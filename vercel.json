@@ -1,0 +1,21 @@
+{
+  "installCommand": "yarn config set strict-ssl false && yarn install",
+  "outputDirectory": "dist",
+  "routes": [
+    {
+      "src": "/api/alive",
+      "dest": "/api/alive.js"
+    },
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/index.js"
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
+}
