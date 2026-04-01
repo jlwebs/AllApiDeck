@@ -116,7 +116,7 @@ function summarizeShape(obj) {
 
 // ─── 核心：服务端代抓取 Token ──────────────────────────────────────────────
 async function fetchTokensForAccount(acc) {
-  const { id, site_name, site_url, site_type, account_info } = acc;
+  const { id, site_name, site_url, site_type, account_info, api_key } = acc;
   const apiKey = account_info?.access_token;
   const userId = account_info?.id;
   const baseUrl = (site_url || '').replace(/\/+$/, '');
@@ -193,7 +193,8 @@ async function fetchTokensForAccount(acc) {
         
         if (resolvedItems.length > 0) {
           // 核心修复：必须带回原始的数字 userId，而不是随机生成的 UUID (id)
-          return { id, site_name, site_url, access_token: apiKey, tokens: resolvedItems, endpoint, account_info: { id: userId, access_token: apiKey } };
+          // 同时带回 api_key，某些站点的 api_key 字段存储了真正的 API 基址 (如 https://api.nih.cc)
+          return { id, site_name, site_url, api_key, access_token: apiKey, tokens: resolvedItems, endpoint, account_info: { id: userId, access_token: apiKey } };
         } else {
           throw new Error('有效解析后为0');
         }
@@ -210,7 +211,7 @@ async function fetchTokensForAccount(acc) {
   } catch (err) {
     // 所有 promise 都抛出错误时
     fetchLog(`[${site_name}] 所有探测组合均失败`);
-    return { id, site_name, site_url, tokens: [], error: '未能获取到有效 Token', account_info: { id: userId } };
+    return { id, site_name, site_url, api_key, tokens: [], error: '未能获取到有效 Token', account_info: { id: userId } };
   }
 }
 
