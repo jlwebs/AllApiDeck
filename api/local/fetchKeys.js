@@ -93,7 +93,8 @@ async function fetchTokensForAccount(acc) {
 
       if (items && items.length > 0) {
         fetchLog(`[SUCCESS] ${site_name} | 从 ${endpoint} 提取出 ${items.length} 个 Token`);
-        return { id, site_name, site_url, tokens: items, endpoint };
+        // 关键修复：返回结果中必须包含 account_info，否则前端无法识别数字 UID 进行鉴权
+        return { id, site_name, site_url, tokens: items, endpoint, account_info };
       }
     } catch (err) {
       // 超时或网络错误，继续下一个端点
