@@ -239,7 +239,9 @@ function proxyMiddlewarePlugin() {
         });
       });
 
-      // 2. 批量检测代理接口
+      // 2. 批量检测代理接口 — 始终 stream:true，在服务端组装 SSE 流
+      //    根因：上游 Go 网关 (one-api/new-api) 对思维链模型在 stream:false 下
+      //    无法正确转换，报 "invalid character 'd'" 错误。stream:true 则正常。
       server.middlewares.use('/api/check-key', (req, res) => {
         if (req.method !== 'POST') { res.statusCode = 405; res.end(); return; }
         let body = '';
@@ -249,42 +251,107 @@ function proxyMiddlewarePlugin() {
             const params = JSON.parse(body);
             const { url, key, model, messages } = params;
             if (params._isFirst) fs.writeFileSync(CHECK_LOG, '', 'utf8');
-            checkLog(`[CHECK] 正在测试: ${url} | Model: ${model} | Key: ${key.slice(0, 12)}...`);
+            const baseUrl = (url || '').replace(/\/+$/, '');
+            checkLog(`[CHECK] 正在测试: ${baseUrl} | Model: ${model} | Key: ${key.slice(0, 12)}...`);
 
             const startTime = Date.now();
-            const response = await fetch(`${url.replace(/\/+$/, '')}/v1/chat/completions`, {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 55000); // 55秒超时（思维链模型需要更长时间）
+
+            const response = await fetch(`${baseUrl}/v1/chat/completions`, {
               method: 'POST',
               headers: {
                 'Authorization': `Bearer ${key}`,
                 'Content-Type': 'application/json',
                 'User-Agent': 'Mozilla/5.0 ApiChecker/1.0',
               },
-              body: JSON.stringify({ model, messages }),
+              body: JSON.stringify({ model, messages: messages || [{ role: 'user', content: 'hi' }], stream: true }),
+              signal: ctrl.signal,
             });
+            clearTimeout(timer);
 
             const duration = ((Date.now() - startTime) / 1000).toFixed(2);
             const status = response.status;
             const contentType = response.headers.get('content-type') || '';
-            const resText = await response.text();
 
-            let data;
-            if (contentType.includes('application/json')) {
-              try { data = JSON.parse(resText); } catch { data = { message: 'Invalid JSON', htmlSnippet: resText.slice(0, 500) }; }
-            } else {
-              const titleMatch = resText.match(/<title>(.*?)<\/title>/i);
-              const title = (titleMatch ? titleMatch[1] : 'HTML Payload').substring(0, 100);
-              data = { message: 'Invalid JSON Response', htmlTitle: title, htmlSnippet: resText.substring(0, 500).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() };
+            // ── 非 2xx：直接读取错误 ──
+            if (!response.ok) {
+              const errText = await response.text();
+              let errMsg = `HTTP ${status}`;
+              try {
+                const errJson = JSON.parse(errText);
+                errMsg = errJson.error?.message || errJson.message || errMsg;
+              } catch {
+                const titleMatch = errText.match(/<title>(.*?)<\/title>/i);
+                if (titleMatch) errMsg = `(HTML) ${titleMatch[1].substring(0, 100)}`;
+              }
+              checkLog(`[CHECK] 失败: ${baseUrl} | ${model} | ${errMsg} | ${duration}s`);
+              res.statusCode = status;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: { message: errMsg } }));
+              return;
             }
 
-            const logMsg = data.htmlTitle ? `[HTML] ${data.htmlTitle}` : (data.error?.message || data.message || `HTTP ${status}`);
-            checkLog(`[CHECK] 结果: HTTP ${status} | 耗时: ${duration}s | ${logMsg}`);
+            // ── 2xx + JSON (某些服务端即使 stream:true 仍返回完整 JSON) ──
+            if (contentType.includes('application/json')) {
+              const resText = await response.text();
+              checkLog(`[CHECK] 成功(非流式回退): ${baseUrl} | ${model} | ${duration}s`);
+              res.statusCode = status;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(resText);
+              return;
+            }
+
+            // ── 核心：逐行读取 SSE 流，组装结果 ──
+            const resText = await response.text();
+            const lines = resText.split('\n');
+
+            let returnedModel = '';
+            let content = '';
+            let reasoningContent = '';
+            let usage = null;
+            let chunkCount = 0;
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || !trimmed.startsWith('data:')) continue;
+              const jsonStr = trimmed.slice(5).trim();
+              if (jsonStr === '[DONE]') break;
+              try {
+                const chunk = JSON.parse(jsonStr);
+                chunkCount++;
+                if (chunk.model && !returnedModel) returnedModel = chunk.model;
+                if (chunk.usage) usage = chunk.usage;
+                const delta = chunk.choices?.[0]?.delta;
+                if (delta) {
+                  if (delta.content) content += delta.content;
+                  if (delta.reasoning_content) reasoningContent += delta.reasoning_content;
+                  if (delta.thinking) reasoningContent += delta.thinking;
+                }
+              } catch { /* 跳过无法解析的行 */ }
+            }
+
             res.setHeader('Content-Type', 'application/json');
-            res.statusCode = status;
-            res.end(contentType.includes('application/json') ? resText : JSON.stringify(data));
+            if (chunkCount > 0) {
+              const isThinking = reasoningContent.length > 0;
+              checkLog(`[CHECK] 成功: ${baseUrl} | ${model} | ${duration}s | ${chunkCount} chunks${isThinking ? ' (thinking)' : ''}`);
+              res.end(JSON.stringify({
+                model: returnedModel || model,
+                choices: [{ message: { role: 'assistant', content: content || null, reasoning_content: reasoningContent || undefined } }],
+                usage,
+                isStreamAssembled: true,
+                message: 'success'
+              }));
+            } else {
+              checkLog(`[CHECK] 失败: ${baseUrl} | ${model} | ${duration}s | 流式响应无有效数据`);
+              res.statusCode = 502;
+              res.end(JSON.stringify({ error: { message: '流式响应无有效数据 (0 chunks)' } }));
+            }
           } catch (err) {
             checkLog(`[CHECK] 异常: ${err.message}`);
-            res.statusCode = 500;
-            res.end(JSON.stringify({ error: err.message }));
+            res.statusCode = err.name === 'AbortError' ? 504 : 500;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ error: { message: err.name === 'AbortError' ? '请求超时 (55s)' : err.message } }));
           }
         });
       });
