@@ -65,6 +65,10 @@ router.get('/proxy-get', async (req, res) => {
 
 // POST /api/check-key
 // 用于批量检测 API 密钥及其模型可用性
+// 核心策略：始终使用 stream:true 发送请求，在 proxy 层组装 SSE 流为统一 JSON
+// 原因：上游 API 网关 (one-api/new-api 等 Go 服务) 对某些思维链模型在 stream:false 下
+//       无法正确将流式响应转为非流式 JSON，报 "invalid character 'd'" 错误。
+//       而 Cherry Studio 等客户端默认使用 stream:true 则完全正常。
 router.post('/check-key', async (req, res) => {
   const { url, key, model, messages } = req.body;
   const baseUrl = (url || '').replace(/\/+$/, '');
@@ -74,7 +78,7 @@ router.post('/check-key', async (req, res) => {
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000); // 30秒超时限制，防止批量测活卡死挂起
+    const timeout = setTimeout(() => controller.abort(), 55000); // 55秒超时（思维链模型需要更长时间）
 
     const response = await fetch(targetUrl, {
       method: 'POST',
@@ -85,95 +89,128 @@ router.post('/check-key', async (req, res) => {
       body: JSON.stringify({
         model: model,
         messages: messages || [{ role: 'user', content: 'hi' }],
-        stream: false
+        stream: true
       }),
       signal: controller.signal
     });
     
     clearTimeout(timeout);
 
-    const contentType = response.headers.get('content-type') || '';
-    let data;
-    let isStreamHack = false;
-
-    if (contentType.includes('application/json')) {
+    // ── 非 2xx 响应：直接读取错误信息 ──
+    if (!response.ok) {
+      let errMsg = `HTTP ${response.status}`;
+      let errorData = null;
       try {
-        data = await response.json();
-      } catch (jsonErr) {
-        // 如果声明是 JSON 但解析报错，可能是碰到了流式数据 (SSE) 的情况 (如 invalid character 'd')
-        const textFallback = await response.text();
+        const text = await response.text();
+        // 尝试解析为 JSON 错误
         try {
-          // 尝试寻找第一块符合 SSE 格式的数据
-          const streamMatch = textFallback.match(/data:\s*({.*})/) || textFallback.match(/({.*})/);
-          if (streamMatch && streamMatch[1]) {
-            data = JSON.parse(streamMatch[1]);
-            isStreamHack = true;
-            checkLog(`[WARN] ${baseUrl} | ${model} | 降级容错: 从非标准响应中抽取出有效流块`);
-          } else {
-            throw new Error('Fallback JSON parse failed');
+          errorData = JSON.parse(text);
+          errMsg = errorData.error?.message || errorData.message || errMsg;
+        } catch {
+          // 可能是 HTML 错误页
+          const titleMatch = text.match(/<title>(.*?)<\/title>/i);
+          if (titleMatch) {
+            errMsg = `(HTML) ${titleMatch[1].substring(0, 100)}`;
           }
-        } catch (innerErr) {
-          data = { 
-            message: 'Invalid JSON Response', 
-            htmlTitle: 'JSON Parse Error',
-            htmlSnippet: textFallback.substring(0, 50).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
-          };
         }
-      }
-    } else if (contentType.includes('text/event-stream')) {
-       // --- NEW: 专门针对服务端无视 stream:false 依然返回 text/event-stream 的情况 ---
-       const text = await response.text();
-       try {
-         const streamMatch = text.match(/data:\s*({.*})/);
-         if (streamMatch && streamMatch[1]) {
-           data = JSON.parse(streamMatch[1]);
-           isStreamHack = true;
-           checkLog(`[WARN] ${baseUrl} | ${model} | 降级容错: 从 event-stream 响应中抽取数据框`);
-         } else {
-           throw new Error('No valid data chunk found built');
-         }
-       } catch(e) {
-          data = { 
-            message: 'Event Stream Parsing Error', 
-            htmlTitle: 'Stream Parsing Failed',
-            htmlSnippet: text.substring(0, 50).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
-          };
-       }
-    } else {
-      const text = await response.text();
-      const titleMatch = text.match(/<title>(.*?)<\/title>/i);
-      const title = (titleMatch ? titleMatch[1] : 'HTML Payload').substring(0, 100);
-      data = { 
-        message: 'Invalid JSON Response', 
-        htmlTitle: title,
-        htmlSnippet: text.substring(0, 50).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
-      };
+      } catch {}
+      checkLog(`[FAIL] ${baseUrl} | ${model} | ${errMsg}`);
+      return res.status(response.status).json({ message: errMsg, error: errorData?.error });
     }
 
-    // 判断成功标准：原生成功，或者降级抽取成功且包含 choices
-    if ((response.ok || isStreamHack) && data && data.choices) {
-      checkLog(`[SUCCESS] ${baseUrl} | ${model} | 响应成功${isStreamHack ? '(弱兼容)' : ''}`);
+    // ── 2xx 响应：解析内容 ──
+    const contentType = response.headers.get('content-type') || '';
+    
+    // 某些服务端可能仍然返回完整 JSON (即使我们请求了 stream:true)
+    if (contentType.includes('application/json')) {
+      const data = await response.json();
+      if (data.choices) {
+        checkLog(`[SUCCESS] ${baseUrl} | ${model} | 响应成功 (非流式回退)`);
+        return res.json({
+          model: data.model || model,
+          choices: data.choices,
+          usage: data.usage,
+          message: 'success'
+        });
+      }
+      // 如果是错误 JSON
+      const errMsg = data.error?.message || data.message || 'Unknown error';
+      checkLog(`[FAIL] ${baseUrl} | ${model} | ${errMsg}`);
+      return res.status(400).json({ message: errMsg, error: data.error });
+    }
+
+    // ── 核心：逐行读取 SSE 流，组装结果 ──
+    const text = await response.text();
+    const lines = text.split('\n');
+    
+    let returnedModel = '';
+    let content = '';
+    let reasoningContent = '';
+    let usage = null;
+    let chunkCount = 0;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || !trimmed.startsWith('data:')) continue;
+      
+      const jsonStr = trimmed.slice(5).trim(); // 去掉 "data:" 前缀
+      if (jsonStr === '[DONE]') break;
+      
+      try {
+        const chunk = JSON.parse(jsonStr);
+        chunkCount++;
+        
+        // 提取模型名（通常在第一个 chunk 中）
+        if (chunk.model && !returnedModel) {
+          returnedModel = chunk.model;
+        }
+        
+        // 提取 usage（通常在最后一个 chunk 中）
+        if (chunk.usage) {
+          usage = chunk.usage;
+        }
+        
+        // 提取 delta 内容
+        const delta = chunk.choices?.[0]?.delta;
+        if (delta) {
+          if (delta.content) content += delta.content;
+          if (delta.reasoning_content) reasoningContent += delta.reasoning_content;
+          if (delta.thinking) reasoningContent += delta.thinking;
+        }
+      } catch {
+        // 跳过无法解析的行
+      }
+    }
+
+    // ── 组装统一结果返回前端 ──
+    if (chunkCount > 0) {
+      const isThinkingModel = reasoningContent.length > 0;
+      checkLog(`[SUCCESS] ${baseUrl} | ${model} | 流式响应成功 (${chunkCount} chunks${isThinkingModel ? ', thinking' : ''})`);
       res.json({
-        model: data.model || model,
-        choices: data.choices,
-        usage: data.usage,
-        isStreamHack, // 回传标记，以便前端标绿 (strict SSE)
+        model: returnedModel || model,
+        choices: [{
+          message: {
+            role: 'assistant',
+            content: content || null,
+            reasoning_content: reasoningContent || undefined
+          }
+        }],
+        usage: usage,
+        isStreamAssembled: true,
         message: 'success'
       });
     } else {
-      const errMsg = data.htmlTitle ? `[HTML] ${data.htmlTitle}` : (data.error?.message || data.message || `HTTP ${response.status}`);
-      checkLog(`[FAIL] ${baseUrl} | ${model} | ${errMsg}`);
-      res.status(response.status).json({ 
-        message: errMsg,
-        error: data.error,
-        htmlTitle: data.htmlTitle,
-        htmlSnippet: data.htmlSnippet,
-        raw: data
-      });
+      // 没有有效 chunk，可能是空响应或格式完全异常
+      checkLog(`[FAIL] ${baseUrl} | ${model} | 流式响应无有效数据块`);
+      res.status(502).json({ message: '流式响应无有效数据块 (0 chunks)', error: { message: text.substring(0, 200) } });
     }
   } catch (err) {
     checkLog(`[ERROR] ${baseUrl} | ${model} | ${err.message}`);
-    res.status(500).json({ message: '请求异常', error: err.message });
+    if (err.name === 'AbortError') {
+      res.status(504).json({ message: '请求超时 (55s)', error: err.message });
+    } else {
+      res.status(500).json({ message: '请求异常', error: err.message });
+    }
   }
 });
 

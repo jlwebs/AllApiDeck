@@ -1342,14 +1342,14 @@ const runSingleTest = async (task, customPayload = null) => {
       // 增强兼容性判定：思维链模型可能使用 reasoning_content
       const hasContent = msgObj && (msgObj.content || msgObj.reasoning_content || msgObj.thinking);
       const isReasoning = msgObj && (msgObj.reasoning_content || msgObj.thinking);
-      const isStrictSSE = data.isStreamHack;
+      const isStreamAssembled = data.isStreamAssembled;
 
       let suffixHtml = '';
       let suffixPlain = '';
       if (isReasoning) {
         suffixHtml = ' <span style="color:#52c41a; font-weight:500; font-size:12px;">(thinking)</span>';
         suffixPlain = ' (thinking)';
-      } else if (isStrictSSE) {
+      } else if (isStreamAssembled) {
         suffixHtml = ' <span style="color:#52c41a; font-weight:500; font-size:12px;">(strict SSE)</span>';
         suffixPlain = ' (strict SSE)';
       }
