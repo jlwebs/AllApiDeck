@@ -192,7 +192,8 @@ async function fetchTokensForAccount(acc) {
         }
         
         if (resolvedItems.length > 0) {
-          return { id, site_name, site_url, access_token: apiKey, tokens: resolvedItems, endpoint };
+          // 核心修复：必须带回原始的数字 userId，而不是随机生成的 UUID (id)
+          return { id, site_name, site_url, access_token: apiKey, tokens: resolvedItems, endpoint, account_info: { id: userId, access_token: apiKey } };
         } else {
           throw new Error('有效解析后为0');
         }
@@ -209,7 +210,7 @@ async function fetchTokensForAccount(acc) {
   } catch (err) {
     // 所有 promise 都抛出错误时
     fetchLog(`[${site_name}] 所有探测组合均失败`);
-    return { id, site_name, site_url, tokens: [], error: '未能获取到有效 Token' };
+    return { id, site_name, site_url, tokens: [], error: '未能获取到有效 Token', account_info: { id: userId } };
   }
 }
 
