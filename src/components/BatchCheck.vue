@@ -494,8 +494,9 @@ const hoverQuota = (record) => {
     const site = record.accountData;
     const siteUrl = siteKey;
     
-    // 强化 UID 提取逻辑
-    const userId = site?.account_info?.id || site?.id || site?.uid || site?.user_id;
+    // 核心修复：只允许纯数字 UID。UUID (如 account-xxx) 会导致 401 格式错误。
+    const rawId = site?.account_info?.id || site?.id || site?.uid || site?.user_id || '';
+    const userId = /^\d+$/.test(String(rawId)) ? String(rawId) : '';
     
     // 优先 access_token（后台登录 token），其次用首个 sk key
     const auth = site?.account_info?.access_token || site?.access_token || site?.tokens?.[0]?.key;
@@ -731,8 +732,10 @@ const processAccounts = async (accounts) => {
 
       for (const ep of endpointsToTry) {
         try {
-          // 同时也为模型探测带上 UID，确保某些严格站点的鉴权能过
-          const discoveryUid = site?.account_info?.id || site?.id || site?.uid || site?.user_id || '';
+          // 同时也为模型探测带上真实的数字 UID，避免 UUID 导致 401 失败
+          const rawDiscoveryId = site?.account_info?.id || site?.id || site?.uid || site?.user_id || '';
+          const discoveryUid = /^\d+$/.test(String(rawDiscoveryId)) ? String(rawDiscoveryId) : '';
+          
           const res = await fetch(`/api/proxy-get?url=${encodeURIComponent(ep.url)}&uid=${discoveryUid}`, {
             method: 'GET',
             headers: { Authorization: `Bearer ${testApiKey}` }

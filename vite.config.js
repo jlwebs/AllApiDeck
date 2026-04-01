@@ -313,8 +313,8 @@ function proxyMiddlewarePlugin() {
               'Cache-Control': 'no-cache'
             };
 
-            // 只有 UID 存在且不为空时才发送兼容头，避免“UID不匹配”错误
-            if (queryUid) {
+            // 核心修复：只有 UID 存在且为纯数字时才发送兼容头。UUID 会导致 401 格式错误。
+            if (queryUid && /^\d+$/.test(queryUid)) {
               const uid = String(queryUid);
               finalHeaders['New-Api-User'] = uid;
               finalHeaders['Veloera-User'] = uid;
