@@ -512,33 +512,46 @@ const hoverQuota = (record) => {
       // 增加超时宽容度到 15s
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 15000);
-      const url = `${siteUrl}/api/user/self`;
-
-      const headers = { 
-        'Authorization': `Bearer ${auth}`
-      };
       
-      const uid = userId ? String(userId) : '';
-      // 通过 URL 参数传 UID 到代理层
-      const proxyUrl = `/api/proxy-get?url=${encodeURIComponent(url)}&uid=${uid}`;
+      // 核心修复：根据 site_type 动态决定端点。sub2api 类型通常是 /api/v1/auth/me
+      const isSub2Api = site?.site_type === 'sub2api';
+      const endpoints = isSub2Api 
+        ? ['/api/v1/auth/me', '/api/user/self'] 
+        : ['/api/user/self', '/api/v1/auth/me'];
+      
+      let quota = null;
+      let finalResStatus = 200;
 
-      const res = await fetch(proxyUrl, {
-        headers,
-        signal: controller.signal,
-      });
+      for (const endpoint of endpoints) {
+        const url = `${siteUrl}${endpoint}`;
+        const uid = userId ? String(userId) : '';
+        const proxyUrl = `/api/proxy-get?url=${encodeURIComponent(url)}&uid=${uid}`;
+
+        const res = await fetch(proxyUrl, {
+          headers: { 'Authorization': `Bearer ${auth}` },
+          signal: controller.signal,
+        });
+        
+        finalResStatus = res.status;
+        if (res.ok) {
+          const json = await res.json();
+          // 兼容多种返回格式: NewAPI 的 data.quota 或 rix-api 的 balance/quota
+          quota = json?.data?.quota ?? json?.quota ?? json?.data?.balance ?? json?.balance ?? null;
+          if (quota !== null) break;
+        } else if (res.status !== 404) {
+          // 如果是非 404 错误（如 401），则不继续试下一个端点
+          break;
+        }
+      }
+
       clearTimeout(timer);
 
-      if (res.ok) {
-        const json = await res.json();
-        // New API 统一格式：{ success: true, data: { quota: 123456 } }
-        const quota = json?.data?.quota ?? json?.quota ?? null;
-        const label = quota != null ? `$${formatBalance(quota)}` : '无余额字段';
+      if (quota !== null) {
+        const label = `$${formatBalance(quota)}`;
         siteQuotaCache[siteKey] = label;
         testResults.value.forEach(r => { if (r.siteUrl?.replace(/\/+$/, '') === siteKey) r.quota = label; });
       } else {
-        const errorText = await res.text();
-        console.error(`[QUOTA-DEBUG] 获取余额失败(${res.status})`, { url, headers, response: errorText });
-        const label = `获取失败(${res.status})`;
+        const label = `获取失败(${finalResStatus})`;
         siteQuotaCache[siteKey] = label;
         testResults.value.forEach(r => { if (r.siteUrl?.replace(/\/+$/, '') === siteKey) r.quota = label; });
       }
