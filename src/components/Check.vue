@@ -113,6 +113,11 @@
                     <AppstoreAddOutlined style="cursor: pointer" />
                   </a>
                 </a-tooltip>
+                <a-tooltip :title="'密钥提取'" placement="bottom">
+                  <a @click="$router.push('/keys')" class="icon-button">
+                    <KeyOutlined style="cursor: pointer" />
+                  </a>
+                </a-tooltip>
                 <a-tooltip :title="t('GITHUB')" placement="bottom">
                   <div @click="openGitHub()" class="icon-button">
                     <GithubOutlined style="cursor: pointer" />
@@ -1065,6 +1070,7 @@ import {
   DoubleRightOutlined,
   ExperimentOutlined,
   AppstoreAddOutlined,
+  KeyOutlined,
 } from '@ant-design/icons-vue';
 import ExperimentalFeatures from './Experimental.vue';
 import { computed, h, nextTick, onMounted, reactive, ref, watch } from 'vue';
@@ -1354,28 +1360,13 @@ const getQueryParams = async () => {
       if (settingsObj.closeChat) {
         enableChat.value = false;
       }
-      if (!settingsObj.closeAnnouncement) {
-        showAnnouncement();
-        const updateInfo = await checkForUpdates(
-          appInfo.version,
-          owner,
-          repo,
-          t
-        );
-        if (updateInfo && updateInfo.hasUpdate) {
-          showUpdatePrompt(updateInfo);
-        }
-      }
+      // 公告弹窗已禁用
       showSettingsModal();
     } catch (e) {
       console.error('解析URL参数失败:', e);
     }
   } else {
-    showAnnouncement();
-    const updateInfo = await checkForUpdates(appInfo.version, owner, repo, t);
-    if (updateInfo && updateInfo.hasUpdate) {
-      showUpdatePrompt(updateInfo);
-    }
+    // 公告弹窗已禁用
   }
 };
 

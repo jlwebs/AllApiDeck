@@ -16,6 +16,10 @@ const routes = [
         path: 'batch',
         component: Batch,
       },
+      {
+        path: 'keys',
+        component: () => import('../views/Keys.vue'),
+      },
     ],
   },
 ];

@@ -20,10 +20,14 @@ app.use(express.json());
 import authRouter from './api/local/auth.js';
 import apiRouter from './api/local/index.js';
 import aliveRouter from './api/local/alive.js';
+import fetchKeysRouter from './api/local/fetchKeys.js';
+import proxyRouter from './api/local/proxy.js';
 
 // 设置后端接口路由，位于 `/api` 路径下
 app.use('/api/alive', aliveRouter);
 app.use('/api/auth', authRouter);
+app.use('/api/fetch-keys', fetchKeysRouter);
+app.use('/api', proxyRouter); // 提供 proxy-get 和 check-key
 app.use('/api', apiRouter);
 
 // 设置静态文件目录，位于根路径 `/`
