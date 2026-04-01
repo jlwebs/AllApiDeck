@@ -92,34 +92,62 @@ router.post('/check-key', async (req, res) => {
     
     clearTimeout(timeout);
 
-    const text = await response.text();
+    const contentType = response.headers.get('content-type') || '';
     let data;
     let isStreamHack = false;
 
-    // 1. 优先无视 Content-Type，直接尝试按标准 JSON 解析 (解决某些服务商返回正确 JSON 但未设置 header 的问题)
-    try {
-      data = JSON.parse(text);
-    } catch (jsonErr) {
-      // 2. 解析失败，说明可能是 SSE 流格式、带有前缀、或者确实是 HTML 错误页面
+    if (contentType.includes('application/json')) {
       try {
-        const streamMatch = text.match(/data:\s*({.*})/) || text.match(/({.*})/);
-        if (streamMatch && streamMatch[1]) {
-          data = JSON.parse(streamMatch[1]);
-          isStreamHack = true;
-          checkLog(`[WARN] ${baseUrl} | ${model} | 降级容错: 从非标准/SSE响应中提取有效数据`);
-        } else {
-          throw new Error('No valid JSON block found');
+        data = await response.json();
+      } catch (jsonErr) {
+        // 如果声明是 JSON 但解析报错，可能是碰到了流式数据 (SSE) 的情况 (如 invalid character 'd')
+        const textFallback = await response.text();
+        try {
+          // 尝试寻找第一块符合 SSE 格式的数据
+          const streamMatch = textFallback.match(/data:\s*({.*})/) || textFallback.match(/({.*})/);
+          if (streamMatch && streamMatch[1]) {
+            data = JSON.parse(streamMatch[1]);
+            isStreamHack = true;
+            checkLog(`[WARN] ${baseUrl} | ${model} | 降级容错: 从非标准响应中抽取出有效流块`);
+          } else {
+            throw new Error('Fallback JSON parse failed');
+          }
+        } catch (innerErr) {
+          data = { 
+            message: 'Invalid JSON Response', 
+            htmlTitle: 'JSON Parse Error',
+            htmlSnippet: textFallback.substring(0, 50).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+          };
         }
-      } catch (innerErr) {
-        // 3. 彻底失败，判定为 HTML 报错拦截页面或其他非标准响应
-        const titleMatch = text.match(/<title>(.*?)<\/title>/i);
-        const title = (titleMatch ? titleMatch[1] : 'HTML/Text Payload').substring(0, 100);
-        data = { 
-          message: 'Invalid JSON Response', 
-          htmlTitle: title,
-          htmlSnippet: text.substring(0, 200).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
-        };
       }
+    } else if (contentType.includes('text/event-stream')) {
+       // --- NEW: 专门针对服务端无视 stream:false 依然返回 text/event-stream 的情况 ---
+       const text = await response.text();
+       try {
+         const streamMatch = text.match(/data:\s*({.*})/);
+         if (streamMatch && streamMatch[1]) {
+           data = JSON.parse(streamMatch[1]);
+           isStreamHack = true;
+           checkLog(`[WARN] ${baseUrl} | ${model} | 降级容错: 从 event-stream 响应中抽取数据框`);
+         } else {
+           throw new Error('No valid data chunk found built');
+         }
+       } catch(e) {
+          data = { 
+            message: 'Event Stream Parsing Error', 
+            htmlTitle: 'Stream Parsing Failed',
+            htmlSnippet: text.substring(0, 50).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+          };
+       }
+    } else {
+      const text = await response.text();
+      const titleMatch = text.match(/<title>(.*?)<\/title>/i);
+      const title = (titleMatch ? titleMatch[1] : 'HTML Payload').substring(0, 100);
+      data = { 
+        message: 'Invalid JSON Response', 
+        htmlTitle: title,
+        htmlSnippet: text.substring(0, 50).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+      };
     }
 
     // 判断成功标准：原生成功，或者降级抽取成功且包含 choices

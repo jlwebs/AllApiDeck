@@ -51,10 +51,30 @@
               </button>
 
               <div class="right-icons">
-                <a-tooltip :title="'返回常规检测'" placement="bottom">
-                  <a @click="$router.push('/')" class="icon-button">
-                    <HomeOutlined style="cursor: pointer" />
+                <a-tooltip :title="'实验性功能'" placement="bottom">
+                  <a @click="showExperimentalFeatures = true" class="icon-button">
+                    <ExperimentOutlined style="cursor: pointer" />
                   </a>
+                </a-tooltip>
+                <a-tooltip :title="'设置'" placement="bottom">
+                  <a @click="openSettingsModal" class="icon-button">
+                    <SettingOutlined style="cursor: pointer" />
+                  </a>
+                </a-tooltip>
+                <a-tooltip :title="'单次检测'" placement="bottom">
+                  <a @click="$router.push('/single')" class="icon-button">
+                    <CheckCircleOutlined style="cursor: pointer" />
+                  </a>
+                </a-tooltip>
+                <a-tooltip :title="'密钥提取'" placement="bottom">
+                  <a @click="$router.push('/keys')" class="icon-button">
+                    <KeyOutlined style="cursor: pointer" />
+                  </a>
+                </a-tooltip>
+                <a-tooltip title="GitHub" placement="bottom">
+                  <div @click="openGitHub()" class="icon-button">
+                    <GithubOutlined style="cursor: pointer" />
+                  </div>
                 </a-tooltip>
               </div>
             </div>
@@ -141,7 +161,7 @@
                   批量检测结果
                 </h3>
                 <a-space>
-                  <a-dropdown-button @click="copyOrganizedResults" :disabled="testing || organizedTreeData.length === 0">
+                  <a-dropdown-button @click="copyOrganizedResults" :disabled="testing || !testResults.length">
                     <CopyOutlined /> 整理有效配置
                     <template #overlay>
                       <a-menu>
@@ -214,6 +234,28 @@
                     <ShareAltOutlined /> 整理与概览
                   </h3>
                   <a-space>
+                    <a-button 
+                      size="small" 
+                      type="link"
+                      @click="toggleExpandAll"
+                      style="margin-right: 2px"
+                    >
+                      <template v-if="expandedKeys.length > 0">
+                        <MenuFoldOutlined /> 全部折叠
+                      </template>
+                      <template v-else>
+                        <MenuUnfoldOutlined /> 全部展开
+                      </template>
+                    </a-button>
+                    <a-button 
+                      size="small" 
+                      type="link"
+                      :loading="isRefreshingBalances" 
+                      @click="refreshAllBalances"
+                      style="margin-right: 5px; color: #1677ff;"
+                    >
+                      <ReloadOutlined v-if="!isRefreshingBalances" /> 更新余额
+                    </a-button>
                     <a-checkbox v-model:checked="filterOnlySuccess" style="margin-right: 15px;">
                       仅有效(过滤红色/失败)
                     </a-checkbox>
@@ -235,13 +277,29 @@
                   <a-tree
                     v-else
                     :tree-data="organizedTreeData"
-                    defaultExpandAll
+                    v-model:expanded-keys="expandedKeys"
                     @select="onTreeSelect"
                     class="result-summary-tree"
                     block-node
                   >
-                    <template #title="{ title, class: nodeClass }">
-                       <span :class="['custom-tree-node', nodeClass]">{{ title }}</span>
+                    <template #title="node">
+                       <div class="custom-tree-node-wrapper" style="display: flex; align-items: center;">
+                         <span :class="['custom-tree-node', node.class]">{{ node.title }}</span>
+                         
+                         <!-- 仅在叶子节点（模型项）显示快捷拉起图标，空两格紧跟 -->
+                         <div v-if="node.isLeaf" class="shortcut-actions" style="margin-left: 12px; display: flex; gap: 8px;">
+                           <a-tooltip title="一键添加到 Cherry Studio">
+                             <span class="app-icon cherry-icon" @click.stop="launchCherryStudio(node)">
+                               🍒
+                             </span>
+                           </a-tooltip>
+                           <a-tooltip title="一键添加到 CC-Switch">
+                             <span class="app-icon switch-icon" @click.stop="launchCCSwitch(node)">
+                               🔄
+                             </span>
+                           </a-tooltip>
+                         </div>
+                       </div>
                     </template>
                   </a-tree>
                 </div>
@@ -264,6 +322,86 @@
               <a-textarea v-model:value="editingPayload" :rows="12" style="font-family: monospace;" />
             </a-modal>
 
+            <!-- Experimental Features Modal -->
+            <a-modal
+              v-model:open="showExperimentalFeatures"
+              title="实验性功能"
+              :footer="null"
+              @cancel="showExperimentalFeatures = false"
+            >
+              <div style="padding: 20px; text-align: center;">
+                <SmileOutlined style="font-size: 48px; color: #1677ff; margin-bottom: 20px;" />
+                <p>实验性功能正在开发中，敬请期待！</p>
+              </div>
+            </a-modal>
+
+            <!-- Settings Modal (Aligned with Check.vue console style) -->
+            <a-modal
+              v-model:open="showAppSettingsModal"
+              title="系统设置"
+              :footer="null"
+              :width="600"
+              @cancel="closeSettingsModal"
+              :centered="true"
+              :destroyOnClose="true"
+            >
+              <a-tabs>
+                <a-tab-pane key="1" tab="本地缓存">
+                  <a-form @submit.prevent>
+                    <a-row :gutter="16" type="flex" align="middle">
+                      <a-col :span="16">
+                        <a-form-item label="API URL">
+                          <a-input v-model:value="settingsApiUrl" placeholder="请输入 API URL">
+                            <template #prefix><UserOutlined /></template>
+                          </a-input>
+                        </a-form-item>
+                        <a-form-item label="API Key">
+                          <a-input-password v-model:value="settingsApiKey" placeholder="请输入 API Key">
+                            <template #prefix><LockOutlined /></template>
+                          </a-input-password>
+                        </a-form-item>
+                      </a-col>
+                      <a-col :span="8">
+                        <a-button type="primary" @click="saveToLocal" block style="height: 104px;">
+                          保存到缓存
+                        </a-button>
+                      </a-col>
+                    </a-row>
+                  </a-form>
+                  <a-list :data-source="localCacheList" bordered style="margin-top: 15px; max-height: 300px; overflow-y: auto;">
+                    <template #renderItem="{ item }">
+                      <a-list-item>
+                        <div style="max-width: 70%;">
+                          <div style="font-weight: bold;">{{ item.name }}</div>
+                          <div style="font-size: 12px; color: #999; overflow: hidden; text-overflow: ellipsis;">{{ item.url }}</div>
+                        </div>
+                        <template #actions>
+                          <a @click="loadLocalRecord(item.id)">填充</a>
+                          <a-popconfirm title="确定删除此缓存？" @confirm="deleteLocalRecord(item.id)">
+                            <a style="color: #ff4d4f;">删除</a>
+                          </a-popconfirm>
+                        </template>
+                      </a-list-item>
+                    </template>
+                  </a-list>
+                </a-tab-pane>
+                <a-tab-pane key="2" tab="常规设置">
+                  <div style="padding: 10px;">
+                    <p><b>界面选项</b></p>
+                    <a-space direction="vertical" style="width: 100%;">
+                      <div style="display: flex; justify-content: space-between;">
+                        <span>自动展开/折叠树形结果</span>
+                        <a-switch v-model:checked="isTreeExpanded" />
+                      </div>
+                    </a-space>
+                    <a-divider />
+                    <div style="text-align: center; color: #999;">
+                      {{ appInfo.name }} v{{ appInfo.version }}
+                    </div>
+                  </div>
+                </a-tab-pane>
+              </a-tabs>
+            </a-modal>
           </div>
         </div>
       </div>
@@ -272,10 +410,10 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ConfigProvider, message, theme } from 'ant-design-vue';
-import { HomeOutlined, InboxOutlined, PlayCircleOutlined, SearchOutlined, CopyOutlined, FilterOutlined, HistoryOutlined, ShareAltOutlined, DownOutlined, RightOutlined } from '@ant-design/icons-vue';
+import { HomeOutlined, ReloadOutlined, MenuUnfoldOutlined, MenuFoldOutlined, InboxOutlined, PlayCircleOutlined, SearchOutlined, CopyOutlined, FilterOutlined, HistoryOutlined, ShareAltOutlined, DownOutlined, RightOutlined, CheckCircleOutlined, SettingOutlined, GithubOutlined, KeyOutlined, ExperimentOutlined, UserOutlined, LockOutlined, MessageOutlined, CopyFilled, SmileOutlined } from '@ant-design/icons-vue';
 import { fetchModelList } from '../utils/api.js';
 import { toggleTheme } from '../utils/theme.js';
 
@@ -289,6 +427,83 @@ const configProviderTheme = computed(() => ({
 const step = ref(1); // 1: upload, 2: select tree, 3: result table
 const isLoadingModels = ref(false);
 const totalAccountsCount = ref(0);
+const showExperimentalFeatures = ref(false);
+const showAppSettingsModal = ref(false);
+const settingsApiUrl = ref('');
+const settingsApiKey = ref('');
+const localCacheList = ref([]);
+const isCloudLoggedIn = ref(false);
+const cloudUrl = ref('');
+const cloudPassword = ref('');
+const cloudDataList = ref([]);
+
+const appInfo = reactive({
+  name: 'API Checker',
+  subtitle: '批量 API 检测工具',
+  version: '2.5.0',
+  author: { url: 'https://github.com/jlwebs' }
+});
+const appDescription = ref(['支持 OpenAI / Claude / Gemini / NewAPI 等多种格式接口的批量并发检测与账号管理。']);
+
+const openSettingsModal = () => {
+  showAppSettingsModal.value = true;
+  loadLocalCache();
+};
+
+const closeSettingsModal = () => {
+  showAppSettingsModal.value = false;
+};
+
+const openGitHub = () => {
+  window.open('https://github.com/jlwebs/api-check', '_blank');
+};
+
+const loadLocalCache = () => {
+  const cache = localStorage.getItem('api_check_local_cache');
+  if (cache) {
+    try {
+      localCacheList.value = JSON.parse(cache);
+    } catch (e) {
+      localCacheList.value = [];
+    }
+  }
+};
+
+const saveToLocal = () => {
+  if (!settingsApiUrl.value || !settingsApiKey.value) {
+    message.warning('请输入完整的 API URL 和 Key');
+    return;
+  }
+  const newRecord = {
+    id: Date.now(),
+    name: new URL(settingsApiUrl.value).hostname,
+    url: settingsApiUrl.value,
+    apiKey: settingsApiKey.value
+  };
+  localCacheList.value.push(newRecord);
+  localStorage.setItem('api_check_local_cache', JSON.stringify(localCacheList.value));
+  message.success('保存成功');
+};
+
+const deleteLocalRecord = (id) => {
+  localCacheList.value = localCacheList.value.filter(r => r.id !== id);
+  localStorage.setItem('api_check_local_cache', JSON.stringify(localCacheList.value));
+};
+
+const loadLocalRecord = (id) => {
+  const record = localCacheList.value.find(r => r.id === id);
+  if (record) {
+    // 批量模式通常是通过文件导入，这里加载到设置仅做展示或备用
+    settingsApiUrl.value = record.url;
+    settingsApiKey.value = record.apiKey;
+    message.success('已加载到配置表单');
+  }
+};
+
+const maskApiKey = (key) => {
+  if (!key) return '';
+  return key.slice(0, 8) + '***' + key.slice(-4);
+};
 
 const isTableExpanded = ref(true);
 const isTreeExpanded = ref(true);
@@ -336,14 +551,37 @@ const allKeys = ref([]); // Store all keys for easy 'Select All'
 
 const loadedSitesCount = ref(0);
 
-// 按 siteUrl 缓存余额，避免重复请求
-const siteQuotaCache = {};
+// 按 siteUrl 缓存余额，确保其为响应式对象
+const siteQuotaCache = reactive({});
 
 const batchConcurrency = ref(20);
 const modelTimeout = ref(15);
 
 const testing = ref(false);
+const isRefreshingBalances = ref(false); // NEW: 刷新余额状态
+const expandedKeys = ref([]); // NEW: 受控展开状态
 const cancelTokens = ref([]); // to allow stopping
+
+// ── NEW: 提取树形数据中所有的 Key 并展开/折叠 ──
+const toggleExpandAll = () => {
+  if (expandedKeys.value.length > 0) {
+    // 当前有展开的，则执行“全部折叠”
+    expandedKeys.value = [];
+  } else {
+    // 当前全部折叠，提取所有节点的 Key 执行“全部展开”
+    const allKeys = [];
+    const collectKeys = (nodes) => {
+      nodes.forEach(node => {
+        allKeys.push(node.key);
+        if (node.children && node.children.length > 0) {
+          collectKeys(node.children);
+        }
+      });
+    };
+    collectKeys(organizedTreeData.value);
+    expandedKeys.value = allKeys;
+  }
+};
 const testResults = ref([]); // all tasks
 const totalTasks = ref(0);
 const completedTasks = ref(0);
@@ -418,10 +656,16 @@ const organizedTreeData = computed(() => {
       key: `${g.siteName}|${g.apiKey}`,
       class: titleClass,
       children: sortedTasks.map(t => ({
-        title: `${t.modelName} - ${t.statusText} (${t.responseTime}s)`,
+        title: `${t.modelName}${t.modelSuffix || ''} - ${t.statusText} (${t.responseTime}s)`,
+        displayTitle: t.displaySuffixHtml ? `${t.modelName}${t.displaySuffixHtml} - ${t.statusText} (${t.responseTime}s)` : null,
         key: t.id,
         isLeaf: true,
-        class: `status-${t.status}`
+        class: `status-${t.status}`,
+        // 核心修复：透传导出及拉起应用必备字段
+        siteName: t.siteName,
+        siteUrl: t.siteUrl,
+        apiKey: t.apiKey,
+        model: t.modelName
       })),
       hasSuccess: g.hasSuccess,
       hasWarning: g.hasWarning
@@ -535,11 +779,18 @@ const hoverQuota = (record) => {
         finalResStatus = res.status;
         if (res.ok) {
           const json = await res.json();
-          // 兼容多种返回格式: NewAPI 的 data.quota 或 rix-api 的 balance/quota
-          quota = json?.data?.quota ?? json?.quota ?? json?.data?.balance ?? json?.balance ?? null;
+          // 深度兼容多种返回格式: NewAPI 的 data.quota, sub2api 的 data.user.quota 或 rix-api 的 balance/quota
+          quota = json?.data?.quota ?? 
+                  json?.quota ?? 
+                  json?.data?.user?.quota ?? 
+                  json?.user?.quota ?? 
+                  json?.data?.balance ?? 
+                  json?.balance ?? 
+                  json?.total_quota ?? 
+                  null;
           if (quota !== null) break;
-        } else if (res.status !== 404) {
-          // 如果是非 404 错误（如 401），则不继续试下一个端点
+        } else if ([401, 403].includes(res.status)) {
+          // 只有鉴权明确失败(401)或者权限受限(403)时，才立刻中断循环
           break;
         }
       }
@@ -547,7 +798,10 @@ const hoverQuota = (record) => {
       clearTimeout(timer);
 
       if (quota !== null) {
-        const label = `$${formatBalance(quota)}`;
+        // 智能判定：如果是 balance 字段或者数值较小，通常是直观金额，不除以 500000
+        const isDirectAmount = quota < 100000;
+        const finalAmount = isDirectAmount ? Number(quota).toFixed(3) : (quota / 500000).toFixed(3);
+        const label = `$${finalAmount}`;
         siteQuotaCache[siteKey] = label;
         testResults.value.forEach(r => { if (r.siteUrl?.replace(/\/+$/, '') === siteKey) r.quota = label; });
       } else {
@@ -577,6 +831,90 @@ const preloadAllQuotas = (extractedSites) => {
     };
     hoverQuota(mockRecord);
   });
+};
+
+// ── NEW: 批量异步强制刷新所有已选站点的余额 ──
+const refreshAllBalances = async () => {
+  if (isRefreshingBalances.value) return;
+  
+  const results = testResults.value;
+  if (results.length === 0) {
+    message.warning('当前暂无检测结果，无法刷新余额');
+    return;
+  }
+
+  isRefreshingBalances.value = true;
+  
+  // 1. 清空所有 siteQuotaCache 缓存
+  Object.keys(siteQuotaCache).forEach(key => delete siteQuotaCache[key]);
+  
+  // 2. 找到所有唯一的站点 URL
+  const uniqueSites = new Map();
+  results.forEach(r => {
+    const siteKey = r.siteUrl?.replace(/\/+$/, '') || '';
+    if (siteKey && !uniqueSites.has(siteKey)) {
+      uniqueSites.set(siteKey, r);
+    }
+  });
+
+  // 3. 异步并发刷新
+  const promises = Array.from(uniqueSites.values()).map(record => {
+    // 强制重置当前记录的 quota 状态，触发 hoverQuota 的重新获取
+    delete record.quota; 
+    return hoverQuota(record);
+  });
+
+  await Promise.allSettled(promises);
+  isRefreshingBalances.value = false;
+  message.success('余额刷新请求已全部发出');
+};
+
+// ── NEW: 一键拉起 Cherry Studio ──
+const launchCherryStudio = (node) => {
+  if (!node.apiKey || !node.siteUrl) {
+    message.warning('配置信息不完整，无法导出');
+    return;
+  }
+  
+  const payload = {
+    id: `batch-${node.key}`,
+    baseUrl: node.siteUrl.replace(/\/+$/, ''),
+    apiKey: node.apiKey,
+    name: `${node.siteName} (${node.model})`
+  };
+  
+  try {
+    const jsonString = JSON.stringify(payload);
+    // 使用 TextEncoder 处理 UTF-8 字符，确保中文字符名不乱码
+    const bytes = new TextEncoder().encode(jsonString);
+    const base64String = btoa(String.fromCharCode(...bytes));
+    const url = `cherrystudio://providers/api-keys?v=1&data=${base64String}`;
+    window.open(url, '_blank');
+    message.success('正在尝试唤起 Cherry Studio...');
+  } catch (err) {
+    message.error('生成配置失败: ' + err.message);
+  }
+};
+
+// ── NEW: 一键拉起 CC-Switch ──
+const launchCCSwitch = (node) => {
+  if (!node.apiKey || !node.siteUrl) {
+    message.warning('配置信息不完整，无法导出');
+    return;
+  }
+
+  const params = new URLSearchParams();
+  params.set('resource', 'provider');
+  params.set('app', 'claude'); // 默认映射为 claude 类型
+  params.set('name', `${node.siteName} - ${node.model}`);
+  params.set('homepage', node.siteUrl);
+  params.set('endpoint', node.siteUrl);
+  params.set('apiKey', node.apiKey);
+  params.set('model', node.model);
+
+  const url = `ccswitch://v1/import?${params.toString()}`;
+  window.open(url, '_blank');
+  message.success('正在尝试唤起 CC-Switch...');
 };
 
 const openPayloadEditor = (record) => {
@@ -867,11 +1205,18 @@ const startBatchCheck = async () => {
     const site = validAccounts.value.find(s => s.id === siteId);
     
     if (site) {
+      // 增强逻辑：对 api_key 进行清洗，优先从中提取 API 基址
+      let effectiveUrl = site.site_url;
+      const rawApiKey = String(site.api_key || '').trim();
+      if (rawApiKey.startsWith('http')) {
+        effectiveUrl = rawApiKey;
+      }
+      
       const task = {
         id: `task_${idx}`,
         siteId,
         siteName: site.site_name,
-        siteUrl: site.site_url,
+        siteUrl: effectiveUrl,
         apiKey: tokenKey, // <--- 使用真正的 sk- 密钥!
         modelName: modelName,
         status: 'pending',
@@ -977,9 +1322,40 @@ const runSingleTest = async (task, customPayload = null) => {
     task.responseTime = responseTime;
 
     if (response.ok) {
-      const data = await response.json();
+      let data = await response.json();
+      
+      // 有些接口返回不是标准的 JSON 格式，可能带有 htmlSnippet。
+      // 我们尝试从中深度提取 JSON，增强解析鲁棒性 (处理 SSE 格式的 data: 前缀)
+      if (data && data.htmlSnippet) {
+        let snippet = String(data.htmlSnippet).trim();
+        if (snippet.startsWith('data:')) {
+          snippet = snippet.replace(/^data:\s*/, '').trim();
+        }
+        if (snippet.startsWith('{') || snippet.startsWith('[')) {
+          try { data = JSON.parse(snippet); } catch (e) {}
+        }
+      }
+
       const returnedModel = data.model || 'unknown';
-      const hasContent = data.choices && data.choices[0]?.message?.content;
+      const msgObj = data.choices && data.choices[0]?.message;
+      
+      // 增强兼容性判定：思维链模型可能使用 reasoning_content
+      const hasContent = msgObj && (msgObj.content || msgObj.reasoning_content || msgObj.thinking);
+      const isReasoning = msgObj && (msgObj.reasoning_content || msgObj.thinking);
+      const isStrictSSE = data.isStreamHack;
+
+      let suffixHtml = '';
+      let suffixPlain = '';
+      if (isReasoning) {
+        suffixHtml = ' <span style="color:#52c41a; font-weight:500; font-size:12px;">(thinking)</span>';
+        suffixPlain = ' (thinking)';
+      } else if (isStrictSSE) {
+        suffixHtml = ' <span style="color:#52c41a; font-weight:500; font-size:12px;">(strict SSE)</span>';
+        suffixPlain = ' (strict SSE)';
+      }
+      
+      task.modelSuffix = suffixPlain;
+      task.displaySuffixHtml = suffixHtml;
       
       // 保存原始响应
       task.fullResponse = JSON.stringify(data, null, 2);
@@ -987,7 +1363,10 @@ const runSingleTest = async (task, customPayload = null) => {
       if (returnedModel.toLowerCase().includes(task.modelName.toLowerCase()) || task.modelName === 'unknown') {
         task.status = 'success';
         task.statusText = '一致可用';
-        task.remark = '通过';
+        task.remark = hasContent ? (msgObj?.content ? '通过' : '思维链模型通过') : '响应成功结构异常';
+        if (!hasContent) {
+           task.status = 'warning';
+        }
       } else {
         task.status = 'warning';
         if (returnedModel === 'unknown') {
@@ -1116,6 +1495,54 @@ const copyOrganizedResults = () => {
 </script>
 
 <style scoped>
+/* Header & Navigation Style */
+.header {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  justify-content: flex-end !important;
+  align-items: center;
+  margin-bottom: 30px;
+  padding: 10px 20px;
+}
+
+#themeToggle {
+  margin-right: 25px; /* 增加与右侧图标组的间距 */
+  flex-shrink: 0;
+}
+
+.right-icons {
+  display: flex;
+  flex-wrap: nowrap !important;
+  gap: 22px; /* 进一步增加图标间距 */
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.icon-button {
+  font-size: 24px; /* 进一步放大图标至 24px */
+  color: #666;
+  transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.dark-mode .icon-button {
+  color: #aaa;
+}
+
+.icon-button:hover {
+  color: #1677ff;
+  transform: scale(1.15);
+}
+
+.dark-mode .icon-button:hover {
+  color: #40a9ff;
+}
+
 .batch-wrapper {
   min-height: 100vh;
   padding: 0;
@@ -1200,5 +1627,42 @@ const copyOrganizedResults = () => {
 
 :deep(.dark-mode .highlighted-row) {
   background-color: rgba(24, 144, 255, 0.3) !important;
+}
+.custom-tree-node-wrapper {
+  display: flex !important;
+  align-items: center;
+  width: 100%;
+}
+
+.shortcut-actions {
+  opacity: 0.1;
+  transition: opacity 0.3s ease;
+}
+
+.custom-tree-node-wrapper:hover .shortcut-actions {
+  opacity: 1;
+}
+
+.app-icon {
+  cursor: pointer;
+  font-size: 14px;
+  filter: grayscale(0.8);
+  transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-icon:hover {
+  filter: grayscale(0);
+  transform: scale(1.3);
+}
+
+.cherry-icon:hover {
+  text-shadow: 0 0 8px rgba(255, 0, 0, 0.4);
+}
+
+.switch-icon:hover {
+  text-shadow: 0 0 8px rgba(0, 123, 255, 0.4);
 }
 </style>
