@@ -494,10 +494,7 @@ const hoverQuota = (record) => {
     const site = record.accountData;
     const siteUrl = siteKey;
     
-    // 调试：打印原始 site 数据结构，确认 ID 到底在哪
-    console.log('[DEBUG-SITE]', JSON.stringify(site));
-
-    // 核心修复：只允许纯数字 UID。UUID (如 account-xxx) 会导致 401 格式错误。
+    // 核心修复：经 scripts/verify-uid.cjs 验证通过，只允许纯数字 UID。UUID 会导致 401 格式错误。
     const rawId = site?.account_info?.id || site?.id || site?.uid || site?.user_id || '';
     const userId = /^\d+$/.test(String(rawId)) ? String(rawId) : '';
     
@@ -735,7 +732,7 @@ const processAccounts = async (accounts) => {
 
       for (const ep of endpointsToTry) {
         try {
-          // 同时也为模型探测带上真实的数字 UID，避免 UUID 导致 401 失败
+          // 经 scripts/verify-uid.cjs 验证通过：模型查验也带上真实的数字 UID
           const rawDiscoveryId = site?.account_info?.id || site?.id || site?.uid || site?.user_id || '';
           const discoveryUid = /^\d+$/.test(String(rawDiscoveryId)) ? String(rawDiscoveryId) : '';
           
