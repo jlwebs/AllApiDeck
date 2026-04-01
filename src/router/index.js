@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import Home from '../views/Home.vue';
+import Batch from '../views/Batch.vue';
 import Layout from '../views/Layout.vue';
 
 const routes = [
@@ -10,6 +11,10 @@ const routes = [
       {
         path: '',
         component: Home,
+      },
+      {
+        path: 'batch',
+        component: Batch,
       },
     ],
   },

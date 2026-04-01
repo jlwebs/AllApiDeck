@@ -108,6 +108,11 @@
                     <SettingOutlined style="cursor: pointer" />
                   </a>
                 </a-tooltip>
+                <a-tooltip :title="t('BATCH_CHECK') || '批量检测'" placement="bottom">
+                  <a @click="$router.push('/batch')" class="icon-button">
+                    <AppstoreAddOutlined style="cursor: pointer" />
+                  </a>
+                </a-tooltip>
                 <a-tooltip :title="t('GITHUB')" placement="bottom">
                   <div @click="openGitHub()" class="icon-button">
                     <GithubOutlined style="cursor: pointer" />
@@ -1059,6 +1064,7 @@ import {
   SmileOutlined,
   DoubleRightOutlined,
   ExperimentOutlined,
+  AppstoreAddOutlined,
 } from '@ant-design/icons-vue';
 import ExperimentalFeatures from './Experimental.vue';
 import { computed, h, nextTick, onMounted, reactive, ref, watch } from 'vue';
