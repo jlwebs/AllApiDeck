@@ -94,8 +94,51 @@ router.post('/check-key', async (req, res) => {
 
     const contentType = response.headers.get('content-type') || '';
     let data;
+    let isStreamHack = false;
+
     if (contentType.includes('application/json')) {
-      data = await response.json();
+      try {
+        data = await response.json();
+      } catch (jsonErr) {
+        // 如果声明是 JSON 但解析报错，可能是碰到了流式数据 (SSE) 的情况 (如 invalid character 'd')
+        const textFallback = await response.text();
+        try {
+          // 尝试寻找第一块符合 SSE 格式的数据
+          const streamMatch = textFallback.match(/data:\s*({.*})/) || textFallback.match(/({.*})/);
+          if (streamMatch && streamMatch[1]) {
+            data = JSON.parse(streamMatch[1]);
+            isStreamHack = true;
+            checkLog(`[WARN] ${baseUrl} | ${model} | 降级容错: 从非标准响应中抽取出有效流块`);
+          } else {
+            throw new Error('Fallback JSON parse failed');
+          }
+        } catch (innerErr) {
+          data = { 
+            message: 'Invalid JSON Response', 
+            htmlTitle: 'JSON Parse Error',
+            htmlSnippet: textFallback.substring(0, 50).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+          };
+        }
+      }
+    } else if (contentType.includes('text/event-stream')) {
+       // --- NEW: 专门针对服务端无视 stream:false 依然返回 text/event-stream 的情况 ---
+       const text = await response.text();
+       try {
+         const streamMatch = text.match(/data:\s*({.*})/);
+         if (streamMatch && streamMatch[1]) {
+           data = JSON.parse(streamMatch[1]);
+           isStreamHack = true;
+           checkLog(`[WARN] ${baseUrl} | ${model} | 降级容错: 从 event-stream 响应中抽取数据框`);
+         } else {
+           throw new Error('No valid data chunk found built');
+         }
+       } catch(e) {
+          data = { 
+            message: 'Event Stream Parsing Error', 
+            htmlTitle: 'Stream Parsing Failed',
+            htmlSnippet: text.substring(0, 50).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+          };
+       }
     } else {
       const text = await response.text();
       const titleMatch = text.match(/<title>(.*?)<\/title>/i);
@@ -107,12 +150,14 @@ router.post('/check-key', async (req, res) => {
       };
     }
 
-    if (response.ok && contentType.includes('application/json')) {
-      checkLog(`[SUCCESS] ${baseUrl} | ${model} | 响应成功`);
+    // 判断成功标准：原生成功，或者降级抽取成功且包含 choices
+    if ((response.ok || isStreamHack) && data && data.choices) {
+      checkLog(`[SUCCESS] ${baseUrl} | ${model} | 响应成功${isStreamHack ? '(弱兼容)' : ''}`);
       res.json({
         model: data.model || model,
         choices: data.choices,
         usage: data.usage,
+        isStreamHack, // 回传标记，以便前端标绿 (strict SSE)
         message: 'success'
       });
     } else {

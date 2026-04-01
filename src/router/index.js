@@ -10,11 +10,15 @@ const routes = [
     children: [
       {
         path: '',
+        component: Batch,
+      },
+      {
+        path: 'single',
         component: Home,
       },
       {
         path: 'batch',
-        component: Batch,
+        redirect: '/',
       },
       {
         path: 'keys',

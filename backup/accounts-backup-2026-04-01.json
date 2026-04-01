@@ -193,6 +193,7 @@
         "id": "account-4adf8350-9740-4b39-b5c2-223a56f575f4",
         "site_name": "NihaoAPI",
         "site_url": "https://nih.cc",
+        "api_key": "https://api.nih.cc",
         "health": {
           "status": "healthy",
           "reason": "账号状态正常"

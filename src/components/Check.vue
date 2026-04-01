@@ -109,7 +109,7 @@
                   </a>
                 </a-tooltip>
                 <a-tooltip :title="t('BATCH_CHECK') || '批量检测'" placement="bottom">
-                  <a @click="$router.push('/batch')" class="icon-button">
+                  <a @click="$router.push('/')" class="icon-button">
                     <AppstoreAddOutlined style="cursor: pointer" />
                   </a>
                 </a-tooltip>
