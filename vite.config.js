@@ -52,8 +52,10 @@ function ensureSkPrefix(key) {
 
 /**
  * 对掩码 key，调用 POST /api/token/{id}/key 获取完整密钥。
+ * 包含 429 限流自动退避重试（最多 3 次）。
  */
-async function resolveFullKey(baseUrl, tokenId, authValue, compatHeaders, siteName) {
+async function resolveFullKey(baseUrl, tokenId, authValue, compatHeaders, siteName, retryCount = 0) {
+  const MAX_RETRIES = 3;
   const url = `${baseUrl}/api/token/${tokenId}/key`;
   try {
     const ctrl = new AbortController();
@@ -72,6 +74,15 @@ async function resolveFullKey(baseUrl, tokenId, authValue, compatHeaders, siteNa
     clearTimeout(timer);
     
     const status = res.status;
+
+    // 429 限流：指数退避重试
+    if (status === 429 && retryCount < MAX_RETRIES) {
+      const delay = Math.pow(2, retryCount) * 1000 + Math.random() * 500; // 1s, 2s, 4s + 随机
+      fetchLog(`[${siteName}] [Resolve] token#${tokenId} 限流(429)，${(delay/1000).toFixed(1)}s 后重试 (${retryCount + 1}/${MAX_RETRIES})`);
+      await new Promise(r => setTimeout(r, delay));
+      return resolveFullKey(baseUrl, tokenId, authValue, compatHeaders, siteName, retryCount + 1);
+    }
+
     const rawText = await res.text();
     
     if (!res.ok) {
@@ -138,47 +149,48 @@ async function fetchTokensForAccount(acc) {
 
   const authValues = isSub2Api ? [`Bearer ${apiKey}`] : [`Bearer ${apiKey}`, apiKey];
 
-  // 竞速模型：所有端点组合一起跑，哪个先拿到且有Token，就保留哪个退出
-  const fetchTasks = [];
-
+  // 顺序尝试端点，而不是竞速
+  // 原因：竞速模式会同时发 8-10 个请求到同一个站点，导致 429 限流
+  // 插件不需要这样做是因为浏览器每次只发一个请求
   for (const endpoint of endpoints) {
     for (const authValue of authValues) {
       const url = `${baseUrl}${endpoint}`;
-      
-      const task = (async () => {
+      try {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 8000); // 8s 超时即可
+        const timer = setTimeout(() => controller.abort(), 10000);
         
-        let response;
-        try {
-          response = await fetch(url, {
-            method: 'GET',
-            headers: {
-              'Authorization': authValue,
-              'Accept': 'application/json',
-              'Content-Type': 'application/json',
-              'Pragma': 'no-cache',
-              'User-Agent': 'Mozilla/5.0 ApiChecker/1.0',
-              ...compatUserHeaders,
-            },
-            signal: controller.signal,
-            redirect: 'follow',
-          });
-          clearTimeout(timer);
-        } catch (err) {
-          clearTimeout(timer);
-          throw new Error(`请求失败: ${err.message}`);
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: {
+            'Authorization': authValue,
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'Pragma': 'no-cache',
+            'User-Agent': 'Mozilla/5.0 ApiChecker/1.0',
+            ...compatUserHeaders,
+          },
+          signal: controller.signal,
+          redirect: 'follow',
+        });
+        clearTimeout(timer);
+
+        // 429 限流: 等一等再试下一个组合
+        if (response.status === 429) {
+          fetchLog(`[${site_name}] 端点 ${endpoint} 限流(429)，跳过`);
+          await new Promise(r => setTimeout(r, 1000));
+          continue;
         }
 
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        if (!response.ok) continue; // 非 200 直接试下一个
 
         const rawText = await response.text();
         let bodyJson;
-        try { bodyJson = JSON.parse(rawText); } catch { throw new Error('非JSON响应'); }
+        try { bodyJson = JSON.parse(rawText); } catch { continue; }
 
         const rawItems = extractItems(bodyJson);
-        if (rawItems.length === 0) throw new Error('没有可用数据项');
+        if (rawItems.length === 0) continue;
 
+        // 逐个解析掩码 key（串行，避免并发 429）
         const resolvedItems = [];
         for (const token of rawItems) {
           const rawKey = token.key || '';
@@ -192,27 +204,20 @@ async function fetchTokensForAccount(acc) {
         }
         
         if (resolvedItems.length > 0) {
-          // 核心修复：必须带回原始的数字 userId，而不是随机生成的 UUID (id)
+          fetchLog(`[${site_name}] --- 成功！从 ${endpoint} 获取到 ${resolvedItems.length} 个可用 Token ---`);
           // 同时带回 api_key，某些站点的 api_key 字段存储了真正的 API 基址 (如 https://api.nih.cc)
           return { id, site_name, site_url, api_key, access_token: apiKey, tokens: resolvedItems, endpoint, account_info: { id: userId, access_token: apiKey } };
-        } else {
-          throw new Error('有效解析后为0');
         }
-      })();
-      
-      fetchTasks.push(task);
+      } catch (err) {
+        // 单个组合失败，继续尝试下一个
+        fetchLog(`[${site_name}] 端点 ${endpoint} 失败: ${err.message}`);
+      }
     }
   }
 
-  try {
-    const result = await Promise.any(fetchTasks);
-    fetchLog(`[${site_name}] --- 竞速夺魁：从 ${result.endpoint} 获取到 ${result.tokens.length} 个可用 Token ---`);
-    return result;
-  } catch (err) {
-    // 所有 promise 都抛出错误时
-    fetchLog(`[${site_name}] 所有探测组合均失败`);
-    return { id, site_name, site_url, api_key, tokens: [], error: '未能获取到有效 Token', account_info: { id: userId } };
-  }
+  // 所有组合都失败了
+  fetchLog(`[${site_name}] 所有端点均未能获取到 Token`);
+  return { id, site_name, site_url, api_key, tokens: [], error: '未能获取到有效 Token', account_info: { id: userId } };
 }
 
 // ─── Vite 插件：混合代理中间件 ───────────────────────────────────────────────
