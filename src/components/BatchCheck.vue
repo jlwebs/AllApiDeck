@@ -494,6 +494,9 @@ const hoverQuota = (record) => {
     const site = record.accountData;
     const siteUrl = siteKey;
     
+    // 调试：打印原始 site 数据结构，确认 ID 到底在哪
+    console.log('[DEBUG-SITE]', JSON.stringify(site));
+
     // 核心修复：只允许纯数字 UID。UUID (如 account-xxx) 会导致 401 格式错误。
     const rawId = site?.account_info?.id || site?.id || site?.uid || site?.user_id || '';
     const userId = /^\d+$/.test(String(rawId)) ? String(rawId) : '';
