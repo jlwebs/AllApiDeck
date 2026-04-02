@@ -1145,7 +1145,7 @@ const processAccounts = async (accounts) => {
   // ── 第 1 步：先用浏览器端直接并发提取（绕过Cloudflare WAF服务端拦截）──
   let extractedSites = [];
   try {
-    const BROWSER_FETCH_CONCURRENCY = 16;
+    const BROWSER_FETCH_CONCURRENCY = 25;
     const browserResults = new Array(accountsToFetch.length);
     let currentIdx = 0;
 
@@ -1218,8 +1218,6 @@ const processAccounts = async (accounts) => {
         const globalIdx = currentIndex++;
         const site = extractedSites[globalIdx];
         
-        await new Promise(r => setTimeout(r, (globalIdx % discoveryLimit) * 150));
-
         const siteIdx = globalIdx + 1;
         const siteDisplayTitle = `${siteIdx}. [${site.site_name}]`;
         const currentSiteNodes = [];

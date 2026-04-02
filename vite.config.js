@@ -133,9 +133,13 @@ async function fetchTokensForAccount(account) {
     for (let p = 0; p < maxPages; p++) {
       const url = `${baseEndpoint}?p=${p}&size=${pageSize}`;
       try {
+        const ctrl = new AbortController();
+        const timeout = setTimeout(() => ctrl.abort(), 10000);
         const res = await fetch(url, {
-          headers: { 'Authorization': authValue, ...browserHeaders, ...compatHeaders }
+          headers: { 'Authorization': authValue, ...browserHeaders, ...compatHeaders },
+          signal: ctrl.signal
         });
+        clearTimeout(timeout);
         
         if (res.ok) {
           const json = await res.json();
@@ -202,11 +206,10 @@ function proxyMiddlewarePlugin() {
                fetchLog(`开始批量提取 ${accounts.length} 个站点的令牌...`);
                const results = new Array(accounts.length);
                let currentIndex = 0;
-               const CONCURRENCY = 6;
+               const CONCURRENCY = 25;
                const worker = async () => {
                  while (currentIndex < accounts.length) {
                    const i = currentIndex++;
-                   await new Promise(r => setTimeout(r, i * 200)); 
                    results[i] = await fetchTokensForAccount(accounts[i]);
                  }
                };
@@ -245,9 +248,13 @@ function proxyMiddlewarePlugin() {
 
           try {
             checkLog(`[PROXY-GET] 正在请求: ${targetUrl} | UID: ${uid}`);
+            const ctrl = new AbortController();
+            const timeout = setTimeout(() => ctrl.abort(), 10000);
             const apiRes = await fetch(targetUrl, {
-              headers: { 'Authorization': auth || '', ...browserHeaders, ...compatHeaders }
+              headers: { 'Authorization': auth || '', ...browserHeaders, ...compatHeaders },
+              signal: ctrl.signal
             });
+            clearTimeout(timeout);
             const data = await apiRes.text();
             res.statusCode = apiRes.status;
             res.setHeader('Content-Type', apiRes.headers.get('content-type') || 'application/json');
@@ -285,6 +292,8 @@ function proxyMiddlewarePlugin() {
               };
 
               const start = Date.now();
+              const ctrl = new AbortController();
+              const timeout = setTimeout(() => ctrl.abort(), 30000);
               const resApi = await fetch(checkUrl, {
                 method: 'POST',
                 headers: {
@@ -297,8 +306,10 @@ function proxyMiddlewarePlugin() {
                   model: model,
                   messages: [{ role: 'user', content: 'Ping' }],
                   max_tokens: 1
-                })
+                }),
+                signal: ctrl.signal
               });
+              clearTimeout(timeout);
 
               const duration = ((Date.now() - start) / 1000).toFixed(2);
               const status = resApi.status;
