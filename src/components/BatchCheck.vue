@@ -933,7 +933,7 @@ const resendPayload = async () => {
   }
   isEditorOpen.value = false;
   
-  // Update task temporarily
+    // Update task temporarily
   editingRecord.value.status = 'testing';
   editingRecord.value.statusText = '重测中';
   // If user changed the model or key in payload, do NOT change the table's display fields immediately unless we want to, but running with custom payload is fine.
@@ -1022,6 +1022,14 @@ const processAccounts = async (accounts) => {
     return;
   }
   
+  // ── 第 0 步：清空后端日志 ──
+  try {
+    await fetch('/api/clear-logs?type=fetch', { method: 'POST' });
+    await fetch('/api/clear-logs?type=check', { method: 'POST' });
+  } catch (e) {
+    console.warn('Clear logs fail, ignoring...', e);
+  }
+
   totalAccountsCount.value = accountsToFetch.length;
   isLoadingModels.value = true;
   step.value = -1; // 显示提取中的中间状态
@@ -1042,7 +1050,7 @@ const processAccounts = async (accounts) => {
 
     const data = await response.json();
     extractedSites = data.results || [];
-    validAccounts.value = extractedSites; // 提前设置，这样 UI 统计分母正常 (已加载/总提取数)
+    validAccounts.value = extractedSites; 
     
     // ── 第 1.5 步：后台提前刷额度 ──
     preloadAllQuotas(extractedSites);
@@ -1053,108 +1061,120 @@ const processAccounts = async (accounts) => {
     return;
   }
 
-  const siteTrees = [];
-  const fullCheckedKeys = [];
-  const fullAllKeys = [];
+    const siteNodes = new Array(extractedSites.length);
+    const fullCheckedKeys = [];
+    const fullAllKeys = [];
 
-  // ── 第 2 步：并发探测模型 ──
-  const discoveryLimit = 30;
-  let currentIndex = 0;
+    // ── 第 2 步：探测模型 (采用分流多进程) ──
+    const discoveryLimit = 12; 
+    let currentIndex = 0;
 
-  const discoverWorker = async () => {
-    while (currentIndex < extractedSites.length) {
-      const site = extractedSites[currentIndex++];
-      if (!site || site.error || !site.tokens || site.tokens.length === 0) {
-        loadedSitesCount.value++;
-        continue;
-      }
-
-      const baseUrl = site.site_url.replace(/\/+$/, '');
-      // 使用提取出的第一个可用 Token 进行模型探测
-      const firstToken = site.tokens[0];
-      const testApiKey = firstToken.key || firstToken.access_token;
-      
-      let supportedModels = [];
-      const endpointsToTry = [
-        { url: `${baseUrl}/v1/models`, type: 'openai' },
-        { url: `${baseUrl}/api/models`, type: 'newapi_public' },
-        { url: `${baseUrl}/api/user/models`, type: 'newapi_user' }
-      ];
-
-      for (const ep of endpointsToTry) {
-        try {
-          // 经 scripts/verify-uid.cjs 验证通过：模型查验也带上真实的数字 UID
-          const rawDiscoveryId = site?.account_info?.id || site?.id || site?.uid || site?.user_id || '';
-          const discoveryUid = /^\d+$/.test(String(rawDiscoveryId)) ? String(rawDiscoveryId) : '';
-          
-          const res = await fetch(`/api/proxy-get?url=${encodeURIComponent(ep.url)}&uid=${discoveryUid}`, {
-            method: 'GET',
-            headers: { Authorization: `Bearer ${testApiKey}` }
-          });
-          if (res.ok) {
-            const contentType = res.headers.get('content-type') || '';
-            if (contentType.includes('application/json')) {
-              const result = await res.json();
-              if (ep.type === 'newapi_user' && Array.isArray(result.data)) {
-                supportedModels = (typeof result.data[0] === 'string' ? result.data : result.data.map(m => m.id)).sort();
-              } else if (result.data && Array.isArray(result.data)) {
-                supportedModels = result.data.map(m => m.id || m.name || m).filter(m => typeof m === 'string').sort();
-              }
-              if (supportedModels.length > 0) break;
-            }
-          }
-        } catch (e) {
-          console.warn(`Discovery fail: ${site.site_name} ${ep.url}`, e);
-        }
-      }
-
-      // 如果探测失败，提供基础模型
-      if (supportedModels.length === 0) {
-        supportedModels = ['gpt-3.5-turbo', 'gpt-4o', 'gpt-4o-mini', 'claude-3-5-sonnet-20240620', 'gemini-1.5-flash-latest'];
-      }
-
-      // 按 Site -> Token -> Models 构建树
-      site.tokens.forEach((token, idx) => {
-        const tKey = token.key || token.access_token;
-        const tName = token.name || `Token ${idx + 1}`;
-        const tokenNodeKey = `token|${site.id}|${tKey}`;
+    const discoverWorker = async () => {
+      while (currentIndex < extractedSites.length) {
+        const globalIdx = currentIndex++;
+        const site = extractedSites[globalIdx];
         
-        const children = supportedModels.map(model => {
-          const itemKey = `${site.id}|${tKey}|${model}`;
-          fullAllKeys.push(itemKey);
-          fullCheckedKeys.push(itemKey);
-          return { title: model, key: itemKey, isLeaf: true };
-        });
+        await new Promise(r => setTimeout(r, (globalIdx % discoveryLimit) * 150));
 
-        fullAllKeys.push(tokenNodeKey);
-        fullCheckedKeys.push(tokenNodeKey);
-        siteTrees.push({
-          title: `[${site.site_name}] ${tName} (${tKey.slice(0, 15)}...)`,
-          key: tokenNodeKey,
-          children: children,
-        });
-      });
+        const siteIdx = globalIdx + 1;
+        const siteDisplayTitle = `${siteIdx}. [${site.site_name}]`;
+        const currentSiteNodes = [];
 
-      loadedSitesCount.value++;
-    }
+        // ── 情况 A: 令牌提取报错 ──
+        if (!site || site.error || !site.tokens || site.tokens.length === 0) {
+          const errorMsg = site.error || '获取令牌失败';
+          currentSiteNodes.push({
+            title: `${siteDisplayTitle} - ❌ ${errorMsg}`,
+            key: `fail-site|${site.id || globalIdx}`,
+            disabled: true,
+            selectable: false,
+            children: []
+          });
+          siteNodes[globalIdx] = currentSiteNodes;
+          loadedSitesCount.value++;
+          continue;
+        }
+
+        // 探测模型
+        let effectiveBaseUrl = site.site_url.replace(/\/+$/, '');
+        const rawApiKey = String(site.api_key || '').trim();
+        if (rawApiKey.startsWith('http')) effectiveBaseUrl = rawApiKey.replace(/\/+$/, '');
+        
+        const baseUrl = effectiveBaseUrl;
+        const firstToken = site.tokens[0];
+        const testApiKey = firstToken.key || firstToken.access_token;
+        
+        let supportedModels = [];
+        const endpointsToTry = [
+          { url: `${baseUrl}/v1/models`, type: 'openai' },
+          { url: `${baseUrl}/api/models`, type: 'newapi_public' },
+          { url: `${baseUrl}/api/user/models`, type: 'newapi_user' }
+        ];
+
+        for (const ep of endpointsToTry) {
+          try {
+            const rawDiscoveryId = site?.account_info?.id || site?.id || site?.uid || site?.user_id || '';
+            const discoveryUid = /^\d+$/.test(String(rawDiscoveryId)) ? String(rawDiscoveryId) : '';
+            const res = await fetch(`/api/proxy-get?url=${encodeURIComponent(ep.url)}&uid=${discoveryUid}`, {
+              headers: { Authorization: `Bearer ${testApiKey}` }
+            });
+            if (res.ok) {
+              const result = await res.json();
+              let rawData = Array.isArray(result) ? result : (result.data?.data || result.data?.items || result.data || []);
+              if (rawData.length > 0) {
+                supportedModels = rawData.map(m => (typeof m === 'string' ? m : (m.id || m.name || m))).filter(m => typeof m === 'string').sort();
+                if (supportedModels.length > 0) break;
+              }
+            }
+          } catch (e) {}
+        }
+
+        // ── 情况 B: 探测不到模型 ──
+        if (supportedModels.length === 0) {
+          currentSiteNodes.push({
+            title: `${siteDisplayTitle} - ⚠️ 未能探测到可用模型列表`,
+            key: `no-model-site|${site.id}`,
+            disabled: true,
+            selectable: false,
+            children: []
+          });
+        } else {
+          // ── 情况 C: 正常 ──
+          site.tokens.forEach((token, idx) => {
+            const tKey = token.key || token.access_token;
+            const tName = token.name || `Token ${idx + 1}`;
+            const tokenNodeKey = `token|${site.id}|${tKey}`;
+            const children = supportedModels.map(model => {
+              const itemKey = `${site.id}|${tKey}|${model}`;
+              fullAllKeys.push(itemKey);
+              fullCheckedKeys.push(itemKey);
+              return { title: model, key: itemKey, isLeaf: true };
+            });
+            fullAllKeys.push(tokenNodeKey);
+            fullCheckedKeys.push(tokenNodeKey);
+            currentSiteNodes.push({
+              title: `${siteDisplayTitle} ${tName} (${tKey.slice(0, 15)}...)`,
+              key: tokenNodeKey,
+              children: children,
+            });
+          });
+        }
+
+        siteNodes[globalIdx] = currentSiteNodes;
+        loadedSitesCount.value++;
+      }
+    };
+
+    const discoveryWorkers = Array.from({ length: Math.min(discoveryLimit, extractedSites.length) }, () => discoverWorker());
+    await Promise.all(discoveryWorkers);
+
+    treeData.value = siteNodes.flat().filter(Boolean);
+    allKeys.value = fullAllKeys;
+    checkedKeys.value = fullCheckedKeys;
+    isLoadingModels.value = false;
+    step.value = 2; // 进入树形选择器
   };
-
-  const discoveryWorkers = [];
-  for (let i = 0; i < Math.min(discoveryLimit, extractedSites.length); i++) {
-    discoveryWorkers.push(discoverWorker());
-  }
-  await Promise.all(discoveryWorkers);
-
-  treeData.value = siteTrees;
-  allKeys.value = fullAllKeys;
-  checkedKeys.value = fullCheckedKeys; // 默认全选
   
-  isLoadingModels.value = false;
-  step.value = 2; // 进入树形选择器
-  
-  validAccounts.value = extractedSites; 
-};
-
 // --- Tree Actions ---
 const selectAllNodes = () => {
   checkedKeys.value = [...allKeys.value];
