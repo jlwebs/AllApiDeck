@@ -167,12 +167,15 @@ async function fetchTokensForAccount(account) {
   // 递归解析掩码 Key
   const resolvedTokens = [];
   for (const t of allTokens) {
-    const rawKey = t.key || t.access_token || '';
+    const rawKey = t.key || t.access_token || t.token || t.api_key || t.apikey || (typeof t === 'string' ? t : '');
     if (isMaskedKey(rawKey) && t.id) {
        const full = await resolveFullKey(baseUrl, t.id, authValue, compatHeaders, site_name);
        if (full) resolvedTokens.push({ ...t, key: full });
     } else if (rawKey && rawKey.length > 5) {
        resolvedTokens.push({ ...t, key: ensureSkPrefix(rawKey) });
+    } else if (t.id || t.name) {
+       // 保留没解析出key的对象，以防因为格式兼容问题全丢了
+       resolvedTokens.push({ ...t, key: rawKey || '未知格式Token' });
     }
   }
 

@@ -1081,9 +1081,15 @@ const fetchTokensForAccountFromBrowser = async (acc) => {
         items = body;
       }
 
-      if (items && items.length > 0) {
-        console.log(`[BrowserFetch] ${site_name} | ${endpoint} => ${items.length}个token`);
-        return { id, site_name, site_url, tokens: items, endpoint, account_info };
+      const resolvedItems = [];
+      for (const t of items) {
+        const rawKey = t.key || t.access_token || t.token || t.api_key || t.apikey || (typeof t === 'string' ? t : '');
+        resolvedItems.push({ ...t, key: rawKey || '未知格式Token' });
+      }
+
+      if (resolvedItems && resolvedItems.length > 0) {
+        console.log(`[BrowserFetch] ${site_name} | ${endpoint} => ${resolvedItems.length}个token`);
+        return { id, site_name, site_url, tokens: resolvedItems, endpoint, account_info };
       }
     } catch (err) {
       if (err.name === 'AbortError') continue;
@@ -1184,7 +1190,8 @@ const processAccounts = async (accounts) => {
           // 将服务端成功的结果写回 extractedSites
           serverResults.forEach(serverResult => {
             const idx = accountsToFetch.findIndex(a => a.id === serverResult.id);
-            if (idx !== -1 && serverResult.tokens && serverResult.tokens.length > 0) {
+            if (idx !== -1) {
+              // 强制将服务端获取到的结果覆盖浏览器的初始错误态，不管服务端有没有取到token
               extractedSites[idx] = serverResult;
             }
           });
