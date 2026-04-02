@@ -10,7 +10,7 @@
  * @param {Function} log - 日志函数
  * @returns {Object} { status, body } - status 为 HTTP 状态码，body 为 JSON 对象
  */
-export async function checkKey({ url, key, model, messages }, log = console.log) {
+export async function checkKey({ url, key, model, messages, uid }, log = console.log) {
   const baseUrl = (url || '').replace(/\/+$/, '');
   const targetUrl = `${baseUrl}/v1/chat/completions`;
 
@@ -21,12 +21,24 @@ export async function checkKey({ url, key, model, messages }, log = console.log)
     const timer = setTimeout(() => controller.abort(), 55000); // 55秒超时（思维链模型需要更长）
 
     const startTime = Date.now();
+    const compatHeaders = /^\d+$/.test(String(uid || ''))
+      ? {
+        'New-Api-User': String(uid),
+        'Veloera-User': String(uid),
+        'voapi-user': String(uid),
+        'User-id': String(uid),
+        'Rix-Api-User': String(uid),
+        'neo-api-user': String(uid),
+      }
+      : {};
+
     const response = await fetch(targetUrl, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${key}`,
         'Content-Type': 'application/json',
         'User-Agent': 'Mozilla/5.0 ApiChecker/1.0',
+        ...compatHeaders,
       },
       body: JSON.stringify({
         model,
