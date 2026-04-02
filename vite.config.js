@@ -2,7 +2,6 @@ import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import fs from 'fs';
 import path from 'path';
-import { visualizer } from 'rollup-plugin-visualizer';
 import Components from 'unplugin-vue-components/vite';
 import { AntDesignVueResolver } from 'unplugin-vue-components/resolvers';
 
@@ -328,7 +327,6 @@ function proxyMiddlewarePlugin() {
 export default defineConfig({
   plugins: [
     vue(),
-    visualizer({ open: false }),
     Components({
       resolvers: [AntDesignVueResolver({ importStyle: false, resolveIcons: true })],
     }),
