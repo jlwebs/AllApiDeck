@@ -332,8 +332,12 @@ export default defineConfig({
     }),
     proxyMiddlewarePlugin(),
   ],
-  server: { port: 3000, host: '0.0.0.0' },
+  server: { port: 3000, host: '0.0.0.0', watch: { ignored: ['**/all-api-hub/**'] } },
   resolve: { alias: { '@': '/src' } },
+  optimizeDeps: {
+    exclude: ['all-api-hub'],
+    entries: ['index.html', 'src/**/*.vue']
+  },
   css: {
     preprocessorOptions: {
       less: {
