@@ -139,7 +139,7 @@
               <div class="settings-action-bar">
                 <div class="batch-settings">
                   <span style="font-size: 14px; margin-right: 10px;">并发数：</span>
-                  <a-input-number v-model:value="batchConcurrency" :min="1" :max="50" />
+                  <a-input-number v-model:value="batchConcurrency" :min="1" :max="100" />
                   <span style="font-size: 14px; margin-left: 20px; margin-right: 10px;">超时(秒)：</span>
                   <a-input-number v-model:value="modelTimeout" :min="1" />
                 </div>
@@ -554,7 +554,7 @@ const loadedSitesCount = ref(0);
 // 按 siteUrl 缓存余额，确保其为响应式对象
 const siteQuotaCache = reactive({});
 
-const batchConcurrency = ref(20);
+const batchConcurrency = ref(25);
 const modelTimeout = ref(15);
 
 const testing = ref(false);
@@ -990,6 +990,113 @@ const resetStep2 = () => {
   totalTasks.value = 0;
 };
 
+// --- 浏览器端直接提取Token（绕过Cloudflare WAF服务端拦截）---
+// 核心原理：Cloudflare Bot Protection会拦截无TLS指纹的服务器请求，
+// 但放行真实浏览器发出的请求（有JA3 TLS指纹+clearance cookie）
+const fetchTokensForAccountFromBrowser = async (acc) => {
+  const { id, site_name, site_url, site_type, account_info } = acc;
+  const apiKey = account_info?.access_token;
+  const baseUrl = (site_url || '').replace(/\/+$/, '');
+  const uid = account_info?.id;
+
+  if (!apiKey || !baseUrl) {
+    return { id, site_name, site_url, tokens: [], error: '缺少 access_token 或 site_url', account_info };
+  }
+
+  // 优先级端点列表：参考all-api-hub的实现策略
+  let endpoints;
+  if (site_type === 'sub2api') {
+    // sub2api使用JWT token，对应不同的API路径
+    endpoints = [
+      `/api/v1/keys?page=1&page_size=100`,
+      `/api/v1/keys?p=0&size=100`,
+      `/api/token/?p=0&size=100`,
+    ];
+  } else {
+    // oneAPI / newAPI / anyrouter 等
+    endpoints = [
+      `/api/token/?p=0&size=100`,
+      `/api/token?p=0&size=100`,
+      `/api/v1/keys?page=1&page_size=100`,
+    ];
+  }
+
+  const headers = {
+    'Authorization': `Bearer ${apiKey}`,
+    'Accept': 'application/json',
+  };
+  // 如果uid是纯数字，加入兼容头（参考all-api-hub的compat headers）
+  if (uid && /^\d+$/.test(String(uid))) {
+    headers['new-api-user'] = String(uid);
+    headers['one-api-user'] = String(uid);
+  }
+
+  for (const endpoint of endpoints) {
+    try {
+      const url = `${baseUrl}${endpoint}`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers,
+        signal: controller.signal,
+        credentials: 'omit',
+      });
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        // 403被CF拦截：检查是否返回了HTML（CF页面）
+        if (response.status === 403) {
+          const ct = response.headers.get('content-type') || '';
+          if (/html/i.test(ct)) {
+            // CF Bot Protection，浏览器也无法直接绕（需要challenge）
+            // 继续试其他端点
+            continue;
+          }
+        }
+        continue;
+      }
+
+      // 检查Content-Type，CF挡截页也可能是200但返回HTML
+      const ct = response.headers.get('content-type') || '';
+      if (/html/i.test(ct)) continue;
+
+      let body;
+      try {
+        body = await response.json();
+      } catch (e) {
+        continue; // 非JSON，跳过
+      }
+
+      // 解析不同格式的响应
+      let items = [];
+      if (body && body.data !== undefined) {
+        const data = body.data;
+        if (Array.isArray(data)) items = data;
+        else if (data && Array.isArray(data.items)) items = data.items;
+      } else if (body && Array.isArray(body.items)) {
+        items = body.items;
+      } else if (Array.isArray(body)) {
+        items = body;
+      }
+
+      if (items && items.length > 0) {
+        console.log(`[BrowserFetch] ${site_name} | ${endpoint} => ${items.length}个token`);
+        return { id, site_name, site_url, tokens: items, endpoint, account_info };
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') continue;
+      // CORS错误或网络错误，继续
+      console.debug(`[BrowserFetch] ${site_name} | ${endpoint} CORS/网络错误:`, err.message);
+      continue;
+    }
+  }
+
+  // 所有浏览器端端点均失败，返回失败标记（由processAccounts fallback到服务端）
+  return { id, site_name, site_url, tokens: [], error: '浏览器端所有端点均失败，将尝试服务端代理', account_info, _needServerFallback: true };
+};
+
 // --- Upload and Parse ---
 const beforeUpload = (file) => {
   const reader = new FileReader();
@@ -1035,22 +1142,59 @@ const processAccounts = async (accounts) => {
   step.value = -1; // 显示提取中的中间状态
   loadedSitesCount.value = 0;
   
-  // ── 第 1 步：后端并发提取 ──
+  // ── 第 1 步：先用浏览器端直接并发提取（绕过Cloudflare WAF服务端拦截）──
   let extractedSites = [];
   try {
-    const response = await fetch('/api/fetch-keys', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ accounts: accountsToFetch }),
-    });
+    const BROWSER_FETCH_CONCURRENCY = 16;
+    const browserResults = new Array(accountsToFetch.length);
+    let currentIdx = 0;
 
-    if (!response.ok) {
-      throw new Error((await response.json()).message || '提取过程出错');
+    const browserFetchWorker = async () => {
+      while (currentIdx < accountsToFetch.length) {
+        const idx = currentIdx++;
+        browserResults[idx] = await fetchTokensForAccountFromBrowser(accountsToFetch[idx]);
+      }
+    };
+
+    const browserWorkers = Array.from(
+      { length: Math.min(BROWSER_FETCH_CONCURRENCY, accountsToFetch.length) },
+      () => browserFetchWorker()
+    );
+    await Promise.all(browserWorkers);
+
+    // 将浏览器端成功的结果同步
+    extractedSites = browserResults;
+
+    // 对于浏览器端提取失败的（_needServerFallback=true），Fallback到服务端代理
+    const failedAccounts = accountsToFetch.filter((acc, i) => 
+      browserResults[i]?._needServerFallback === true
+    );
+
+    if (failedAccounts.length > 0) {
+      console.log(`[FetchKeys] 浏览器端失败 ${failedAccounts.length} 个，尝试服务端代理墙跑...`);
+      try {
+        const serverResponse = await fetch('/api/fetch-keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accounts: failedAccounts }),
+        });
+        if (serverResponse.ok) {
+          const serverData = await serverResponse.json();
+          const serverResults = serverData.results || [];
+          // 将服务端成功的结果写回 extractedSites
+          serverResults.forEach(serverResult => {
+            const idx = accountsToFetch.findIndex(a => a.id === serverResult.id);
+            if (idx !== -1 && serverResult.tokens && serverResult.tokens.length > 0) {
+              extractedSites[idx] = serverResult;
+            }
+          });
+        }
+      } catch (e) {
+        console.warn('[FetchKeys] 服务端墙跑失败:', e.message);
+      }
     }
 
-    const data = await response.json();
-    extractedSites = data.results || [];
-    validAccounts.value = extractedSites; 
+    validAccounts.value = extractedSites;
     
     // ── 第 1.5 步：后台提前刷额度 ──
     preloadAllQuotas(extractedSites);
@@ -1066,7 +1210,7 @@ const processAccounts = async (accounts) => {
     const fullAllKeys = [];
 
     // ── 第 2 步：探测模型 (采用分流多进程) ──
-    const discoveryLimit = 12; 
+    const discoveryLimit = 25; 
     let currentIndex = 0;
 
     const discoverWorker = async () => {
