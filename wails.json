@@ -1,0 +1,14 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "BatchApiCheck",
+  "outputfilename": "batch-api-check",
+  "frontend:dir": ".",
+  "frontend:install": "node -e \"process.exit(0)\"",
+  "frontend:build": "npm run build:web",
+  "frontend:dev:watcher": "node -e \"process.exit(0)\"",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "ding",
+    "email": ""
+  }
+}

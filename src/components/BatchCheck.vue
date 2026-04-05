@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <ConfigProvider :theme="configProviderTheme">
     <div class="wrapper batch-wrapper">
       <div style="width: 100%;">
@@ -102,10 +102,19 @@
                 <p class="ant-upload-hint">解析后将自动并发获取每个网站的模型列表</p>
               </a-upload-dragger>
               
-              <div v-if="hasHistory" style="margin-top: 20px; text-align: center;">
-                <a-button @click="loadHistory" type="dashed">
-                  <HistoryOutlined /> 查看上一次检测结果
-                </a-button>
+              <div style="margin-top: 20px; text-align: center;">
+                <a-space v-if="isWailsRuntime || hasHistory">
+                  <a-button
+                    v-if="isWailsRuntime"
+                    @click="importFromExtension"
+                    :loading="isImportingExtension"
+                  >
+                    <InboxOutlined /> 从浏览器扩展导入
+                  </a-button>
+                  <a-button v-if="hasHistory" @click="loadHistory" type="dashed">
+                    <HistoryOutlined /> 查看上一次检测结果
+                  </a-button>
+                </a-space>
               </div>
             </div>
 
@@ -180,26 +189,6 @@
                   <RightOutlined v-else style="margin-right: 8px;" />
                   批量检测结果
                 </h3>
-                <a-space>
-                  <a-dropdown-button @click="copyOrganizedResults" :disabled="testing || !testResults.length">
-                    <CopyOutlined /> 整理有效配置
-                    <template #overlay>
-                      <a-menu>
-                        <a-menu-item key="2" @click="copyAllConfigs">
-                          <CopyOutlined /> 复制全表配置
-                        </a-menu-item>
-                      </a-menu>
-                    </template>
-                  </a-dropdown-button>
-                  <a-button @click="retestAllFromResults" :disabled="testing || !testResults.length">
-                    <RedoOutlined /> 再测一次
-                  </a-button>
-                  <a-button v-if="hasHistory && !testing" @click="loadHistory">
-                    <HistoryOutlined /> 恢复历史
-                  </a-button>
-                  <a-button danger v-if="testing" @click="stopTesting">停止检测</a-button>
-                  <a-button v-else @click="resetStep2">返回选择面板</a-button>
-                </a-space>
               </div>
               <div
                 v-if="browserSessionPolling.active"
@@ -208,29 +197,86 @@
                 <a-spin size="small" />
                 <span>受控浏览器后台检测中（{{ browserSessionPolling.round }} / {{ browserSessionPolling.totalRounds }}），剩余 {{ browserSessionPolling.pending }} 个站点...</span>
               </div>
-              <div style="display:flex; justify-content:space-between; align-items: flex-start; margin-bottom: 10px; gap: 20px;">
-                <div class="quick-filters" style="display:flex; flex-wrap:wrap; gap:8px; flex: 1;">
-                  <template v-for="group in quickFilters" :key="group.brand">
-                    <a-tag v-for="m in group.models" :key="m"
-                           :color="activeQuickFilters.includes(m) ? 'blue' : 'default'"
-                           style="cursor:pointer; user-select: none;"
-                           @click="toggleQuickFilter(m)"
-                    >
-                      {{ m }}
-                    </a-tag>
-                  </template>
-                </div>
-                <a-input-search
-                  v-model:value="resultModelFilter"
-                  placeholder="模型过滤：空格分隔关键字（如 gpt-5.2 codex）"
-                  style="width: 380px; flex-shrink: 0;"
-                  allow-clear
-                >
-                  <template #prefix><SearchOutlined /></template>
-                </a-input-search>
-              </div>
-
               <div v-show="isTableExpanded">
+                <div class="result-topbar">
+                  <div class="quick-filter-toolbar">
+                    <div class="quick-filter-strip" v-if="quickFilters.length">
+                      <a-popover
+                        v-for="family in quickFilters"
+                        :key="family.key"
+                        trigger="hover"
+                        placement="bottomLeft"
+                        overlayClassName="quick-filter-family-popover"
+                      >
+                        <template #content>
+                          <div class="quick-filter-family-panel">
+                            <div class="quick-filter-family-panel-title">{{ family.label }}</div>
+                            <div class="quick-filter-option-list">
+                              <a-button
+                                v-for="option in family.options"
+                                :key="option.key"
+                                size="small"
+                                :type="activeQuickFilters.includes(option.key) ? 'primary' : 'default'"
+                                @click="toggleQuickFilter(option.key)"
+                              >
+                                {{ option.label }}
+                              </a-button>
+                            </div>
+                          </div>
+                        </template>
+                        <a-button
+                          class="quick-filter-family-trigger"
+                          :type="isQuickFilterFamilyActive(family) ? 'primary' : 'default'"
+                        >
+                          {{ family.label }}
+                          <span v-if="getQuickFilterFamilyActiveCount(family)" class="quick-filter-family-count">
+                            {{ getQuickFilterFamilyActiveCount(family) }}
+                          </span>
+                        </a-button>
+                      </a-popover>
+                      <a-button
+                        class="quick-filter-clear-trigger"
+                        @click="clearQuickFilters"
+                        :disabled="!activeQuickFilters.length"
+                      >
+                        清空
+                      </a-button>
+                    </div>
+                    <div v-else class="quick-filter-empty-inline">暂无可用快捷分组</div>
+                    <span v-if="activeQuickFilterSummary" class="quick-filter-summary">{{ activeQuickFilterSummary }}</span>
+                  </div>
+
+                  <div class="result-side-controls">
+                    <a-input-search
+                      v-model:value="resultModelFilter"
+                      placeholder="模型过滤：空格分隔关键字（如 gpt-5.2 codex）"
+                      allow-clear
+                    >
+                      <template #prefix><SearchOutlined /></template>
+                    </a-input-search>
+
+                    <a-space wrap class="result-action-group">
+                      <a-dropdown-button @click="copyOrganizedResults" :disabled="testing || !testResults.length">
+                        <CopyOutlined /> 整理有效配置
+                        <template #overlay>
+                          <a-menu>
+                            <a-menu-item key="2" @click="copyAllConfigs">
+                              <CopyOutlined /> 复制全表配置
+                            </a-menu-item>
+                          </a-menu>
+                        </template>
+                      </a-dropdown-button>
+                      <a-button @click="retestAllFromResults" :disabled="testing || !testResults.length">
+                        <RedoOutlined /> 再测一次
+                      </a-button>
+                      <a-button v-if="hasHistory && !testing" @click="loadHistory">
+                        <HistoryOutlined /> 恢复历史
+                      </a-button>
+                      <a-button danger v-if="testing" @click="stopTesting">停止检测</a-button>
+                      <a-button v-else @click="resetStep2">返回选择面板</a-button>
+                    </a-space>
+                  </div>
+                </div>
                 <a-progress :percent="testProgress" show-info style="margin-bottom: 15px" />
 
                 <a-table
@@ -471,13 +517,15 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ConfigProvider, message, theme, Modal } from 'ant-design-vue';
 import { HomeOutlined, ReloadOutlined, MenuUnfoldOutlined, MenuFoldOutlined, InboxOutlined, PlayCircleOutlined, SearchOutlined, CopyOutlined, FilterOutlined, HistoryOutlined, ShareAltOutlined, DownOutlined, RightOutlined, CheckCircleOutlined, SettingOutlined, GithubOutlined, KeyOutlined, ExperimentOutlined, UserOutlined, LockOutlined, MessageOutlined, CopyFilled, SmileOutlined, RedoOutlined } from '@ant-design/icons-vue';
 import { fetchModelList } from '../utils/api.js';
+import { apiFetch, isProbablyWailsRuntime } from '../utils/runtimeApi.js';
 import { toggleTheme } from '../utils/theme.js';
 
+const isWailsRuntime = isProbablyWailsRuntime();
 const { t } = useI18n();
 const isDarkMode = ref(false);
 const configProviderTheme = computed(() => ({
@@ -488,6 +536,7 @@ const configProviderTheme = computed(() => ({
 const step = ref(1); // 1: upload, 2: select tree, 3: result table
 const isLoadingModels = ref(false);
 const isDiscoveringModels = ref(false);
+const isImportingExtension = ref(false);
 const totalAccountsCount = ref(0);
 const showExperimentalFeatures = ref(false);
 const showAppSettingsModal = ref(false);
@@ -612,6 +661,15 @@ const checkedKeys = ref([]);
 const allKeys = ref([]); // Store all keys for easy 'Select All'
 
 const loadedSitesCount = ref(0);
+const fetchKeysProgress = reactive({
+  active: false,
+  total: 0,
+  completed: 0,
+  successSites: 0,
+  lastSiteName: '',
+  startedAt: 0,
+  lastUpdatedAt: 0,
+});
 const browserSessionPolling = reactive({
   active: false,
   round: 0,
@@ -619,6 +677,7 @@ const browserSessionPolling = reactive({
   pending: 0,
 });
 const browserSessionPendingSiteNames = ref([]);
+let fetchKeysProgressTimer = null;
 
 // 按 siteUrl 缓存余额，确保其为响应式对象
 const siteQuotaCache = reactive({});
@@ -684,48 +743,193 @@ const scheduleOrganizedSourceRefresh = (force = false) => {
 const searchQuery = ref('');
 const filterOnlySuccess = ref(false);
 
-// 快捷筛选：按品牌分组，每组取版本最新的前3个模型
+// 快捷筛选：按系列分组，悬浮展开版本/子类
 const activeQuickFilters = ref([]);
 
+const normalizeQuickFilterName = (name) => {
+  const normalized = String(name || '').trim();
+  if (!normalized) return '';
+  const withoutVendor = normalized.includes('/') ? normalized.split('/').pop() : normalized;
+  return String(withoutVendor || '').trim();
+};
+
+const extractQuickFilterCategory = (name) => {
+  const normalized = normalizeQuickFilterName(name);
+  if (!normalized) return '';
+  const match = normalized.match(/gpt|[a-zA-Z]{3,}/i);
+  return match ? match[0].toLowerCase() : '';
+};
+
+const extractQuickFilterVersion = (name) => {
+  const normalized = normalizeQuickFilterName(name);
+  if (!normalized) return '';
+  const match = normalized.match(/\d+(?:\.\d+)?/);
+  return match ? match[0] : '';
+};
+
+const buildQuickFilterOptionLabel = (category, version, sampleName) => {
+  if (version) return `${category}-${version}`;
+  return normalizeQuickFilterName(sampleName || category);
+};
+
 const quickFilters = computed(() => {
-  const models = new Set(organizedSourceResults.value.map(r => r.modelName));
-  const grouped = {};
+  const models = Array.from(new Set(
+    organizedSourceResults.value
+      .map(item => String(item?.modelName || '').trim())
+      .filter(Boolean)
+  ));
+  const familyMap = new Map();
+
   models.forEach(model => {
-    const match = model.match(/^[a-zA-Z]{3,}/);
-    if (!match) return;
-    const brand = match[0].toLowerCase();
-    if (!grouped[brand]) grouped[brand] = [];
-    grouped[brand].push(model);
+    const category = extractQuickFilterCategory(model);
+    if (!category) return;
+    const version = extractQuickFilterVersion(model);
+    const familyKey = category;
+    const optionKey = `${familyKey}:${version || normalizeQuickFilterName(model).toLowerCase()}`;
+    if (!familyMap.has(familyKey)) {
+      familyMap.set(familyKey, {
+        key: familyKey,
+        label: familyKey.toUpperCase(),
+        category: familyKey,
+        optionsMap: new Map(),
+      });
+    }
+
+    const family = familyMap.get(familyKey);
+    if (!family.optionsMap.has(optionKey)) {
+      family.optionsMap.set(optionKey, {
+        key: optionKey,
+        label: buildQuickFilterOptionLabel(familyKey, version, model),
+        version,
+        models: [],
+      });
+    }
+
+    family.optionsMap.get(optionKey).models.push(model);
   });
 
-  const result = [];
-  for (const brand in grouped) {
-    grouped[brand].sort((a, b) => {
-      const numA = parseFloat(a.match(/\d+(\.\d+)?/)?.[0] || '0');
-      const numB = parseFloat(b.match(/\d+(\.\d+)?/)?.[0] || '0');
-      if (numA !== numB) return numB - numA;
-      return b.localeCompare(a);
+  const regularFamilies = [];
+  const rareOptions = [];
+  familyMap.forEach(family => {
+    const options = Array.from(family.optionsMap.values()).sort((a, b) => {
+      const versionDiff = (parseFloat(b.version) || 0) - (parseFloat(a.version) || 0);
+      if (versionDiff !== 0) return versionDiff;
+      return a.label.localeCompare(b.label);
     });
-    result.push({ brand, models: grouped[brand].slice(0, 3) });
+
+    const nextFamily = {
+      key: family.key,
+      label: family.label,
+      category: family.category,
+      options,
+    };
+
+    if (options.length <= 1) {
+      rareOptions.push(...options);
+      return;
+    }
+
+    regularFamilies.push(nextFamily);
+  });
+
+  if (rareOptions.length > 0) {
+    rareOptions.sort((a, b) => a.label.localeCompare(b.label));
+    regularFamilies.push({
+      key: 'rare',
+      label: '冷门组模型',
+      category: 'rare',
+      options: rareOptions,
+    });
   }
 
-  const priority = ['gpt', 'claude', 'gemini'];
-  result.sort((a, b) => {
-    const idxA = priority.indexOf(a.brand);
-    const idxB = priority.indexOf(b.brand);
+  const priority = ['gpt', 'claude', 'gemini', 'deepseek', 'llama', 'minimax', 'grok', 'kimi', 'glm'];
+  regularFamilies.sort((a, b) => {
+    const idxA = priority.indexOf(a.category);
+    const idxB = priority.indexOf(b.category);
     if (idxA !== -1 && idxB !== -1) return idxA - idxB;
     if (idxA !== -1) return -1;
     if (idxB !== -1) return 1;
-    return b.models.length - a.models.length;
+    if (a.options.length !== b.options.length) return b.options.length - a.options.length;
+    return a.label.localeCompare(b.label);
   });
-  return result.slice(0, 8);
+
+  return regularFamilies;
 });
 
-const toggleQuickFilter = (model) => {
-  const idx = activeQuickFilters.value.indexOf(model);
+const toggleQuickFilter = (optionKey) => {
+  const idx = activeQuickFilters.value.indexOf(optionKey);
   if (idx > -1) activeQuickFilters.value.splice(idx, 1);
-  else activeQuickFilters.value.push(model);
+  else activeQuickFilters.value.push(optionKey);
 };
+
+const clearQuickFilters = () => {
+  activeQuickFilters.value = [];
+};
+
+const isQuickFilterFamilyActive = (family) => {
+  return family.options.some(option => activeQuickFilters.value.includes(option.key));
+};
+
+const getQuickFilterFamilyActiveCount = (family) => {
+  return family.options.filter(option => activeQuickFilters.value.includes(option.key)).length;
+};
+
+const activeQuickFilterModelSet = computed(() => {
+  const selectedModels = new Set();
+  quickFilters.value.forEach(family => {
+    family.options.forEach(option => {
+      if (!activeQuickFilters.value.includes(option.key)) return;
+      option.models.forEach(model => selectedModels.add(model));
+    });
+  });
+  return selectedModels;
+});
+
+const activeQuickFilterSummary = computed(() => {
+  const labels = [];
+  quickFilters.value.forEach(family => {
+    family.options.forEach(option => {
+      if (activeQuickFilters.value.includes(option.key)) labels.push(option.label);
+    });
+  });
+  if (labels.length === 0) return '';
+  if (labels.length <= 3) return `已选: ${labels.join(' / ')}`;
+  return `已选: ${labels.slice(0, 3).join(' / ')} +${labels.length - 3}`;
+});
+
+const loadingStagePercent = computed(() => {
+  if (step.value !== -1 || !isLoadingModels.value) return 0;
+  const total = fetchKeysProgress.total || totalAccountsCount.value;
+  const completed = fetchKeysProgress.completed || 0;
+  if (total <= 0) return 0;
+  return Math.max(0, Math.min(100, Math.floor((completed / total) * 100)));
+});
+
+const loadingStageTitle = computed(() => {
+  if (isWailsRuntime && fetchKeysProgress.total > 0) return '正在提取站点 Token';
+  return '正在准备可检测站点';
+});
+
+const loadingStageDescription = computed(() => {
+  const total = fetchKeysProgress.total || totalAccountsCount.value;
+  const completed = fetchKeysProgress.completed || 0;
+  if (total > 0) {
+    return `已完成 ${completed} / ${total} 个站点，成功拉取 ${fetchKeysProgress.successSites} 个站点的 Token`;
+  }
+  return '正在建立批量检测所需的站点数据，请稍候。';
+});
+
+const loadingStageMeta = computed(() => {
+  const meta = [];
+  const refreshedAt = fetchKeysProgress.lastUpdatedAt || Date.now();
+  if (fetchKeysProgress.lastSiteName) {
+    meta.push(`当前站点：${fetchKeysProgress.lastSiteName}`);
+  }
+  if (fetchKeysProgress.startedAt) {
+    meta.push(`耗时 ${Math.max(1, Math.floor((refreshedAt - fetchKeysProgress.startedAt) / 1000))} 秒`);
+  }
+  return meta.join(' · ');
+});
 
 const testProgress = computed(() => {
   if (totalTasks.value === 0) return 0;
@@ -744,6 +948,9 @@ const organizedTreeData = computed(() => {
   // Grouping
   const groups = new Map();
   results.forEach(task => {
+    const matchQuickFilter =
+      activeQuickFilterModelSet.value.size === 0 ||
+      activeQuickFilterModelSet.value.has(task.modelName);
     const matchModel = modelKeywords.length === 0 || modelKeywords.some(k => task.modelName.toLowerCase().includes(k));
     // Keyword match: site name or model name matches ANY of symbols
     const matchSearch = keywords.length === 0 || keywords.some(k => 
@@ -754,6 +961,7 @@ const organizedTreeData = computed(() => {
     // Status match
     const isError = task.status === 'error';
     if (filterOnlySuccess.value && isError) return;
+    if (!matchQuickFilter) return;
     if (!matchModel) return;
     if (!matchSearch) return;
 
@@ -833,8 +1041,8 @@ const currentResultData = computed(() => {
   let filtered = testResults.value;
 
   // 1. Apply active quick filters if any
-  if (activeQuickFilters.value.length > 0) {
-    filtered = filtered.filter(item => activeQuickFilters.value.includes(item.modelName));
+  if (activeQuickFilterModelSet.value.size > 0) {
+    filtered = filtered.filter(item => activeQuickFilterModelSet.value.has(item.modelName));
   }
 
   // 2. Apply search keywords
@@ -1000,7 +1208,7 @@ const hoverQuota = (record) => {
         const uid = userId ? String(userId) : '';
         const proxyUrl = `/api/proxy-get?url=${encodeURIComponent(url)}&uid=${uid}`;
 
-        const res = await fetch(proxyUrl, {
+        const res = await apiFetch(proxyUrl, {
           headers: { 'Authorization': `Bearer ${auth}` },
           signal: controller.signal,
         });
@@ -1186,6 +1394,10 @@ onMounted(() => {
   }
 });
 
+onBeforeUnmount(() => {
+  stopFetchKeysProgressPolling();
+});
+
 const loadHistory = () => {
   const hist = localStorage.getItem('api_check_last_results');
   if (hist) {
@@ -1207,6 +1419,8 @@ const handleToggleTheme = () => {
 };
 
 const resetStep1 = () => {
+  stopFetchKeysProgressPolling();
+  resetFetchKeysProgress();
   step.value = 1;
   treeData.value = [];
   checkedKeys.value = [];
@@ -1216,6 +1430,7 @@ const resetStep1 = () => {
 };
 
 const resetStep2 = () => {
+  stopFetchKeysProgressPolling();
   step.value = 2;
   testResults.value = [];
   organizedSourceResults.value = [];
@@ -1292,7 +1507,7 @@ const normalizeFallbackBrowserType = (value) => {
 };
 
 const getDetectedFallbackBrowser = async () => {
-  const res = await fetch('/api/browser-session/browsers');
+  const res = await apiFetch('/api/browser-session/browsers');
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(text || `探测系统浏览器失败(${res.status})`);
@@ -1322,7 +1537,7 @@ const getDetectedFallbackBrowser = async () => {
 
 const getFallbackBrowserStatus = async (browserType = 'chrome') => {
   const normalizedType = normalizeFallbackBrowserType(browserType);
-  const res = await fetch(`/api/browser-session/status?browserType=${normalizedType}`);
+  const res = await apiFetch(`/api/browser-session/status?browserType=${normalizedType}`);
   if (!res.ok) {
     return { running: false, attached: false, browserType: normalizedType };
   }
@@ -1393,7 +1608,7 @@ const openSitesInBrowserSession = async (sites, browserType = 'chrome') => {
 
   if (!payload.length) return 0;
 
-  const res = await fetch('/api/browser-session/open', {
+  const res = await apiFetch('/api/browser-session/open', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sites: payload, browserType }),
@@ -1418,7 +1633,7 @@ const restartBrowserSessionProcessAndOpen = async (sites, browserType = 'chrome'
     }))
     .filter(site => /^https?:\/\//i.test(site.url));
 
-  const res = await fetch('/api/browser-session/restart-open', {
+  const res = await apiFetch('/api/browser-session/restart-open', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ browserType, sites: payload }),
@@ -1437,7 +1652,7 @@ const restartBrowserSessionProcessAndOpen = async (sites, browserType = 'chrome'
 const browserSessionFetchForAccounts = async (accounts, browserType = 'chrome', round = 1, totalRounds = 1) => {
   if (!accounts.length) return [];
 
-  const res = await fetch('/api/browser-session/fetch-keys', {
+  const res = await apiFetch('/api/browser-session/fetch-keys', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ accounts, browserType, round, totalRounds }),
@@ -1871,6 +2086,86 @@ const beforeUpload = (file) => {
   return false; // prevent automatic upload
 };
 
+const importFromExtension = async () => {
+  const importer = window?.go?.main?.App?.ImportExtensionAccounts;
+  if (typeof importer !== 'function') {
+    message.error('当前仅 Wails 桌面端支持扩展导入');
+    return;
+  }
+
+  isImportingExtension.value = true;
+  try {
+    const result = await importer();
+    const accounts = result?.payload?.accounts?.accounts;
+    if (!Array.isArray(accounts) || accounts.length === 0) {
+      message.warning('扩展存储中未找到可用账号数据');
+      return;
+    }
+    message.success(`已从扩展导入 ${accounts.length} 个账号`);
+    processAccountsV2(accounts);
+  } catch (err) {
+    stopFetchKeysProgressPolling();
+    message.error(err?.message || '扩展导入失败');
+  } finally {
+    isImportingExtension.value = false;
+  }
+};
+
+const fetchTokensForAccountsViaServer = async (accounts) => {
+  const response = await apiFetch('/api/fetch-keys', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ accounts }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(text || `server fetch failed (${response.status})`);
+  }
+  const data = await response.json().catch(() => ({}));
+  return Array.isArray(data?.results) ? data.results : [];
+};
+
+const resetFetchKeysProgress = () => {
+  fetchKeysProgress.active = false;
+  fetchKeysProgress.total = 0;
+  fetchKeysProgress.completed = 0;
+  fetchKeysProgress.successSites = 0;
+  fetchKeysProgress.lastSiteName = '';
+  fetchKeysProgress.startedAt = 0;
+  fetchKeysProgress.lastUpdatedAt = 0;
+};
+
+const stopFetchKeysProgressPolling = () => {
+  if (fetchKeysProgressTimer) {
+    clearInterval(fetchKeysProgressTimer);
+    fetchKeysProgressTimer = null;
+  }
+};
+
+const syncFetchKeysProgress = async () => {
+  try {
+    const response = await apiFetch('/api/fetch-keys/progress');
+    if (!response.ok) return;
+    const snapshot = await response.json().catch(() => null);
+    if (!snapshot || typeof snapshot !== 'object') return;
+    fetchKeysProgress.active = Boolean(snapshot.active);
+    fetchKeysProgress.total = Number(snapshot.total || 0);
+    fetchKeysProgress.completed = Number(snapshot.completed || 0);
+    fetchKeysProgress.successSites = Number(snapshot.successSites || 0);
+    fetchKeysProgress.lastSiteName = String(snapshot.lastSiteName || '');
+    fetchKeysProgress.startedAt = Number(snapshot.startedAt || 0);
+    fetchKeysProgress.lastUpdatedAt = Number(snapshot.lastUpdatedAt || 0);
+  } catch {}
+};
+
+const startFetchKeysProgressPolling = () => {
+  stopFetchKeysProgressPolling();
+  void syncFetchKeysProgress();
+  fetchKeysProgressTimer = setInterval(() => {
+    void syncFetchKeysProgress();
+  }, 700);
+};
+
 const updateBrowserSessionPendingSites = (sites) => {
   browserSessionPendingSiteNames.value = (Array.isArray(sites) ? sites : [])
     .map(site => String(site?.site_name || '').trim())
@@ -1892,8 +2187,8 @@ const processAccounts = async (accounts) => {
   
   // ── 第 0 步：清空后端日志 ──
   try {
-    await fetch('/api/clear-logs?type=fetch', { method: 'POST' });
-    await fetch('/api/clear-logs?type=check', { method: 'POST' });
+    await apiFetch('/api/clear-logs?type=fetch', { method: 'POST' });
+    await apiFetch('/api/clear-logs?type=check', { method: 'POST' });
   } catch (e) {
     console.warn('Clear logs fail, ignoring...', e);
   }
@@ -1939,7 +2234,7 @@ const processAccounts = async (accounts) => {
     if (failedAccounts.length > 0) {
       console.log(`[FetchKeys] 浏览器端失败 ${failedAccounts.length} 个，尝试服务端代理墙跑...`);
       try {
-        const serverResponse = await fetch('/api/fetch-keys', {
+        const serverResponse = await apiFetch('/api/fetch-keys', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ accounts: failedAccounts }),
@@ -2137,7 +2432,7 @@ const processAccounts = async (accounts) => {
           try {
             const rawDiscoveryId = site?.account_info?.id || site?.id || site?.uid || site?.user_id || '';
             const discoveryUid = /^\d+$/.test(String(rawDiscoveryId)) ? String(rawDiscoveryId) : '';
-            const res = await fetch(`/api/proxy-get?url=${encodeURIComponent(ep.url)}&uid=${discoveryUid}`, {
+            const res = await apiFetch(`/api/proxy-get?url=${encodeURIComponent(ep.url)}&uid=${discoveryUid}`, {
               headers: { Authorization: `Bearer ${testApiKey}` }
             });
             if (res.ok) {
@@ -2217,8 +2512,8 @@ const processAccountsV2 = async (accounts) => {
   }
 
   try {
-    await fetch('/api/clear-logs?type=fetch', { method: 'POST' });
-    await fetch('/api/clear-logs?type=check', { method: 'POST' });
+    await apiFetch('/api/clear-logs?type=fetch', { method: 'POST' });
+    await apiFetch('/api/clear-logs?type=check', { method: 'POST' });
   } catch (e) {
     console.warn('Clear logs fail, ignoring...', e);
   }
@@ -2237,6 +2532,10 @@ const processAccountsV2 = async (accounts) => {
   browserSessionPolling.totalRounds = 0;
   browserSessionPolling.pending = 0;
   browserSessionPendingSiteNames.value = [];
+  resetFetchKeysProgress();
+  if (isWailsRuntime) {
+    fetchKeysProgress.total = accountsToFetch.length;
+  }
 
   const isSiteFailed = (site) => !site || site.error || !Array.isArray(site.tokens) || site.tokens.length === 0;
   const getPendingHint = () => `后台检测中（第 ${Math.max(browserSessionPolling.round, 1)}/${Math.max(browserSessionPolling.totalRounds, 1)} 轮）`;
@@ -2390,7 +2689,7 @@ const processAccountsV2 = async (accounts) => {
           try {
             const rawDiscoveryId = site?.account_info?.id || site?.id || site?.uid || site?.user_id || '';
             const discoveryUid = /^\d+$/.test(String(rawDiscoveryId)) ? String(rawDiscoveryId) : '';
-            const res = await fetch(`/api/proxy-get?url=${encodeURIComponent(ep.url)}&uid=${discoveryUid}`, {
+            const res = await apiFetch(`/api/proxy-get?url=${encodeURIComponent(ep.url)}&uid=${discoveryUid}`, {
               headers: { Authorization: `Bearer ${tokenKey}` },
             });
             if (!res.ok) {
@@ -2527,43 +2826,54 @@ const processAccountsV2 = async (accounts) => {
   };
 
   try {
-    const BROWSER_FETCH_CONCURRENCY = 25;
-    const browserResults = new Array(accountsToFetch.length);
-    let currentIdx = 0;
-
-    const browserFetchWorker = async () => {
-      while (currentIdx < accountsToFetch.length) {
-        const idx = currentIdx++;
-        browserResults[idx] = await fetchTokensForAccountFromBrowserV2(accountsToFetch[idx]);
-      }
-    };
-
-    await Promise.all(
-      Array.from(
-        { length: Math.min(BROWSER_FETCH_CONCURRENCY, Math.max(accountsToFetch.length, 1)) },
-        () => browserFetchWorker()
-      )
-    );
-
-    extractedSites = browserResults;
-
-    const failedAccounts = accountsToFetch.filter((acc, i) => browserResults[i]?._needServerFallback === true);
-    if (failedAccounts.length > 0) {
-      console.log(`[FetchKeys] 浏览器端失败 ${failedAccounts.length} 个，尝试服务端代理兜底...`);
+    if (isWailsRuntime) {
+      console.log(`[FetchKeys] Wails WebView detected, use server-side extraction for ${accountsToFetch.length} sites`);
+      startFetchKeysProgressPolling();
       try {
-        const serverResponse = await fetch('/api/fetch-keys', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accounts: failedAccounts }),
-        });
-        if (serverResponse.ok) {
-          const serverData = await serverResponse.json();
-          const serverResults = Array.isArray(serverData?.results) ? serverData.results : [];
-          const mergeStats = mergeExtractedSiteResults(extractedSites, serverResults);
-          console.log(`[FetchKeys] 服务端兜底合并: mergedSites=${mergeStats.mergedSites}, recoveredSites=${mergeStats.recoveredSites}, gainedTokens=${mergeStats.gainedTokens}, gainedUsableTokens=${mergeStats.gainedUsableTokens}`);
+        extractedSites = await fetchTokensForAccountsViaServer(accountsToFetch);
+      } finally {
+        await syncFetchKeysProgress();
+        stopFetchKeysProgressPolling();
+      }
+    } else {
+      const BROWSER_FETCH_CONCURRENCY = 25;
+      const browserResults = new Array(accountsToFetch.length);
+      let currentIdx = 0;
+
+      const browserFetchWorker = async () => {
+        while (currentIdx < accountsToFetch.length) {
+          const idx = currentIdx++;
+          browserResults[idx] = await fetchTokensForAccountFromBrowserV2(accountsToFetch[idx]);
         }
-      } catch (e) {
-        console.warn('[FetchKeys] 服务端兜底失败:', e?.message || String(e));
+      };
+
+      await Promise.all(
+        Array.from(
+          { length: Math.min(BROWSER_FETCH_CONCURRENCY, Math.max(accountsToFetch.length, 1)) },
+          () => browserFetchWorker()
+        )
+      );
+
+      extractedSites = browserResults;
+
+      const failedAccounts = accountsToFetch.filter((acc, i) => browserResults[i]?._needServerFallback === true);
+      if (failedAccounts.length > 0) {
+        console.log(`[FetchKeys] 浏览器端失败 ${failedAccounts.length} 个，尝试服务端代理兜底...`);
+        try {
+          const serverResponse = await apiFetch('/api/fetch-keys', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ accounts: failedAccounts }),
+          });
+          if (serverResponse.ok) {
+            const serverData = await serverResponse.json();
+            const serverResults = Array.isArray(serverData?.results) ? serverData.results : [];
+            const mergeStats = mergeExtractedSiteResults(extractedSites, serverResults);
+            console.log(`[FetchKeys] 服务端兜底合并: mergedSites=${mergeStats.mergedSites}, recoveredSites=${mergeStats.recoveredSites}, gainedTokens=${mergeStats.gainedTokens}, gainedUsableTokens=${mergeStats.gainedUsableTokens}`);
+          }
+        } catch (e) {
+          console.warn('[FetchKeys] 服务端兜底失败:', e?.message || String(e));
+        }
       }
     }
 
@@ -2918,7 +3228,7 @@ const runSingleTest = async (task, customPayload = null) => {
       task.siteUrl = customPayload.url;
     }
 
-    const response = await fetch('/api/check-key', {
+    const response = await apiFetch('/api/check-key', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -3109,6 +3419,140 @@ const copyOrganizedResults = () => {
 
 <style scoped>
 /* Header & Navigation Style */
+.loading-status-card {
+  width: min(560px, 92vw);
+  margin-top: 18px;
+  padding: 18px 20px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+}
+
+.loading-status-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.loading-status-description {
+  margin: 0;
+  font-size: 14px;
+  color: #334155;
+}
+
+.loading-status-meta {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.result-topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 12px;
+}
+
+.result-side-controls {
+  width: 380px;
+  min-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.result-action-group {
+  justify-content: flex-start;
+}
+
+.quick-filter-toolbar {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 32px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.quick-filter-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0;
+  width: 100%;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.quick-filter-strip > :not(.quick-filter-clear-trigger) {
+  min-width: 0;
+}
+
+.quick-filter-empty-inline {
+  color: #94a3b8;
+  font-size: 13px;
+  padding: 6px 0;
+}
+
+.quick-filter-family-trigger,
+.quick-filter-clear-trigger {
+  width: 100%;
+  border: 0 !important;
+  border-right: 1px solid rgba(15, 23, 42, 0.08) !important;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  height: 40px;
+  justify-content: flex-start;
+  padding: 0 20px !important;
+}
+
+.quick-filter-strip > :nth-child(5n) .quick-filter-family-trigger,
+.quick-filter-strip > :nth-child(5n) .quick-filter-clear-trigger,
+.quick-filter-strip > .quick-filter-clear-trigger:nth-child(5n) {
+  border-right: 0 !important;
+}
+
+.quick-filter-strip > :nth-last-child(-n + 5) .quick-filter-family-trigger,
+.quick-filter-strip > :nth-last-child(-n + 5) .quick-filter-clear-trigger,
+.quick-filter-strip > .quick-filter-clear-trigger:nth-last-child(-n + 5) {
+  border-bottom: 0 !important;
+}
+
+.quick-filter-family-count {
+  margin-left: 6px;
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.quick-filter-summary {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.quick-filter-family-panel {
+  width: min(420px, 56vw);
+  max-width: 420px;
+}
+
+.quick-filter-family-panel-title {
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.quick-filter-option-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .header {
   display: flex !important;
   flex-direction: row !important;
@@ -3285,5 +3729,16 @@ const copyOrganizedResults = () => {
 
 .switch-icon:hover {
   text-shadow: 0 0 8px rgba(0, 123, 255, 0.4);
+}
+
+@media (max-width: 1200px) {
+  .result-topbar {
+    flex-direction: column;
+  }
+
+  .result-side-controls {
+    width: 100%;
+    min-width: 0;
+  }
 }
 </style>

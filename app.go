@@ -1,0 +1,304 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"sync"
+	"time"
+)
+
+const (
+	sidecarHost = "127.0.0.1"
+	sidecarPort = 3000
+)
+
+type App struct {
+	ctx        context.Context
+	sidecarCmd *exec.Cmd
+	sidecarLog *os.File
+	sidecarMu  sync.Mutex
+}
+
+func NewApp() *App {
+	return &App{}
+}
+
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+	debugLogf("startup begin")
+	if err := a.ensureSidecar(); err != nil {
+		debugLogf("startup sidecar error: %v", err)
+		fmt.Printf("failed to start local API sidecar: %v\n", err)
+		return
+	}
+	debugLogf("startup sidecar ready")
+}
+
+func (a *App) shutdown(ctx context.Context) {
+	_ = ctx
+	a.stopSidecar()
+}
+
+func (a *App) ensureSidecar() error {
+	a.sidecarMu.Lock()
+	defer a.sidecarMu.Unlock()
+
+	debugLogf("ensureSidecar enter")
+
+	if apiReady(sidecarHost, sidecarPort, 1200*time.Millisecond) {
+		debugLogf("sidecar already ready on %s:%d", sidecarHost, sidecarPort)
+		return nil
+	}
+	if tcpPortOpen(sidecarHost, sidecarPort, 600*time.Millisecond) {
+		if err := waitForAPIReady(sidecarHost, sidecarPort, 8*time.Second); err == nil {
+			debugLogf("sidecar became ready on occupied port %s:%d after waiting", sidecarHost, sidecarPort)
+			return nil
+		}
+		debugLogf("port %d occupied by another process", sidecarPort)
+		return fmt.Errorf("port %d is already occupied by another process", sidecarPort)
+	}
+
+	projectRoot, err := findProjectRoot()
+	if err != nil {
+		debugLogf("findProjectRoot failed: %v", err)
+		return err
+	}
+	debugLogf("project root: %s", projectRoot)
+
+	nodePath, err := exec.LookPath("node")
+	if err != nil {
+		debugLogf("node not found: %v", err)
+		return fmt.Errorf("node executable not found in PATH: %w", err)
+	}
+	debugLogf("node path: %s", nodePath)
+
+	viteBin := filepath.Join(projectRoot, "node_modules", "vite", "bin", "vite.js")
+	if _, err := os.Stat(viteBin); err != nil {
+		debugLogf("vite executable missing: %s", viteBin)
+		return fmt.Errorf("vite executable not found: %s", viteBin)
+	}
+	debugLogf("vite executable: %s", viteBin)
+
+	logDir := filepath.Join(projectRoot, "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		debugLogf("mkdir logs failed: %v", err)
+		return fmt.Errorf("failed to create log directory: %w", err)
+	}
+
+	logPath := filepath.Join(logDir, "EXE_BACKEND_DEBUG.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		debugLogf("open backend log failed: %v", err)
+		return fmt.Errorf("failed to open backend log: %w", err)
+	}
+
+	cmd := exec.Command(nodePath, viteBin, "--host", sidecarHost, "--port", fmt.Sprintf("%d", sidecarPort), "--strictPort")
+	cmd.Dir = projectRoot
+	cmd.Env = os.Environ()
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+
+	if _, err := io.WriteString(logFile, fmt.Sprintf("[%s] [EXE] starting vite sidecar in %s\n", time.Now().Format(time.RFC3339), projectRoot)); err != nil {
+		_ = logFile.Close()
+		return fmt.Errorf("failed to write startup log: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		debugLogf("start vite sidecar failed: %v", err)
+		return fmt.Errorf("failed to launch vite sidecar: %w", err)
+	}
+	debugLogf("vite sidecar process started pid=%d", cmd.Process.Pid)
+
+	a.sidecarCmd = cmd
+	a.sidecarLog = logFile
+
+	go a.waitSidecar(cmd, logFile)
+
+	if err := waitForAPIReady(sidecarHost, sidecarPort, 20*time.Second); err != nil {
+		debugLogf("waitForAPIReady failed: %v", err)
+		a.stopSidecarLocked()
+		return fmt.Errorf("vite sidecar did not become ready: %w", err)
+	}
+
+	_, _ = io.WriteString(logFile, fmt.Sprintf("[%s] [EXE] vite sidecar ready at http://%s:%d\n", time.Now().Format(time.RFC3339), sidecarHost, sidecarPort))
+	debugLogf("vite sidecar ready at http://%s:%d", sidecarHost, sidecarPort)
+	return nil
+}
+
+func (a *App) waitSidecar(cmd *exec.Cmd, logFile *os.File) {
+	err := cmd.Wait()
+
+	a.sidecarMu.Lock()
+	defer a.sidecarMu.Unlock()
+
+	if a.sidecarCmd == cmd {
+		a.sidecarCmd = nil
+	}
+
+	if logFile != nil {
+		if err != nil {
+			_, _ = io.WriteString(logFile, fmt.Sprintf("[%s] [EXE] vite sidecar exited with error: %v\n", time.Now().Format(time.RFC3339), err))
+		} else {
+			_, _ = io.WriteString(logFile, fmt.Sprintf("[%s] [EXE] vite sidecar exited cleanly\n", time.Now().Format(time.RFC3339)))
+		}
+	}
+
+	if a.sidecarLog == logFile {
+		_ = a.sidecarLog.Close()
+		a.sidecarLog = nil
+	}
+}
+
+func (a *App) stopSidecar() {
+	a.sidecarMu.Lock()
+	defer a.sidecarMu.Unlock()
+	a.stopSidecarLocked()
+}
+
+func (a *App) stopSidecarLocked() {
+	if a.sidecarCmd != nil && a.sidecarCmd.Process != nil {
+		killProcessTree(a.sidecarCmd.Process.Pid)
+		a.sidecarCmd = nil
+	}
+	if a.sidecarLog != nil {
+		_, _ = io.WriteString(a.sidecarLog, fmt.Sprintf("[%s] [EXE] stopping vite sidecar\n", time.Now().Format(time.RFC3339)))
+		_ = a.sidecarLog.Close()
+		a.sidecarLog = nil
+	}
+}
+
+func killProcessTree(pid int) {
+	if pid <= 0 {
+		return
+	}
+
+	if runtime.GOOS == "windows" {
+		_ = exec.Command("taskkill", "/PID", fmt.Sprintf("%d", pid), "/T", "/F").Run()
+		return
+	}
+
+	_ = exec.Command("kill", "-TERM", fmt.Sprintf("%d", pid)).Run()
+}
+
+func findProjectRoot() (string, error) {
+	exePath, _ := os.Executable()
+	workingDir, _ := os.Getwd()
+
+	candidates := []string{
+		workingDir,
+		filepath.Dir(exePath),
+		filepath.Join(filepath.Dir(exePath), ".."),
+		filepath.Join(filepath.Dir(exePath), "..", ".."),
+	}
+
+	for _, candidate := range candidates {
+		if root := walkUpToProjectRoot(candidate); root != "" {
+			return root, nil
+		}
+	}
+
+	return "", fmt.Errorf("unable to locate project root from cwd=%s exe=%s", workingDir, exePath)
+}
+
+func walkUpToProjectRoot(start string) string {
+	if start == "" {
+		return ""
+	}
+
+	dir := filepath.Clean(start)
+	for {
+		if looksLikeProjectRoot(dir) {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+func looksLikeProjectRoot(dir string) bool {
+	required := []string{
+		filepath.Join(dir, "package.json"),
+		filepath.Join(dir, "vite.config.js"),
+		filepath.Join(dir, "node_modules", "vite", "bin", "vite.js"),
+	}
+	for _, path := range required {
+		if _, err := os.Stat(path); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func waitForAPIReady(host string, port int, timeout time.Duration) error {
+	start := time.Now()
+	for time.Since(start) < timeout {
+		if apiReady(host, port, 1200*time.Millisecond) {
+			return nil
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return fmt.Errorf("timeout after %s", timeout)
+}
+
+func apiReady(host string, port int, timeout time.Duration) bool {
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Get(fmt.Sprintf("http://%s:%d/api/browser-session/browsers", host, port))
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 500
+}
+
+func tcpPortOpen(host string, port int, timeout time.Duration) bool {
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, port), timeout)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+func debugLogf(format string, args ...interface{}) {
+	line := fmt.Sprintf("[%s] [EXE] %s\n", time.Now().Format(time.RFC3339), fmt.Sprintf(format, args...))
+	for _, path := range candidateDebugLogPaths() {
+		if path == "" {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			continue
+		}
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			continue
+		}
+		_, _ = io.WriteString(file, line)
+		_ = file.Close()
+		return
+	}
+}
+
+func candidateDebugLogPaths() []string {
+	var paths []string
+	if wd, err := os.Getwd(); err == nil && wd != "" {
+		paths = append(paths, filepath.Join(wd, "logs", "EXE_BACKEND_DEBUG.log"))
+	}
+	if exePath, err := os.Executable(); err == nil && exePath != "" {
+		exeDir := filepath.Dir(exePath)
+		paths = append(paths, filepath.Join(exeDir, "logs", "EXE_BACKEND_DEBUG.log"))
+		paths = append(paths, filepath.Join(exeDir, "..", "logs", "EXE_BACKEND_DEBUG.log"))
+		paths = append(paths, filepath.Join(exeDir, "..", "..", "logs", "EXE_BACKEND_DEBUG.log"))
+	}
+	return paths
+}
