@@ -1,4 +1,4 @@
-﻿import { defineConfig } from 'vite';
+import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import fs from 'fs';
 import path from 'path';
@@ -111,10 +111,11 @@ function getDefaultBrowserUserDataDir(browserType = 'chrome') {
 
 function getBrowserProfileLaunchMode(browserType = 'chrome') {
   const explicitMode = String(process.env.BROWSER_PROFILE_MODE || '').trim().toLowerCase();
-  if (explicitMode === 'managed-copy' || explicitMode === 'linked-default') {
+  if (explicitMode === 'managed-copy' || explicitMode === 'linked-default' || explicitMode === 'shadow-copy') {
     return explicitMode;
   }
-  return process.platform === 'win32' ? 'linked-default' : 'managed-copy';
+  // shadow-copy: 大目录 Junction 链接 + 核心文件物理拷贝，Windows 默认
+  return process.platform === 'win32' ? 'shadow-copy' : 'managed-copy';
 }
 
 function detectInstalledBrowsers() {
@@ -267,9 +268,91 @@ function getLinkedDefaultBrowserProfileDir(browserType = 'chrome') {
   return { profileDir: linkDir, targetDir: defaultDir, mode: 'linked-default' };
 }
 
+/**
+ * 创建"影子"配置目录：
+ *  - 大体积目录（Extensions/ShaderCache 等）使用 Junction 符号链接，避免拷贝耗时
+ *  - 核心状态文件（Preferences/Cookies/Login Data 等）物理拷贝，避免与正在运行的浏览器争锁
+ */
+function createShadowProfileDir(browserType = 'chrome') {
+  const normalizedBrowser = browserType === 'edge' ? 'edge' : 'chrome';
+  const defaultUserDataDir = getDefaultBrowserUserDataDir(normalizedBrowser);
+  if (!defaultUserDataDir || !fs.existsSync(defaultUserDataDir)) {
+    throw new Error(`${normalizedBrowser === 'chrome' ? 'Chrome' : 'Edge'} 默认用户目录不存在，无法创建影子配置`);
+  }
+
+  const shadowRoot = path.join(process.cwd(), '.browser-session-shadow', normalizedBrowser);
+  // 每次启动前重建影子目录，确保核心状态文件是最新拷贝
+  try { fs.rmSync(shadowRoot, { recursive: true, force: true }); } catch {}
+  fs.mkdirSync(shadowRoot, { recursive: true });
+
+  const defaultProfileSrc = path.join(defaultUserDataDir, 'Default');
+  const defaultProfileDst = path.join(shadowRoot, 'Default');
+  fs.mkdirSync(defaultProfileDst, { recursive: true });
+
+  // 1. 物理拷贝 User Data 根目录核心文件
+  for (const file of ['Local State', 'First Run']) {
+    const src = path.join(defaultUserDataDir, file);
+    if (fs.existsSync(src)) {
+      try { fs.copyFileSync(src, path.join(shadowRoot, file)); } catch (e) {
+        fetchLog(`[ShadowProfile] 拷贝根文件失败: ${file} | ${e.message}`);
+      }
+    }
+  }
+
+  // 2. 物理拷贝 Default/ 核心文件（Chrome 启动时会对其加锁）
+  const profileFilesToCopy = [
+    'Preferences', 'Login Data', 'Login Data-journal',
+    'Cookies', 'Cookies-journal',
+    'Web Data', 'Web Data-journal',
+    'Bookmarks', 'History', 'TransportSecurity',
+  ];
+  for (const file of profileFilesToCopy) {
+    const src = path.join(defaultProfileSrc, file);
+    if (fs.existsSync(src)) {
+      try { fs.copyFileSync(src, path.join(defaultProfileDst, file)); } catch (e) {
+        fetchLog(`[ShadowProfile] 拷贝 Default/${file} 失败: ${e.message}`);
+      }
+    }
+  }
+
+  // 3. 大体积目录用 Junction 符号链接，读取最新但不拷贝
+  const profileDirsToLink = [
+    'Extensions', 'Dictionaries', 'ShaderCache', 'GrShaderCache',
+    'Application Cache', 'Code Cache', 'IndexedDB', 'Local Storage',
+    'Cache', 'Cache2', 'GPUCache', 'Service Worker',
+  ];
+  for (const dir of profileDirsToLink) {
+    const src = path.join(defaultProfileSrc, dir);
+    const dst = path.join(defaultProfileDst, dir);
+    if (fs.existsSync(src)) {
+      try { fs.symlinkSync(src, dst, 'junction'); } catch (e) {
+        fetchLog(`[ShadowProfile] 链接 Default/${dir} 失败: ${e.message}`);
+      }
+    }
+  }
+
+  // 4. User Data 根目录的大体积目录也做 Junction
+  const rootDirsToLink = ['Crashpad', 'hyphen-data', 'WidevineCdm', 'SwReporter'];
+  for (const dir of rootDirsToLink) {
+    const src = path.join(defaultUserDataDir, dir);
+    const dst = path.join(shadowRoot, dir);
+    if (fs.existsSync(src)) {
+      try { fs.symlinkSync(src, dst, 'junction'); } catch (e) {
+        fetchLog(`[ShadowProfile] 链接根目录 ${dir} 失败: ${e.message}`);
+      }
+    }
+  }
+
+  fetchLog(`[ShadowProfile] 影子配置创建完成(${normalizedBrowser}) shadow=${shadowRoot} source=${defaultUserDataDir}`);
+  return { profileDir: shadowRoot, targetDir: defaultUserDataDir, mode: 'shadow-copy' };
+}
+
 function resolveBrowserProfileDir(browserType = 'chrome') {
   const normalizedBrowser = browserType === 'edge' ? 'edge' : 'chrome';
   const mode = getBrowserProfileLaunchMode(normalizedBrowser);
+  if (mode === 'shadow-copy') {
+    return createShadowProfileDir(normalizedBrowser);
+  }
   if (mode === 'linked-default') {
     return getLinkedDefaultBrowserProfileDir(normalizedBrowser);
   }
@@ -280,6 +363,7 @@ function resolveBrowserProfileDir(browserType = 'chrome') {
     mode,
   };
 }
+
 
 function isTcpPortReachable(port, host = '127.0.0.1', timeoutMs = 800) {
   return new Promise((resolve) => {

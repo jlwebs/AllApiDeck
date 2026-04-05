@@ -191,6 +191,12 @@
                       </a-menu>
                     </template>
                   </a-dropdown-button>
+                  <a-button @click="retestAllFromResults" :disabled="testing || !testResults.length">
+                    <RedoOutlined /> 再测一次
+                  </a-button>
+                  <a-button v-if="hasHistory && !testing" @click="loadHistory">
+                    <HistoryOutlined /> 恢复历史
+                  </a-button>
                   <a-button danger v-if="testing" @click="stopTesting">停止检测</a-button>
                   <a-button v-else @click="resetStep2">返回选择面板</a-button>
                 </a-space>
@@ -202,11 +208,22 @@
                 <a-spin size="small" />
                 <span>受控浏览器后台检测中（{{ browserSessionPolling.round }} / {{ browserSessionPolling.totalRounds }}），剩余 {{ browserSessionPolling.pending }} 个站点...</span>
               </div>
-              <div style="display:flex; justify-content:flex-end; margin-bottom: 10px;">
+              <div style="display:flex; justify-content:space-between; align-items: flex-start; margin-bottom: 10px; gap: 20px;">
+                <div class="quick-filters" style="display:flex; flex-wrap:wrap; gap:8px; flex: 1;">
+                  <template v-for="group in quickFilters" :key="group.brand">
+                    <a-tag v-for="m in group.models" :key="m"
+                           :color="activeQuickFilters.includes(m) ? 'blue' : 'default'"
+                           style="cursor:pointer; user-select: none;"
+                           @click="toggleQuickFilter(m)"
+                    >
+                      {{ m }}
+                    </a-tag>
+                  </template>
+                </div>
                 <a-input-search
                   v-model:value="resultModelFilter"
                   placeholder="模型过滤：空格分隔关键字（如 gpt-5.2 codex）"
-                  style="width: 420px"
+                  style="width: 380px; flex-shrink: 0;"
                   allow-clear
                 >
                   <template #prefix><SearchOutlined /></template>
@@ -457,7 +474,7 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ConfigProvider, message, theme, Modal } from 'ant-design-vue';
-import { HomeOutlined, ReloadOutlined, MenuUnfoldOutlined, MenuFoldOutlined, InboxOutlined, PlayCircleOutlined, SearchOutlined, CopyOutlined, FilterOutlined, HistoryOutlined, ShareAltOutlined, DownOutlined, RightOutlined, CheckCircleOutlined, SettingOutlined, GithubOutlined, KeyOutlined, ExperimentOutlined, UserOutlined, LockOutlined, MessageOutlined, CopyFilled, SmileOutlined } from '@ant-design/icons-vue';
+import { HomeOutlined, ReloadOutlined, MenuUnfoldOutlined, MenuFoldOutlined, InboxOutlined, PlayCircleOutlined, SearchOutlined, CopyOutlined, FilterOutlined, HistoryOutlined, ShareAltOutlined, DownOutlined, RightOutlined, CheckCircleOutlined, SettingOutlined, GithubOutlined, KeyOutlined, ExperimentOutlined, UserOutlined, LockOutlined, MessageOutlined, CopyFilled, SmileOutlined, RedoOutlined } from '@ant-design/icons-vue';
 import { fetchModelList } from '../utils/api.js';
 import { toggleTheme } from '../utils/theme.js';
 
@@ -667,6 +684,49 @@ const scheduleOrganizedSourceRefresh = (force = false) => {
 const searchQuery = ref('');
 const filterOnlySuccess = ref(false);
 
+// 快捷筛选：按品牌分组，每组取版本最新的前3个模型
+const activeQuickFilters = ref([]);
+
+const quickFilters = computed(() => {
+  const models = new Set(organizedSourceResults.value.map(r => r.modelName));
+  const grouped = {};
+  models.forEach(model => {
+    const match = model.match(/^[a-zA-Z]{3,}/);
+    if (!match) return;
+    const brand = match[0].toLowerCase();
+    if (!grouped[brand]) grouped[brand] = [];
+    grouped[brand].push(model);
+  });
+
+  const result = [];
+  for (const brand in grouped) {
+    grouped[brand].sort((a, b) => {
+      const numA = parseFloat(a.match(/\d+(\.\d+)?/)?.[0] || '0');
+      const numB = parseFloat(b.match(/\d+(\.\d+)?/)?.[0] || '0');
+      if (numA !== numB) return numB - numA;
+      return b.localeCompare(a);
+    });
+    result.push({ brand, models: grouped[brand].slice(0, 3) });
+  }
+
+  const priority = ['gpt', 'claude', 'gemini'];
+  result.sort((a, b) => {
+    const idxA = priority.indexOf(a.brand);
+    const idxB = priority.indexOf(b.brand);
+    if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+    if (idxA !== -1) return -1;
+    if (idxB !== -1) return 1;
+    return b.models.length - a.models.length;
+  });
+  return result.slice(0, 8);
+});
+
+const toggleQuickFilter = (model) => {
+  const idx = activeQuickFilters.value.indexOf(model);
+  if (idx > -1) activeQuickFilters.value.splice(idx, 1);
+  else activeQuickFilters.value.push(model);
+};
+
 const testProgress = computed(() => {
   if (totalTasks.value === 0) return 0;
   return Math.floor((completedTasks.value / totalTasks.value) * 100);
@@ -770,12 +830,23 @@ const organizedTreeData = computed(() => {
 });
 
 const currentResultData = computed(() => {
+  let filtered = testResults.value;
+
+  // 1. Apply active quick filters if any
+  if (activeQuickFilters.value.length > 0) {
+    filtered = filtered.filter(item => activeQuickFilters.value.includes(item.modelName));
+  }
+
+  // 2. Apply search keywords
   const keywords = resultModelFilter.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  if (!keywords.length) return testResults.value;
-  return testResults.value.filter(item => {
-    const model = String(item?.modelName || '').toLowerCase();
-    return keywords.some(k => model.includes(k));
-  });
+  if (keywords.length > 0) {
+    filtered = filtered.filter(item => {
+      const model = String(item?.modelName || '').toLowerCase();
+      return keywords.some(k => model.includes(k));
+    });
+  }
+
+  return filtered;
 });
 
 const resultColumns = [
@@ -2756,6 +2827,61 @@ const stopTesting = () => {
   // Trigger abort on controllers
   cancelTokens.value.forEach(controller => controller.abort());
   message.info('已停止检测');
+};
+
+const retestAllFromResults = async () => {
+  if (testing.value) return;
+  if (!testResults.value || testResults.value.length === 0) {
+    message.warning('当前没有任务可测试');
+    return;
+  }
+  
+  // 重置任务状态
+  tasksQueue.length = 0;
+  testResults.value.forEach(task => {
+    task.status = 'pending';
+    task.statusText = '排队中';
+    task.responseTime = '-';
+    task.remark = '-';
+    tasksQueue.push(task);
+  });
+  
+  testing.value = true;
+  totalTasks.value = tasksQueue.length;
+  completedTasks.value = 0;
+  cancelTokens.value = [];
+  scheduleOrganizedSourceRefresh(true);
+  
+  message.success('已重新加入队列开始测试！');
+  
+  let currentIndex = 0;
+  const worker = async () => {
+    while (currentIndex < tasksQueue.length && testing.value) {
+      const taskIndex = currentIndex++;
+      const task = tasksQueue[taskIndex];
+      task.status = 'testing';
+      task.statusText = '测试中';
+      await runSingleTest(task);
+      completedTasks.value++;
+      scheduleOrganizedSourceRefresh();
+    }
+  };
+
+  const workers = [];
+  const actualConcurrency = Math.min(batchConcurrency.value, tasksQueue.length);
+  for (let i = 0; i < actualConcurrency; i++) {
+    workers.push(worker());
+  }
+
+  await Promise.all(workers);
+  
+  if (testing.value) {
+    testing.value = false;
+    scheduleOrganizedSourceRefresh(true);
+    message.success('再次批量检测完成！');
+    localStorage.setItem('api_check_last_results', JSON.stringify(testResults.value));
+    hasHistory.value = true;
+  }
 };
 
 const runSingleTest = async (task, customPayload = null) => {
