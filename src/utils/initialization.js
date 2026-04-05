@@ -1,14 +1,8 @@
 import { appInfo, banner } from './info.js';
 export function initializeTheme(isDarkMode) {
   // 初始化主题
-  const savedTheme = localStorage.getItem('theme');
-  if (savedTheme) {
-    isDarkMode.value = savedTheme === 'dark';
-  } else {
-    isDarkMode.value = window.matchMedia(
-      '(prefers-color-scheme: dark)'
-    ).matches;
-  }
+  const savedTheme = localStorage.getItem('api_check_theme');
+  isDarkMode.value = savedTheme === 'dark';
   document.body.classList.toggle('dark-mode', isDarkMode.value);
   document.body.classList.toggle('light-mode', !isDarkMode.value);
 }
