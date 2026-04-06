@@ -1,12 +1,196 @@
+import { apiFetch } from './runtimeApi.js';
+
 export async function fetchModelList(apiUrl, apiKey) {
-  const apiUrlValue = apiUrl.replace(/\/+$/, '');
-  const response = await fetch(`${apiUrlValue}/v1/models`, {
+  const endpoints = buildModelEndpointCandidates(apiUrl);
+  const errors = [];
+  const controllers = endpoints.map(() => new AbortController());
+
+  try {
+    const winner = await Promise.any(
+      endpoints.map((endpoint, index) =>
+        requestModelList(endpoint, apiKey, controllers[index].signal)
+          .then(result => ({ index, result }))
+          .catch(error => {
+            errors.push(`${endpoint} -> ${error.message}`);
+            throw error;
+          })
+      )
+    );
+
+    controllers.forEach((controller, index) => {
+      if (index !== winner.index) {
+        controller.abort();
+      }
+    });
+
+    return winner.result;
+  } catch (error) {
+    const detail = errors.slice(0, 6).join(' | ');
+    throw new Error(detail || error?.message || '未找到可用的 models 接口');
+  }
+}
+
+async function requestModelList(endpoint, apiKey, signal) {
+  const target = `/api/proxy-get?url=${encodeURIComponent(endpoint)}`;
+  const response = await apiFetch(target, {
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
+    signal,
   });
-  return await response.json();
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const normalized = normalizeModelListPayload(payload);
+  const candidates = normalized?.data || normalized?.models || [];
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    throw new Error('empty model list');
+  }
+
+  return normalized;
+}
+
+function normalizeModelListPayload(payload) {
+  if (Array.isArray(payload)) {
+    return { data: payload };
+  }
+
+  if (Array.isArray(payload?.data)) {
+    return payload;
+  }
+
+  if (Array.isArray(payload?.data?.data)) {
+    return {
+      ...payload,
+      data: payload.data.data,
+    };
+  }
+
+  if (Array.isArray(payload?.data?.items)) {
+    return {
+      ...payload,
+      data: payload.data.items,
+    };
+  }
+
+  if (Array.isArray(payload?.models)) {
+    return {
+      ...payload,
+      data: payload.models,
+    };
+  }
+
+  if (Array.isArray(payload?.result?.models)) {
+    return {
+      ...payload,
+      data: payload.result.models,
+    };
+  }
+
+  if (Array.isArray(payload?.items)) {
+    return {
+      ...payload,
+      data: payload.items,
+    };
+  }
+
+  return payload || { data: [] };
+}
+
+function buildModelEndpointCandidates(apiUrl) {
+  const normalizedInput = String(apiUrl || '').trim().replace(/\/+$/, '');
+  if (!normalizedInput) {
+    throw new Error('API 地址不能为空');
+  }
+
+  const bases = new Set([normalizedInput]);
+  const queue = [normalizedInput];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const stripped = stripKnownApiSuffix(current);
+    if (stripped && stripped !== current && !bases.has(stripped)) {
+      bases.add(stripped);
+      queue.push(stripped);
+    }
+  }
+
+  const endpoints = new Set();
+  bases.forEach(base => {
+    if (/\/api\/user\/models$/i.test(base) || /\/api\/models$/i.test(base) || /\/api\/v\d+\/models$/i.test(base) || /\/v\d+\/models$/i.test(base) || /\/models$/i.test(base)) {
+      endpoints.add(base);
+      return;
+    }
+
+    if (/\/api\/v\d+$/i.test(base)) {
+      endpoints.add(`${base}/models`);
+      endpoints.add(`${base.replace(/\/api\/v\d+$/i, '')}/api/models`);
+      endpoints.add(`${base.replace(/\/api\/v\d+$/i, '')}/api/user/models`);
+      endpoints.add(`${base.replace(/\/api\/v\d+$/i, '')}/v1/models`);
+      return;
+    }
+
+    if (/\/api$/i.test(base)) {
+      endpoints.add(`${base}/models`);
+      endpoints.add(`${base}/user/models`);
+      endpoints.add(`${base}/v1/models`);
+      endpoints.add(`${base.replace(/\/api$/i, '')}/v1/models`);
+      return;
+    }
+
+    if (/\/v\d+$/i.test(base)) {
+      endpoints.add(`${base}/models`);
+      endpoints.add(`${base.replace(/\/v\d+$/i, '')}/v1/models`);
+      endpoints.add(`${base.replace(/\/v\d+$/i, '')}/models`);
+      endpoints.add(`${base.replace(/\/v\d+$/i, '')}/api/models`);
+      endpoints.add(`${base.replace(/\/v\d+$/i, '')}/api/user/models`);
+      return;
+    }
+
+    endpoints.add(`${base}/v1/models`);
+    endpoints.add(`${base}/models`);
+    endpoints.add(`${base}/api/models`);
+    endpoints.add(`${base}/api/user/models`);
+    endpoints.add(`${base}/api/v1/models`);
+  });
+
+  return Array.from(endpoints);
+}
+
+function stripKnownApiSuffix(input) {
+  const patterns = [
+    /\/v\d+\/chat\/completions$/i,
+    /\/chat\/completions$/i,
+    /\/v\d+\/completions$/i,
+    /\/completions$/i,
+    /\/v\d+\/responses$/i,
+    /\/responses$/i,
+    /\/v\d+\/embeddings$/i,
+    /\/embeddings$/i,
+    /\/v\d+\/images\/generations$/i,
+    /\/images\/generations$/i,
+    /\/api\/user\/models$/i,
+    /\/api\/models$/i,
+    /\/api\/v\d+\/models$/i,
+    /\/v\d+\/models$/i,
+    /\/models$/i,
+    /\/api\/v\d+$/i,
+    /\/api$/i,
+    /\/v\d+$/i,
+  ];
+
+  for (const pattern of patterns) {
+    if (pattern.test(input)) {
+      return input.replace(pattern, '');
+    }
+  }
+
+  return input;
 }
 
 export async function fetchQuotaInfo(apiUrl, apiKey) {

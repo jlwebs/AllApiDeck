@@ -36,3 +36,5 @@ tput
 
 
 .ace-tool/
+*.err
+*.out

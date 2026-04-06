@@ -25,19 +25,31 @@ function checkLog(msg) {
 router.get('/proxy-get', async (req, res) => {
   const targetUrl = req.query.url;
   const auth = req.headers.authorization;
+  const uid = String(req.query.uid || '').trim();
 
   if (!targetUrl) return res.status(400).json({ message: '缺少 url 参数' });
 
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
+    const headers = {
+      'Authorization': auth,
+      'Accept': 'application/json'
+    };
+    if (/^\d+$/.test(uid)) {
+      headers['new-api-user'] = uid;
+      headers['one-api-user'] = uid;
+      headers['New-API-User'] = uid;
+      headers['Veloera-User'] = uid;
+      headers['voapi-user'] = uid;
+      headers['User-id'] = uid;
+      headers['Rix-Api-User'] = uid;
+      headers['neo-api-user'] = uid;
+    }
 
     const response = await fetch(targetUrl, {
       method: 'GET',
-      headers: {
-        'Authorization': auth,
-        'Accept': 'application/json'
-      },
+      headers,
       signal: controller.signal
     });
     

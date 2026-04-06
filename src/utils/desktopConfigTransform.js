@@ -1,0 +1,532 @@
+const OPENCLAW_DEFAULT_CONFIG = {
+  models: {
+    mode: 'merge',
+    providers: {},
+  },
+};
+
+export const DESKTOP_CONFIG_APPS = [
+  { id: 'claude', label: 'Claude' },
+  { id: 'codex', label: 'Codex' },
+  { id: 'opencode', label: 'OpenCode' },
+  { id: 'openclaw', label: 'OpenClaw' },
+];
+
+export function createDesktopConfigDraft(record) {
+  const defaultModel =
+    String(record?.quickTestModel || '').trim() ||
+    pickFallbackModel(record?.modelsList, record?.modelsText);
+  const providerName = String(record?.siteName || 'Custom Provider').trim() || 'Custom Provider';
+  const endpoint = String(record?.siteUrl || '').trim();
+  const apiKey = String(record?.apiKey || '').trim();
+
+  return {
+    selectedApps: [],
+    providerName,
+    providerKey: sanitizeProviderKey(providerName),
+    endpoint,
+    apiKey,
+    model: defaultModel || 'gpt-4o-mini',
+    claudeBaseUrl: endpoint,
+    claudeApiKeyField: 'ANTHROPIC_AUTH_TOKEN',
+    codexBaseUrl: endpoint,
+    opencodeBaseUrl: endpoint,
+    opencodeNpm: '@ai-sdk/openai-compatible',
+    openclawBaseUrl: endpoint,
+    openclawApi: 'openai-completions',
+  };
+}
+
+export function buildDesktopConfigPreview(draft, snapshot) {
+  const selectedApps = Array.isArray(draft?.selectedApps) ? draft.selectedApps : [];
+  const selectedSet = new Set(selectedApps);
+  const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
+  const appGroups = [];
+  const writes = [];
+  const errors = [];
+
+  for (const app of DESKTOP_CONFIG_APPS) {
+    if (!selectedSet.has(app.id)) {
+      continue;
+    }
+
+    try {
+      const appFiles = buildAppFilePreview(app.id, app.label, draft, files);
+      if (appFiles.length > 0) {
+        appGroups.push({
+          appId: app.id,
+          appName: app.label,
+          files: appFiles,
+        });
+        for (const file of appFiles) {
+          writes.push({
+            appId: file.appId,
+            fileId: file.fileId,
+            content: file.after,
+          });
+        }
+      }
+    } catch (error) {
+      errors.push(`${app.label}: ${error.message || '生成配置失败'}`);
+    }
+  }
+
+  return {
+    appGroups,
+    writes,
+    errors,
+  };
+}
+
+function buildAppFilePreview(appId, appName, draft, snapshotFiles) {
+  switch (appId) {
+    case 'claude':
+      return [buildClaudePreview(appName, draft, findSnapshotFile(snapshotFiles, 'claude', 'settings'))];
+    case 'codex':
+      return [
+        buildCodexAuthPreview(appName, draft, findSnapshotFile(snapshotFiles, 'codex', 'auth')),
+        buildCodexConfigPreview(appName, draft, findSnapshotFile(snapshotFiles, 'codex', 'config')),
+      ];
+    case 'opencode':
+      return [buildOpenCodePreview(appName, draft, findSnapshotFile(snapshotFiles, 'opencode', 'config'))];
+    case 'openclaw':
+      return [buildOpenClawPreview(appName, draft, findSnapshotFile(snapshotFiles, 'openclaw', 'config'))];
+    default:
+      throw new Error(`不支持的应用: ${appId}`);
+  }
+}
+
+function buildClaudePreview(appName, draft, file) {
+  const baseUrl = requireField(draft.claudeBaseUrl, `${appName} Base URL`);
+  const apiKey = requireField(draft.apiKey, `${appName} API Key`);
+  const model = requireField(draft.model, `${appName} 模型`);
+  const keyField = draft.claudeApiKeyField === 'ANTHROPIC_API_KEY'
+    ? 'ANTHROPIC_API_KEY'
+    : 'ANTHROPIC_AUTH_TOKEN';
+
+  const current = parseStrictJsonObject(file.content, 'Claude settings.json');
+  const next = structuredClone(current);
+  if (!isPlainObject(next.env)) {
+    next.env = {};
+  }
+
+  next.env.ANTHROPIC_BASE_URL = baseUrl;
+  next.env[keyField] = apiKey;
+  next.env.ANTHROPIC_MODEL = model;
+  next.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = model;
+  next.env.ANTHROPIC_DEFAULT_SONNET_MODEL = model;
+  next.env.ANTHROPIC_DEFAULT_OPUS_MODEL = model;
+
+  if (keyField === 'ANTHROPIC_AUTH_TOKEN') {
+    delete next.env.ANTHROPIC_API_KEY;
+  } else {
+    delete next.env.ANTHROPIC_AUTH_TOKEN;
+  }
+
+  return buildPreviewFile(file, JSON.stringify(next, null, 2));
+}
+
+function buildCodexAuthPreview(appName, draft, file) {
+  const apiKey = requireField(draft.apiKey, `${appName} API Key`);
+  const current = parseStrictJsonObject(file.content, 'Codex auth.json');
+  const next = structuredClone(current);
+  next.OPENAI_API_KEY = apiKey;
+  return buildPreviewFile(file, JSON.stringify(next, null, 2));
+}
+
+function buildCodexConfigPreview(appName, draft, file) {
+  const providerKey = requireField(
+    sanitizeProviderKey(draft.providerKey || draft.providerName),
+    `${appName} Provider Key`
+  );
+  const providerName = requireField(draft.providerName, `${appName} Provider Name`);
+  const baseUrl = requireField(draft.codexBaseUrl, `${appName} Base URL`);
+  const model = requireField(draft.model, `${appName} 模型`);
+
+  const next = upsertCodexConfigToml(file.content, {
+    providerKey,
+    providerName,
+    baseUrl,
+    model,
+  });
+
+  return buildPreviewFile(file, next);
+}
+
+function buildOpenCodePreview(appName, draft, file) {
+  const providerKey = requireField(
+    sanitizeProviderKey(draft.providerKey || draft.providerName),
+    `${appName} Provider Key`
+  );
+  const providerName = requireField(draft.providerName, `${appName} Provider Name`);
+  const baseUrl = requireField(draft.opencodeBaseUrl, `${appName} Base URL`);
+  const apiKey = requireField(draft.apiKey, `${appName} API Key`);
+  const model = requireField(draft.model, `${appName} 模型`);
+
+  const current = parseStrictJsonObject(file.content, 'OpenCode opencode.json', {
+    $schema: 'https://opencode.ai/config.json',
+  });
+  const next = structuredClone(current);
+
+  if (!isPlainObject(next.provider)) {
+    next.provider = {};
+  }
+
+  next.provider[providerKey] = {
+    npm: draft.opencodeNpm || '@ai-sdk/openai-compatible',
+    name: providerName,
+    options: {
+      baseURL: baseUrl,
+      apiKey,
+    },
+    models: {
+      [model]: {
+        name: model,
+      },
+    },
+  };
+
+  return buildPreviewFile(file, JSON.stringify(next, null, 2));
+}
+
+function buildOpenClawPreview(appName, draft, file) {
+  const providerKey = requireField(
+    sanitizeProviderKey(draft.providerKey || draft.providerName),
+    `${appName} Provider Key`
+  );
+  const providerName = requireField(draft.providerName, `${appName} Provider Name`);
+  const baseUrl = requireField(draft.openclawBaseUrl, `${appName} Base URL`);
+  const apiKey = requireField(draft.apiKey, `${appName} API Key`);
+  const model = requireField(draft.model, `${appName} 模型`);
+
+  const current = parseLooseJsonObject(file.content, 'OpenClaw openclaw.json', OPENCLAW_DEFAULT_CONFIG);
+  const next = structuredClone(current);
+
+  if (!isPlainObject(next.models)) {
+    next.models = {};
+  }
+  if (!isPlainObject(next.models.providers)) {
+    next.models.providers = {};
+  }
+  if (!next.models.mode) {
+    next.models.mode = 'merge';
+  }
+
+  next.models.providers[providerKey] = {
+    baseUrl,
+    apiKey,
+    api: draft.openclawApi || 'openai-completions',
+    models: [
+      {
+        id: model,
+        name: model,
+      },
+    ],
+  };
+
+  if (!isPlainObject(next.agents)) {
+    next.agents = {};
+  }
+  if (!isPlainObject(next.agents.defaults)) {
+    next.agents.defaults = {};
+  }
+  if (!isPlainObject(next.agents.defaults.models)) {
+    next.agents.defaults.models = {};
+  }
+
+  const fullModelName = `${providerKey}/${model}`;
+  next.agents.defaults.model = {
+    primary: fullModelName,
+  };
+  next.agents.defaults.models[fullModelName] = {
+    alias: providerName,
+  };
+
+  return buildPreviewFile(file, JSON.stringify(next, null, 2));
+}
+
+function buildPreviewFile(file, after) {
+  const before = String(file?.content || '');
+  return {
+    appId: file.appId,
+    appName: file.appName,
+    fileId: file.fileId,
+    label: file.label,
+    path: file.path,
+    exists: Boolean(file.exists),
+    before,
+    after: ensureTrailingNewline(after),
+  };
+}
+
+function parseStrictJsonObject(text, label, fallback = {}) {
+  if (!String(text || '').trim()) {
+    return structuredClone(fallback);
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${label} 不是合法 JSON，无法自动合并`);
+  }
+
+  if (!isPlainObject(parsed)) {
+    throw new Error(`${label} 根节点必须是对象`);
+  }
+
+  return parsed;
+}
+
+function parseLooseJsonObject(text, label, fallback = {}) {
+  if (!String(text || '').trim()) {
+    return structuredClone(fallback);
+  }
+
+  const normalized = normalizeJson5LikeToJson(text);
+  let parsed;
+  try {
+    parsed = JSON.parse(normalized);
+  } catch (error) {
+    throw new Error(`${label} 不是可解析的 JSON/JSON5，无法自动合并`);
+  }
+
+  if (!isPlainObject(parsed)) {
+    throw new Error(`${label} 根节点必须是对象`);
+  }
+
+  return parsed;
+}
+
+function normalizeJson5LikeToJson(input) {
+  const withoutComments = stripJsonComments(input);
+  const withDoubleQuotes = convertSingleQuotedStrings(withoutComments);
+  const quotedKeys = withDoubleQuotes.replace(
+    /([{,]\s*)([A-Za-z_$][\w$-]*)(\s*:)/g,
+    '$1"$2"$3'
+  );
+  return quotedKeys.replace(/,(\s*[}\]])/g, '$1');
+}
+
+function stripJsonComments(input) {
+  let result = '';
+  let inSingle = false;
+  let inDouble = false;
+  let escaping = false;
+
+  for (let index = 0; index < input.length; index += 1) {
+    const current = input[index];
+    const next = input[index + 1];
+
+    if (!inSingle && !inDouble && current === '/' && next === '/') {
+      while (index < input.length && input[index] !== '\n') {
+        index += 1;
+      }
+      if (index < input.length) {
+        result += '\n';
+      }
+      continue;
+    }
+
+    if (!inSingle && !inDouble && current === '/' && next === '*') {
+      index += 2;
+      while (index < input.length && !(input[index] === '*' && input[index + 1] === '/')) {
+        index += 1;
+      }
+      index += 1;
+      continue;
+    }
+
+    result += current;
+
+    if (escaping) {
+      escaping = false;
+      continue;
+    }
+
+    if ((inSingle || inDouble) && current === '\\') {
+      escaping = true;
+      continue;
+    }
+
+    if (!inDouble && current === '\'') {
+      inSingle = !inSingle;
+      continue;
+    }
+
+    if (!inSingle && current === '"') {
+      inDouble = !inDouble;
+    }
+  }
+
+  return result;
+}
+
+function convertSingleQuotedStrings(input) {
+  let result = '';
+  let inDouble = false;
+  let escaping = false;
+
+  for (let index = 0; index < input.length; index += 1) {
+    const current = input[index];
+
+    if (inDouble) {
+      result += current;
+      if (escaping) {
+        escaping = false;
+      } else if (current === '\\') {
+        escaping = true;
+      } else if (current === '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+
+    if (current === '"') {
+      inDouble = true;
+      result += current;
+      continue;
+    }
+
+    if (current !== '\'') {
+      result += current;
+      continue;
+    }
+
+    let buffer = '';
+    let innerEscaping = false;
+    let closed = false;
+    for (index += 1; index < input.length; index += 1) {
+      const inner = input[index];
+      if (innerEscaping) {
+        buffer += inner;
+        innerEscaping = false;
+        continue;
+      }
+      if (inner === '\\') {
+        innerEscaping = true;
+        buffer += inner;
+        continue;
+      }
+      if (inner === '\'') {
+        closed = true;
+        break;
+      }
+      buffer += inner;
+    }
+
+    if (!closed) {
+      throw new Error('单引号字符串未闭合');
+    }
+
+    const decoded = buffer
+      .replace(/\\'/g, '\'')
+      .replace(/\\"/g, '"');
+    result += JSON.stringify(decoded);
+  }
+
+  return result;
+}
+
+function upsertCodexConfigToml(currentText, options) {
+  let text = String(currentText || '').trim();
+
+  if (!text) {
+    text = '';
+  }
+
+  text = upsertTomlRootField(text, 'model_provider', quoteTomlString(options.providerKey));
+  text = upsertTomlRootField(text, 'model', quoteTomlString(options.model));
+  text = upsertTomlRootField(text, 'model_reasoning_effort', quoteTomlString('high'));
+  text = upsertTomlRootField(text, 'disable_response_storage', 'true');
+
+  const providerSection = [
+    `[model_providers.${options.providerKey}]`,
+    `name = ${quoteTomlString(options.providerName)}`,
+    `base_url = ${quoteTomlString(options.baseUrl)}`,
+    'wire_api = "responses"',
+    'requires_openai_auth = true',
+  ].join('\n');
+
+  const sectionPattern = new RegExp(
+    `(^|\\n)\\[model_providers\\.${escapeRegExp(options.providerKey)}\\]\\n[\\s\\S]*?(?=\\n\\[[^\\]]+\\]|$)`,
+    'm'
+  );
+
+  if (sectionPattern.test(text)) {
+    text = text.replace(sectionPattern, `\n${providerSection}\n`);
+  } else {
+    text = `${text.trim()}\n\n${providerSection}\n`;
+  }
+
+  return ensureTrailingNewline(text.replace(/\n{3,}/g, '\n\n').trim());
+}
+
+function upsertTomlRootField(text, field, valueLiteral) {
+  const pattern = new RegExp(`^${escapeRegExp(field)}\\s*=.*$`, 'm');
+  if (pattern.test(text)) {
+    return text.replace(pattern, `${field} = ${valueLiteral}`);
+  }
+
+  const trimmed = String(text || '').trim();
+  return trimmed ? `${field} = ${valueLiteral}\n${trimmed}` : `${field} = ${valueLiteral}`;
+}
+
+function findSnapshotFile(files, appId, fileId) {
+  const file = files.find(item => item.appId === appId && item.fileId === fileId);
+  if (!file) {
+    throw new Error(`未找到 ${appId}/${fileId} 的本地配置文件快照`);
+  }
+  return file;
+}
+
+function requireField(value, label) {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    throw new Error(`${label} 不能为空`);
+  }
+  return normalized;
+}
+
+function ensureTrailingNewline(text) {
+  const normalized = String(text || '');
+  return normalized.endsWith('\n') ? normalized : `${normalized}\n`;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function quoteTomlString(value) {
+  return JSON.stringify(String(value || ''));
+}
+
+function sanitizeProviderKey(value) {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  return normalized || 'custom_provider';
+}
+
+function pickFallbackModel(modelsList, modelsText) {
+  const candidates = [];
+  if (Array.isArray(modelsList)) {
+    candidates.push(...modelsList);
+  }
+  if (typeof modelsText === 'string') {
+    candidates.push(...modelsText.split(/[\n,，]+/));
+  }
+
+  return (
+    candidates
+      .map(item => String(item || '').trim())
+      .find(Boolean) || ''
+  );
+}
+
+function isPlainObject(value) {
+  return Object.prototype.toString.call(value) === '[object Object]';
+}

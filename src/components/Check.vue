@@ -113,7 +113,7 @@
                     <AppstoreAddOutlined style="cursor: pointer" />
                   </a>
                 </a-tooltip>
-                <a-tooltip :title="'密钥提取'" placement="bottom">
+                <a-tooltip :title="'密钥管理'" placement="bottom">
                   <a @click="$router.push('/keys')" class="icon-button">
                     <KeyOutlined style="cursor: pointer" />
                   </a>
