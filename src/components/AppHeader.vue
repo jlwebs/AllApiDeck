@@ -58,13 +58,13 @@
     </button>
 
     <button
-      v-if="showExperimental"
       type="button"
       class="nav-item nav-button"
-      @click="$emit('experimental')"
+      :class="{ 'nav-item-active': currentPage === 'keys' }"
+      @click="navigate('/keys')"
     >
-      <span class="nav-icon"><ExperimentOutlined /></span>
-      <span class="nav-label">实验功能</span>
+      <span class="nav-icon"><KeyOutlined /></span>
+      <span class="nav-label">密钥管理</span>
     </button>
 
     <button
@@ -78,13 +78,13 @@
     </button>
 
     <button
+      v-if="showExperimental"
       type="button"
       class="nav-item nav-button"
-      :class="{ 'nav-item-active': currentPage === 'keys' }"
-      @click="navigate('/keys')"
+      @click="$emit('experimental')"
     >
-      <span class="nav-icon"><KeyOutlined /></span>
-      <span class="nav-label">密钥管理</span>
+      <span class="nav-icon"><ExperimentOutlined /></span>
+      <span class="nav-label">实验功能</span>
     </button>
 
     <button type="button" class="nav-item nav-button" @click="openGitHub">
