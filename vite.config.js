@@ -55,6 +55,27 @@ const DEV_WATCH_IGNORES = [
   '**/tmp_*.json',
 ];
 
+function decodeProcessOutput(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (!Buffer.isBuffer(value)) return String(value);
+
+  if (process.platform === 'win32') {
+    try {
+      return new TextDecoder('gb18030').decode(value);
+    } catch {}
+  }
+
+  return value.toString('utf8');
+}
+
+function extractExecErrorMessage(err) {
+  const stderr = decodeProcessOutput(err?.stderr).trim();
+  const stdout = decodeProcessOutput(err?.stdout).trim();
+  const message = decodeProcessOutput(err?.message).trim();
+  return stderr || stdout || message || String(err || '').trim();
+}
+
 const fetchKeysProgress = {
   active: false,
   total: 0,
@@ -241,10 +262,10 @@ function isBrowserProcessRunning(browserType = 'chrome') {
     if (process.platform === 'win32') {
       const imageName = normalizedBrowser === 'edge' ? 'msedge.exe' : 'chrome.exe';
       const output = execFileSync('tasklist.exe', ['/FI', `IMAGENAME eq ${imageName}`], {
-        encoding: 'utf8',
+        encoding: 'buffer',
         stdio: ['ignore', 'pipe', 'ignore'],
       });
-      return output.toLowerCase().includes(imageName);
+      return decodeProcessOutput(output).toLowerCase().includes(imageName);
     }
 
     if (process.platform === 'darwin') {
@@ -273,7 +294,7 @@ function killBrowserProcesses(browserType = 'chrome') {
     if (process.platform === 'win32') {
       const imageName = normalizedBrowser === 'edge' ? 'msedge.exe' : 'chrome.exe';
       execFileSync('taskkill.exe', ['/IM', imageName, '/F'], {
-        encoding: 'utf8',
+        encoding: 'buffer',
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       return true;
@@ -295,11 +316,11 @@ function killBrowserProcesses(browserType = 'chrome') {
     });
     return true;
   } catch (err) {
-    const message = String(err?.stderr || err?.stdout || err?.message || '');
-    if (/not found|没有运行的任务|no running instance|not matched/i.test(message)) {
+    const message = extractExecErrorMessage(err);
+    if (/没有运行的任务|no running instance|not found|not matched/i.test(message)) {
       return false;
     }
-    throw err;
+    throw new Error(message || 'failed to terminate browser process', { cause: err });
   }
 }
 

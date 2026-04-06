@@ -5,79 +5,13 @@
         <div class="page-content" style="width: 100%">
           <div class="container" style="max-width: 100% !important; margin: 0 !important; padding: 20px !important;">
             <!-- Header section, similar to Check.vue for consistency -->
-            <div class="header">
-              <button
-                id="themeToggle"
-                :aria-label="t('SWITCH_THEME') || '切换主题'"
-                @click="handleToggleTheme"
-              >
-                <!-- Sun/Moon Icon SVG -->
-                <svg
-                  v-if="!isDarkMode"
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="24"
-                  height="24"
-                  viewBox="0 0 24 24"
-                  fill="transparent"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <circle cx="12" cy="12" r="4"></circle>
-                  <path d="M12 2v2"></path>
-                  <path d="M12 20v2"></path>
-                  <path d="m4.93 4.93 1.41 1.41"></path>
-                  <path d="m17.66 17.66 1.41 1.41"></path>
-                  <path d="M2 12h2"></path>
-                  <path d="M20 12h2"></path>
-                  <path d="m6.34 17.66-1.41 1.41"></path>
-                  <path d="m19.07 4.93-1.41 1.41"></path>
-                </svg>
-                <svg
-                  v-else
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="24"
-                  height="24"
-                  viewBox="0 0 24 24"
-                  fill="transparent"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
-                </svg>
-              </button>
-
-              <div class="right-icons">
-                <a-tooltip :title="'实验性功能'" placement="bottom">
-                  <a @click="showExperimentalFeatures = true" class="icon-button">
-                    <ExperimentOutlined style="cursor: pointer" />
-                  </a>
-                </a-tooltip>
-                <a-tooltip :title="'设置'" placement="bottom">
-                  <a @click="openSettingsModal" class="icon-button">
-                    <SettingOutlined style="cursor: pointer" />
-                  </a>
-                </a-tooltip>
-                <a-tooltip :title="'单次检测'" placement="bottom">
-                  <a @click="$router.push('/single')" class="icon-button">
-                    <CheckCircleOutlined style="cursor: pointer" />
-                  </a>
-                </a-tooltip>
-                <a-tooltip :title="'密钥提取'" placement="bottom">
-                  <a @click="$router.push('/keys')" class="icon-button">
-                    <KeyOutlined style="cursor: pointer" />
-                  </a>
-                </a-tooltip>
-                <a-tooltip title="GitHub" placement="bottom">
-                  <div @click="openGitHub()" class="icon-button">
-                    <GithubOutlined style="cursor: pointer" />
-                  </div>
-                </a-tooltip>
-              </div>
-            </div>
+            <AppHeader
+              current-page="batch"
+              :is-dark-mode="isDarkMode"
+              @toggle-theme="handleToggleTheme"
+              @experimental="showExperimentalFeatures = true"
+              @settings="openSettingsModal"
+            />
 
             <h1 style="text-align: center; margin-bottom: 20px;">
               批量并发检测
@@ -107,27 +41,43 @@
                   <a-button
                     v-if="isWailsRuntime"
                     @click="importFromExtension"
-                    :loading="isImportingExtension"
+                    :disabled="isImportingExtension"
                   >
-                    <InboxOutlined /> 从浏览器扩展导入
+                    <InboxOutlined /> {{ isImportingExtension ? '正在读取扩展数据...' : '从浏览器扩展导入' }}
                   </a-button>
                   <a-button v-if="hasHistory" @click="loadHistory" type="dashed">
                     <HistoryOutlined /> 查看上一次检测结果
                   </a-button>
                 </a-space>
+                <div
+                  v-if="isWailsRuntime && importExtensionStatusText"
+                  class="extension-import-status-line"
+                >
+                  <a-tag :color="importExtensionStatusColor">{{ importExtensionStatusText }}</a-tag>
+                </div>
               </div>
             </div>
 
             <!-- 加载状态 -->
             <div v-show="isLoadingModels && step === -1" class="step-container loading-container">
               <a-spin size="large" />
-              <p style="margin-top: 20px;">正在并发获取各大站点的模型列表，请稍候... ({{ loadedSitesCount }} / {{ totalAccountsCount }})</p>
+              <p style="margin-top: 20px;">正在并发获取各大站点的模型列表，请稍候...</p>
+              <div v-if="loadingStageStatusText" class="loading-stage-status-line">
+                <a-tag :color="loadingStageStatusColor">{{ loadingStageStatusText }}</a-tag>
+              </div>
             </div>
 
             <!-- 步骤 2：树形选择器选择想要检查的模型 -->
             <div v-show="step === 2" class="step-container">
               <div class="selection-topbar">
-                <h3 class="selection-title">请勾选需要测试的网站与模型</h3>
+                <div class="selection-header-row">
+                  <h3 class="selection-title">请勾选需要测试的网站与模型</h3>
+                  <a-space wrap class="selection-action-group">
+                    <a-button @click="selectAllNodes" size="small">全部全选</a-button>
+                    <a-button @click="unselectAllNodes" size="small">全部反选</a-button>
+                    <a-button @click="selectChatModelsOnly" size="small">仅选主流聊天</a-button>
+                  </a-space>
+                </div>
                 <div class="selection-quick-filters">
                   <div class="quick-filter-toolbar">
                     <div class="quick-filter-strip" v-if="quickFilters.length">
@@ -184,11 +134,6 @@
                     <span v-if="activeQuickFilterSummary" class="quick-filter-summary">{{ activeQuickFilterSummary }}</span>
                   </div>
                 </div>
-                <a-space class="selection-action-group">
-                  <a-button @click="selectAllNodes" size="small">全部全选</a-button>
-                  <a-button @click="unselectAllNodes" size="small">全部反选</a-button>
-                  <a-button @click="selectChatModelsOnly" size="small">仅选主流聊天</a-button>
-                </a-space>
               </div>
 
               <div
@@ -205,9 +150,9 @@
                 <a-tree
                   v-model:checkedKeys="checkedKeys"
                   :tree-data="treeData"
+                  :virtual="false"
                   checkable
                   defaultExpandAll
-                  height="400"
                 >
                   <template #title="node">
                     <div class="custom-tree-node-wrapper" style="display: flex; align-items: center;">
@@ -584,7 +529,8 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ConfigProvider, message, theme, Modal } from 'ant-design-vue';
-import { HomeOutlined, ReloadOutlined, MenuUnfoldOutlined, MenuFoldOutlined, InboxOutlined, PlayCircleOutlined, SearchOutlined, CopyOutlined, FilterOutlined, HistoryOutlined, ShareAltOutlined, DownOutlined, RightOutlined, CheckCircleOutlined, SettingOutlined, GithubOutlined, KeyOutlined, ExperimentOutlined, UserOutlined, LockOutlined, MessageOutlined, CopyFilled, SmileOutlined, RedoOutlined } from '@ant-design/icons-vue';
+import { HomeOutlined, ReloadOutlined, MenuUnfoldOutlined, MenuFoldOutlined, InboxOutlined, PlayCircleOutlined, SearchOutlined, CopyOutlined, FilterOutlined, HistoryOutlined, ShareAltOutlined, DownOutlined, RightOutlined, UserOutlined, LockOutlined, MessageOutlined, CopyFilled, SmileOutlined, RedoOutlined } from '@ant-design/icons-vue';
+import AppHeader from './AppHeader.vue';
 import { fetchModelList } from '../utils/api.js';
 import { apiFetch, isProbablyWailsRuntime } from '../utils/runtimeApi.js';
 import { toggleTheme } from '../utils/theme.js';
@@ -601,6 +547,9 @@ const step = ref(1); // 1: upload, 2: select tree, 3: result table
 const isLoadingModels = ref(false);
 const isDiscoveringModels = ref(false);
 const isImportingExtension = ref(false);
+const importExtensionStatus = ref('');
+const importExtensionStatusColor = ref('default');
+const importExtensionElapsedSeconds = ref(0);
 const totalAccountsCount = ref(0);
 const showExperimentalFeatures = ref(false);
 const showAppSettingsModal = ref(false);
@@ -627,10 +576,6 @@ const openSettingsModal = () => {
 
 const closeSettingsModal = () => {
   showAppSettingsModal.value = false;
-};
-
-const openGitHub = () => {
-  window.open('https://github.com/jlwebs/api-check', '_blank');
 };
 
 const loadLocalCache = () => {
@@ -809,6 +754,7 @@ const filterOnlySuccess = ref(false);
 
 // 快捷筛选：按系列分组，悬浮展开版本/子类
 const activeQuickFilters = ref([]);
+const quickFilterSelectionMode = ref(false);
 
 const normalizeQuickFilterName = (name) => {
   const normalized = String(name || '').trim();
@@ -836,12 +782,46 @@ const buildQuickFilterOptionLabel = (category, version, sampleName) => {
   return normalizeQuickFilterName(sampleName || category);
 };
 
-const quickFilters = computed(() => {
-  const models = Array.from(new Set(
+const collectQuickFilterModelsFromTreeNodes = (nodes, bucket = []) => {
+  (Array.isArray(nodes) ? nodes : []).forEach(node => {
+    const children = Array.isArray(node?.children) ? node.children : [];
+    if (node?.isLeaf === true) {
+      const modelName = String(node?.title || '').trim();
+      if (modelName) bucket.push(modelName);
+      return;
+    }
+    if (children.length > 0) {
+      collectQuickFilterModelsFromTreeNodes(children, bucket);
+    }
+  });
+  return bucket;
+};
+
+const quickFilterSourceModels = computed(() => {
+  if (step.value === 2) {
+    return Array.from(new Set(
+      collectQuickFilterModelsFromTreeNodes(treeData.value)
+        .map(model => String(model || '').trim())
+        .filter(Boolean)
+    ));
+  }
+
+  const resultModels = testResults.value
+    .map(item => String(item?.modelName || '').trim())
+    .filter(Boolean);
+  if (resultModels.length > 0) {
+    return Array.from(new Set(resultModels));
+  }
+
+  return Array.from(new Set(
     organizedSourceResults.value
       .map(item => String(item?.modelName || '').trim())
       .filter(Boolean)
   ));
+});
+
+const quickFilters = computed(() => {
+  const models = quickFilterSourceModels.value;
   const familyMap = new Map();
 
   models.forEach(model => {
@@ -920,14 +900,46 @@ const quickFilters = computed(() => {
   return regularFamilies;
 });
 
+watch(quickFilters, (families) => {
+  const validOptionKeys = new Set();
+  (Array.isArray(families) ? families : []).forEach(family => {
+    (Array.isArray(family?.options) ? family.options : []).forEach(option => {
+      validOptionKeys.add(option.key);
+    });
+  });
+
+  if (activeQuickFilters.value.length === 0) return;
+  activeQuickFilters.value = activeQuickFilters.value.filter(key => validOptionKeys.has(key));
+});
+
+const applyActiveQuickFilters = (nextOptionKeys) => {
+  const normalized = Array.from(new Set(
+    (Array.isArray(nextOptionKeys) ? nextOptionKeys : []).filter(Boolean)
+  ));
+
+  if (step.value === 2 && normalized.length > 0 && !quickFilterSelectionMode.value) {
+    // 第一次点击快捷筛选，先清空默认全选/手工勾选，再交给快捷筛选接管。
+    checkedKeys.value = [];
+    quickFilterSelectionMode.value = true;
+  }
+
+  activeQuickFilters.value = normalized;
+
+  if (step.value === 2 && normalized.length === 0 && quickFilterSelectionMode.value) {
+    checkedKeys.value = [];
+    quickFilterSelectionMode.value = false;
+  }
+};
+
 const toggleQuickFilter = (optionKey) => {
-  const idx = activeQuickFilters.value.indexOf(optionKey);
-  if (idx > -1) activeQuickFilters.value.splice(idx, 1);
-  else activeQuickFilters.value.push(optionKey);
+  const current = new Set(activeQuickFilters.value);
+  if (current.has(optionKey)) current.delete(optionKey);
+  else current.add(optionKey);
+  applyActiveQuickFilters(Array.from(current));
 };
 
 const clearQuickFilters = () => {
-  activeQuickFilters.value = [];
+  applyActiveQuickFilters([]);
 };
 
 const isQuickFilterFamilyFullySelected = (family) => {
@@ -942,7 +954,7 @@ const selectQuickFilterFamily = (family) => {
   } else {
     family.options.forEach(option => current.add(option.key));
   }
-  activeQuickFilters.value = Array.from(current);
+  applyActiveQuickFilters(Array.from(current));
 };
 
 const isQuickFilterFamilyActive = (family) => {
@@ -963,6 +975,28 @@ const activeQuickFilterModelSet = computed(() => {
   });
   return selectedModels;
 });
+
+watch([activeQuickFilterModelSet, treeData], ([currentModelSet], [previousModelSet]) => {
+  if (step.value !== 2) return;
+  if (!(currentModelSet instanceof Set) || currentModelSet.size === 0) {
+    if (quickFilterSelectionMode.value) {
+      checkedKeys.value = [];
+    }
+    return;
+  }
+
+  const selectableKeys = collectSelectableModelKeysFromTreeNodes(treeData.value);
+  const matchedKeys = selectableKeys.filter(key => currentModelSet.has(getModelNameFromSelectableKey(key)));
+
+  // 第一次点击快捷筛选时，直接切换为“快捷筛选驱动勾选”。
+  const previousSize = previousModelSet instanceof Set ? previousModelSet.size : 0;
+  if (previousSize === 0) {
+    checkedKeys.value = [...matchedKeys];
+    return;
+  }
+
+  checkedKeys.value = [...matchedKeys];
+}, { deep: true });
 
 const activeQuickFilterSummary = computed(() => {
   const labels = [];
@@ -1008,6 +1042,45 @@ const loadingStageMeta = computed(() => {
     meta.push(`耗时 ${Math.max(1, Math.floor((refreshedAt - fetchKeysProgress.startedAt) / 1000))} 秒`);
   }
   return meta.join(' · ');
+});
+
+const loadingStageStatusText = computed(() => {
+  if (step.value !== -1 || !isLoadingModels.value) return '';
+
+  if (isWailsRuntime && fetchKeysProgress.total > 0) {
+    const total = fetchKeysProgress.total || totalAccountsCount.value;
+    const completed = fetchKeysProgress.completed || 0;
+    const currentSite = String(fetchKeysProgress.lastSiteName || '').trim();
+    if (completed < total) {
+      return currentSite
+        ? `Token 提取中：${completed}/${total}，当前站点 ${currentSite}`
+        : `Token 提取中：${completed}/${total}`;
+    }
+    return 'Token 提取完成，正在整理站点结果';
+  }
+
+  if (loadedSitesCount.value > 0 && loadedSitesCount.value < totalAccountsCount.value) {
+    return `模型发现中：${loadedSitesCount.value}/${totalAccountsCount.value}`;
+  }
+
+  if (loadedSitesCount.value >= totalAccountsCount.value && totalAccountsCount.value > 0) {
+    return '模型发现完成，正在生成可选树';
+  }
+
+  return '正在初始化批量检测任务';
+});
+
+const loadingStageStatusColor = computed(() => {
+  if (!loadingStageStatusText.value) return 'default';
+  if (loadedSitesCount.value >= totalAccountsCount.value && totalAccountsCount.value > 0) return 'success';
+  return 'processing';
+});
+
+const importExtensionStatusText = computed(() => {
+  const text = String(importExtensionStatus.value || '').trim();
+  if (!text) return '';
+  if (!isImportingExtension.value) return text;
+  return `${text}（${importExtensionElapsedSeconds.value}s）`;
 });
 
 const testProgress = computed(() => {
@@ -1150,6 +1223,8 @@ const hasHistory = ref(false);
 const isEditorOpen = ref(false);
 const editingRecord = ref(null);
 const editingPayload = ref('');
+let importExtensionResetTimer = null;
+let importExtensionTickTimer = null;
 
 const getMaskedKey = (key) => {
   if (!key) return '';
@@ -1461,6 +1536,7 @@ const resendPayload = async () => {
 };
 
 onMounted(() => {
+  resetImportExtensionState();
   isDarkMode.value = document.body.classList.contains('dark-mode');
   const hist = localStorage.getItem('api_check_last_results');
   if (hist) {
@@ -1474,6 +1550,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  resetImportExtensionState();
   stopFetchKeysProgressPolling();
 });
 
@@ -1541,6 +1618,28 @@ const isSelectableModelKey = (key) => {
   if (text.startsWith('discover-loading|')) return false;
   const parts = text.split('|');
   return parts.length >= 3;
+};
+
+const getModelNameFromSelectableKey = (key) => {
+  const parts = String(key || '').split('|');
+  if (parts.length < 3) return '';
+  return String(parts.slice(2).join('|') || '').trim();
+};
+
+const collectSelectableModelKeysFromTreeNodes = (nodes, bucket = []) => {
+  (Array.isArray(nodes) ? nodes : []).forEach(node => {
+    const key = String(node?.key || '');
+    if (node?.isLeaf === true && isSelectableModelKey(key)) {
+      bucket.push(key);
+      return;
+    }
+
+    const children = Array.isArray(node?.children) ? node.children : [];
+    if (children.length > 0) {
+      collectSelectableModelKeysFromTreeNodes(children, bucket);
+    }
+  });
+  return bucket;
 };
 
 const mergeExtractedSiteResults = (baseResults, retryResults) => {
@@ -2227,28 +2326,82 @@ const beforeUpload = (file) => {
   return false; // prevent automatic upload
 };
 
+const stopImportExtensionTicking = () => {
+  if (importExtensionTickTimer) {
+    clearInterval(importExtensionTickTimer);
+    importExtensionTickTimer = null;
+  }
+};
+
+const setImportExtensionStatus = (text, color = 'processing') => {
+  importExtensionStatus.value = String(text || '').trim();
+  importExtensionStatusColor.value = color;
+};
+
+const resetImportExtensionState = (options = {}) => {
+  const { preserveStatus = false } = options;
+  if (importExtensionResetTimer) {
+    clearTimeout(importExtensionResetTimer);
+    importExtensionResetTimer = null;
+  }
+  stopImportExtensionTicking();
+  isImportingExtension.value = false;
+  importExtensionElapsedSeconds.value = 0;
+  if (!preserveStatus) {
+    importExtensionStatus.value = '';
+    importExtensionStatusColor.value = 'default';
+  }
+};
+
+const markImportExtensionBusy = () => {
+  resetImportExtensionState();
+  isImportingExtension.value = true;
+  importExtensionElapsedSeconds.value = 0;
+  stopImportExtensionTicking();
+  importExtensionTickTimer = setInterval(() => {
+    importExtensionElapsedSeconds.value += 1;
+  }, 1000);
+  setImportExtensionStatus('等待桌面端读取浏览器扩展存储', 'processing');
+  importExtensionResetTimer = setTimeout(() => {
+    console.warn('[ExtensionImport] loading state watchdog reset');
+    setImportExtensionStatus('导入状态已自动复位，请重试', 'warning');
+    resetImportExtensionState({ preserveStatus: true });
+  }, 20000);
+};
+
 const importFromExtension = async () => {
+  if (isImportingExtension.value) return;
+
   const importer = window?.go?.main?.App?.ImportExtensionAccounts;
   if (typeof importer !== 'function') {
     message.error('当前仅 Wails 桌面端支持扩展导入');
     return;
   }
 
-  isImportingExtension.value = true;
+  markImportExtensionBusy();
   try {
-    const result = await importer();
+    const result = await Promise.race([
+      importer(),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('扩展导入超时，请重试')), 15000);
+      }),
+    ]);
+    setImportExtensionStatus('桌面端已返回扩展数据，正在解析账号', 'processing');
     const accounts = result?.payload?.accounts?.accounts;
     if (!Array.isArray(accounts) || accounts.length === 0) {
+      setImportExtensionStatus('扩展存储中未找到可用账号数据', 'warning');
       message.warning('扩展存储中未找到可用账号数据');
       return;
     }
+    setImportExtensionStatus(`已读取 ${accounts.length} 个账号，正在启动站点检测`, 'success');
     message.success(`已从扩展导入 ${accounts.length} 个账号`);
-    processAccountsV2(accounts);
+    await processAccountsV2(accounts);
   } catch (err) {
     stopFetchKeysProgressPolling();
+    setImportExtensionStatus(err?.message || '扩展导入失败', 'error');
     message.error(err?.message || '扩展导入失败');
   } finally {
-    isImportingExtension.value = false;
+    resetImportExtensionState({ preserveStatus: true });
   }
 };
 
@@ -2658,13 +2811,6 @@ const processAccountsV2 = async (accounts) => {
     return;
   }
 
-  try {
-    await apiFetch('/api/clear-logs?type=fetch', { method: 'POST' });
-    await apiFetch('/api/clear-logs?type=check', { method: 'POST' });
-  } catch (e) {
-    console.warn('Clear logs fail, ignoring...', e);
-  }
-
   totalAccountsCount.value = accountsToFetch.length;
   loadedSitesCount.value = 0;
   isLoadingModels.value = true;
@@ -2682,6 +2828,15 @@ const processAccountsV2 = async (accounts) => {
   resetFetchKeysProgress();
   if (isWailsRuntime) {
     fetchKeysProgress.total = accountsToFetch.length;
+  }
+
+  try {
+    await Promise.allSettled([
+      apiFetch('/api/clear-logs?type=fetch', { method: 'POST' }),
+      apiFetch('/api/clear-logs?type=check', { method: 'POST' }),
+    ]);
+  } catch (e) {
+    console.warn('Clear logs fail, ignoring...', e);
   }
 
   const isSiteFailed = (site) => !site || site.error || !Array.isArray(site.tokens) || site.tokens.length === 0;
@@ -3618,25 +3773,38 @@ const copyOrganizedResults = () => {
 }
 
 .selection-topbar {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 18px;
-  margin-bottom: 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.selection-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
 .selection-title {
   margin: 0;
-  align-self: center;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.2;
   white-space: nowrap;
 }
 
 .selection-quick-filters {
+  width: 100%;
   min-width: 0;
 }
 
 .selection-action-group {
-  align-self: start;
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  margin-left: auto;
 }
 
 .result-topbar {
@@ -3666,11 +3834,12 @@ const copyOrganizedResults = () => {
   gap: 12px;
   min-height: 32px;
   min-width: 0;
+  width: 100%;
 }
 
 .quick-filter-strip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   gap: 0;
   width: 100%;
   max-width: 100%;
@@ -3700,20 +3869,19 @@ const copyOrganizedResults = () => {
   border-radius: 0 !important;
   box-shadow: none !important;
   height: 40px;
-  justify-content: flex-start;
+  justify-content: center;
   padding: 0 20px !important;
 }
 
-.quick-filter-strip > :nth-child(5n) .quick-filter-family-trigger,
-.quick-filter-strip > :nth-child(5n) .quick-filter-clear-trigger,
-.quick-filter-strip > .quick-filter-clear-trigger:nth-child(5n) {
-  border-right: 0 !important;
+.quick-filter-family-trigger:hover,
+.quick-filter-clear-trigger:hover {
+  background: rgba(22, 119, 255, 0.06) !important;
 }
 
-.quick-filter-strip > :nth-last-child(-n + 5) .quick-filter-family-trigger,
-.quick-filter-strip > :nth-last-child(-n + 5) .quick-filter-clear-trigger,
-.quick-filter-strip > .quick-filter-clear-trigger:nth-last-child(-n + 5) {
-  border-bottom: 0 !important;
+.quick-filter-clear-trigger.ant-btn[disabled],
+.quick-filter-clear-trigger.ant-btn[disabled]:hover {
+  background: rgba(148, 163, 184, 0.08) !important;
+  color: rgba(148, 163, 184, 0.9) !important;
 }
 
 .quick-filter-family-count {
@@ -3752,6 +3920,16 @@ const copyOrganizedResults = () => {
   background: #fffaf4 !important;
   box-shadow: none !important;
   font-weight: 600;
+}
+
+.extension-import-status-line {
+  margin-top: 10px;
+  min-height: 24px;
+}
+
+.loading-stage-status-line {
+  margin-top: 12px;
+  min-height: 24px;
 }
 
 .header {
@@ -3835,6 +4013,7 @@ const copyOrganizedResults = () => {
   border-radius: 8px;
   padding: 10px;
   margin-bottom: 20px;
+  max-height: 420px;
   overflow-y: auto;
 }
 .settings-action-bar {
@@ -3933,14 +4112,26 @@ const copyOrganizedResults = () => {
 }
 
 @media (max-width: 900px) {
-  .selection-topbar,
   .result-topbar {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .selection-header-row {
+    align-items: flex-start;
   }
 
   .selection-title,
   .selection-action-group {
     white-space: normal;
+  }
+
+  .selection-action-group {
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+
+  .quick-filter-strip {
+    grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
   }
 
   .result-side-controls {
