@@ -126,9 +126,65 @@
 
             <!-- 步骤 2：树形选择器选择想要检查的模型 -->
             <div v-show="step === 2" class="step-container">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h3 style="margin: 0;">请勾选需要测试的网站与模型</h3>
-                <a-space>
+              <div class="selection-topbar">
+                <h3 class="selection-title">请勾选需要测试的网站与模型</h3>
+                <div class="selection-quick-filters">
+                  <div class="quick-filter-toolbar">
+                    <div class="quick-filter-strip" v-if="quickFilters.length">
+                      <a-popover
+                        v-for="family in quickFilters"
+                        :key="family.key"
+                        trigger="hover"
+                        placement="bottomLeft"
+                        overlayClassName="quick-filter-family-popover"
+                      >
+                        <template #content>
+                          <div class="quick-filter-family-panel">
+                            <div class="quick-filter-family-panel-title">{{ family.label }}</div>
+                            <div class="quick-filter-option-list">
+                              <a-button
+                                v-for="option in family.options"
+                                :key="option.key"
+                                size="small"
+                                :type="activeQuickFilters.includes(option.key) ? 'primary' : 'default'"
+                                @click="toggleQuickFilter(option.key)"
+                              >
+                                {{ option.label }}
+                              </a-button>
+                              <a-button
+                                size="small"
+                                class="quick-filter-family-select-all"
+                                @click="selectQuickFilterFamily(family)"
+                              >
+                                {{ isQuickFilterFamilyFullySelected(family) ? '取消' : '全选' }}
+                              </a-button>
+                            </div>
+                          </div>
+                        </template>
+                        <a-button
+                          class="quick-filter-family-trigger"
+                          :type="isQuickFilterFamilyActive(family) ? 'primary' : 'default'"
+                          @click="selectQuickFilterFamily(family)"
+                        >
+                          {{ family.label }}
+                          <span v-if="getQuickFilterFamilyActiveCount(family)" class="quick-filter-family-count">
+                            {{ getQuickFilterFamilyActiveCount(family) }}
+                          </span>
+                        </a-button>
+                      </a-popover>
+                      <a-button
+                        class="quick-filter-clear-trigger"
+                        @click="clearQuickFilters"
+                        :disabled="!activeQuickFilters.length"
+                      >
+                        清空
+                      </a-button>
+                    </div>
+                    <div v-else class="quick-filter-empty-inline">暂无可用快捷分组</div>
+                    <span v-if="activeQuickFilterSummary" class="quick-filter-summary">{{ activeQuickFilterSummary }}</span>
+                  </div>
+                </div>
+                <a-space class="selection-action-group">
                   <a-button @click="selectAllNodes" size="small">全部全选</a-button>
                   <a-button @click="unselectAllNodes" size="small">全部反选</a-button>
                   <a-button @click="selectChatModelsOnly" size="small">仅选主流聊天</a-button>
@@ -221,12 +277,20 @@
                               >
                                 {{ option.label }}
                               </a-button>
+                              <a-button
+                                size="small"
+                                class="quick-filter-family-select-all"
+                                @click="selectQuickFilterFamily(family)"
+                              >
+                                {{ isQuickFilterFamilyFullySelected(family) ? '取消' : '全选' }}
+                              </a-button>
                             </div>
                           </div>
                         </template>
                         <a-button
                           class="quick-filter-family-trigger"
                           :type="isQuickFilterFamilyActive(family) ? 'primary' : 'default'"
+                          @click="selectQuickFilterFamily(family)"
                         >
                           {{ family.label }}
                           <span v-if="getQuickFilterFamilyActiveCount(family)" class="quick-filter-family-count">
@@ -864,6 +928,21 @@ const toggleQuickFilter = (optionKey) => {
 
 const clearQuickFilters = () => {
   activeQuickFilters.value = [];
+};
+
+const isQuickFilterFamilyFullySelected = (family) => {
+  return family.options.length > 0
+    && family.options.every(option => activeQuickFilters.value.includes(option.key));
+};
+
+const selectQuickFilterFamily = (family) => {
+  const current = new Set(activeQuickFilters.value);
+  if (isQuickFilterFamilyFullySelected(family)) {
+    family.options.forEach(option => current.delete(option.key));
+  } else {
+    family.options.forEach(option => current.add(option.key));
+  }
+  activeQuickFilters.value = Array.from(current);
 };
 
 const isQuickFilterFamilyActive = (family) => {
@@ -1598,6 +1677,68 @@ const confirmWithModal = ({ title, content, okText = '确定', cancelText = '取
   });
 };
 
+const openUrlInSystemBrowser = (url) => {
+  if (!url) return;
+  if (isWailsRuntime && typeof window !== 'undefined' && typeof window.runtime?.BrowserOpenURL === 'function') {
+    try {
+      window.runtime.BrowserOpenURL(url);
+      return;
+    } catch {}
+  }
+  window.open(url, '_blank');
+};
+
+const openFailedSitesForManualLogin = async (sites) => {
+  const urls = Array.from(new Set(
+    (Array.isArray(sites) ? sites : [])
+      .map(site => String(site?.site_url || site?.siteUrl || '').replace(/\/+$/, '').trim())
+      .filter(url => /^https?:\/\//i.test(url))
+  ));
+
+  urls.forEach(url => openUrlInSystemBrowser(url));
+  return urls.length;
+};
+
+const confirmShadowLoginReadiness = async (sites, browserType = 'chrome') => {
+  const normalizedSites = Array.isArray(sites) ? sites.filter(Boolean) : [];
+  const previewNames = normalizedSites
+    .map(site => String(site?.site_name || site?.siteName || '').trim())
+    .filter(Boolean)
+    .slice(0, 6);
+  const remaining = normalizedSites.length - previewNames.length;
+  const siteSummary = previewNames.join('、') + (remaining > 0 ? ` 等 ${normalizedSites.length} 个站点` : '');
+  const browserLabel = browserType === 'edge' ? 'Edge' : 'Chrome';
+  const action = await new Promise(resolve => {
+    Modal.confirm({
+      title: '非 CDP 模式登录确认',
+      content: `接下来会使用 ${browserLabel} 的 shadow 模式继续老流程抓取。请先确认当前失效站点都已经在普通浏览器里登录完成；Google 关联登录在此模式下可能失效。${siteSummary ? `本轮待处理站点：${siteSummary}。` : ''}`,
+      okText: '打开并确认',
+      cancelText: '跳过',
+      okType: 'primary',
+      onOk: () => resolve('open'),
+      onCancel: () => resolve('skip'),
+    });
+  });
+
+  if (action === 'skip') {
+    return true;
+  }
+
+  const openedCount = await openFailedSitesForManualLogin(normalizedSites);
+  if (openedCount <= 0) {
+    message.warning('没有可打开的失败站点 URL，将直接继续 shadow 抓取。');
+    return true;
+  }
+
+  return await confirmWithModal({
+    title: '站点已打开',
+    content: `已在普通浏览器中打开 ${openedCount} 个失败站点。请先完成登录确认，再继续拉起 shadow 浏览器执行老流程；后续受控浏览器会最小化启动。`,
+    okText: '登录完成，继续',
+    cancelText: '取消本次抓取',
+    okType: 'primary',
+  });
+};
+
 const openSitesInBrowserSession = async (sites, browserType = 'chrome') => {
   const payload = sites
     .map(site => ({
@@ -2278,6 +2419,12 @@ const processAccounts = async (accounts) => {
             return;
           }
 
+          const readyForShadow = await confirmShadowLoginReadiness(stillFailedAccounts, browserType);
+          if (!readyForShadow) {
+            message.warning('你取消了 shadow 模式抓取，请先在浏览器中完成失效站点登录后再重试。');
+            return;
+          }
+
           let openedCount = 0;
           try {
             openedCount = await openSitesInBrowserSession(stillFailedAccounts, browserType);
@@ -2899,6 +3046,12 @@ const processAccountsV2 = async (accounts) => {
             return;
           }
 
+          const readyForShadow = await confirmShadowLoginReadiness(stillFailedAccounts, browserType);
+          if (!readyForShadow) {
+            message.warning('你取消了 shadow 模式抓取，请先在浏览器中完成失效站点登录后再重试。');
+            return;
+          }
+
           let openedCount = 0;
           try {
             openedCount = await openSitesInBrowserSession(stillFailedAccounts, browserType);
@@ -3200,26 +3353,28 @@ const runSingleTest = async (task, customPayload = null) => {
   const keyToUse = customPayload ? customPayload.key : task.apiKey;
   const messagesToUse = customPayload ? customPayload.messages : [{ role: 'user', content: 'hello' }];
 
-  let timeout = modelTimeout.value * 1000;
+  let backendTimeoutMs = modelTimeout.value * 1000;
   if (modelToTest.startsWith('o1-')) {
-    timeout *= 6;
+    backendTimeoutMs *= 6;
   }
+  const clientTimeoutMs = Math.max(backendTimeoutMs + 10000, 30000);
 
   const controller = new AbortController();
   cancelTokens.value.push(controller);
   
-  const id = setTimeout(() => controller.abort(), timeout + 2000); // 宽延2秒
+  const id = setTimeout(() => controller.abort(), clientTimeoutMs);
   const startTime = Date.now();
 
   try {
     const isFirst = task.id === 'task_0';
-    const payloadBody = {
-      url: apiUrlValue,
-      key: keyToUse,
-      model: modelToTest,
-      messages: messagesToUse,
-      _isFirst: isFirst
-    };
+      const payloadBody = {
+        url: apiUrlValue,
+        key: keyToUse,
+        model: modelToTest,
+        messages: messagesToUse,
+        timeoutMs: backendTimeoutMs,
+        _isFirst: isFirst
+      };
     
     // 如果是编辑模式重试，同步更新一下任务的属性以便UI显示最新值 (可选，看是否需要覆盖原来的)
     if (customPayload) {
@@ -3334,9 +3489,25 @@ const runSingleTest = async (task, customPayload = null) => {
     task.status = 'error';
     task.statusText = toStatusTextByError(err?.message || '');
     if (err.name === 'AbortError') {
-      task.remark = '请求超时';
+      task.remark = `前端等待超时 (${Math.round(clientTimeoutMs / 1000)}s)`;
+      task.fullResponse = JSON.stringify({
+        error: 'client_abort',
+        message: task.remark,
+        siteUrl: apiUrlValue,
+        model: modelToTest,
+        backendTimeoutMs,
+        clientTimeoutMs,
+      }, null, 2);
     } else {
       task.remark = truncateText(err.message, 200);
+      task.fullResponse = JSON.stringify({
+        error: err?.name || 'request_failed',
+        message: err?.message || 'unknown_error',
+        siteUrl: apiUrlValue,
+        model: modelToTest,
+        backendTimeoutMs,
+        clientTimeoutMs,
+      }, null, 2);
     }
   } finally {
     clearTimeout(id);
@@ -3446,17 +3617,39 @@ const copyOrganizedResults = () => {
   color: #64748b;
 }
 
+.selection-topbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 18px;
+  margin-bottom: 15px;
+}
+
+.selection-title {
+  margin: 0;
+  align-self: center;
+  white-space: nowrap;
+}
+
+.selection-quick-filters {
+  min-width: 0;
+}
+
+.selection-action-group {
+  align-self: start;
+}
+
 .result-topbar {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  align-items: start;
   gap: 20px;
   margin-bottom: 12px;
 }
 
 .result-side-controls {
-  width: 380px;
-  min-width: 380px;
+  width: 100%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -3472,7 +3665,6 @@ const copyOrganizedResults = () => {
   flex-direction: column;
   gap: 12px;
   min-height: 32px;
-  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -3481,6 +3673,7 @@ const copyOrganizedResults = () => {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0;
   width: 100%;
+  max-width: 100%;
   border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: 12px;
   overflow: hidden;
@@ -3551,6 +3744,14 @@ const copyOrganizedResults = () => {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.quick-filter-family-select-all {
+  border: 2px solid #8b5e3c !important;
+  color: #8b5e3c !important;
+  background: #fffaf4 !important;
+  box-shadow: none !important;
+  font-weight: 600;
 }
 
 .header {
@@ -3731,9 +3932,15 @@ const copyOrganizedResults = () => {
   text-shadow: 0 0 8px rgba(0, 123, 255, 0.4);
 }
 
-@media (max-width: 1200px) {
+@media (max-width: 900px) {
+  .selection-topbar,
   .result-topbar {
-    flex-direction: column;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .selection-title,
+  .selection-action-group {
+    white-space: normal;
   }
 
   .result-side-controls {

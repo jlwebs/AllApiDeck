@@ -91,6 +91,7 @@
 import { ref, computed } from 'vue';
 import { message } from 'ant-design-vue';
 import { UploadOutlined } from '@ant-design/icons-vue';
+import { apiFetch } from '../utils/runtimeApi.js';
 
 const fileList = ref([]);
 const loading = ref(false);
@@ -192,7 +193,7 @@ const processAccounts = async (accounts) => {
   allResults.value = [];
 
   try {
-    const response = await fetch('/api/fetch-keys', {
+    const response = await apiFetch('/api/fetch-keys', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ accounts: accountsToTarget }),

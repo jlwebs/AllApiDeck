@@ -10,12 +10,63 @@ const projectRoot = path.resolve(__dirname, '..');
 const rawArgs = process.argv.slice(2);
 const command = rawArgs[0] || 'dev';
 const isWindows = process.platform === 'win32';
+const logDir = path.join(projectRoot, 'logs');
+const runnerLogPath = path.join(logDir, 'wails-dev-runner.log');
+const sidecarLogPath = path.join(logDir, 'wails-dev-sidecar.log');
+const viteLogPath = path.join(logDir, 'wails-dev-vite.log');
+const wailsLogPath = path.join(logDir, 'wails-dev-host.log');
+
+function ensureLogDir() {
+  if (!fs.existsSync(logDir)) {
+    fs.mkdirSync(logDir, { recursive: true });
+  }
+}
+
+function appendLogLine(logPath, scope, message) {
+  ensureLogDir();
+  const lines = String(message ?? '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .filter((line) => line.length > 0);
+  if (!lines.length) return;
+
+  const payload = lines
+    .map((line) => `[${new Date().toISOString()}] [${scope}] ${line}\n`)
+    .join('');
+  fs.appendFileSync(logPath, payload, 'utf8');
+}
+
+function logRunner(message) {
+  console.log(message);
+  appendLogLine(runnerLogPath, 'runner', message);
+}
+
+function mirrorChildStream(stream, output, logPath, scope) {
+  if (!stream) return;
+  stream.on('data', (chunk) => {
+    const text = chunk.toString();
+    output.write(chunk);
+    appendLogLine(logPath, scope, text);
+  });
+}
+
+function attachChildLogging(child, scope, logPath) {
+  mirrorChildStream(child.stdout, process.stdout, logPath, scope);
+  mirrorChildStream(child.stderr, process.stderr, logPath, scope);
+  child.on('spawn', () => {
+    appendLogLine(logPath, scope, `spawn pid=${child.pid}`);
+  });
+  child.on('exit', (code, signal) => {
+    appendLogLine(logPath, scope, `exit code=${code ?? 'null'} signal=${signal ?? 'null'}`);
+  });
+}
 
 function safeGoEnv(name) {
   try {
     return execFileSync('go', ['env', name], {
       cwd: projectRoot,
       encoding: 'utf8',
+      timeout: 3000,
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
   } catch {
@@ -42,6 +93,37 @@ function resolveWailsExecutable() {
   return isWindows ? 'wails.exe' : 'wails';
 }
 
+function resolveViteExecutable(rootDir = projectRoot) {
+  const directPath = path.join(rootDir, 'node_modules', 'vite', 'bin', 'vite.js');
+  if (fs.existsSync(directPath)) {
+    return directPath;
+  }
+
+  const viteDir = path.join(rootDir, 'node_modules', 'vite');
+  if (fs.existsSync(viteDir)) {
+    try {
+      const realViteDir = fs.realpathSync(viteDir);
+      const realBinPath = path.join(realViteDir, 'bin', 'vite.js');
+      if (fs.existsSync(realBinPath)) {
+        return realBinPath;
+      }
+    } catch {}
+  }
+
+  const pnpmRoot = path.join(rootDir, 'node_modules', '.pnpm');
+  if (fs.existsSync(pnpmRoot)) {
+    const vitePackageDir = fs.readdirSync(pnpmRoot).find((name) => name.startsWith('vite@'));
+    if (vitePackageDir) {
+      const pnpmBinPath = path.join(pnpmRoot, vitePackageDir, 'node_modules', 'vite', 'bin', 'vite.js');
+      if (fs.existsSync(pnpmBinPath)) {
+        return pnpmBinPath;
+      }
+    }
+  }
+
+  return '';
+}
+
 function buildEnv() {
   const env = { ...process.env };
   const noisyKeys = [
@@ -66,6 +148,12 @@ function buildEnv() {
   }
   env.npm_config_userconfig = npmrcPath;
   env.NPM_CONFIG_USERCONFIG = npmrcPath;
+
+  const goCachePath = path.join(projectRoot, '.gocache');
+  if (!fs.existsSync(goCachePath)) {
+    fs.mkdirSync(goCachePath, { recursive: true });
+  }
+  env.GOCACHE = goCachePath;
 
   return env;
 }
@@ -148,6 +236,7 @@ function listProjectDevProcesses() {
     const output = execFileSync('powershell.exe', ['-NoProfile', '-Command', script], {
       cwd: projectRoot,
       encoding: 'utf8',
+      timeout: 3000,
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
     if (!output) return [];
@@ -167,7 +256,7 @@ async function cleanupStaleDevProcesses() {
   const summary = staleProcesses
     .map((proc) => `${proc.Name}:${proc.ProcessId}`)
     .join(', ');
-  console.log(`[dev] Cleaning stale dev processes: ${summary}`);
+  logRunner(`[dev] Cleaning stale dev processes: ${summary}`);
 
   for (const proc of staleProcesses) {
     killTree(proc.ProcessId);
@@ -179,6 +268,8 @@ async function cleanupStaleDevProcesses() {
 function attachExit(child, cleanup = () => {}) {
   child.on('error', (error) => {
     cleanup();
+    appendLogLine(runnerLogPath, 'runner', `[wails] Failed to start: ${error.message}`);
+    appendLogLine(runnerLogPath, 'runner', '[wails] Ensure `go install github.com/wailsapp/wails/v2/cmd/wails@latest` has been run.');
     console.error(`[wails] Failed to start: ${error.message}`);
     console.error('[wails] Ensure `go install github.com/wailsapp/wails/v2/cmd/wails@latest` has been run.');
     process.exit(1);
@@ -195,30 +286,44 @@ function attachExit(child, cleanup = () => {}) {
 }
 
 async function runDevMode() {
+  ensureLogDir();
+  fs.writeFileSync(runnerLogPath, '', 'utf8');
+  fs.writeFileSync(sidecarLogPath, '', 'utf8');
+  fs.writeFileSync(viteLogPath, '', 'utf8');
+  fs.writeFileSync(wailsLogPath, '', 'utf8');
+
+  logRunner('[dev] Preparing runtime...');
   const env = buildEnv();
+  logRunner('[dev] Resolving Wails executable...');
   const wailsExecutable = resolveWailsExecutable();
+  logRunner(`[dev] Wails executable: ${wailsExecutable}`);
+  logRunner('[dev] Cleaning stale dev processes...');
   await cleanupStaleDevProcesses();
 
+  const loopbackHost = '127.0.0.1';
   const sidecarPort = await findAvailablePort(13000, 20);
   const vitePort = await findAvailablePort(3000, 20);
-  const viteExecutable = path.join(projectRoot, 'node_modules', 'vite', 'bin', 'vite.js');
-  const frontendUrl = `http://localhost:${vitePort}`;
-  const sidecarUrl = `http://127.0.0.1:${sidecarPort}`;
+  const wailsDevServerPort = await findAvailablePort(34115, 50);
+  const frontendUrl = `http://${loopbackHost}:${vitePort}`;
+  const sidecarUrl = `http://${loopbackHost}:${sidecarPort}`;
+  const wailsDevServerAddress = `${loopbackHost}:${wailsDevServerPort}`;
+  const viteRunner = path.join(projectRoot, 'scripts', 'run-vite.mjs');
 
-  if (!fs.existsSync(viteExecutable)) {
-    throw new Error(`Missing Vite executable: ${viteExecutable}`);
+  if (!fs.existsSync(viteRunner)) {
+    throw new Error(`Missing Vite runner: ${viteRunner}`);
   }
 
-  console.log(`[dev] Starting sidecar: ${sidecarUrl}`);
+  logRunner(`[dev] Starting sidecar: ${sidecarUrl}`);
   const sidecarChild = spawn(
     process.execPath,
     [path.join(projectRoot, 'server.js')],
     {
       cwd: projectRoot,
-      stdio: ['ignore', 'inherit', 'inherit'],
+      stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...env, PORT: String(sidecarPort) },
     },
   );
+  attachChildLogging(sidecarChild, 'sidecar', sidecarLogPath);
 
   const sidecarReady = await waitForPort(sidecarPort, 30000);
   if (!sidecarReady) {
@@ -226,13 +331,13 @@ async function runDevMode() {
     throw new Error(`Sidecar did not start within 30s: ${sidecarUrl}`);
   }
 
-  console.log(`[dev] Starting Vite: ${frontendUrl}`);
+  logRunner(`[dev] Starting Vite: ${frontendUrl}`);
   const viteChild = spawn(
     process.execPath,
-    [viteExecutable, '--host', '0.0.0.0', '--port', String(vitePort), '--strictPort'],
+    [viteRunner, 'dev', '--host', loopbackHost, '--port', String(vitePort), '--strictPort'],
     {
       cwd: projectRoot,
-      stdio: ['ignore', 'inherit', 'inherit'],
+      stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...env,
         VITE_API_BASE_URL: frontendUrl,
@@ -240,6 +345,7 @@ async function runDevMode() {
       },
     },
   );
+  attachChildLogging(viteChild, 'vite', viteLogPath);
 
   const viteReady = await waitForPort(vitePort, 30000);
   if (!viteReady) {
@@ -255,19 +361,30 @@ async function runDevMode() {
     throw new Error(`Vite API middleware did not become ready within 30s: ${frontendUrl}/api/browser-session/browsers`);
   }
 
-  const wailsArgs = ['dev', '-m', '-s', `-frontenddevserverurl=${frontendUrl}`];
+  const wailsArgs = [
+    'dev',
+    '-tags', 'native_webview2loader',
+    '-m',
+    '-s',
+    '-nocolour',
+    '-loglevel', 'Debug',
+    '-v', '2',
+    '-devserver', wailsDevServerAddress,
+    `-frontenddevserverurl=${frontendUrl}`,
+  ];
   for (const extraArg of rawArgs.slice(1)) {
     if (!wailsArgs.includes(extraArg)) {
       wailsArgs.push(extraArg);
     }
   }
 
-  console.log(`[dev] Starting Wails: ${wailsArgs.join(' ')}`);
+  logRunner(`[dev] Starting Wails: ${wailsArgs.join(' ')}`);
   const wailsChild = spawn(wailsExecutable, wailsArgs, {
     cwd: projectRoot,
-    stdio: ['ignore', 'inherit', 'inherit'],
+    stdio: ['ignore', 'pipe', 'pipe'],
     env,
   });
+  attachChildLogging(wailsChild, 'wails', wailsLogPath);
 
   const cleanup = () => {
     killTree(sidecarChild.pid);
@@ -304,6 +421,7 @@ async function runDevMode() {
 function buildPassthroughArgs() {
   const args = rawArgs.length ? [...rawArgs] : [command];
   if (args[0] === 'dev' && !args.includes('-m')) args.push('-m');
+  if (!args.includes('-nocolour')) args.push('-nocolour');
   return args;
 }
 
@@ -323,6 +441,7 @@ async function main() {
 }
 
 main().catch((error) => {
+  appendLogLine(runnerLogPath, 'runner', `[wails] ${error.message}`);
   console.error(`[wails] ${error.message}`);
   process.exit(1);
 });

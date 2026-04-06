@@ -43,7 +43,20 @@ func (a *App) startup(ctx context.Context) {
 
 func (a *App) shutdown(ctx context.Context) {
 	_ = ctx
+	debugLogf("shutdown begin")
 	a.stopSidecar()
+	debugLogf("shutdown complete")
+}
+
+func (a *App) domReady(ctx context.Context) {
+	_ = ctx
+	debugLogf("dom ready")
+}
+
+func (a *App) beforeClose(ctx context.Context) bool {
+	_ = ctx
+	debugLogf("before close")
+	return false
 }
 
 func (a *App) ensureSidecar() error {
@@ -79,8 +92,8 @@ func (a *App) ensureSidecar() error {
 	}
 	debugLogf("node path: %s", nodePath)
 
-	viteBin := filepath.Join(projectRoot, "node_modules", "vite", "bin", "vite.js")
-	if _, err := os.Stat(viteBin); err != nil {
+	viteBin := resolveViteExecutable(projectRoot)
+	if viteBin == "" {
 		debugLogf("vite executable missing: %s", viteBin)
 		return fmt.Errorf("vite executable not found: %s", viteBin)
 	}
@@ -230,14 +243,46 @@ func looksLikeProjectRoot(dir string) bool {
 	required := []string{
 		filepath.Join(dir, "package.json"),
 		filepath.Join(dir, "vite.config.js"),
-		filepath.Join(dir, "node_modules", "vite", "bin", "vite.js"),
 	}
 	for _, path := range required {
 		if _, err := os.Stat(path); err != nil {
 			return false
 		}
 	}
-	return true
+	return resolveViteExecutable(dir) != ""
+}
+
+func resolveViteExecutable(projectRoot string) string {
+	directPath := filepath.Join(projectRoot, "node_modules", "vite", "bin", "vite.js")
+	if _, err := os.Stat(directPath); err == nil {
+		return directPath
+	}
+
+	viteDir := filepath.Join(projectRoot, "node_modules", "vite")
+	if realViteDir, err := filepath.EvalSymlinks(viteDir); err == nil {
+		realBinPath := filepath.Join(realViteDir, "bin", "vite.js")
+		if _, err := os.Stat(realBinPath); err == nil {
+			return realBinPath
+		}
+	}
+
+	pnpmRoot := filepath.Join(projectRoot, "node_modules", ".pnpm")
+	entries, err := os.ReadDir(pnpmRoot)
+	if err != nil {
+		return ""
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() || len(entry.Name()) < 6 || entry.Name()[:5] != "vite@" {
+			continue
+		}
+		pnpmBinPath := filepath.Join(pnpmRoot, entry.Name(), "node_modules", "vite", "bin", "vite.js")
+		if _, err := os.Stat(pnpmBinPath); err == nil {
+			return pnpmBinPath
+		}
+	}
+
+	return ""
 }
 
 func waitForAPIReady(host string, port int, timeout time.Duration) error {

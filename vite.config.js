@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { spawn, execFileSync } from 'child_process';
 import net from 'net';
@@ -9,10 +10,98 @@ import Components from 'unplugin-vue-components/vite';
 import { AntDesignVueResolver } from 'unplugin-vue-components/resolvers';
 
 // ─── 配置与辅助函数 ────────────────────────────────────────────────────────
-const FETCH_LOG = path.join(process.cwd(), 'logs/fetch-keys.log');
-const CHECK_LOG = path.join(process.cwd(), 'logs/check-keys.log');
+function ensureDirSync(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
+  return dirPath;
+}
 
-if (!fs.existsSync('logs')) fs.mkdirSync('logs');
+function resolveRuntimeRootDir() {
+  const explicitDir = String(process.env.BATCH_API_CHECK_RUNTIME_DIR || '').trim();
+  if (explicitDir) {
+    return path.resolve(explicitDir);
+  }
+
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || '';
+    if (localAppData) {
+      return path.join(localAppData, 'BatchApiCheck', 'runtime');
+    }
+  }
+
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'BatchApiCheck', 'runtime');
+  }
+
+  const xdgRuntimeHome = process.env.XDG_STATE_HOME || process.env.XDG_CACHE_HOME || '';
+  if (xdgRuntimeHome) {
+    return path.join(xdgRuntimeHome, 'batch-api-check', 'runtime');
+  }
+
+  return path.join(os.tmpdir(), 'batch-api-check', 'runtime');
+}
+
+const APP_RUNTIME_ROOT = ensureDirSync(resolveRuntimeRootDir());
+const LOG_DIR = ensureDirSync(path.join(APP_RUNTIME_ROOT, 'logs'));
+const BROWSER_SESSION_ROOT = ensureDirSync(path.join(APP_RUNTIME_ROOT, 'browser-session'));
+const FETCH_LOG = path.join(LOG_DIR, 'fetch-keys.log');
+const CHECK_LOG = path.join(LOG_DIR, 'check-keys.log');
+const CLIENT_LOG = path.join(LOG_DIR, 'wails-render.log');
+const DEV_WATCH_IGNORES = [
+  '**/all-api-hub/**',
+  '**/.browser-session-*/**',
+  '**/.tmp-browser*/**',
+  '**/logs/**',
+  '**/tmp_*.log',
+  '**/tmp_*.json',
+];
+
+const fetchKeysProgress = {
+  active: false,
+  total: 0,
+  completed: 0,
+  successSites: 0,
+  lastSiteName: '',
+  startedAt: 0,
+  lastUpdatedAt: 0,
+};
+
+function resetFetchKeysProgress(total = 0) {
+  fetchKeysProgress.active = total > 0;
+  fetchKeysProgress.total = total;
+  fetchKeysProgress.completed = 0;
+  fetchKeysProgress.successSites = 0;
+  fetchKeysProgress.lastSiteName = '';
+  fetchKeysProgress.startedAt = total > 0 ? Date.now() : 0;
+  fetchKeysProgress.lastUpdatedAt = total > 0 ? Date.now() : 0;
+}
+
+function markFetchKeysProgress(result, account) {
+  fetchKeysProgress.completed += 1;
+  fetchKeysProgress.lastSiteName = String(
+    result?.site_name || account?.site_name || account?.site_url || ''
+  );
+  if (Array.isArray(result?.tokens) && result.tokens.length > 0) {
+    fetchKeysProgress.successSites += 1;
+  }
+  fetchKeysProgress.lastUpdatedAt = Date.now();
+}
+
+function finishFetchKeysProgress() {
+  fetchKeysProgress.active = false;
+  fetchKeysProgress.lastUpdatedAt = Date.now();
+}
+
+function getFetchKeysProgressSnapshot() {
+  return {
+    active: fetchKeysProgress.active,
+    total: fetchKeysProgress.total,
+    completed: fetchKeysProgress.completed,
+    successSites: fetchKeysProgress.successSites,
+    lastSiteName: fetchKeysProgress.lastSiteName,
+    startedAt: fetchKeysProgress.startedAt,
+    lastUpdatedAt: fetchKeysProgress.lastUpdatedAt,
+  };
+}
 
 const fetchLog = (msg) => {
   const line = `[${new Date().toLocaleTimeString()}] ${msg}\n`;
@@ -23,6 +112,11 @@ const fetchLog = (msg) => {
 const checkLog = (msg) => {
   const line = `[${new Date().toLocaleTimeString()}] ${msg}\n`;
   fs.appendFileSync(CHECK_LOG, line);
+};
+
+const clientLog = (msg) => {
+  const line = `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+  fs.appendFileSync(CLIENT_LOG, line);
 };
 
 const ensureSkPrefix = (key) => (key && !key.startsWith('sk-') ? `sk-${key}` : key);
@@ -114,7 +208,6 @@ function getBrowserProfileLaunchMode(browserType = 'chrome') {
   if (explicitMode === 'managed-copy' || explicitMode === 'linked-default' || explicitMode === 'shadow-copy') {
     return explicitMode;
   }
-  // shadow-copy: 大目录 Junction 链接 + 核心文件物理拷贝，Windows 默认
   return process.platform === 'win32' ? 'shadow-copy' : 'managed-copy';
 }
 
@@ -220,6 +313,34 @@ async function waitForBrowserProcessStopped(browserType = 'chrome', timeoutMs = 
   return !isBrowserProcessRunning(normalizedBrowser);
 }
 
+function resetBrowserFallbackState() {
+  browserFallbackContextPromise = null;
+  browserFallbackContextBrowserType = null;
+  browserFallbackLaunchPromise = null;
+  browserFallbackLaunchBrowserType = null;
+  browserFallbackPages.clear();
+}
+
+async function stopBrowserSessionsAndProcesses(browserType = 'chrome', reason = 'manual-stop', timeoutMs = 12000) {
+  const normalizedBrowser = browserType === 'edge' ? 'edge' : 'chrome';
+  resetBrowserFallbackState();
+  const killed = killBrowserProcesses(normalizedBrowser);
+  const stopped = await waitForBrowserProcessStopped(normalizedBrowser, timeoutMs);
+  fetchLog(`[BrowserSession] 结束浏览器进程(${normalizedBrowser}) reason=${reason}: ${killed ? 'success' : 'no-process'} stopped=${stopped}`);
+  return { killed, stopped };
+}
+
+async function prepareShadowBrowserLaunch(browserType = 'chrome') {
+  const normalizedBrowser = browserType === 'edge' ? 'edge' : 'chrome';
+  fetchLog(`[BrowserSession] shadow-copy 启动前先关闭旧 shadow/default(${normalizedBrowser})`);
+  const { stopped } = await stopBrowserSessionsAndProcesses(normalizedBrowser, 'shadow-launch');
+  if (!stopped) {
+    const error = new Error(`${normalizedBrowser === 'chrome' ? 'Chrome' : 'Edge'} 在启动 shadow 模式前未能完全退出`);
+    error.code = 'BROWSER_PROFILE_IN_USE';
+    throw error;
+  }
+}
+
 let browserFallbackContextPromise = null;
 const browserFallbackPages = new Map();
 let browserFallbackContextBrowserType = null;
@@ -237,7 +358,7 @@ function getCdpBaseUrl(browserType = 'chrome') {
 
 function getManagedBrowserProfileDir(browserType = 'chrome') {
   const normalizedBrowser = browserType === 'edge' ? 'edge' : 'chrome';
-  const profileDir = path.join(process.cwd(), '.browser-session-profile', normalizedBrowser);
+  const profileDir = path.join(BROWSER_SESSION_ROOT, 'managed', normalizedBrowser);
   fs.mkdirSync(profileDir, { recursive: true });
   return profileDir;
 }
@@ -249,7 +370,7 @@ function getLinkedDefaultBrowserProfileDir(browserType = 'chrome') {
     throw new Error(`${normalizedBrowser === 'chrome' ? 'Chrome' : 'Edge'} 默认用户目录不存在`);
   }
 
-  const linkRoot = path.join(process.cwd(), '.browser-session-linked');
+  const linkRoot = path.join(BROWSER_SESSION_ROOT, 'linked');
   const linkDir = path.join(linkRoot, normalizedBrowser);
   fs.mkdirSync(linkRoot, { recursive: true });
 
@@ -280,7 +401,7 @@ function createShadowProfileDir(browserType = 'chrome') {
     throw new Error(`${normalizedBrowser === 'chrome' ? 'Chrome' : 'Edge'} 默认用户目录不存在，无法创建影子配置`);
   }
 
-  const shadowRoot = path.join(process.cwd(), '.browser-session-shadow', normalizedBrowser);
+  const shadowRoot = path.join(BROWSER_SESSION_ROOT, 'shadow', normalizedBrowser);
   // 每次启动前重建影子目录，确保核心状态文件是最新拷贝
   try { fs.rmSync(shadowRoot, { recursive: true, force: true }); } catch {}
   fs.mkdirSync(shadowRoot, { recursive: true });
@@ -438,6 +559,9 @@ function launchBrowserWithRemoteDebugging(executablePath, browserType = 'chrome'
     '--no-default-browser-check',
     '--disable-session-crashed-bubble',
   ];
+  if (process.platform === 'win32') {
+    args.push('--start-minimized');
+  }
   const child = spawn(executablePath, args, {
     detached: true,
     stdio: 'ignore',
@@ -460,6 +584,9 @@ function launchBrowserUrlWithRemoteDebugging(executablePath, browserType = 'chro
     '--new-window',
     targetUrl,
   ];
+  if (process.platform === 'win32') {
+    args.push('--start-minimized');
+  }
   const child = spawn(executablePath, args, {
     detached: true,
     stdio: 'ignore',
@@ -504,6 +631,10 @@ async function startManagedBrowserWithRemoteDebugging(executablePath, browserTyp
 
   browserFallbackLaunchBrowserType = normalizedBrowser;
   browserFallbackLaunchPromise = (async () => {
+    const launchMode = getBrowserProfileLaunchMode(normalizedBrowser);
+    if (launchMode === 'shadow-copy') {
+      await prepareShadowBrowserLaunch(normalizedBrowser);
+    }
     const profileSpec = resolveBrowserProfileDir(normalizedBrowser);
     fetchLog(`[BrowserSession] 准备启动受控浏览器(${normalizedBrowser}) mode=${profileSpec.mode} 并等待 CDP 端口 ${CDP_PORTS[normalizedBrowser]}`);
     launchBrowserUrlWithRemoteDebugging(executablePath, normalizedBrowser, targetUrl, profileSpec);
@@ -537,7 +668,12 @@ async function ensureRemoteDebugBrowser(browserType = 'chrome') {
   }
 
   fetchLog(`[BrowserSession] 尝试启动 ${normalizedBrowser} 并开启远程调试: ${executablePath}`);
-  launchBrowserWithRemoteDebugging(executablePath, normalizedBrowser);
+  const launchMode = getBrowserProfileLaunchMode(normalizedBrowser);
+  if (launchMode === 'shadow-copy') {
+    await prepareShadowBrowserLaunch(normalizedBrowser);
+  }
+  const profileSpec = resolveBrowserProfileDir(normalizedBrowser);
+  launchBrowserWithRemoteDebugging(executablePath, normalizedBrowser, profileSpec);
 
   const version = await waitForRemoteDebugReady(normalizedBrowser);
   if (!version?.webSocketDebuggerUrl) {
@@ -1479,9 +1615,42 @@ function proxyMiddlewarePlugin() {
           if (req.method !== 'POST') { res.statusCode = 405; return res.end(); }
           const params = new URL(req.url, 'http://localhost').searchParams;
           const target = params.get('type') || 'check';
-          const file = target === 'fetch' ? FETCH_LOG : CHECK_LOG;
+          const file = target === 'fetch'
+            ? FETCH_LOG
+            : target === 'render'
+              ? CLIENT_LOG
+              : CHECK_LOG;
           fs.writeFileSync(file, '', 'utf8');
           return res.end(JSON.stringify({ success: true }));
+        }
+
+        if (req.url.startsWith('/api/client-log')) {
+          if (req.method !== 'POST') { res.statusCode = 405; return res.end(); }
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            try {
+              const payload = JSON.parse(body || '{}');
+              const level = String(payload?.level || 'info').trim().toUpperCase();
+              const message = String(payload?.message || '').trim();
+              const location = String(payload?.href || payload?.location || '').trim();
+              const sessionId = String(payload?.sessionId || '').trim();
+              const details = payload?.details ? JSON.stringify(payload.details) : '';
+              clientLog(`[${level}]${sessionId ? ` [session:${sessionId}]` : ''}${location ? ` [${location}]` : ''} ${message}${details ? ` | ${details}` : ''}`);
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ success: true }));
+            } catch (err) {
+              res.statusCode = 400;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ success: false, message: err.message }));
+            }
+          });
+          return;
+        }
+
+        if (req.url.startsWith('/api/fetch-keys/progress')) {
+          res.setHeader('Content-Type', 'application/json');
+          return res.end(JSON.stringify(getFetchKeysProgressSnapshot()));
         }
 
         // 1. 批量提取 Token 接口
@@ -1492,6 +1661,7 @@ function proxyMiddlewarePlugin() {
           req.on('end', async () => {
              try {
                const { accounts } = JSON.parse(body);
+               resetFetchKeysProgress(Array.isArray(accounts) ? accounts.length : 0);
                fetchLog(`开始批量提取 ${accounts.length} 个站点的令牌...`);
                const results = new Array(accounts.length);
                let currentIndex = 0;
@@ -1499,7 +1669,9 @@ function proxyMiddlewarePlugin() {
                const worker = async () => {
                  while (currentIndex < accounts.length) {
                    const i = currentIndex++;
-                   results[i] = await fetchTokensForAccount(accounts[i]);
+                   const result = await fetchTokensForAccount(accounts[i]);
+                   results[i] = result;
+                   markFetchKeysProgress(result, accounts[i]);
                  }
                };
                await Promise.all(Array.from({ length: CONCURRENCY }).map(worker));
@@ -1516,6 +1688,8 @@ function proxyMiddlewarePlugin() {
              } catch (err) {
                res.statusCode = 500;
                res.end(JSON.stringify({ message: err.message }));
+             } finally {
+               finishFetchKeysProgress();
              }
           });
           return;
@@ -1627,13 +1801,7 @@ function proxyMiddlewarePlugin() {
             try {
               const { browserType = 'chrome' } = JSON.parse(body || '{}');
               const normalizedBrowser = browserType === 'edge' ? 'edge' : 'chrome';
-              const killed = killBrowserProcesses(normalizedBrowser);
-              browserFallbackContextPromise = null;
-              browserFallbackContextBrowserType = null;
-              browserFallbackLaunchPromise = null;
-              browserFallbackLaunchBrowserType = null;
-              browserFallbackPages.clear();
-              const stopped = await waitForBrowserProcessStopped(normalizedBrowser, 12000);
+              const { killed, stopped } = await stopBrowserSessionsAndProcesses(normalizedBrowser, 'api-kill');
               fetchLog(`[BrowserSession] 结束浏览器进程(${normalizedBrowser}): ${killed ? 'success' : 'no-process'}`);
               res.setHeader('Content-Type', 'application/json');
               res.end(JSON.stringify({ success: true, killed, stopped, browserType: normalizedBrowser }));
@@ -1661,13 +1829,7 @@ function proxyMiddlewarePlugin() {
                 }))
                 .filter(site => /^https?:\/\//i.test(site.url));
 
-              const killed = killBrowserProcesses(normalizedBrowser);
-              browserFallbackContextPromise = null;
-              browserFallbackContextBrowserType = null;
-              browserFallbackLaunchPromise = null;
-              browserFallbackLaunchBrowserType = null;
-              browserFallbackPages.clear();
-              const stopped = await waitForBrowserProcessStopped(normalizedBrowser, 12000);
+              const { killed, stopped } = await stopBrowserSessionsAndProcesses(normalizedBrowser, 'restart-open');
               fetchLog(`[BrowserSession] 结束浏览器进程(${normalizedBrowser}): ${killed ? 'success' : 'no-process'}`);
 
               if (!stopped) {
@@ -1866,7 +2028,22 @@ export default defineConfig({
     }),
     proxyMiddlewarePlugin(),
   ],
-  server: { port: 3000, host: '0.0.0.0', watch: { ignored: ['**/all-api-hub/**'] } },
+  server: {
+    port: 3000,
+    host: '0.0.0.0',
+    watch: { ignored: DEV_WATCH_IGNORES },
+    warmup: {
+      clientFiles: [
+        './index.html',
+        './src/main.js',
+        './src/App.vue',
+        './src/router/index.js',
+        './src/views/*.vue',
+        './src/components/*.vue',
+        './src/utils/*.js',
+      ],
+    },
+  },
   resolve: { alias: { '@': '/src' } },
   optimizeDeps: {
     exclude: ['all-api-hub'],
