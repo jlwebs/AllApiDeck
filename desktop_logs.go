@@ -58,6 +58,7 @@ func (a *App) ListDesktopLogFiles() (*DesktopLogSnapshot, error) {
 			if !isDesktopLogFile(name) {
 				continue
 			}
+
 			fullPath := filepath.Join(dir.path, name)
 			if seen[fullPath] {
 				continue
@@ -138,27 +139,42 @@ type desktopLogDir struct {
 }
 
 func resolveDesktopLogDirs() ([]desktopLogDir, error) {
-	projectRoot, err := findProjectRoot()
-	if err != nil {
-		return nil, err
-	}
+	dirs := make([]desktopLogDir, 0, 5)
+	seen := map[string]bool{}
 
-	dirs := []desktopLogDir{
-		{
-			path:        filepath.Join(projectRoot, "logs"),
-			sourceKey:   "project",
-			sourceLabel: "项目 logs",
-		},
-	}
-
-	runtimeRoot := resolveRuntimeRootDirForDesktop()
-	if runtimeRoot != "" {
+	addDir := func(path string, sourceKey string, sourceLabel string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return
+		}
+		if seen[absPath] {
+			return
+		}
+		seen[absPath] = true
 		dirs = append(dirs, desktopLogDir{
-			path:        filepath.Join(runtimeRoot, "logs"),
-			sourceKey:   "runtime",
-			sourceLabel: "运行时 logs",
+			path:        absPath,
+			sourceKey:   sourceKey,
+			sourceLabel: sourceLabel,
 		})
 	}
+
+	if projectRoot, err := findProjectRoot(); err == nil && projectRoot != "" {
+		addDir(filepath.Join(projectRoot, "logs"), "project", "项目 logs")
+	}
+	if wd, err := os.Getwd(); err == nil && wd != "" {
+		addDir(filepath.Join(wd, "logs"), "cwd", "当前目录 logs")
+	}
+	if exePath, err := os.Executable(); err == nil && exePath != "" {
+		exeDir := filepath.Dir(exePath)
+		addDir(filepath.Join(exeDir, "logs"), "exe", "EXE 同级 logs")
+		addDir(filepath.Join(exeDir, "..", "logs"), "exe_parent", "EXE 上级 logs")
+	}
+	addDir(resolveRuntimeLogDir(), "runtime", "运行时 logs")
+
 	return dirs, nil
 }
 
@@ -190,11 +206,11 @@ func classifyDesktopLogGroup(name string) (string, string) {
 	lower := strings.ToLower(name)
 	switch {
 	case strings.Contains(lower, "fetch"), strings.Contains(lower, "check-keys"), strings.Contains(lower, "proxy"), strings.Contains(lower, "models"), strings.Contains(lower, "nih"):
-		return "fetch", "抓取提取"
+		return "fetch", "抓取与检测"
 	case strings.Contains(lower, "wails"), strings.Contains(lower, "exe_backend"), strings.Contains(lower, "render"):
 		return "runtime", "核心运行"
 	case strings.Contains(lower, "test"), strings.Contains(lower, "debug"):
-		return "debug", "调试样本"
+		return "debug", "调试与样本"
 	default:
 		return "other", "其他日志"
 	}

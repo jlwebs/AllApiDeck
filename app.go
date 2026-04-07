@@ -33,6 +33,10 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	debugLogf("startup begin")
+	if !shouldStartDevSidecar() {
+		debugLogf("startup skip dev sidecar: embedded bridge mode")
+		return
+	}
 	if err := a.ensureSidecar(); err != nil {
 		debugLogf("startup sidecar error: %v", err)
 		fmt.Printf("failed to start local API sidecar: %v\n", err)
@@ -252,6 +256,17 @@ func looksLikeProjectRoot(dir string) bool {
 	return resolveViteExecutable(dir) != ""
 }
 
+func shouldStartDevSidecar() bool {
+	projectRoot, err := findProjectRoot()
+	if err != nil {
+		return false
+	}
+	if _, err := exec.LookPath("node"); err != nil {
+		return false
+	}
+	return resolveViteExecutable(projectRoot) != ""
+}
+
 func resolveViteExecutable(projectRoot string) string {
 	directPath := filepath.Join(projectRoot, "node_modules", "vite", "bin", "vite.js")
 	if _, err := os.Stat(directPath); err == nil {
@@ -336,6 +351,7 @@ func debugLogf(format string, args ...interface{}) {
 
 func candidateDebugLogPaths() []string {
 	var paths []string
+	paths = append(paths, filepath.Join(resolveRuntimeLogDir(), "EXE_BACKEND_DEBUG.log"))
 	if wd, err := os.Getwd(); err == nil && wd != "" {
 		paths = append(paths, filepath.Join(wd, "logs", "EXE_BACKEND_DEBUG.log"))
 	}

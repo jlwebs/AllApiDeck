@@ -128,6 +128,20 @@
 
             <h1>{{ t('API_CHECKER_TITLE') }}</h1>
             <h3>{{ t('API_CHECKER_SUBTITLE') }}</h3>
+            <div
+              v-if="showBackendHealth"
+              class="backend-health-banner"
+              :class="{
+                'backend-health-ok': backendHealth.ok,
+                'backend-health-down': backendHealth.checked && !backendHealth.ok,
+              }"
+            >
+              <span class="backend-health-dot"></span>
+              <span class="backend-health-label">
+                {{ backendHealth.ok ? '本地后端正常' : (backendHealth.checked ? '本地后端异常' : '本地后端检测中') }}
+              </span>
+              <span class="backend-health-detail">{{ backendHealth.detail }}</span>
+            </div>
 
             <form @submit.prevent="handleSubmit" id="apiForm">
               <div style="position: relative">
@@ -1073,7 +1087,7 @@ import {
   KeyOutlined,
 } from '@ant-design/icons-vue';
 import ExperimentalFeatures from './Experimental.vue';
-import { computed, h, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import { computed, h, nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import {
   ConfigProvider,
   message,
@@ -1113,6 +1127,7 @@ import ModelVerifier from '../utils/verify.js';
 import { toggleTheme } from '../utils/theme.js';
 import { createSVGDataURL } from '../utils/svg.js';
 import { announcement, appInfo } from '../utils/info.js';
+import { apiFetch, isProbablyWailsRuntime } from '../utils/runtimeApi.js';
 import {
   cantFunctionModelList,
   cantOfficialModelList,
@@ -1154,6 +1169,29 @@ const shouldShift = ref(false);
 const showResultContainer = ref(false);
 const handlePageChange = page => {
   currentPage.value = page;
+};
+
+const probeBackendHealth = async () => {
+  if (!showBackendHealth.value) {
+    return;
+  }
+
+  try {
+    const response = await apiFetch('/api/alive');
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const payload = await response.json().catch(() => ({}));
+    backendHealth.ok = Boolean(payload?.ok ?? true);
+    backendHealth.checked = true;
+    backendHealth.detail = backendHealth.ok
+      ? `桥接模式在线 · ${payload?.mode || 'local'}`
+      : '保活响应异常';
+  } catch (error) {
+    backendHealth.ok = false;
+    backendHealth.checked = true;
+    backendHealth.detail = error?.message || '请求失败';
+  }
 };
 
 // 关闭结果容器的函数
@@ -1201,6 +1239,13 @@ const progressPercent = ref(0);
 const chatSite = ref('https://chat.crond.dev');
 const enableChat = ref(true);
 const showExperimentalFeatures = ref(false);
+const showBackendHealth = computed(() => isProbablyWailsRuntime());
+const backendHealth = reactive({
+  ok: false,
+  checked: false,
+  detail: '等待首次检测',
+});
+let backendHealthTimer = null;
 const pagination = reactive({
   current: 1,
   pageSize: 8, // 默认每页显示8条，可以根据需要调整
@@ -1284,6 +1329,12 @@ onMounted(() => {
     localCacheList.value = [];
   }
   getQueryParams();
+  void probeBackendHealth();
+  if (showBackendHealth.value) {
+    backendHealthTimer = setInterval(() => {
+      void probeBackendHealth();
+    }, 10000);
+  }
 });
 
 onMounted(() => {
@@ -1308,6 +1359,13 @@ onMounted(() => {
   };
   setVh();
   window.addEventListener('resize', setVh);
+});
+
+onBeforeUnmount(() => {
+  if (backendHealthTimer) {
+    clearInterval(backendHealthTimer);
+    backendHealthTimer = null;
+  }
 });
 
 // 显示更新提示的函数
@@ -3159,6 +3217,45 @@ h1 {
 
 h3 {
   margin-bottom: 20px;
+}
+
+.backend-health-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+  color: #334155;
+  font-size: 13px;
+}
+
+.backend-health-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #faad14;
+  box-shadow: 0 0 0 4px rgba(250, 173, 20, 0.16);
+}
+
+.backend-health-ok .backend-health-dot {
+  background: #52c41a;
+  box-shadow: 0 0 0 4px rgba(82, 196, 26, 0.16);
+}
+
+.backend-health-down .backend-health-dot {
+  background: #ff4d4f;
+  box-shadow: 0 0 0 4px rgba(255, 77, 79, 0.16);
+}
+
+.backend-health-label {
+  font-weight: 600;
+}
+
+.backend-health-detail {
+  color: #64748b;
 }
 
 /* 表单样式 */

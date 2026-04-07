@@ -13,9 +13,25 @@
               @settings="openSettingsModal"
             />
 
-            <h1 style="text-align: center; margin-bottom: 20px;">
-              批量并发检测
-            </h1>
+            <div class="page-title-row">
+              <h1 class="page-title">
+                批量并发检测
+              </h1>
+              <a-tooltip v-if="showBackendHealth" :title="backendHealthTooltip">
+                <div
+                  class="backend-health-pill"
+                  :class="{
+                    'backend-health-ok': backendHealth.ok,
+                    'backend-health-down': backendHealth.checked && !backendHealth.ok,
+                  }"
+                >
+                  <span class="backend-health-dot"></span>
+                  <span class="backend-health-label">
+                    {{ backendHealth.ok ? '本地后端正常' : (backendHealth.checked ? '本地后端异常' : '本地后端检测中') }}
+                  </span>
+                </div>
+              </a-tooltip>
+            </div>
             <h3 style="text-align: center; color: #666; margin-bottom: 30px;">
               （支持导入 accounts-backup JSON 进行批量筛查）
             </h3>
@@ -605,7 +621,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ConfigProvider, message, theme, Modal } from 'ant-design-vue';
 import { HomeOutlined, ReloadOutlined, MenuUnfoldOutlined, MenuFoldOutlined, InboxOutlined, PlayCircleOutlined, SearchOutlined, CopyOutlined, FilterOutlined, HistoryOutlined, ShareAltOutlined, DownOutlined, RightOutlined, UserOutlined, LockOutlined, MessageOutlined, CopyFilled, SmileOutlined, RedoOutlined, CloudSyncOutlined } from '@ant-design/icons-vue';
@@ -615,6 +631,8 @@ import { listDesktopLogFiles, readDesktopLogFile, isDesktopLogBridgeAvailable } 
 import { apiFetch, isProbablyWailsRuntime } from '../utils/runtimeApi.js';
 import { extractChromeProfileTokens, isChromeProfileAuthBridgeAvailable } from '../utils/profileAuthBridge.js';
 import { toggleTheme } from '../utils/theme.js';
+import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils/balance.js';
+import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
 
 const isWailsRuntime = isProbablyWailsRuntime();
 const { t } = useI18n();
@@ -631,6 +649,13 @@ const isImportingExtension = ref(false);
 const importExtensionStatus = ref('');
 const importExtensionStatusColor = ref('default');
 const importExtensionElapsedSeconds = ref(0);
+const showBackendHealth = computed(() => isWailsRuntime);
+const backendHealth = reactive({
+  ok: false,
+  checked: false,
+  detail: '等待首次检测',
+  debug: '',
+});
 const totalAccountsCount = ref(0);
 const showExperimentalFeatures = ref(false);
 const showAppSettingsModal = ref(false);
@@ -697,6 +722,15 @@ const currentDesktopLogGroupFiles = computed(() => {
 const currentDesktopLogFileMeta = computed(() => {
   const targetPath = String(selectedDesktopLogPath.value || '').trim();
   return currentDesktopLogGroupFiles.value.find(file => String(file?.path || '').trim() === targetPath) || null;
+});
+
+const backendHealthTooltip = computed(() => {
+  const statusText = backendHealth.ok
+    ? '状态：正常'
+    : (backendHealth.checked ? '状态：异常' : '状态：检测中');
+  const detailText = `详情：${backendHealth.detail || '无'}`;
+  const debugText = backendHealth.debug ? `诊断：${backendHealth.debug}` : '';
+  return [statusText, detailText, debugText].filter(Boolean).join('\n');
 });
 
 const formatLogTimestamp = (ts) => {
@@ -1437,6 +1471,7 @@ const editingRecord = ref(null);
 const editingPayload = ref('');
 let importExtensionResetTimer = null;
 let importExtensionTickTimer = null;
+let backendHealthTimer = null;
 
 const getMaskedKey = (key) => {
   if (!key) return '';
@@ -1538,85 +1573,13 @@ const hoverQuota = (record) => {
 
   // 非阻塞异步：用 access_token 请求 /api/user/self，取 quota 字段（插件同款）
   (async () => {
-    const site = record.accountData;
-    const siteUrl = siteKey;
-    
-    // 核心修复：经 scripts/verify-uid.cjs 验证通过，只允许纯数字 UID。UUID 会导致 401 格式错误。
-    const rawId = site?.account_info?.id || site?.id || site?.uid || site?.user_id || '';
-    const userId = /^\d+$/.test(String(rawId)) ? String(rawId) : '';
-    
-    // 优先 access_token（后台登录 token），其次用首个 sk key
-    const auth = site?.account_info?.access_token || site?.access_token || site?.tokens?.[0]?.key;
-
-    if (!auth || !siteUrl) {
-      const label = '无授权';
-      siteQuotaCache[siteKey] = label;
-      testResults.value.forEach(r => { if (r.siteUrl?.replace(/\/+$/, '') === siteKey) r.quota = label; });
-      return;
-    }
-
-    try {
-      // 增加超时宽容度到 15s
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 15000);
-      
-      // 核心修复：根据 site_type 动态决定端点。sub2api 类型通常是 /api/v1/auth/me
-      const isSub2Api = site?.site_type === 'sub2api';
-      const endpoints = isSub2Api 
-        ? ['/api/v1/auth/me', '/api/user/self'] 
-        : ['/api/user/self', '/api/v1/auth/me'];
-      
-      let quota = null;
-      let finalResStatus = 200;
-
-      for (const endpoint of endpoints) {
-        const url = `${siteUrl}${endpoint}`;
-        const uid = userId ? String(userId) : '';
-        const proxyUrl = `/api/proxy-get?url=${encodeURIComponent(url)}&uid=${uid}`;
-
-        const res = await apiFetch(proxyUrl, {
-          headers: { 'Authorization': `Bearer ${auth}` },
-          signal: controller.signal,
-        });
-        
-        finalResStatus = res.status;
-        if (res.ok) {
-          const json = await res.json();
-          // 深度兼容多种返回格式: NewAPI 的 data.quota, sub2api 的 data.user.quota 或 rix-api 的 balance/quota
-          quota = json?.data?.quota ?? 
-                  json?.quota ?? 
-                  json?.data?.user?.quota ?? 
-                  json?.user?.quota ?? 
-                  json?.data?.balance ?? 
-                  json?.balance ?? 
-                  json?.total_quota ?? 
-                  null;
-          if (quota !== null) break;
-        } else if ([401, 403].includes(res.status)) {
-          // 只有鉴权明确失败(401)或者权限受限(403)时，才立刻中断循环
-          break;
-        }
-      }
-
-      clearTimeout(timer);
-
-      if (quota !== null) {
-        // 智能判定：如果是 balance 字段或者数值较小，通常是直观金额，不除以 500000
-        const isDirectAmount = quota < 100000;
-        const finalAmount = isDirectAmount ? Number(quota).toFixed(3) : (quota / 500000).toFixed(3);
-        const label = `$${finalAmount}`;
-        siteQuotaCache[siteKey] = label;
-        testResults.value.forEach(r => { if (r.siteUrl?.replace(/\/+$/, '') === siteKey) r.quota = label; });
-      } else {
-        const label = `获取失败(${finalResStatus})`;
-        siteQuotaCache[siteKey] = label;
-        testResults.value.forEach(r => { if (r.siteUrl?.replace(/\/+$/, '') === siteKey) r.quota = label; });
-      }
-    } catch (e) {
-      const label = e.name === 'AbortError' ? '请求超时' : '网络错误';
-      siteQuotaCache[siteKey] = label;
-      testResults.value.forEach(r => { if (r.siteUrl?.replace(/\/+$/, '') === siteKey) r.quota = label; });
-    }
+    const label = await fetchQuotaLabelWithBatchLogic({
+      apiFetch,
+      site: record.accountData,
+      siteUrl: siteKey,
+    });
+    siteQuotaCache[siteKey] = label;
+    testResults.value.forEach(r => { if (r.siteUrl?.replace(/\/+$/, '') === siteKey) r.quota = label; });
   })();
 };
 
@@ -1748,9 +1711,25 @@ const resendPayload = async () => {
 };
 
 onMounted(() => {
+  logClientDiagnostic('batch.lifecycle', 'BatchCheck mounted');
+  logClientDiagnostic(
+    'batch.lifecycle',
+    `PerformHttpRequest typeof=${typeof window?.go?.main?.App?.PerformHttpRequest} PerformHttpRequestRaw typeof=${typeof window?.go?.main?.App?.PerformHttpRequestRaw} AppendClientLog typeof=${typeof window?.go?.main?.App?.AppendClientLog}`
+  );
   resetImportExtensionState();
   isDarkMode.value = document.body.classList.contains('dark-mode');
   loadDesktopTokenSourceMode();
+  void probeBackendHealth();
+  setTimeout(() => {
+    if (!backendHealth.checked) {
+      void probeBackendHealth();
+    }
+  }, 1200);
+  if (showBackendHealth.value) {
+    backendHealthTimer = setInterval(() => {
+      void probeBackendHealth();
+    }, 10000);
+  }
   const hist = localStorage.getItem('api_check_last_results');
   if (hist) {
     try {
@@ -1787,6 +1766,10 @@ watch(selectedDesktopLogGroup, (groupKey) => {
 onBeforeUnmount(() => {
   resetImportExtensionState();
   stopFetchKeysProgressPolling();
+  if (backendHealthTimer) {
+    clearInterval(backendHealthTimer);
+    backendHealthTimer = null;
+  }
 });
 
 const loadHistory = () => {
@@ -2788,6 +2771,45 @@ const stopImportExtensionTicking = () => {
   }
 };
 
+const waitForUiPaint = async () => {
+  await nextTick();
+  await new Promise(resolve => setTimeout(resolve, 0));
+};
+
+const probeBackendHealth = async () => {
+  if (!showBackendHealth.value) {
+    logClientDiagnostic('batch.health', 'skip probe: not wails runtime');
+    return;
+  }
+
+  const performType = typeof window?.go?.main?.App?.PerformHttpRequest;
+  const performRawType = typeof window?.go?.main?.App?.PerformHttpRequestRaw;
+  const appendType = typeof window?.go?.main?.App?.AppendClientLog;
+  backendHealth.debug = `isWailsRuntime=${String(isWailsRuntime)}; PerformHttpRequest=${performType}; PerformHttpRequestRaw=${performRawType}; AppendClientLog=${appendType}`;
+
+  try {
+    logClientDiagnostic('batch.health', 'probe start');
+    const response = await apiFetch('/api/alive');
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const payload = await response.json().catch(() => ({}));
+    backendHealth.ok = Boolean(payload?.ok ?? true);
+    backendHealth.checked = true;
+    backendHealth.detail = backendHealth.ok
+      ? `桥接模式在线 · ${payload?.mode || 'local'}`
+      : '保活响应异常';
+    backendHealth.debug = `${backendHealth.debug}; status=${response.status}; payload=${JSON.stringify(payload).slice(0, 240)}`;
+    logClientDiagnostic('batch.health', `probe success ok=${backendHealth.ok} detail=${backendHealth.detail}`);
+  } catch (error) {
+    backendHealth.ok = false;
+    backendHealth.checked = true;
+    backendHealth.detail = error?.message || '请求失败';
+    backendHealth.debug = `${backendHealth.debug}; error=${error?.stack || error?.message || String(error)}`;
+    logClientDiagnostic('batch.health', `probe failed: ${backendHealth.detail}`);
+  }
+};
+
 const setImportExtensionStatus = (text, color = 'processing') => {
   importExtensionStatus.value = String(text || '').trim();
   importExtensionStatusColor.value = color;
@@ -2835,6 +2857,8 @@ const importFromExtension = async () => {
 
   markImportExtensionBusy();
   try {
+    setImportExtensionStatus('正在扫描浏览器扩展数据库', 'processing');
+    await waitForUiPaint();
     const result = await Promise.race([
       importer(),
       new Promise((_, reject) => {
@@ -2842,13 +2866,15 @@ const importFromExtension = async () => {
       }),
     ]);
     setImportExtensionStatus('桌面端已返回扩展数据，正在解析账号', 'processing');
+    await waitForUiPaint();
     const accounts = result?.payload?.accounts?.accounts;
     if (!Array.isArray(accounts) || accounts.length === 0) {
       setImportExtensionStatus('扩展存储中未找到可用账号数据', 'warning');
       message.warning('扩展存储中未找到可用账号数据');
       return;
     }
-    setImportExtensionStatus(`已读取 ${accounts.length} 个账号，正在启动站点检测`, 'success');
+    setImportExtensionStatus(`已读取 ${accounts.length} 个账号，正在构建检测任务`, 'success');
+    await waitForUiPaint();
     message.success(`已从扩展导入 ${accounts.length} 个账号`);
     await processAccountsV2(accounts);
   } catch (err) {
@@ -4183,6 +4209,8 @@ function syncDetectedKeysToLocalStorage(options = {}) {
           quickTestRemark: '',
           quickTestAt: null,
           quickTestResponseTime: '',
+          balanceLabel: '',
+          balanceUpdatedAt: null,
         });
       }
 
@@ -4192,6 +4220,10 @@ function syncDetectedKeysToLocalStorage(options = {}) {
       record.statuses.push(String(task.status || ''));
       if (task.modelName) {
         record.modelsSet.add(String(task.modelName).trim());
+      }
+      if (!record.balanceLabel && isDisplayableQuotaLabel(task.quota)) {
+        record.balanceLabel = String(task.quota).trim();
+        record.balanceUpdatedAt = Date.now();
       }
     });
 
@@ -4216,6 +4248,8 @@ function syncDetectedKeysToLocalStorage(options = {}) {
         quickTestRemark: '',
         quickTestAt: null,
         quickTestResponseTime: '',
+        balanceLabel: record.balanceLabel || '',
+        balanceUpdatedAt: record.balanceUpdatedAt || null,
       };
     });
 
@@ -4728,6 +4762,55 @@ const copyOrganizedResults = () => {
 .loading-stage-status-line {
   margin-top: 12px;
   min-height: 24px;
+}
+
+.page-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.page-title {
+  margin: 0;
+  text-align: center;
+}
+
+.backend-health-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+  color: #334155;
+  font-size: 13px;
+  cursor: help;
+}
+
+.backend-health-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #faad14;
+  box-shadow: 0 0 0 4px rgba(250, 173, 20, 0.16);
+}
+
+.backend-health-ok .backend-health-dot {
+  background: #52c41a;
+  box-shadow: 0 0 0 4px rgba(82, 196, 26, 0.16);
+}
+
+.backend-health-down .backend-health-dot {
+  background: #ff4d4f;
+  box-shadow: 0 0 0 4px rgba(255, 77, 79, 0.16);
+}
+
+.backend-health-label {
+  font-weight: 600;
 }
 
 .header {
