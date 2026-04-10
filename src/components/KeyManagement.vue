@@ -20,6 +20,7 @@
       <a-card title="本地密钥管理" class="inventory-card">
         <template #extra>
           <a-space wrap>
+            <a-checkbox v-model:checked="hideInvalidKeys">隐藏无效密钥</a-checkbox>
             <a-button @click="openManualRecordModal()">手工添加</a-button>
             <a-popover trigger="hover" placement="bottom">
               <template #content>
@@ -32,31 +33,64 @@
             </a-popover>
             <a-button :disabled="displayedRows.length === 0" @click="exportCsv">导出 CSV</a-button>
             <a-popconfirm title="确认清空本地密钥库？" ok-text="清空" cancel-text="取消" @confirm="clearLocalRecords">
-              <a-button danger :disabled="displayedRows.length === 0">清空本地库</a-button>
+              <a-button danger :disabled="tableData.length === 0">清空本地库</a-button>
             </a-popconfirm>
           </a-space>
         </template>
 
         <a-empty v-if="displayedRows.length === 0" description="暂无本地密钥记录，可从批量检测自动同步、剪贴板导入或手工添加。" />
-        <a-table v-else :columns="columns" :data-source="displayedRows" :row-key="record => record.rowKey" :pagination="{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'] }" :scroll="{ x: 1560 }" size="middle">
+        <a-table v-else :columns="columns" :data-source="displayedRows" :row-key="record => record.rowKey" :pagination="{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'] }" :scroll="{ x: 1280 }" size="small" class="compact-key-table">
           <template #bodyCell="{ column, record }">
             <template v-if="column.dataIndex === 'siteName'">
               <div class="site-cell">
-                <div class="site-heading">
-                  <a-tag v-if="record.sourceType === 'manual'" color="blue">手工添加</a-tag>
-                  <strong>{{ record.siteName }}</strong>
+                <div class="site-top-row">
+                  <div class="site-main-block">
+                    <div class="site-heading">
+                      <a-tag v-if="record.sourceType === 'manual'" color="blue">手工添加</a-tag>
+                      <strong>{{ record.siteName }}</strong>
+                    </div>
+                    <span class="subtle-text">{{ record.tokenName || '未命名 Token' }}</span>
+                  </div>
+                  <div v-if="canRefreshBalance(record)" class="site-balance-panel" :title="getRecordBalanceTooltip(record)">
+                    <div class="site-balance-meta">
+                      <span class="site-balance-time">
+                        <ClockCircleOutlined />
+                        <span>{{ getBalanceRelativeTime(record) }}</span>
+                      </span>
+                      <button type="button" class="site-balance-refresh-icon-button" :disabled="record.balanceLoading" @click="refreshRecordBalance(record)">
+                        <ReloadOutlined class="site-balance-refresh-icon" :class="{ 'site-balance-refresh-icon-spinning': record.balanceLoading }" />
+                      </button>
+                    </div>
+                    <div class="site-balance-value" :class="{ 'site-balance-value-empty': !getRecordBalanceValue(record) || record.balanceLoading }">
+                      <span class="site-balance-label">剩余:</span>
+                      <span class="site-balance-text">{{ record.balanceLoading ? '--' : (getRecordBalanceNumericText(record) || '--') }}</span>
+                      <span v-if="showBalanceUnit(record)" class="site-balance-unit">USD</span>
+                    </div>
+                  </div>
                 </div>
-                <span class="subtle-text">{{ record.tokenName || '未命名 Token' }}</span>
               </div>
             </template>
             <template v-else-if="column.dataIndex === 'apiKey'">
-              <a-typography-text :copyable="{ text: record.apiKey }" :ellipsis="{ tooltip: record.apiKey }" class="cell-copy-text">{{ maskApiKey(record.apiKey) }}</a-typography-text>
-            </template>
-            <template v-else-if="column.dataIndex === 'siteUrl'">
-              <a-typography-text :copyable="{ text: record.siteUrl }" :ellipsis="{ tooltip: record.siteUrl }" class="cell-copy-text">{{ record.siteUrl }}</a-typography-text>
+              <div class="api-combined-cell">
+                <a-typography-text :copyable="{ text: record.apiKey }" :ellipsis="{ tooltip: record.apiKey }" class="cell-copy-text">{{ maskApiKey(record.apiKey) }}</a-typography-text>
+                <a-typography-text :copyable="{ text: record.siteUrl }" :ellipsis="{ tooltip: record.siteUrl }" class="cell-copy-text api-endpoint-text">{{ record.siteUrl }}</a-typography-text>
+              </div>
             </template>
             <template v-else-if="column.dataIndex === 'modelsText'">
-              <a-tooltip :title="record.modelsText || '未提供模型信息'"><span class="models-text">{{ record.modelsText || '未提供模型信息' }}</span></a-tooltip>
+              <a-tooltip :title="getRecordModelTooltip(record)">
+                <a-select
+                  size="small"
+                  class="record-model-select"
+                  :value="record.selectedModel || undefined"
+                  :options="getRecordModelOptions(record)"
+                  :loading="record.modelLoading"
+                  :filter-option="true"
+                  option-filter-prop="label"
+                  :placeholder="record.modelsList?.length ? '选择模型' : '点击拉取模型列表'"
+                  @dropdownVisibleChange="open => handleRecordModelDropdownVisibleChange(record, open)"
+                  @change="value => handleRecordModelSelectionChange(record, value)"
+                />
+              </a-tooltip>
             </template>
             <template v-else-if="column.dataIndex === 'status'">
               <a-tag :color="record.status === 1 ? 'green' : 'red'">{{ record.status === 1 ? '正常' : '禁用/异常' }}</a-tag>
@@ -102,7 +136,7 @@
             </template>
             <template v-else-if="column.dataIndex === 'quickTest'">
               <div class="quick-test-cell">
-                <a-button type="primary" size="small" :loading="record.quickTestLoading" @click="runQuickTest(record)">快速测有效</a-button>
+                <a-button type="primary" size="small" class="quick-test-button" :loading="record.quickTestLoading" @click="runQuickTest(record)">快速测</a-button>
                 <a-tooltip :title="getQuickTestTooltip(record)">
                   <a-tag v-if="record.quickTestStatus" :color="getQuickTestColor(record.quickTestStatus)" class="quick-test-tag">{{ record.quickTestLabel || record.quickTestStatus }}</a-tag>
                   <span v-else class="subtle-text">未测速</span>
@@ -142,12 +176,12 @@
             <a-form-item label="模型候选">
               <a-select
                 v-model:value="manualRecordDraft.modelsValue"
-                mode="tags"
                 :options="manualModelOptions"
                 :loading="manualModelLoading"
+                show-search
                 :filter-option="true"
-                :token-separators="[',', '，', ' ']"
-                placeholder="切换到这里会自动抓取模型，支持多选"
+                option-filter-prop="label"
+                placeholder="切换到这里会自动抓取模型，单选保留一个候选"
                 @dropdownVisibleChange="handleManualModelDropdownVisibleChange"
                 @change="handleManualModelSelectionChange"
               />
@@ -190,9 +224,24 @@
               <a-form layout="vertical">
                 <div class="config-grid">
                   <a-form-item label="Provider 名称"><a-input v-model:value="desktopConfigDraft.providerName" placeholder="例如 My Provider" /></a-form-item>
-                  <a-form-item label="Provider Key"><a-input v-model:value="desktopConfigDraft.providerKey" placeholder="例如 my-provider" /></a-form-item>
+                  <a-form-item label="Provider Key">
+                    <a-input :value="desktopConfigDraft.forceCustomProviderKey ? 'custom' : '保持当前 provider key'" readonly />
+                    <a-checkbox :checked="desktopConfigDraft.forceCustomProviderKey !== false" class="desktop-provider-checkbox" @change="handleDesktopProviderKeyModeChange">
+                      custom:统一化保证历史会话可见
+                    </a-checkbox>
+                    <div class="desktop-field-hint">默认勾选会统一写入 `custom`；取消后保持各应用修改前的当前 provider key。</div>
+                  </a-form-item>
                   <a-form-item label="API Key"><a-input-password v-model:value="desktopConfigDraft.apiKey" placeholder="sk-..." /></a-form-item>
-                  <a-form-item label="默认模型"><a-input v-model:value="desktopConfigDraft.model" placeholder="例如 gpt-4o-mini" /></a-form-item>
+                  <a-form-item label="默认模型">
+                    <a-select
+                      v-model:value="desktopConfigDraft.model"
+                      :options="desktopConfigModelOptions"
+                      show-search
+                      :filter-option="true"
+                      option-filter-prop="label"
+                      placeholder="请选择当前记录模型"
+                    />
+                  </a-form-item>
                   <a-form-item label="Claude Base URL"><a-input v-model:value="desktopConfigDraft.claudeBaseUrl" /></a-form-item>
                   <a-form-item label="Claude Key 字段"><a-select v-model:value="desktopConfigDraft.claudeApiKeyField"><a-select-option value="ANTHROPIC_AUTH_TOKEN">ANTHROPIC_AUTH_TOKEN</a-select-option><a-select-option value="ANTHROPIC_API_KEY">ANTHROPIC_API_KEY</a-select-option></a-select></a-form-item>
                   <a-form-item label="Codex Base URL"><a-input v-model:value="desktopConfigDraft.codexBaseUrl" /></a-form-item>
@@ -215,6 +264,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue';
+import { ClockCircleOutlined, ReloadOutlined } from '@ant-design/icons-vue';
 import { ConfigProvider, message, theme } from 'ant-design-vue';
 import AppHeader from './AppHeader.vue';
 import DesktopConfigDiffModal from './DesktopConfigDiffModal.vue';
@@ -224,6 +274,7 @@ import { apiFetch } from '../utils/runtimeApi.js';
 import { toggleTheme } from '../utils/theme.js';
 import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManagedAppConfigFiles } from '../utils/desktopConfigBridge.js';
 import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS } from '../utils/desktopConfigTransform.js';
+import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils/balance.js';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
 import geminiAppIcon from '../assets/app-icons/gemini.svg';
@@ -235,6 +286,7 @@ import ccSwitchIcon from '../assets/action-icons/cc-switch.png';
 const STORAGE_KEY = 'api_check_key_management_records_v1';
 const MANUAL_STORAGE_KEY = 'api_check_key_management_manual_records_v1';
 const META_STORAGE_KEY = 'api_check_key_management_meta_v1';
+const LAST_RESULTS_STORAGE_KEY = 'api_check_last_results';
 const DEFAULT_TEST_TIMEOUT_MS = 20000;
 const CC_SWITCH_TARGET_APPS = ['claude', 'codex', 'gemini', 'opencode', 'openclaw'];
 const DESKTOP_APP_ICONS = {
@@ -246,7 +298,8 @@ const DESKTOP_APP_ICONS = {
 };
 
 function createManualRecordDraft(record = null) {
-  const modelsValue = normalizeModels(record?.modelsList || record?.modelsText);
+  const modelsList = normalizeModels(record?.modelsList || record?.modelsText);
+  const modelsValue = String(record?.selectedModel || pickPreferredModel(modelsList) || '').trim();
   return {
     rowKey: record?.rowKey || '',
     sourceType: record?.sourceType || 'manual',
@@ -254,7 +307,8 @@ function createManualRecordDraft(record = null) {
     tokenName: record?.tokenName || '',
     siteUrl: record?.siteUrl || '',
     apiKey: record?.apiKey || '',
-    modelsText: modelsValue.join(', '),
+    selectedModel: modelsValue,
+    modelsText: modelsList.join(', '),
     modelsValue,
     status: Number(record?.status || 1),
   };
@@ -266,6 +320,8 @@ const allResults = ref([]);
 const tableData = ref([]);
 const showExperimentalFeatures = ref(false);
 const syncMeta = ref({ lastBatchSyncAt: null, lastBatchSyncCount: 0, lastBatchFailedCount: 0 });
+const keyBalanceRefreshBootstrapped = ref(false);
+const batchHistoryContextMap = ref(new Map());
 const desktopConfigModalOpen = ref(false);
 const desktopConfigDiffOpen = ref(false);
 const desktopConfigLoading = ref(false);
@@ -279,32 +335,50 @@ const manualRecordDraft = reactive(createManualRecordDraft());
 const manualModelOptions = ref([]);
 const manualModelLoading = ref(false);
 const manualModelFetchKey = ref('');
+const hideInvalidKeys = ref(true);
 
 const configProviderTheme = computed(() => ({
   algorithm: isDarkMode.value ? theme.darkAlgorithm : theme.defaultAlgorithm,
 }));
+const desktopConfigModelOptions = computed(() => {
+  const record = desktopConfigTargetRecord.value;
+  if (!record) return [];
+  const options = getRecordModelOptions(record);
+  const currentValue = String(desktopConfigDraft.model || '').trim();
+  if (!currentValue) return options;
+  return options.some(option => option.value === currentValue)
+    ? options
+    : [{ label: currentValue, value: currentValue }, ...options];
+});
 const columns = [
-  { title: '网站', dataIndex: 'siteName', key: 'siteName', width: 180, fixed: 'left', sorter: (a, b) => String(a.siteName || '').localeCompare(String(b.siteName || '')) },
-  { title: 'API Key', dataIndex: 'apiKey', key: 'apiKey', width: 220 },
-  { title: '接口地址', dataIndex: 'siteUrl', key: 'siteUrl', width: 260, sorter: (a, b) => String(a.siteUrl || '').localeCompare(String(b.siteUrl || '')) },
-  { title: '模型候选', dataIndex: 'modelsText', key: 'modelsText', width: 260 },
-  { title: '状态', dataIndex: 'status', key: 'status', width: 110, sorter: (a, b) => Number(a.status || 0) - Number(b.status || 0) },
-  { title: '专属导出', dataIndex: 'exportActions', key: 'exportActions', width: 180 },
-  { title: '快速测有效', dataIndex: 'quickTest', key: 'quickTest', width: 220 },
-  { title: '操作', dataIndex: 'rowActions', key: 'rowActions', width: 160 },
-  { title: '最近同步', dataIndex: 'updatedAt', key: 'updatedAt', width: 190, sorter: (a, b) => Number(a.updatedAt || 0) - Number(b.updatedAt || 0), defaultSortOrder: 'descend' },
+  { title: '网站', dataIndex: 'siteName', key: 'siteName', width: 220, fixed: 'left', sorter: (a, b) => String(a.siteName || '').localeCompare(String(b.siteName || '')) },
+  { title: 'API Key', dataIndex: 'apiKey', key: 'apiKey', width: 210 },
+  { title: '模型候选', dataIndex: 'modelsText', key: 'modelsText', width: 190 },
+  { title: '状态', dataIndex: 'status', key: 'status', width: 88, sorter: (a, b) => Number(a.status || 0) - Number(b.status || 0) },
+  { title: '专属导出', dataIndex: 'exportActions', key: 'exportActions', width: 190 },
+  { title: '快速测有效', dataIndex: 'quickTest', key: 'quickTest', width: 190 },
+  { title: '操作', dataIndex: 'rowActions', key: 'rowActions', width: 110 },
+  { title: '最近同步', dataIndex: 'updatedAt', key: 'updatedAt', width: 150, sorter: (a, b) => Number(a.updatedAt || 0) - Number(b.updatedAt || 0), defaultSortOrder: 'descend' },
 ];
 const failedSites = computed(() => allResults.value.filter(result => !Array.isArray(result?.tokens) || result.tokens.length === 0));
 const failedSiteNames = computed(() => failedSites.value.map(site => site?.site_name || site?.id || '未命名站点').join('，'));
-const displayedRows = computed(() => [...tableData.value].sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0) || String(a.siteName || '').localeCompare(String(b.siteName || ''))));
+const displayedRows = computed(() => {
+  const filteredRows = hideInvalidKeys.value
+    ? tableData.value.filter(record => Number(record?.status || 0) === 1)
+    : tableData.value;
+  return [...filteredRows].sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0) || String(a.siteName || '').localeCompare(String(b.siteName || '')));
+});
 const healthyKeyCount = computed(() => tableData.value.filter(record => record.status === 1).length);
 const syncSummary = computed(() => !syncMeta.value.lastBatchSyncAt ? '导入 accounts-backup JSON 后，会自动把获取到的 sk key 写入 localStorage。' : `最近一次批量同步写入 ${syncMeta.value.lastBatchSyncCount} 条记录，失败站点 ${syncMeta.value.lastBatchFailedCount} 个。`);
 
 onMounted(() => {
   if (!document.body.classList.contains('dark-mode') && !document.body.classList.contains('light-mode')) document.body.classList.add('light-mode');
   isDarkMode.value = document.body.classList.contains('dark-mode');
+  batchHistoryContextMap.value = loadBatchHistoryContextMap();
   tableData.value = loadStoredRecords();
   syncMeta.value = loadStoredMeta();
+  persistRecords();
+  void autoRefreshKeyBalancesOnce();
 });
 
 function handleToggleTheme() {
@@ -412,7 +486,7 @@ function mergeStoredRecords(incomingRows) {
   loadStoredRecords().forEach(record => mergedMap.set(record.rowKey, { ...record, quickTestLoading: false }));
   incomingRows.forEach(row => {
     const previous = mergedMap.get(row.rowKey);
-    mergedMap.set(row.rowKey, {
+    mergedMap.set(row.rowKey, hydrateRecordModelSelection({
       ...previous,
       ...row,
       createdAt: previous?.createdAt || now,
@@ -425,9 +499,9 @@ function mergeStoredRecords(incomingRows) {
       quickTestResponseTime: previous?.quickTestResponseTime || '',
       quickTestResponseContent: previous?.quickTestResponseContent || '',
       quickTestLoading: false,
-    });
+    }));
   });
-  return Array.from(mergedMap.values());
+  return mergeBatchHistoryBalances(Array.from(mergedMap.values()));
 }
 
 async function runQuickTest(record) {
@@ -462,8 +536,20 @@ async function runQuickTest(record) {
 }
 
 async function resolveQuickTestModel(record) {
+  const selectedModel = String(record?.selectedModel || '').trim();
+  if (selectedModel) return selectedModel;
+  const historyPreferred = getBatchHistoryContext(record)?.preferredModel || '';
+  if (historyPreferred) {
+    record.selectedModel = historyPreferred;
+    persistRecords();
+    return historyPreferred;
+  }
   const fromRecord = pickPreferredModel(record.modelsList);
-  if (fromRecord) return fromRecord;
+  if (fromRecord) {
+    record.selectedModel = fromRecord;
+    persistRecords();
+    return fromRecord;
+  }
   const modelResponse = await fetchModelList(record.siteUrl, record.apiKey);
   const rawCandidates = modelResponse?.data || modelResponse?.models || [];
   const normalizedCandidates = normalizeModels(rawCandidates);
@@ -472,6 +558,7 @@ async function resolveQuickTestModel(record) {
   if (!preferred) throw new Error('没有找到适合快速对话测试的模型');
   record.modelsList = normalizedCandidates;
   record.modelsText = normalizedCandidates.join(', ');
+  record.selectedModel = preferred;
   persistRecords();
   return preferred;
 }
@@ -569,15 +656,17 @@ async function importFromClipboardPackage() {
 
     const merged = new Map(tableData.value.map(record => [record.rowKey, { ...record }]));
     importedRecords.forEach(rawRecord => {
-      const record = {
+      const modelsList = normalizeModels(rawRecord.modelsList || rawRecord.modelsText);
+      const record = hydrateRecordModelSelection({
         ...rawRecord,
         sourceType: rawRecord.sourceType || 'auto',
         siteName: String(rawRecord.siteName || '未命名站点').trim() || '未命名站点',
         tokenName: String(rawRecord.tokenName || '').trim(),
         siteUrl: normalizeSiteUrl(rawRecord.siteUrl),
         apiKey: normalizeApiKey(rawRecord.apiKey),
-        modelsList: normalizeModels(rawRecord.modelsList || rawRecord.modelsText),
-        modelsText: normalizeModels(rawRecord.modelsList || rawRecord.modelsText).join(', ') || '未提供模型信息',
+        modelsList,
+        modelsText: modelsList.join(', ') || '未提供模型信息',
+        selectedModel: String(rawRecord.selectedModel || '').trim(),
         status: Number(rawRecord.status || 1),
         quickTestStatus: rawRecord.quickTestStatus || '',
         quickTestLabel: rawRecord.quickTestLabel || '',
@@ -587,7 +676,7 @@ async function importFromClipboardPackage() {
         quickTestResponseTime: rawRecord.quickTestResponseTime || '',
         quickTestResponseContent: rawRecord.quickTestResponseContent || '',
         quickTestLoading: false,
-      };
+      });
       record.rowKey = rawRecord.rowKey || (record.sourceType === 'manual' ? buildManualRowKey() : buildRowKey(record.siteUrl, record.apiKey));
       if (record.siteUrl && record.apiKey) {
         merged.set(record.rowKey, record);
@@ -621,6 +710,7 @@ async function copySingleImportCommand(record) {
       apiKey: normalizeApiKey(record.apiKey),
       modelsList: normalizeModels(record.modelsList || record.modelsText),
       modelsText: normalizeModels(record.modelsList || record.modelsText).join(', ') || '未提供模型信息',
+      selectedModel: String(record.selectedModel || '').trim(),
       quickTestResponseContent: record.quickTestResponseContent || '',
     };
     const payload = {
@@ -648,7 +738,8 @@ async function submitManualRecord() {
   const siteName = String(manualRecordDraft.siteName || '').trim();
   const siteUrl = normalizeSiteUrl(manualRecordDraft.siteUrl);
   const apiKey = normalizeApiKey(manualRecordDraft.apiKey);
-  manualRecordDraft.modelsText = normalizeModels(manualRecordDraft.modelsValue).join(', ');
+  manualRecordDraft.modelsText = normalizeModels([manualRecordDraft.modelsValue]).join(', ');
+  manualRecordDraft.selectedModel = String(manualRecordDraft.modelsValue || '').trim();
   if (!siteName || !siteUrl || !apiKey) {
     message.warning('请至少填写网站名称、接口地址和 API Key');
     return;
@@ -684,10 +775,11 @@ async function handleManualModelDropdownVisibleChange(open) {
 }
 
 function handleManualModelSelectionChange(values) {
-  const normalizedValues = normalizeModels(values);
-  manualRecordDraft.modelsValue = normalizedValues;
-  manualRecordDraft.modelsText = normalizedValues.join(', ');
-  mergeManualModelOptions(normalizedValues);
+  const normalizedValue = normalizeModels([values])[0] || '';
+  manualRecordDraft.modelsValue = normalizedValue;
+  manualRecordDraft.selectedModel = normalizedValue;
+  manualRecordDraft.modelsText = normalizedValue;
+  mergeManualModelOptions(normalizedValue ? [normalizedValue] : []);
 }
 
 async function loadManualModelOptions(force = false) {
@@ -707,12 +799,20 @@ async function loadManualModelOptions(force = false) {
   try {
     const modelResponse = await fetchModelList(siteUrl, apiKey);
     const rawCandidates = modelResponse?.data || modelResponse?.models || [];
-    const normalizedCandidates = normalizeModels(rawCandidates);
+    const historyContext = getBatchHistoryContextByKeys(siteUrl, apiKey);
+    const normalizedCandidates = normalizeModels([
+      ...getContextModelNames(historyContext),
+      ...normalizeModels(rawCandidates),
+    ]);
     if (!normalizedCandidates.length) {
       throw new Error('没有获取到可用模型');
     }
     manualModelFetchKey.value = currentFetchKey;
     mergeManualModelOptions(normalizedCandidates);
+    if (!manualRecordDraft.modelsValue) {
+      const preferred = historyContext?.preferredModel || pickPreferredModel(normalizedCandidates) || normalizedCandidates[0];
+      handleManualModelSelectionChange(preferred);
+    }
   } catch (error) {
     console.error(error);
     message.error(`获取模型列表失败：${error.message || '未知错误'}`);
@@ -896,11 +996,17 @@ function toggleDesktopAppSelection(appId) {
   }
 }
 
+function handleDesktopProviderKeyModeChange(event) {
+  const checked = Boolean(event?.target?.checked);
+  desktopConfigDraft.forceCustomProviderKey = checked;
+  desktopConfigDraft.providerKey = checked ? 'custom' : '';
+}
+
 function overwriteManualRecordDraft(nextDraft) {
   Object.keys(manualRecordDraft).forEach(key => delete manualRecordDraft[key]);
   Object.assign(manualRecordDraft, nextDraft);
   manualModelFetchKey.value = '';
-  mergeManualModelOptions(nextDraft.modelsValue || []);
+  mergeManualModelOptions(normalizeModels([nextDraft.modelsValue]));
 }
 
 function getQuickTestTooltip(record) {
@@ -913,6 +1019,155 @@ function getQuickTestTooltip(record) {
     record.quickTestResponseContent ? `内容：${record.quickTestResponseContent}` : '',
     record.quickTestAt ? `时间：${formatDateTime(record.quickTestAt)}` : '',
   ].filter(Boolean).join('\n');
+}
+
+function canRefreshBalance(record) {
+  return Boolean(getBatchHistoryContext(record)?.accountData);
+}
+
+function getRecordBalanceValue(record) {
+  const directLabel = normalizeBalanceLabel(record?.balanceLabel);
+  if (directLabel) return formatBalanceDisplay(directLabel);
+  if (record?.unlimitedQuota) return '无限';
+  const remainQuota = Number(record?.remainQuota);
+  if (Number.isFinite(remainQuota)) {
+    return formatBalanceAmount(remainQuota);
+  }
+  return '';
+}
+
+function getRecordBalanceNumericText(record) {
+  const value = getRecordBalanceValue(record);
+  if (!value || value === '无限') return value;
+  return value.replace(/\s*USD$/i, '').trim();
+}
+
+function showBalanceUnit(record) {
+  const value = getRecordBalanceValue(record);
+  return Boolean(value && value !== '无限');
+}
+
+function getBalanceRelativeTime(record) {
+  if (record?.balanceLoading) return '刷新中';
+  const timestamp = Number(record?.balanceUpdatedAt || 0);
+  if (!timestamp) return '未刷新';
+  const diffMs = Math.max(0, Date.now() - timestamp);
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diffMs < minute) return '刚刚';
+  if (diffMs < hour) return `${Math.floor(diffMs / minute)} 分钟前`;
+  if (diffMs < day) return `${Math.floor(diffMs / hour)} 小时前`;
+  return `${Math.floor(diffMs / day)} 天前`;
+}
+
+function getRecordBalanceTooltip(record) {
+  const lines = [];
+  const balanceText = getRecordBalanceValue(record);
+  if (balanceText) lines.push(`余额 ${balanceText}`);
+  const usedQuota = Number(record?.usedQuota);
+  if (Number.isFinite(usedQuota)) {
+    lines.push(`已用 ${formatBalanceAmount(usedQuota)}`);
+  }
+  if (record?.balanceUpdatedAt) {
+    lines.push(`更新时间 ${formatDateTime(record.balanceUpdatedAt)}`);
+  }
+  if (record?.balanceError) {
+    lines.push(`刷新失败 ${record.balanceError}`);
+  }
+  return lines.join('\n') || '暂无余额信息';
+}
+
+function normalizeBalanceLabel(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/^\$?-?\d/.test(text) || /USD$/i.test(text)) return text;
+  if (/^无限/.test(text)) return text;
+  return '';
+}
+
+function formatBalanceAmount(rawAmount) {
+  const amount = Number(rawAmount);
+  if (!Number.isFinite(amount)) return '';
+  const finalAmount = amount < 100000 ? amount.toFixed(2) : (amount / 500000).toFixed(2);
+  return `${finalAmount} USD`;
+}
+
+function formatBalanceDisplay(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/^无限/.test(text)) return '无限';
+  if (/USD$/i.test(text)) return text.replace(/\s+/g, ' ');
+  if (text.startsWith('$')) return `${text.slice(1)} USD`;
+  return text;
+}
+
+async function refreshRecordBalance(record, { silent = false } = {}) {
+  if (!canRefreshBalance(record) || record.balanceLoading) return;
+  record.balanceLoading = true;
+  record.balanceError = '';
+  try {
+    const snapshot = await fetchRecordBalanceSnapshot(record);
+    record.balanceLabel = snapshot.balanceLabel || '';
+    record.remainQuota = snapshot.remainQuota ?? record.remainQuota ?? null;
+    record.usedQuota = snapshot.usedQuota ?? record.usedQuota ?? null;
+    record.unlimitedQuota = snapshot.unlimitedQuota === true;
+    record.balanceUpdatedAt = Date.now();
+    persistRecords();
+    if (!silent) {
+      message.success(`已刷新 ${record.siteName} 余额`);
+    }
+  } catch (error) {
+    record.balanceError = error.message || '未知错误';
+    persistRecords();
+    if (!silent) {
+      message.error(`刷新余额失败：${record.balanceError}`);
+    }
+  } finally {
+    record.balanceLoading = false;
+    persistRecords();
+  }
+}
+
+async function fetchRecordBalanceSnapshot(record) {
+  const siteUrl = normalizeSiteUrl(record.siteUrl);
+  const apiKey = normalizeApiKey(record.apiKey);
+  const batchContext = getBatchHistoryContext(record);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    if (!batchContext?.accountData) {
+      throw new Error('缺少批量检测上下文，无法复用余额刷新逻辑');
+    }
+
+    const batchSnapshot = await tryFetchBatchCheckQuota(batchContext.accountData, siteUrl);
+    if (batchSnapshot) return batchSnapshot;
+
+    throw new Error('批量检测同款余额接口未返回可识别字段');
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error('请求超时');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function tryFetchBatchCheckQuota(site, siteUrl) {
+  const label = await fetchQuotaLabelWithBatchLogic({
+    apiFetch,
+    site,
+    siteUrl,
+  });
+  if (!isDisplayableQuotaLabel(label)) return null;
+  return {
+    balanceLabel: label,
+    remainQuota: null,
+    usedQuota: null,
+    unlimitedQuota: /^无限/.test(String(label || '').trim()),
+  };
 }
 
 function getQuickTestColor(status) {
@@ -963,7 +1218,7 @@ const buildRowKey = (siteUrl, apiKey) => `${normalizeSiteUrl(siteUrl)}::${String
 const buildManualRowKey = () => `manual::${Date.now()}::${Math.random().toString(36).slice(2, 8)}`;
 
 function createRecordFromDraft(draft, existingRecord = null) {
-  const modelsList = normalizeModels(draft.modelsText);
+  const modelsList = normalizeModels([draft.modelsValue || draft.selectedModel || draft.modelsText]);
   const now = Date.now();
   const sourceType = existingRecord?.sourceType || draft.sourceType || 'manual';
   const isManual = sourceType === 'manual';
@@ -977,6 +1232,7 @@ function createRecordFromDraft(draft, existingRecord = null) {
     apiKey: normalizeApiKey(draft.apiKey),
     modelsList,
     modelsText: modelsList.length ? modelsList.join(', ') : '未提供模型信息',
+    selectedModel: modelsList[0] || '',
     status: Number(draft.status || 1),
     createdAt: existingRecord?.createdAt || now,
     updatedAt: now,
@@ -1084,6 +1340,7 @@ function loadStoredRecords() {
       apiKey: String(record.apiKey || '').trim(),
       modelsList: normalizeModels(record.modelsList || record.modelsText),
       modelsText: record.modelsText || '未提供模型信息',
+      selectedModel: String(record.selectedModel || '').trim(),
       quickTestStatus: record.quickTestStatus || '',
       quickTestLabel: record.quickTestLabel || '',
       quickTestModel: record.quickTestModel || '',
@@ -1091,9 +1348,13 @@ function loadStoredRecords() {
       quickTestAt: record.quickTestAt || null,
       quickTestResponseTime: record.quickTestResponseTime || '',
       quickTestResponseContent: record.quickTestResponseContent || '',
+      balanceLabel: record.balanceLabel || '',
+      balanceUpdatedAt: record.balanceUpdatedAt || null,
+      balanceError: record.balanceError || '',
+      balanceLoading: false,
       quickTestLoading: false,
       rowKey: record.rowKey || (record.sourceType === 'manual' ? buildManualRowKey() : buildRowKey(record.siteUrl, record.apiKey)),
-    })).filter(record => record.siteUrl && record.apiKey);
+    })).map(hydrateRecordModelSelection).filter(record => record.siteUrl && record.apiKey);
 
     const raw = localStorage.getItem(STORAGE_KEY);
     const parsed = JSON.parse(raw || '[]');
@@ -1106,6 +1367,7 @@ function loadStoredRecords() {
       apiKey: String(record.apiKey || '').trim(),
       modelsList: normalizeModels(record.modelsList || record.modelsText),
       modelsText: record.modelsText || '未提供模型信息',
+      selectedModel: String(record.selectedModel || '').trim(),
       quickTestStatus: record.quickTestStatus || '',
       quickTestLabel: record.quickTestLabel || '',
       quickTestModel: record.quickTestModel || '',
@@ -1113,9 +1375,13 @@ function loadStoredRecords() {
       quickTestAt: record.quickTestAt || null,
       quickTestResponseTime: record.quickTestResponseTime || '',
       quickTestResponseContent: record.quickTestResponseContent || '',
+      balanceLabel: record.balanceLabel || '',
+      balanceUpdatedAt: record.balanceUpdatedAt || null,
+      balanceError: record.balanceError || '',
+      balanceLoading: false,
       quickTestLoading: false,
       rowKey: record.rowKey || buildRowKey(record.siteUrl, record.apiKey),
-    })).filter(record => record.siteUrl && record.apiKey);
+    })).map(hydrateRecordModelSelection).filter(record => record.siteUrl && record.apiKey);
   } catch (error) {
     console.error(error);
     return [];
@@ -1137,14 +1403,293 @@ function loadStoredMeta() {
   }
 }
 
+function loadBatchHistoryBalanceMap() {
+  try {
+    const raw = localStorage.getItem(LAST_RESULTS_STORAGE_KEY);
+    const parsed = JSON.parse(raw || '[]');
+    if (!Array.isArray(parsed)) return new Map();
+
+    const balanceMap = new Map();
+    parsed.forEach(item => {
+      const siteUrl = normalizeSiteUrl(item?.siteUrl);
+      const apiKey = String(item?.apiKey || '').trim();
+      const balanceLabel = normalizeBalanceLabel(item?.quota);
+      if (!siteUrl || !apiKey || !balanceLabel) return;
+      const rowKey = buildRowKey(siteUrl, apiKey);
+      const updatedAt = Number(item?.updatedAt || item?.finishedAt || item?.completedAt || item?.timestamp || Date.now());
+      const current = balanceMap.get(rowKey);
+      if (!current || updatedAt >= current.balanceUpdatedAt) {
+        balanceMap.set(rowKey, {
+          balanceLabel,
+          balanceUpdatedAt: updatedAt,
+        });
+      }
+    });
+    return balanceMap;
+  } catch (error) {
+    console.error(error);
+    return new Map();
+  }
+}
+
+function loadBatchHistoryContextMap() {
+  try {
+    const raw = localStorage.getItem(LAST_RESULTS_STORAGE_KEY);
+    const parsed = JSON.parse(raw || '[]');
+    if (!Array.isArray(parsed)) return new Map();
+
+    const groupedContextMap = new Map();
+    parsed.forEach(item => {
+      const siteUrl = normalizeSiteUrl(item?.siteUrl);
+      const apiKey = String(item?.apiKey || '').trim();
+      if (!siteUrl || !apiKey) return;
+      const rowKey = buildRowKey(siteUrl, apiKey);
+      const updatedAt = Number(item?.updatedAt || item?.finishedAt || item?.completedAt || item?.timestamp || Date.now());
+      const modelName = String(item?.modelName || '').trim();
+      const current = groupedContextMap.get(rowKey) || {
+        updatedAt: 0,
+        accountData: null,
+        tasksByModel: new Map(),
+      };
+      if (updatedAt >= current.updatedAt && item?.accountData) {
+        current.accountData = item.accountData;
+      }
+      current.updatedAt = Math.max(current.updatedAt, updatedAt);
+      if (modelName) {
+        const taskSnapshot = {
+          modelName,
+          status: String(item?.status || '').trim(),
+          statusText: String(item?.statusText || '').trim(),
+          responseTime: String(item?.responseTime || '').trim(),
+          modelSuffix: String(item?.modelSuffix || '').trim(),
+          remark: String(item?.remark || '').trim(),
+          updatedAt,
+        };
+        const previousTask = current.tasksByModel.get(modelName);
+        if (!previousTask || compareHistoryTasks(taskSnapshot, previousTask) < 0) {
+          current.tasksByModel.set(modelName, taskSnapshot);
+        }
+      }
+      groupedContextMap.set(rowKey, current);
+    });
+
+    const contextMap = new Map();
+    groupedContextMap.forEach((context, rowKey) => {
+      const tasks = Array.from(context.tasksByModel.values()).sort(compareHistoryTasks);
+      const preferredTask = tasks.find(isUsableHistoryTask) || tasks[0] || null;
+      contextMap.set(rowKey, {
+        updatedAt: context.updatedAt,
+        accountData: context.accountData,
+        tasks,
+        preferredTask,
+        preferredModel: preferredTask?.modelName || '',
+      });
+    });
+    return contextMap;
+  } catch (error) {
+    console.error(error);
+    return new Map();
+  }
+}
+
+function getBatchHistoryContextByKeys(siteUrl, apiKey) {
+  return batchHistoryContextMap.value.get(buildRowKey(siteUrl, apiKey)) || null;
+}
+
+function getBatchHistoryContext(record) {
+  return getBatchHistoryContextByKeys(record?.siteUrl, record?.apiKey);
+}
+
+function mergeBatchHistoryBalances(records) {
+  const balanceMap = loadBatchHistoryBalanceMap();
+  if (!balanceMap.size) return records;
+
+  return records.map(record => {
+    const snapshot = balanceMap.get(buildRowKey(record.siteUrl, record.apiKey));
+    if (!snapshot) return record;
+    const currentUpdatedAt = Number(record.balanceUpdatedAt || 0);
+    if (currentUpdatedAt && currentUpdatedAt >= snapshot.balanceUpdatedAt) return record;
+    return {
+      ...record,
+      balanceLabel: snapshot.balanceLabel,
+      balanceUpdatedAt: snapshot.balanceUpdatedAt,
+    };
+  });
+}
+
+function compareHistoryTasks(left, right) {
+  const leftWeight = getHistoryTaskWeight(left);
+  const rightWeight = getHistoryTaskWeight(right);
+  if (leftWeight !== rightWeight) return rightWeight - leftWeight;
+  const leftUpdatedAt = Number(left?.updatedAt || 0);
+  const rightUpdatedAt = Number(right?.updatedAt || 0);
+  if (leftUpdatedAt !== rightUpdatedAt) return rightUpdatedAt - leftUpdatedAt;
+  return String(left?.modelName || '').localeCompare(String(right?.modelName || ''));
+}
+
+function getHistoryTaskWeight(task) {
+  const status = String(task?.status || '').trim();
+  if (status === 'success') return 3;
+  if (status === 'warning') return 2;
+  if (status === 'pending') return 1;
+  return 0;
+}
+
+function isUsableHistoryTask(task) {
+  const status = String(task?.status || '').trim();
+  return Boolean(task?.modelName) && (status === 'success' || status === 'warning');
+}
+
+function getContextModelNames(context) {
+  return Array.isArray(context?.tasks) ? context.tasks.map(task => task?.modelName).filter(Boolean) : [];
+}
+
+function buildHistoryTaskSummary(task) {
+  if (!task) return '';
+  const suffix = String(task?.modelSuffix || '').replace(/[()]/g, '').trim();
+  const statusText = String(task?.statusText || '').trim() || (String(task?.status || '').trim() === 'success' ? '一致可用' : '');
+  const responseTime = String(task?.responseTime || '').trim();
+  return [suffix, statusText, responseTime ? `${responseTime}s` : ''].filter(Boolean).join(' / ');
+}
+
+function buildModelOptionLabel(model, task = null) {
+  const summary = buildHistoryTaskSummary(task);
+  return summary ? `${model} (${summary})` : model;
+}
+
+function buildMergedModelList(record, context = getBatchHistoryContext(record)) {
+  return normalizeModels([
+    ...getContextModelNames(context),
+    ...(Array.isArray(record?.modelsList) ? record.modelsList : []),
+    record?.selectedModel || '',
+    record?.quickTestModel || '',
+  ]);
+}
+
+function hydrateRecordModelSelection(record) {
+  const context = getBatchHistoryContext(record);
+  const modelsList = buildMergedModelList(record, context);
+  const selectedModel = String(record?.selectedModel || '').trim();
+  const preferredModel = context?.preferredModel || pickPreferredModel(modelsList) || '';
+  const nextSelectedModel = modelsList.includes(selectedModel)
+    ? selectedModel
+    : (modelsList.includes(preferredModel) ? preferredModel : (modelsList[0] || ''));
+  return {
+    ...record,
+    modelsList,
+    modelsText: modelsList.join(', ') || '未提供模型信息',
+    selectedModel: nextSelectedModel,
+    modelLoading: false,
+  };
+}
+
+function getRecordModelOptions(record) {
+  const context = getBatchHistoryContext(record);
+  const taskMap = new Map((Array.isArray(context?.tasks) ? context.tasks : []).map(task => [task.modelName, task]));
+  return buildMergedModelList(record, context).map(model => ({
+    label: buildModelOptionLabel(model, taskMap.get(model) || null),
+    value: model,
+  }));
+}
+
+function getRecordSelectedModelTask(record) {
+  const context = getBatchHistoryContext(record);
+  const selectedModel = String(record?.selectedModel || '').trim();
+  if (!selectedModel || !Array.isArray(context?.tasks)) return null;
+  return context.tasks.find(task => task.modelName === selectedModel) || null;
+}
+
+function getRecordModelTooltip(record) {
+  const selectedModel = String(record?.selectedModel || '').trim();
+  if (!selectedModel) return record.modelsText || '未提供模型信息';
+  const summary = buildHistoryTaskSummary(getRecordSelectedModelTask(record));
+  return summary ? `${selectedModel} (${summary})` : selectedModel;
+}
+
+async function loadRecordModelOptions(record, force = false) {
+  if (!record?.siteUrl || !record?.apiKey) return;
+  const currentFetchKey = `${normalizeSiteUrl(record.siteUrl)}::${normalizeApiKey(record.apiKey)}`;
+  if (!force && record.modelFetchKey === currentFetchKey && Array.isArray(record.modelsList) && record.modelsList.length > 0) {
+    return;
+  }
+
+  record.modelLoading = true;
+  try {
+    const modelResponse = await fetchModelList(record.siteUrl, record.apiKey);
+    const rawCandidates = modelResponse?.data || modelResponse?.models || [];
+    const normalizedCandidates = normalizeModels(rawCandidates);
+    const context = getBatchHistoryContext(record);
+    const mergedModels = normalizeModels([
+      ...getContextModelNames(context),
+      ...normalizedCandidates,
+      ...(Array.isArray(record.modelsList) ? record.modelsList : []),
+    ]);
+    if (!mergedModels.length) {
+      throw new Error('没有获取到可用模型');
+    }
+    record.modelsList = mergedModels;
+    record.modelsText = mergedModels.join(', ');
+    record.modelFetchKey = currentFetchKey;
+    if (!record.selectedModel || !mergedModels.includes(record.selectedModel)) {
+      record.selectedModel = context?.preferredModel || pickPreferredModel(mergedModels) || mergedModels[0] || '';
+    }
+    persistRecords();
+  } catch (error) {
+    console.error(error);
+    message.error(`获取模型列表失败：${error.message || '未知错误'}`);
+  } finally {
+    record.modelLoading = false;
+  }
+}
+
+async function handleRecordModelDropdownVisibleChange(record, open) {
+  if (!open) return;
+  await loadRecordModelOptions(record);
+}
+
+function handleRecordModelSelectionChange(record, value) {
+  const normalizedValue = normalizeModels([value])[0] || '';
+  record.selectedModel = normalizedValue;
+  if (normalizedValue && !normalizeModels(record.modelsList).includes(normalizedValue)) {
+    record.modelsList = normalizeModels([...(record.modelsList || []), normalizedValue]);
+    record.modelsText = record.modelsList.join(', ');
+  }
+  persistRecords();
+}
+
+async function autoRefreshKeyBalancesOnce() {
+  if (keyBalanceRefreshBootstrapped.value) return;
+  keyBalanceRefreshBootstrapped.value = true;
+
+  const targets = tableData.value.filter(record => canRefreshBalance(record));
+  if (!targets.length) return;
+
+  const concurrency = 4;
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < targets.length) {
+      const currentIndex = cursor;
+      cursor += 1;
+      const record = targets[currentIndex];
+      if (!record) continue;
+      await refreshRecordBalance(record, { silent: true });
+    }
+  };
+
+  await Promise.allSettled(
+    Array.from({ length: Math.min(concurrency, targets.length) }, () => worker())
+  );
+}
+
 function persistRecords() {
   const autoRecords = [];
   const manualRecords = [];
-  tableData.value.forEach(({ quickTestLoading, ...record }) => {
+  tableData.value.forEach(({ quickTestLoading, balanceLoading, modelLoading, modelFetchKey, ...record }) => {
     const normalizedRecord = {
       ...record,
       sourceType: record.sourceType || 'auto',
       modelsList: normalizeModels(record.modelsList || record.modelsText),
+      selectedModel: String(record.selectedModel || '').trim(),
       quickTestResponseContent: record.quickTestResponseContent || '',
       rowKey: record.rowKey || (record.sourceType === 'manual' ? buildManualRowKey() : buildRowKey(record.siteUrl, record.apiKey)),
     };
@@ -1155,7 +1700,7 @@ function persistRecords() {
   localStorage.setItem(MANUAL_STORAGE_KEY, JSON.stringify(manualRecords));
   return;
 
-  const serializable = tableData.value.map(({ quickTestLoading, ...record }) => ({
+  const serializable = tableData.value.map(({ quickTestLoading, balanceLoading, modelLoading, modelFetchKey, ...record }) => ({
     ...record,
     modelsList: normalizeModels(record.modelsList || record.modelsText),
     rowKey: record.rowKey || buildRowKey(record.siteUrl, record.apiKey),
@@ -1173,20 +1718,42 @@ function persistMeta() {
 .sync-card,.inventory-card{width:100%}
 .sync-toolbar,.sync-meta,.quick-test-cell,.site-cell,.time-cell{display:flex;gap:12px;flex-wrap:wrap}
 .sync-toolbar{align-items:center;justify-content:space-between}
-.sync-meta,.site-cell,.time-cell,.quick-test-cell{flex-direction:column;gap:4px}
-.site-heading{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.sync-meta,.site-cell,.time-cell,.quick-test-cell{flex-direction:column;gap:3px}
+.site-heading{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.site-cell{width:100%}
+.site-top-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;width:100%}
+.site-main-block{min-width:0;flex:1}
+.site-balance-panel{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:128px}
+.site-balance-meta{display:flex;align-items:center;justify-content:flex-start;gap:10px;width:100%;color:#9ca3af;font-size:11px}
+.site-balance-time{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.site-balance-refresh-icon-button{border:0;background:transparent;color:#6b7280;padding:0;margin-left:2px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.site-balance-refresh-icon-button:disabled{opacity:.65;cursor:default}
+.site-balance-value{display:flex;align-items:baseline;gap:6px;color:#c2410c;font-size:12px;font-weight:500;line-height:1.2;white-space:nowrap;max-width:100%}
+.site-balance-value-empty{color:#94a3b8}
+.site-balance-label{color:#6b7280}
+.site-balance-text{overflow:hidden;text-overflow:ellipsis;font-size:12px;font-weight:600;color:#ea580c}
+.site-balance-unit{color:#6b7280;font-size:11px}
+.site-balance-refresh-icon{font-size:14px}
+.site-balance-refresh-icon-spinning{animation:spin 1s linear infinite}
 .sync-meta,.subtle-text{color:#64748b;font-size:12px}
 .sync-loading{margin-top:16px;display:flex;align-items:center;gap:10px}
 .sync-alert{margin-top:16px}
-.cell-copy-text{max-width:260px;display:inline-block}
-.models-text{display:block;width:100%;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cell-copy-text{max-width:240px;display:inline-block}
+.api-combined-cell{display:flex;flex-direction:column;gap:4px;min-width:0}
+.api-endpoint-text{font-size:12px;color:#64748b}
+.models-text{display:block;width:100%;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.record-model-select{width:100%;min-width:0}
+.record-model-select :deep(.ant-select-selector){border-radius:10px;padding-inline:10px !important;min-height:34px}
+.record-model-select :deep(.ant-select-selection-item){overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:32px}
+.record-model-select :deep(.ant-select-arrow){font-size:12px}
+.record-model-select :deep(.ant-select-selection-placeholder){font-size:12px;line-height:32px}
 .import-export-menu{min-width:170px;display:flex;flex-direction:column;gap:8px}
-.inline-export-actions{display:flex;align-items:center;gap:10px}
-.export-icon-button{width:34px;height:34px;border:0;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .18s ease, box-shadow .18s ease, filter .18s ease;background:linear-gradient(135deg,#f8fafc,#e2e8f0);box-shadow:inset 0 0 0 1px rgba(148,163,184,.28)}
+.inline-export-actions{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;min-width:max-content}
+.export-icon-button{width:32px;height:32px;border:0;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .18s ease, box-shadow .18s ease, filter .18s ease;background:linear-gradient(135deg,#f8fafc,#e2e8f0);box-shadow:inset 0 0 0 1px rgba(148,163,184,.28);flex:0 0 auto}
 .export-icon-button:hover{transform:translateY(-1px) scale(1.06);filter:saturate(1.08)}
 .export-icon-glyph{font-size:16px;line-height:1}
-.export-icon-image{width:22px;height:22px;display:block;object-fit:contain}
-.export-icon-image-switch{width:20px;height:20px;border-radius:6px}
+.export-icon-image{width:20px;height:20px;display:block;object-fit:contain}
+.export-icon-image-switch{width:18px;height:18px;border-radius:6px}
 .export-copy{color:#0f172a}
 .export-cherry{background:linear-gradient(135deg,#fff1f2,#ffe4e6);color:#be123c}
 .export-switch{background:linear-gradient(135deg,#fff7ed,#ffedd5);color:#1d4ed8}
@@ -1195,6 +1762,13 @@ function persistMeta() {
 .switch-app-item{border:0;border-radius:10px;background:#f8fafc;color:#0f172a;padding:8px 10px;text-align:left;cursor:pointer;transition:background .18s ease,color .18s ease}
 .switch-app-item:hover{background:#e0ecff;color:#1d4ed8}
 .quick-test-tag{width:fit-content}
+.quick-test-cell{gap:8px;min-width:0;align-items:flex-start;padding-left:10px}
+.quick-test-button{align-self:flex-start;padding-inline:18px;border-radius:12px;flex:0 0 auto}
+.compact-key-table :deep(table){table-layout:fixed}
+.compact-key-table :deep(.ant-table-thead > tr > th){padding:12px 12px}
+.compact-key-table :deep(.ant-table-tbody > tr > td){padding:10px 12px;vertical-align:top}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.compact-key-table :deep(.ant-table-cell){overflow:hidden}
 .desktop-config-modal{display:flex;flex-direction:column;gap:16px}
 .desktop-config-alert{margin-bottom:4px}
 .desktop-config-layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:20px;align-items:start}
@@ -1205,6 +1779,8 @@ function persistMeta() {
 .desktop-app-card{border:0;border-radius:22px;padding:16px 12px;background:#fff;color:#0f172a;box-shadow:0 10px 24px rgba(15,23,42,.08),inset 0 0 0 1px rgba(148,163,184,.16);display:flex;flex-direction:column;align-items:center;gap:10px;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,background .18s ease}
 .desktop-app-card:hover{transform:translateY(-2px)}
 .desktop-app-card-active{box-shadow:0 14px 30px rgba(37,99,235,.16),inset 0 0 0 2px rgba(37,99,235,.45);background:linear-gradient(180deg,#ffffff,#eff6ff)}
+.desktop-provider-checkbox{margin-top:10px}
+.desktop-field-hint{margin-top:8px;color:#64748b;font-size:12px;line-height:1.5}
 .desktop-app-logo{width:58px;height:58px;border-radius:18px;display:inline-flex;align-items:center;justify-content:center;background:#f8fafc;padding:10px}
 .desktop-app-logo-image{width:100%;height:100%;display:block;object-fit:contain}
 .desktop-app-name{font-size:13px;font-weight:600}

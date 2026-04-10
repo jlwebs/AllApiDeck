@@ -173,12 +173,44 @@
                   defaultExpandAll
                 >
                   <template #title="node">
-                    <div class="custom-tree-node-wrapper" style="display: flex; align-items: center;">
-                      <span class="custom-tree-node">{{ node.title }}</span>
+                    <div class="custom-tree-node-wrapper tree-provider-node-wrapper" style="display: flex; align-items: center;">
+                      <div class="provider-tree-label">
+                        <button
+                          v-if="canOpenProviderSiteFromTreeNode(node) && getProviderTreeTitle(node)"
+                          type="button"
+                          :class="['provider-tree-link', { 'is-grey': node.isProviderDiagnostic || node.titleClass === 'tree-node-grey' }]"
+                          @click.stop="openProviderSiteFromTreeNode(node)"
+                        >
+                          {{ getProviderTreeTitle(node) }}
+                        </button>
+                        <span
+                          v-if="canOpenProviderSiteFromTreeNode(node) && getProviderTreeSuffix(node)"
+                          :class="['custom-tree-node', node.titleClass]"
+                        >
+                          {{ getProviderTreeSuffix(node) }}
+                        </span>
+                        <span
+                          v-else
+                          :class="['custom-tree-node', node.titleClass]"
+                        >
+                          {{ node.title }}
+                        </span>
+                      </div>
                       <span v-if="node.isModelDiscovering || node.isBrowserPending" class="tree-node-pending-hint">
                         <a-spin size="small" />
                         <span>{{ node.isModelDiscovering ? (node.modelDiscoveringHint || '模型检测中') : node.pendingHint }}</span>
                       </span>
+                      <div v-if="isProviderDiagnosticTreeNode(node)" class="provider-tree-actions">
+                        <a-popover trigger="hover" placement="rightTop" overlayClassName="provider-diagnostic-popover">
+                          <template #content>
+                            <div class="provider-diagnostic-menu">
+                              <a-button size="small" @click.stop="copyProviderFetchReplay(node)">复制 fetch 复现</a-button>
+                              <a-button size="small" @click.stop="copyProviderTraceLog(node)">复制调研 trace 日志</a-button>
+                            </div>
+                          </template>
+                          <span class="provider-diagnostic-trigger" @click.stop>调试</span>
+                        </a-popover>
+                      </div>
                     </div>
                   </template>
                 </a-tree>
@@ -856,6 +888,226 @@ const maskApiKey = (key) => {
   return key.slice(0, 8) + '***' + key.slice(-4);
 };
 
+const maskTokenPreview = (token) => {
+  const text = String(token || '').trim();
+  if (!text) return '';
+  if (text.length <= 12) return text;
+  return `${text.slice(0, 8)}...${text.slice(-4)}`;
+};
+
+const stringifyPreview = (value, maxLength = 280) => {
+  if (value == null) return '';
+  let text = '';
+  if (typeof value === 'string') {
+    text = value;
+  } else {
+    try {
+      text = JSON.stringify(value);
+    } catch {
+      text = String(value);
+    }
+  }
+  text = text.replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+};
+
+const buildCompatHeadersForUid = (uid) => {
+  const normalizedUid = String(uid || '').trim();
+  if (!/^\d+$/.test(normalizedUid)) return {};
+  return {
+    'one-api-user': normalizedUid,
+    'New-API-User': normalizedUid,
+    'Veloera-User': normalizedUid,
+    'voapi-user': normalizedUid,
+    'User-id': normalizedUid,
+    'Rix-Api-User': normalizedUid,
+    'neo-api-user': normalizedUid,
+  };
+};
+
+const getTokenListEndpointCandidates = (siteType) => {
+  if (siteType === 'anyrouter') {
+    return [
+      '/api/token/?p=0&size=100',
+      '/api/token?p=0&size=100',
+    ];
+  }
+  return siteType === 'sub2api'
+    ? [
+      '/api/v1/keys?page=1&page_size=100',
+      '/api/v1/keys?p=0&size=100',
+      '/api/token/?p=0&size=100',
+      '/api/token?p=0&size=100',
+    ]
+    : [
+      '/api/token/?p=0&size=100',
+      '/api/token?p=0&size=100',
+      '/api/v1/keys?page=1&page_size=100',
+      '/api/v1/keys?p=0&size=100',
+    ];
+};
+
+const buildProviderReplayHeaders = ({ tokenKey, uid, siteUrl }) => {
+  const normalizedSiteUrl = String(siteUrl || '').replace(/\/+$/, '').trim();
+  const headers = {
+    Authorization: `Bearer ${String(tokenKey || '').trim()}`,
+    Accept: 'application/json, text/plain, */*',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'X-Requested-With': 'XMLHttpRequest',
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+  };
+  if (normalizedSiteUrl) {
+    headers.Referer = `${normalizedSiteUrl}/`;
+  }
+  return {
+    ...headers,
+    ...buildCompatHeadersForUid(uid),
+  };
+};
+
+const getProviderTreeParts = (node) => {
+  if (!node) {
+    return { title: '', suffix: '' };
+  }
+  const explicitTitle = String(node?.providerTitleText || '').trim();
+  const explicitSuffix = String(node?.providerStatusText || '').trim();
+  if (explicitTitle || explicitSuffix) {
+    return {
+      title: explicitTitle,
+      suffix: explicitSuffix,
+    };
+  }
+
+  const rawTitle = String(node?.title || '').trim();
+  const match = rawTitle.match(/^(\d+\.\s*\[[^\]]+\])(\s*.*)$/);
+  if (match) {
+    return {
+      title: String(match[1] || '').trim(),
+      suffix: String(match[2] || '').trim(),
+    };
+  }
+  return {
+    title: '',
+    suffix: rawTitle,
+  };
+};
+
+const getProviderTreeTitle = (node) => getProviderTreeParts(node).title;
+const getProviderTreeSuffix = (node) => getProviderTreeParts(node).suffix;
+const isProviderDiagnosticTreeNode = (node) => Boolean(node?.isProviderDiagnostic);
+const canOpenProviderSiteFromTreeNode = (node) => /^https?:\/\//i.test(String(node?.providerSiteUrl || '').trim());
+
+const openProviderSiteFromTreeNode = (node) => {
+  const url = String(node?.providerSiteUrl || '').replace(/\/+$/, '').trim();
+  if (!canOpenProviderSiteFromTreeNode(node)) {
+    message.warning('当前节点没有可打开的站点地址');
+    return;
+  }
+  openUrlInSystemBrowser(url);
+};
+
+const buildProviderFetchReplayText = (node) => {
+  const meta = node?.providerDiagnostic || {};
+  const request = meta?.replayRequest || null;
+  const replayCandidates = Array.isArray(meta?.replayCandidates) ? meta.replayCandidates.filter(Boolean) : [];
+  if ((!request?.url || !request?.headers?.Authorization) && replayCandidates.length > 0) {
+    const candidateUrls = replayCandidates.map(item => JSON.stringify(item.url)).join(',\n  ');
+    const headersText = JSON.stringify(replayCandidates[0]?.headers || {}, null, 2);
+    return [
+      `// ${meta.siteName || 'provider'} Token 列表抓取复现`,
+      `const targets = [`,
+      `  ${candidateUrls}`,
+      `];`,
+      `const headers = ${headersText};`,
+      `for (const url of targets) {`,
+      `  const res = await fetch(url, { method: 'GET', headers, credentials: 'include' });`,
+      `  console.log('url=', url, 'status=', res.status);`,
+      `  console.log(await res.text());`,
+      `}`,
+    ].join('\n');
+  }
+  if (!request?.url || !request?.headers?.Authorization) {
+    return [
+      `// ${meta.siteName || node?.providerTitleText || '当前节点'} 暂无可复现的探测请求`,
+      `// 原因: ${meta.userFacingError || meta.rawError || 'unknown'}`,
+      `// 建议复制“调研 trace 日志”查看本轮完整回溯`,
+    ].join('\n');
+  }
+
+  return [
+    `// ${meta.siteName || 'provider'} 模型发现复现`,
+    `const res = await fetch(${JSON.stringify(request.url)}, {`,
+    `  method: 'GET',`,
+    `  headers: ${JSON.stringify(request.headers, null, 2)}`,
+    `});`,
+    `console.log('status=', res.status);`,
+    `console.log(await res.text());`,
+  ].join('\n');
+};
+
+const buildProviderTraceLogText = (node) => {
+  const meta = node?.providerDiagnostic || {};
+  const storageFields = Array.isArray(meta?.storageFields) ? meta.storageFields.filter(Boolean) : [];
+  const traceLines = Array.isArray(meta?.traceLines) && meta.traceLines.length
+    ? meta.traceLines
+    : ['(empty)'];
+  return [
+    `[Provider] ${meta.siteName || node?.providerTitleText || '-'}`,
+    `[SiteURL] ${meta.siteUrl || node?.providerSiteUrl || '-'}`,
+    `[Stage] ${meta.stage || '-'}`,
+    `[ExtractionMode] ${meta.extractionMode || '-'}`,
+    `[UID] ${meta.uid || '-'}`,
+    `[Tokens] total=${Number(meta.totalTokens || 0)} usable=${Number(meta.usableTokens || 0)}`,
+    `[TokenEndpoint] ${meta.tokenEndpoint || '-'}`,
+    `[StorageOrigin] ${meta.storageOrigin || '-'}`,
+    `[StorageFields] ${storageFields.length ? storageFields.join(', ') : '-'}`,
+    `[ReasonRaw] ${meta.rawError || '-'}`,
+    `[ReasonDisplay] ${meta.userFacingError || '-'}`,
+    '',
+    '[Trace]',
+    ...traceLines,
+  ].join('\n');
+};
+
+const writeTextToClipboard = async (text) => {
+  const content = String(text || '');
+  if (!content) throw new Error('empty_text');
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(content);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = content;
+  textarea.setAttribute('readonly', 'readonly');
+  textarea.style.position = 'fixed';
+  textarea.style.top = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
+};
+
+const copyProviderFetchReplay = async (node) => {
+  try {
+    await writeTextToClipboard(buildProviderFetchReplayText(node));
+    message.success('已复制 fetch 复现语句');
+  } catch (error) {
+    message.error(error?.message || '复制 fetch 复现失败');
+  }
+};
+
+const copyProviderTraceLog = async (node) => {
+  try {
+    await writeTextToClipboard(buildProviderTraceLogText(node));
+    message.success('已复制调研 trace 日志');
+  } catch (error) {
+    message.error(error?.message || '复制 trace 日志失败');
+  }
+};
+
 const isTableExpanded = ref(true);
 const isTreeExpanded = ref(true);
 const highlightedTaskId = ref(null);
@@ -903,6 +1155,8 @@ const allKeys = ref([]); // Store all keys for easy 'Select All'
 const loadedSitesCount = ref(0);
 const fetchKeysProgress = reactive({
   active: false,
+  stage: '',
+  detail: '',
   total: 0,
   completed: 0,
   successSites: 0,
@@ -1251,6 +1505,10 @@ const loadingStagePercent = computed(() => {
 
 const loadingStageTitle = computed(() => {
   if (isWailsRuntime && desktopTokenSourceMode.value === 'profile_file' && fetchKeysProgress.total > 0) {
+    if (fetchKeysProgress.stage === 'profile_copy') return '正在复制 Chrome Local Storage';
+    if (fetchKeysProgress.stage === 'profile_scan') return '正在扫描 Chrome Local Storage';
+    if (fetchKeysProgress.stage === 'extract_site') return '正在逐站点提取 Token';
+    if (fetchKeysProgress.stage === 'done') return '正在整理 Profile 提取结果';
     return '正在读取 Chrome Profile 文件';
   }
   if (isWailsRuntime && fetchKeysProgress.total > 0) return '正在提取站点 Token';
@@ -1261,6 +1519,9 @@ const loadingStageDescription = computed(() => {
   const total = fetchKeysProgress.total || totalAccountsCount.value;
   const completed = fetchKeysProgress.completed || 0;
   if (isWailsRuntime && desktopTokenSourceMode.value === 'profile_file' && total > 0) {
+    if (fetchKeysProgress.stage === 'profile_copy' || fetchKeysProgress.stage === 'profile_scan') {
+      return `${fetchKeysProgress.detail || '正在读取本地 Chrome Profile 数据'}，完成后将开始逐站点提取`;
+    }
     return `已处理 ${completed} / ${total} 个站点，已从本地 Profile 提取 ${fetchKeysProgress.successSites} 个站点的 Token`;
   }
   if (total > 0) {
@@ -1272,6 +1533,9 @@ const loadingStageDescription = computed(() => {
 const loadingStageMeta = computed(() => {
   const meta = [];
   const refreshedAt = fetchKeysProgress.lastUpdatedAt || Date.now();
+  if (fetchKeysProgress.detail && !(isWailsRuntime && desktopTokenSourceMode.value === 'profile_file' && (fetchKeysProgress.stage === 'profile_copy' || fetchKeysProgress.stage === 'profile_scan'))) {
+    meta.push(fetchKeysProgress.detail);
+  }
   if (fetchKeysProgress.lastSiteName) {
     meta.push(`当前站点：${fetchKeysProgress.lastSiteName}`);
   }
@@ -1287,6 +1551,12 @@ const loadingStageStatusText = computed(() => {
   if (isWailsRuntime && desktopTokenSourceMode.value === 'profile_file' && fetchKeysProgress.total > 0) {
     const total = fetchKeysProgress.total || totalAccountsCount.value;
     const completed = fetchKeysProgress.completed || 0;
+    if (fetchKeysProgress.stage === 'profile_copy') {
+      return 'Profile 文件准备中：复制 Local Storage';
+    }
+    if (fetchKeysProgress.stage === 'profile_scan') {
+      return 'Profile 文件提取中：扫描 Local Storage';
+    }
     if (completed < total) {
       return `Profile 文件提取中：${completed}/${total}`;
     }
@@ -1846,9 +2116,19 @@ const countUsableTokensForSite = (site) => {
   return tokens.filter(isUsableToken).length;
 };
 
+const shouldUseAnyrouterProfileAssist = (site) => (
+  isAnyrouterSite(site) &&
+  (
+    Boolean(site?.error) ||
+    countUsableTokensForSite(site) <= 0
+  )
+);
+
 const markLocalProfileExtractionStart = (total) => {
   resetFetchKeysProgress();
   fetchKeysProgress.active = true;
+  fetchKeysProgress.stage = 'profile_prepare';
+  fetchKeysProgress.detail = '准备读取 Chrome Default Profile';
   fetchKeysProgress.total = Number(total || 0);
   fetchKeysProgress.completed = 0;
   fetchKeysProgress.successSites = 0;
@@ -1860,6 +2140,8 @@ const markLocalProfileExtractionStart = (total) => {
 const markLocalProfileExtractionDone = (sites) => {
   const safeSites = Array.isArray(sites) ? sites : [];
   fetchKeysProgress.active = false;
+  fetchKeysProgress.stage = 'done';
+  fetchKeysProgress.detail = '提取完成，正在整理结果';
   fetchKeysProgress.completed = safeSites.length;
   fetchKeysProgress.successSites = safeSites.filter(site => Array.isArray(site?.tokens) && site.tokens.length > 0).length;
   fetchKeysProgress.lastSiteName = 'Chrome Default Profile';
@@ -2095,6 +2377,103 @@ const openFailedSitesForManualLogin = async (sites) => {
   return urls.length;
 };
 
+const isAnyrouterSite = (site) => {
+  const siteType = String(site?.site_type || site?.siteType || '').trim().toLowerCase();
+  if (siteType === 'anyrouter') return true;
+  const rawUrl = String(site?.site_url || site?.siteUrl || '').trim();
+  if (!rawUrl) return false;
+  try {
+    const parsed = new URL(rawUrl);
+    const host = String(parsed.hostname || '').toLowerCase();
+    return host === 'anyrouter.top' || host.endsWith('.anyrouter.top');
+  } catch {
+    return false;
+  }
+};
+
+const getDesktopProfileProgressDirect = async () => {
+  const getter = window?.go?.main?.App?.GetChromeProfileExtractProgress;
+  if (typeof getter !== 'function') {
+    return null;
+  }
+  return await getter();
+};
+
+const openDesktopProfileAssistSites = async (sites) => {
+  const payload = (Array.isArray(sites) ? sites : [])
+    .map(site => ({
+      siteName: String(site?.site_name || site?.siteName || '').trim() || 'Anyrouter',
+      siteUrl: String(site?.site_url || site?.siteUrl || '').replace(/\/+$/, '').trim(),
+      siteType: String(site?.site_type || site?.siteType || '').trim(),
+    }))
+    .filter(site => /^https?:\/\//i.test(site.siteUrl));
+
+  if (!payload.length) {
+    return { opened: 0, results: [], errors: [] };
+  }
+
+  const opener = window?.go?.main?.App?.OpenDesktopProfileAssist;
+  if (typeof opener === 'function') {
+    const directResult = await opener(payload);
+    return {
+      opened: Number(directResult?.opened || 0),
+      results: Array.isArray(directResult?.results) ? directResult.results : [],
+      errors: Array.isArray(directResult?.errors) ? directResult.errors : [],
+    };
+  }
+
+  const res = await apiFetch('/api/profile-assist/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sites: payload }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const error = new Error(
+      Array.isArray(data?.errors) && data.errors.length
+        ? data.errors.join(' | ')
+        : (data?.message || `打开桌面内置登录窗口失败(${res.status})`)
+    );
+    error.code = data?.code || `HTTP_${res.status}`;
+    throw error;
+  }
+
+  return {
+    opened: Number(data?.opened || 0),
+    results: Array.isArray(data?.results) ? data.results : [],
+    errors: Array.isArray(data?.errors) ? data.errors : [],
+  };
+};
+
+const autoOpenAnyrouterProfileAssist = async (sites, reason = 'unknown') => {
+  const targets = (Array.isArray(sites) ? sites : [])
+    .filter(site => shouldUseAnyrouterProfileAssist(site) && !site?._profileAssistOpened);
+  if (!targets.length) return { opened: 0, results: [], errors: [] };
+
+  const assistResult = await openDesktopProfileAssistSites(targets);
+  if (Number(assistResult?.opened || 0) > 0) {
+    const openedUrlSet = new Set(
+      (assistResult?.results || [])
+        .map(item => String(item?.siteUrl || '').replace(/\/+$/, '').trim())
+        .filter(Boolean)
+    );
+    targets.forEach(site => {
+      const siteUrl = String(site?.site_url || site?.siteUrl || '').replace(/\/+$/, '').trim();
+      if (openedUrlSet.has(siteUrl)) {
+        site._profileAssistOpened = true;
+      }
+    });
+    const cookieTotal = (assistResult?.results || []).reduce((sum, item) => sum + Number(item?.injectedCookies || 0), 0);
+    message.info(`Anyrouter 已自动打开内置 WebView2 (${assistResult.opened} 个)，并尝试注入 ${cookieTotal} 个 Chrome cookie。`, 5);
+    console.log(`[ProfileAssist] auto open (${reason}) opened=${assistResult.opened} cookieTotal=${cookieTotal}`);
+  }
+  if (Array.isArray(assistResult?.errors) && assistResult.errors.length > 0) {
+    console.warn(`[ProfileAssist] auto open warnings(${reason}):`, assistResult.errors.join(' | '));
+  }
+  return assistResult;
+};
+
 const confirmShadowLoginReadiness = async (sites, browserType = 'chrome') => {
   const normalizedSites = Array.isArray(sites) ? sites.filter(Boolean) : [];
   const previewNames = normalizedSites
@@ -2160,7 +2539,34 @@ const confirmProfileFileLoginRecovery = async (sites) => {
     return { shouldRetry: false, openedCount: 0 };
   }
 
-  const openedCount = await openFailedSitesForManualLogin(normalizedSites);
+  const desktopAssistSites = isWailsRuntime ? normalizedSites.filter(site => isAnyrouterSite(site) && !site?._profileAssistOpened) : [];
+  const browserSites = normalizedSites.filter(site => !desktopAssistSites.includes(site));
+
+  let desktopAssistOpened = 0;
+  if (desktopAssistSites.length > 0) {
+    try {
+      const assistResult = await openDesktopProfileAssistSites(desktopAssistSites);
+      desktopAssistOpened = Number(assistResult?.opened || 0);
+      if (desktopAssistOpened > 0) {
+        const cookieTotal = (assistResult?.results || []).reduce(
+          (sum, item) => sum + Number(item?.injectedCookies || 0),
+          0
+        );
+        message.info(`已为 ${desktopAssistOpened} 个 Anyrouter 站点打开内置 WebView2，并尝试注入 ${cookieTotal} 个 Chrome cookie。`, 5);
+      }
+      if (Array.isArray(assistResult?.errors) && assistResult.errors.length > 0) {
+        console.warn('[ProfileAssist] desktop assist warnings:', assistResult.errors.join(' | '));
+      }
+    } catch (assistError) {
+      console.warn('[ProfileAssist] open desktop profile assist failed:', assistError?.message || String(assistError));
+      message.warning(`Anyrouter 内置登录窗口打开失败，将回退到系统浏览器：${assistError?.message || String(assistError)}`, 5);
+      browserSites.push(...desktopAssistSites);
+      desktopAssistOpened = 0;
+    }
+  }
+
+  const browserOpenedCount = await openFailedSitesForManualLogin(browserSites);
+  const openedCount = desktopAssistOpened + browserOpenedCount;
   if (openedCount <= 0) {
     message.warning('没有可打开的失败站点 URL，当前无法执行手动登录引导。');
     return { shouldRetry: false, openedCount: 0 };
@@ -2168,7 +2574,9 @@ const confirmProfileFileLoginRecovery = async (sites) => {
 
   const shouldRetry = await confirmWithModal({
     title: '站点已打开',
-    content: `已在默认浏览器打开 ${openedCount} 个失败站点。请先在这些页面手动登录并完成刷新，然后点击“重新读取 Profile 文件”。此模式不会拉起受控浏览器，也不会切到 CDP 模式。`,
+    content: desktopAssistOpened > 0
+      ? `已打开 ${openedCount} 个失败站点，其中 ${desktopAssistOpened} 个 Anyrouter 站点使用内置 WebView2 尝试继承 Chrome Default 的 cookie/localStorage。请先确认这些窗口是否已自动带出登录态；若未自动登录，直接在该窗口中手动登录并完成刷新后，再点击“重新读取 Profile 文件”。`
+      : `已在默认浏览器打开 ${openedCount} 个失败站点。请先在这些页面手动登录并完成刷新，然后点击“重新读取 Profile 文件”。此模式不会拉起受控浏览器，也不会切到 CDP 模式。`,
     okText: '我已登录，重新读取',
     cancelText: '稍后处理',
     okType: 'primary',
@@ -2371,11 +2779,16 @@ const fetchTokensForAccountFromBrowser = async (acc) => {
     ];
   } else {
     // oneAPI / newAPI / anyrouter 等
-    endpoints = [
-      `/api/token/?p=0&size=100`,
-      `/api/token?p=0&size=100`,
-      `/api/v1/keys?page=1&page_size=100`,
-    ];
+    endpoints = site_type === 'anyrouter'
+      ? [
+        `/api/token/?p=0&size=100`,
+        `/api/token?p=0&size=100`,
+      ]
+      : [
+        `/api/token/?p=0&size=100`,
+        `/api/token?p=0&size=100`,
+        `/api/v1/keys?page=1&page_size=100`,
+      ];
   }
 
   const headers = {
@@ -2386,7 +2799,6 @@ const fetchTokensForAccountFromBrowser = async (acc) => {
   };
   // 如果uid是纯数字，加入兼容头（参考all-api-hub的compat headers）
   if (uid && /^\d+$/.test(String(uid))) {
-    headers['new-api-user'] = String(uid);
     headers['one-api-user'] = String(uid);
     headers['New-API-User'] = String(uid);
     headers['Veloera-User'] = String(uid);
@@ -2596,19 +3008,24 @@ const fetchTokensForAccountFromBrowserV2 = async (acc) => {
     return { id, site_name, site_url, tokens: [], error: '缺少 access_token 或 site_url', account_info };
   }
 
-  const endpoints = site_type === 'sub2api'
+  const endpoints = site_type === 'anyrouter'
     ? [
-      '/api/v1/keys?page=1&page_size=100',
-      '/api/v1/keys?p=0&size=100',
       '/api/token/?p=0&size=100',
       '/api/token?p=0&size=100',
     ]
-    : [
-      '/api/token/?p=0&size=100',
-      '/api/token?p=0&size=100',
-      '/api/v1/keys?page=1&page_size=100',
-      '/api/v1/keys?p=0&size=100',
-    ];
+    : site_type === 'sub2api'
+      ? [
+        '/api/v1/keys?page=1&page_size=100',
+        '/api/v1/keys?p=0&size=100',
+        '/api/token/?p=0&size=100',
+        '/api/token?p=0&size=100',
+      ]
+      : [
+        '/api/token/?p=0&size=100',
+        '/api/token?p=0&size=100',
+        '/api/v1/keys?page=1&page_size=100',
+        '/api/v1/keys?p=0&size=100',
+      ];
 
   const headers = {
     Authorization: `Bearer ${apiKey}`,
@@ -2618,7 +3035,6 @@ const fetchTokensForAccountFromBrowserV2 = async (acc) => {
   };
 
   if (/^\d+$/.test(uid)) {
-    headers['new-api-user'] = uid;
     headers['one-api-user'] = uid;
     headers['New-API-User'] = uid;
     headers['Veloera-User'] = uid;
@@ -2902,6 +3318,8 @@ const fetchTokensForAccountsViaServer = async (accounts) => {
 
 const resetFetchKeysProgress = () => {
   fetchKeysProgress.active = false;
+  fetchKeysProgress.stage = '';
+  fetchKeysProgress.detail = '';
   fetchKeysProgress.total = 0;
   fetchKeysProgress.completed = 0;
   fetchKeysProgress.successSites = 0;
@@ -2919,11 +3337,19 @@ const stopFetchKeysProgressPolling = () => {
 
 const syncFetchKeysProgress = async () => {
   try {
-    const response = await apiFetch('/api/fetch-keys/progress');
-    if (!response.ok) return;
-    const snapshot = await response.json().catch(() => null);
+    let snapshot = null;
+    if (isWailsRuntime && desktopTokenSourceMode.value === 'profile_file') {
+      snapshot = await getDesktopProfileProgressDirect();
+    }
+    if (!snapshot) {
+      const response = await apiFetch('/api/fetch-keys/progress');
+      if (!response.ok) return;
+      snapshot = await response.json().catch(() => null);
+    }
     if (!snapshot || typeof snapshot !== 'object') return;
     fetchKeysProgress.active = Boolean(snapshot.active);
+    fetchKeysProgress.stage = String(snapshot.stage || '');
+    fetchKeysProgress.detail = String(snapshot.detail || '');
     fetchKeysProgress.total = Number(snapshot.total || 0);
     fetchKeysProgress.completed = Number(snapshot.completed || 0);
     fetchKeysProgress.successSites = Number(snapshot.successSites || 0);
@@ -3499,23 +3925,71 @@ const processAccountsV2 = async (accounts) => {
     const discoverOne = async (globalIdx) => {
       const site = extractedSites[globalIdx] || snapshot[globalIdx];
       const siteName = String(site?.site_name || `站点${globalIdx + 1}`);
+      const siteUrl = String(site?.site_url || '').replace(/\/+$/, '').trim();
       const siteDisplayTitle = `${globalIdx + 1}. [${siteName}]`;
       const currentSiteNodes = [];
       const existingSiteNodes = Array.isArray(siteNodes[globalIdx]) ? siteNodes[globalIdx] : [];
       const hasExistingModelNodes = existingSiteNodes.some(node => String(node?.key || '').startsWith('token|'));
+      const rawDiscoveryId = site?.account_info?.id || site?.id || site?.uid || site?.user_id || '';
+      const discoveryUid = /^\d+$/.test(String(rawDiscoveryId)) ? String(rawDiscoveryId) : '';
+      const extractionToken = String(site?.resolved_access_token || site?.account_info?.access_token || '').trim();
+      const tokenReplayCandidates = extractionToken && siteUrl
+        ? getTokenListEndpointCandidates(site?.site_type).map(path => ({
+          url: `${siteUrl}${path}`,
+          headers: buildProviderReplayHeaders({
+            tokenKey: extractionToken,
+            uid: discoveryUid,
+            siteUrl,
+          }),
+        }))
+        : [];
 
       if (isSiteFailed(site)) {
         if (!isInitialDiscovery && hasExistingModelNodes) {
           console.log(`[FetchKeys] 模型刷新跳过: [${siteName}] 当前提取失败，保留上次成功模型节点`);
           return existingSiteNodes.map(node => withPendingMeta(siteName, { ...node, isModelDiscovering: false }));
         }
-        const errorMsg = formatUserFacingErrorText(site?.error || '获取令牌失败');
+        const rawError = String(site?.error || '获取令牌失败').trim();
+        const errorMsg = formatUserFacingErrorText(rawError);
         currentSiteNodes.push(withPendingMeta(siteName, {
           title: `${siteDisplayTitle} - ❌ ${errorMsg}`,
           key: `fail-site|${site?.id || globalIdx}`,
-          disabled: true,
+          disableCheckbox: true,
           selectable: false,
           isModelDiscovering: false,
+          titleClass: 'tree-node-grey',
+          providerTitleText: siteDisplayTitle,
+          providerStatusText: `- ❌ ${errorMsg}`,
+          providerSiteUrl: siteUrl,
+          isProviderDiagnostic: true,
+          providerDiagnostic: {
+            stage: 'token_extract',
+            siteName,
+            siteUrl,
+            extractionMode,
+            uid: discoveryUid,
+            totalTokens: Array.isArray(site?.tokens) ? site.tokens.length : 0,
+            usableTokens: countUsableTokensForSite(site),
+            tokenEndpoint: String(site?.endpoint || '').trim(),
+            storageOrigin: String(site?._profileStorageOrigin || '').trim(),
+            storageFields: Array.isArray(site?._profileStorageFields) ? site._profileStorageFields : [],
+            replayCandidates: tokenReplayCandidates,
+            rawError,
+            userFacingError: errorMsg,
+            traceLines: [
+              `[EXTRACT_FAIL] site=${siteName}`,
+              `[ERROR] ${rawError || '获取令牌失败'}`,
+              extractionToken ? `[TOKEN] ${maskTokenPreview(extractionToken)}` : '',
+              site?.endpoint ? `[TOKEN_ENDPOINT] ${site.endpoint}` : '',
+              tokenReplayCandidates.length
+                ? `[TOKEN_CANDIDATES] ${tokenReplayCandidates.map(item => item.url).join(' | ')}`
+                : '',
+              site?._profileStorageOrigin ? `[PROFILE_ORIGIN] ${site._profileStorageOrigin}` : '',
+              Array.isArray(site?._profileStorageFields) && site._profileStorageFields.length
+                ? `[PROFILE_FIELDS] ${site._profileStorageFields.join(', ')}`
+                : '',
+            ].filter(Boolean),
+          },
           children: [],
         }));
         return currentSiteNodes;
@@ -3531,9 +4005,42 @@ const processAccountsV2 = async (accounts) => {
         currentSiteNodes.push(withPendingMeta(siteName, {
           title: `${siteDisplayTitle} - ⏳ Token 已取到，但可用 Key 为 0（等待后台补全）`,
           key: `no-usable-token-site|${site.id || globalIdx}`,
-          disabled: true,
+          disableCheckbox: true,
           selectable: false,
           isModelDiscovering: false,
+          titleClass: 'tree-node-grey',
+          providerTitleText: siteDisplayTitle,
+          providerStatusText: '- ⏳ Token 已取到，但可用 Key 为 0（等待后台补全）',
+          providerSiteUrl: siteUrl,
+          isProviderDiagnostic: true,
+          providerDiagnostic: {
+            stage: 'token_extract',
+            siteName,
+            siteUrl,
+            extractionMode,
+            uid: discoveryUid,
+            totalTokens: Array.isArray(site?.tokens) ? site.tokens.length : 0,
+            usableTokens: 0,
+            tokenEndpoint: String(site?.endpoint || '').trim(),
+            storageOrigin: String(site?._profileStorageOrigin || '').trim(),
+            storageFields: Array.isArray(site?._profileStorageFields) ? site._profileStorageFields : [],
+            replayCandidates: tokenReplayCandidates,
+            rawError: 'usable_token_empty',
+            userFacingError: 'Token 已取到，但当前没有可直接使用的明文 Key',
+            traceLines: [
+              `[TOKEN_EMPTY] site=${siteName}`,
+              `[TOKENS] total=${Array.isArray(site?.tokens) ? site.tokens.length : 0} usable=0`,
+              extractionToken ? `[TOKEN] ${maskTokenPreview(extractionToken)}` : '',
+              site?.endpoint ? `[TOKEN_ENDPOINT] ${site.endpoint}` : '',
+              tokenReplayCandidates.length
+                ? `[TOKEN_CANDIDATES] ${tokenReplayCandidates.map(item => item.url).join(' | ')}`
+                : '',
+              site?._profileStorageOrigin ? `[PROFILE_ORIGIN] ${site._profileStorageOrigin}` : '',
+              Array.isArray(site?._profileStorageFields) && site._profileStorageFields.length
+                ? `[PROFILE_FIELDS] ${site._profileStorageFields.join(', ')}`
+                : '',
+            ].filter(Boolean),
+          },
           children: [],
         }));
         return currentSiteNodes;
@@ -3553,21 +4060,48 @@ const processAccountsV2 = async (accounts) => {
       let supportedModels = [];
       let discoveryReason = 'unknown';
       let tokenUsed = '';
+      let replayRequest = null;
+      const traceLines = [
+        `[DISCOVERY_START] site=${siteName} usableTokens=${usableTokens.length}`,
+      ];
       for (const token of usableTokens) {
         const tokenKey = String(token?.key || token?.access_token || '').trim();
         if (!tokenKey) continue;
+        const tokenPreview = maskTokenPreview(tokenKey);
         for (const ep of endpointsToTry) {
+          const requestHeaders = buildProviderReplayHeaders({
+            tokenKey,
+            uid: discoveryUid,
+            siteUrl: effectiveBaseUrl || siteUrl,
+          });
+          replayRequest = {
+            url: ep.url,
+            headers: requestHeaders,
+          };
+          traceLines.push(`[TRY] token=${tokenPreview || '(empty)'} endpoint=${ep.type} url=${ep.url}`);
           try {
-            const rawDiscoveryId = site?.account_info?.id || site?.id || site?.uid || site?.user_id || '';
-            const discoveryUid = /^\d+$/.test(String(rawDiscoveryId)) ? String(rawDiscoveryId) : '';
             const res = await apiFetch(`/api/proxy-get?url=${encodeURIComponent(ep.url)}&uid=${discoveryUid}`, {
               headers: { Authorization: `Bearer ${tokenKey}` },
             });
             if (!res.ok) {
+              let errorPayload = '';
+              try {
+                errorPayload = stringifyPreview(await res.clone().json());
+              } catch {
+                errorPayload = stringifyPreview(await res.text().catch(() => ''));
+              }
+              traceLines.push(`[HTTP_${res.status}] ${ep.url}${errorPayload ? ` payload=${errorPayload}` : ''}`);
               discoveryReason = `http_${res.status}`;
               continue;
             }
-            const result = await res.json();
+            let result = null;
+            try {
+              result = await res.json();
+            } catch (parseError) {
+              discoveryReason = 'json_decode_failed';
+              traceLines.push(`[PARSE_FAIL] ${ep.url} error=${parseError?.message || 'unknown'}`);
+              continue;
+            }
             const rawData = Array.isArray(result)
               ? result
               : (result.data?.data || result.data?.items || result.data || []);
@@ -3579,13 +4113,16 @@ const processAccountsV2 = async (accounts) => {
               if (supportedModels.length > 0) {
                 tokenUsed = tokenKey;
                 discoveryReason = `ok_${ep.type}`;
+                traceLines.push(`[SUCCESS] ${ep.url} models=${supportedModels.length}`);
                 break;
               }
             } else {
               discoveryReason = 'empty_models';
+              traceLines.push(`[EMPTY_MODELS] ${ep.url} payload=${stringifyPreview(result) || '(empty)'}`);
             }
           } catch (e) {
             discoveryReason = `exception_${e?.message || 'unknown'}`;
+            traceLines.push(`[EXCEPTION] ${ep.url} error=${e?.message || 'unknown'}`);
           }
         }
         if (supportedModels.length > 0) break;
@@ -3602,9 +4139,27 @@ const processAccountsV2 = async (accounts) => {
         currentSiteNodes.push(withPendingMeta(siteName, {
           title: `${siteDisplayTitle} - ⚠️ 未能探测到可用模型列表（usable=${usableTokens.length}，${discoveryReasonText}）`,
           key: `no-model-site|${site.id || globalIdx}`,
-          disabled: true,
+          disableCheckbox: true,
           selectable: false,
           isModelDiscovering: false,
+          titleClass: 'tree-node-grey',
+          providerTitleText: siteDisplayTitle,
+          providerStatusText: `- ⚠️ 未能探测到可用模型列表（usable=${usableTokens.length}，${discoveryReasonText}）`,
+          providerSiteUrl: siteUrl,
+          isProviderDiagnostic: true,
+          providerDiagnostic: {
+            stage: 'model_discovery',
+            siteName,
+            siteUrl,
+            extractionMode,
+            uid: discoveryUid,
+            totalTokens: Array.isArray(site?.tokens) ? site.tokens.length : 0,
+            usableTokens: usableTokens.length,
+            rawError: discoveryReason,
+            userFacingError: discoveryReasonText,
+            replayRequest,
+            traceLines,
+          },
           children: [],
         }));
         return currentSiteNodes;
@@ -3626,6 +4181,9 @@ const processAccountsV2 = async (accounts) => {
           title: `${siteDisplayTitle} ${tokenName} (${tokenKey.slice(0, 15)}...)`,
           key: tokenNodeKey,
           isModelDiscovering: false,
+          providerTitleText: siteDisplayTitle,
+          providerStatusText: `${tokenName} (${tokenKey.slice(0, 15)}...)`,
+          providerSiteUrl: siteUrl,
           children,
         }));
       });
@@ -3702,6 +4260,7 @@ const processAccountsV2 = async (accounts) => {
       if (extractionMode === 'profile_file' && isChromeProfileAuthAvailable.value) {
         console.log(`[FetchKeys] Wails WebView detected, use Chrome Profile extraction for ${accountsToFetch.length} sites`);
         markLocalProfileExtractionStart(accountsToFetch.length);
+        startFetchKeysProgressPolling();
         try {
           const response = await extractChromeProfileTokens(accountsToFetch);
           if (Array.isArray(response?.warnings) && response.warnings.length > 0) {
@@ -3709,6 +4268,7 @@ const processAccountsV2 = async (accounts) => {
           }
           extractedSites = mergeChromeProfileExtractedSites(accountsToFetch, response);
         } finally {
+          stopFetchKeysProgressPolling();
           markLocalProfileExtractionDone(extractedSites);
         }
       } else if (extractionMode === 'profile_file') {
@@ -3782,7 +4342,14 @@ const processAccountsV2 = async (accounts) => {
       }
     }
 
-    let stillFailedAccounts = extractedSites.filter(isSiteFailed);
+    let stillFailedAccounts = extractedSites.filter(site => isSiteFailed(site) || shouldUseAnyrouterProfileAssist(site));
+    if (isWailsRuntime && extractionMode === 'profile_file') {
+      try {
+        await autoOpenAnyrouterProfileAssist(stillFailedAccounts, 'initial-extract');
+      } catch (assistError) {
+        console.warn('[ProfileAssist] initial auto open failed:', assistError?.message || String(assistError));
+      }
+    }
     updateBrowserSessionPendingSites(stillFailedAccounts);
     validAccounts.value = extractedSites;
     preloadAllQuotas(extractedSites);
@@ -3826,7 +4393,12 @@ const processAccountsV2 = async (accounts) => {
           validAccounts.value = extractedSites;
           preloadAllQuotas(extractedSites);
 
-          stillFailedAccounts = extractedSites.filter(isSiteFailed);
+          stillFailedAccounts = extractedSites.filter(site => isSiteFailed(site) || shouldUseAnyrouterProfileAssist(site));
+          try {
+            await autoOpenAnyrouterProfileAssist(stillFailedAccounts, 'profile-retry');
+          } catch (assistError) {
+            console.warn('[ProfileAssist] retry auto open failed:', assistError?.message || String(assistError));
+          }
           summarizeStage('Profile 文件模式手动登录后重试', extractedSites, stillFailedAccounts);
           console.log(`[FetchKeys] Profile 文件模式重试合并: mergedSites=${mergeStats.mergedSites}, recoveredSites=${mergeStats.recoveredSites}, gainedTokens=${mergeStats.gainedTokens}, gainedUsableTokens=${mergeStats.gainedUsableTokens}`);
 
@@ -3859,7 +4431,7 @@ const processAccountsV2 = async (accounts) => {
     } else if (extractionMode === 'cdp_restart' && cdpModeContext && stillFailedAccounts.length > 0) {
       void (async () => {
         try {
-          const { browserType, maxRetryRounds, retryIntervalMs } = cdpModeContext;
+        const { browserType, maxRetryRounds, retryIntervalMs } = cdpModeContext;
           browserSessionPolling.active = true;
           browserSessionPolling.totalRounds = maxRetryRounds;
           browserSessionPolling.round = 1;
@@ -3992,7 +4564,7 @@ const processAccountsV2 = async (accounts) => {
               validAccounts.value = extractedSites;
               preloadAllQuotas(extractedSites);
 
-              stillFailedAccounts = extractedSites.filter(isSiteFailed);
+              stillFailedAccounts = extractedSites.filter(site => isSiteFailed(site) || shouldUseAnyrouterProfileAssist(site));
               browserSessionPolling.pending = stillFailedAccounts.length;
               updateBrowserSessionPendingSites(stillFailedAccounts);
               refreshTreePendingHints();
@@ -4958,6 +5530,70 @@ const copyOrganizedResults = () => {
   display: flex !important;
   align-items: center;
   width: 100%;
+}
+
+.tree-provider-node-wrapper {
+  gap: 10px;
+}
+
+.provider-tree-label {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+}
+
+.provider-tree-link {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  color: #1677ff;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.provider-tree-link:hover {
+  text-decoration: underline;
+}
+
+.provider-tree-link.is-grey {
+  color: #8c8c8c;
+}
+
+.provider-tree-actions {
+  margin-left: auto;
+  opacity: 0.12;
+  transition: opacity 0.2s ease;
+}
+
+.tree-provider-node-wrapper:hover .provider-tree-actions {
+  opacity: 1;
+}
+
+.provider-diagnostic-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(140, 140, 140, 0.14);
+  color: #8c8c8c;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.provider-diagnostic-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 180px;
 }
 
 .shortcut-actions {

@@ -14,6 +14,7 @@ export const DESKTOP_CONFIG_APPS = [
 
 export function createDesktopConfigDraft(record) {
   const defaultModel =
+    String(record?.selectedModel || '').trim() ||
     String(record?.quickTestModel || '').trim() ||
     pickFallbackModel(record?.modelsList, record?.modelsText);
   const providerName = String(record?.siteName || 'Custom Provider').trim() || 'Custom Provider';
@@ -23,7 +24,8 @@ export function createDesktopConfigDraft(record) {
   return {
     selectedApps: [],
     providerName,
-    providerKey: sanitizeProviderKey(providerName),
+    providerKey: 'custom',
+    forceCustomProviderKey: true,
     endpoint,
     apiKey,
     model: defaultModel || 'gpt-4o-mini',
@@ -135,10 +137,7 @@ function buildCodexAuthPreview(appName, draft, file) {
 }
 
 function buildCodexConfigPreview(appName, draft, file) {
-  const providerKey = requireField(
-    sanitizeProviderKey(draft.providerKey || draft.providerName),
-    `${appName} Provider Key`
-  );
+  const providerKey = resolveProviderKeyForApp('codex', draft, file.content);
   const providerName = requireField(draft.providerName, `${appName} Provider Name`);
   const baseUrl = requireField(draft.codexBaseUrl, `${appName} Base URL`);
   const model = requireField(draft.model, `${appName} 模型`);
@@ -154,10 +153,6 @@ function buildCodexConfigPreview(appName, draft, file) {
 }
 
 function buildOpenCodePreview(appName, draft, file) {
-  const providerKey = requireField(
-    sanitizeProviderKey(draft.providerKey || draft.providerName),
-    `${appName} Provider Key`
-  );
   const providerName = requireField(draft.providerName, `${appName} Provider Name`);
   const baseUrl = requireField(draft.opencodeBaseUrl, `${appName} Base URL`);
   const apiKey = requireField(draft.apiKey, `${appName} API Key`);
@@ -166,6 +161,7 @@ function buildOpenCodePreview(appName, draft, file) {
   const current = parseStrictJsonObject(file.content, 'OpenCode opencode.json', {
     $schema: 'https://opencode.ai/config.json',
   });
+  const providerKey = resolveProviderKeyForApp('opencode', draft, current);
   const next = structuredClone(current);
 
   if (!isPlainObject(next.provider)) {
@@ -190,16 +186,13 @@ function buildOpenCodePreview(appName, draft, file) {
 }
 
 function buildOpenClawPreview(appName, draft, file) {
-  const providerKey = requireField(
-    sanitizeProviderKey(draft.providerKey || draft.providerName),
-    `${appName} Provider Key`
-  );
   const providerName = requireField(draft.providerName, `${appName} Provider Name`);
   const baseUrl = requireField(draft.openclawBaseUrl, `${appName} Base URL`);
   const apiKey = requireField(draft.apiKey, `${appName} API Key`);
   const model = requireField(draft.model, `${appName} 模型`);
 
   const current = parseLooseJsonObject(file.content, 'OpenClaw openclaw.json', OPENCLAW_DEFAULT_CONFIG);
+  const providerKey = resolveProviderKeyForApp('openclaw', draft, current);
   const next = structuredClone(current);
 
   if (!isPlainObject(next.models)) {
@@ -509,6 +502,81 @@ function sanitizeProviderKey(value) {
     .replace(/^_+|_+$/g, '');
 
   return normalized || 'custom_provider';
+}
+
+function resolveProviderKeyForApp(appId, draft, source) {
+  if (draft?.forceCustomProviderKey !== false) {
+    return 'custom';
+  }
+
+  const fallback = sanitizeProviderKey(draft?.providerKey || draft?.providerName || 'custom');
+  if (appId === 'codex') {
+    return extractCodexProviderKey(source) || fallback;
+  }
+  if (appId === 'opencode') {
+    return extractOpenCodeProviderKey(source, draft) || fallback;
+  }
+  if (appId === 'openclaw') {
+    return extractOpenClawProviderKey(source, draft) || fallback;
+  }
+  return fallback;
+}
+
+function extractCodexProviderKey(text) {
+  const match = String(text || '').match(/^\s*model_provider\s*=\s*["']([^"'\n]+)["']/m);
+  return match?.[1] ? sanitizeProviderKey(match[1]) : '';
+}
+
+function extractOpenCodeProviderKey(config, draft) {
+  const providers = isPlainObject(config?.provider) ? config.provider : {};
+  const keys = Object.keys(providers);
+  if (!keys.length) return '';
+
+  const preferred = sanitizeProviderKey(draft?.providerKey || draft?.providerName || '');
+  if (preferred && providers[preferred]) return preferred;
+
+  const providerName = String(draft?.providerName || '').trim();
+  if (providerName) {
+    const nameMatch = keys.find(key => String(providers[key]?.name || '').trim() === providerName);
+    if (nameMatch) return sanitizeProviderKey(nameMatch);
+  }
+
+  const endpoint = normalizeComparableUrl(draft?.opencodeBaseUrl || draft?.endpoint);
+  if (endpoint) {
+    const endpointMatch = keys.find(
+      key => normalizeComparableUrl(providers[key]?.options?.baseURL) === endpoint
+    );
+    if (endpointMatch) return sanitizeProviderKey(endpointMatch);
+  }
+
+  return sanitizeProviderKey(keys[0]);
+}
+
+function extractOpenClawProviderKey(config, draft) {
+  const providers = isPlainObject(config?.models?.providers) ? config.models.providers : {};
+  const keys = Object.keys(providers);
+  if (!keys.length) return '';
+
+  const primary = String(config?.agents?.defaults?.model?.primary || '').trim();
+  if (primary.includes('/')) {
+    const activeKey = sanitizeProviderKey(primary.split('/')[0]);
+    if (providers[activeKey]) return activeKey;
+  }
+
+  const preferred = sanitizeProviderKey(draft?.providerKey || draft?.providerName || '');
+  if (preferred && providers[preferred]) return preferred;
+
+  const endpoint = normalizeComparableUrl(draft?.openclawBaseUrl || draft?.endpoint);
+  if (endpoint) {
+    const endpointMatch = keys.find(key => normalizeComparableUrl(providers[key]?.baseUrl) === endpoint);
+    if (endpointMatch) return sanitizeProviderKey(endpointMatch);
+  }
+
+  return sanitizeProviderKey(keys[0]);
+}
+
+function normalizeComparableUrl(value) {
+  return String(value || '').trim().replace(/\/+$/, '').toLowerCase();
 }
 
 function pickFallbackModel(modelsList, modelsText) {
