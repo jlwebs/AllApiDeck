@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-//go:embed build/windows/icon.ico
+//go:embed assets/windows/icon.ico
 var embeddedWindowsAppIcon []byte
 
 var (
