@@ -64,7 +64,10 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: |
+          npm config set registry https://registry.npmjs.org
+          npm config set replace-registry-host always
+          npm install --no-fund --no-audit
         shell: pwsh
 
       - name: Install Wails CLI
