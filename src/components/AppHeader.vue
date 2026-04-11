@@ -151,7 +151,7 @@ const navigate = async path => {
 };
 
 const openGitHub = () => {
-  window.open('https://github.com/jlwebs/api-check', '_blank', 'noopener');
+  window.open('https://github.com/jlwebs/AllApiDeck', '_blank', 'noopener');
 };
 </script>
 
