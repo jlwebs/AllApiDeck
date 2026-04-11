@@ -72,11 +72,12 @@
             </button>
           </div>
 
-          <div class="panel-record-meta">
-            <span class="panel-record-quick">{{ getQuickStatusSummary(record) }}</span>
-          </div>
+          <div class="panel-record-extra">
+            <div class="panel-record-meta">
+              <span class="panel-record-quick">{{ getQuickStatusSummary(record) }}</span>
+            </div>
 
-          <div class="panel-record-actions">
+            <div class="panel-record-actions">
             <a-popover
               trigger="click"
               placement="leftTop"
@@ -138,6 +139,7 @@
                 <EditOutlined />
               </button>
             </a-tooltip>
+            </div>
           </div>
         </article>
       </section>
@@ -183,6 +185,11 @@ const SITE_EMOJI_LIST = [
   '🧭', '🪄', '🪁', '🎐', '🪵', '🍵', '🌿', '🍯', '🪴', '📮',
 ];
 
+const COMPAT_SITE_EMOJI_LIST = [
+  '🦊', '🐧', '🐬', '🦄', '🐼', '🐳', '🐙', '🐢', '🐝', '🐻',
+  '🐱', '🐶', '🌵', '🍀', '🍵', '🍬', '📮', '🎯', '🎈', '🎁',
+];
+
 const QUICK_TOOLTIP_MAX_CHARS = 15;
 
 const records = ref([]);
@@ -219,14 +226,18 @@ function getSiteShortName(siteName) {
 
 function getSiteEmoji(siteName) {
   const text = String(siteName || '').trim().toLowerCase();
-  if (!text) return SITE_EMOJI_LIST[0];
+  if (!text) return COMPAT_SITE_EMOJI_LIST[0];
 
   let hash = 2166136261;
   for (let index = 0; index < text.length; index += 1) {
     hash ^= text.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
-  return SITE_EMOJI_LIST[(hash >>> 0) % SITE_EMOJI_LIST.length];
+  const listLength = COMPAT_SITE_EMOJI_LIST.length || 1;
+  const normalizedHash = hash >>> 0;
+  const emojiIndex = ((normalizedHash % listLength) + listLength) % listLength;
+  const emoji = COMPAT_SITE_EMOJI_LIST[emojiIndex];
+  return typeof emoji === 'string' && emoji.trim() ? emoji : COMPAT_SITE_EMOJI_LIST[0];
 }
 
 function getCompactBalanceText(record) {
@@ -800,6 +811,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
   animation: panel-card-in 0.34s ease both;
   border: 1px solid rgba(255, 255, 255, 0.52);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
 }
 
 .panel-record::before {
@@ -946,6 +958,23 @@ onBeforeUnmount(() => {
   gap: 6px;
 }
 
+.panel-record-extra {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-4px);
+  overflow: hidden;
+  transition: max-height 0.18s ease, opacity 0.16s ease, transform 0.18s ease;
+  pointer-events: none;
+}
+
+.panel-record:hover .panel-record-extra,
+.panel-record:focus-within .panel-record-extra {
+  max-height: 96px;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
 .panel-record-balance {
   flex: 1;
   display: flex;
@@ -997,10 +1026,12 @@ onBeforeUnmount(() => {
 }
 
 .panel-record-meta {
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  padding-top: 10px;
 }
 
 .panel-record-quick {
@@ -1013,10 +1044,11 @@ onBeforeUnmount(() => {
 }
 
 .panel-record-actions {
+  overflow: hidden;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
-  margin-top: 0;
+  margin-top: 10px;
 }
 
 .panel-action-button {

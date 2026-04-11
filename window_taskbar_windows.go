@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	panelWindowTitleTaskbar = "Batch API Check Panel"
+	panelWindowTitleTaskbar = "All API Dock Panel"
 	wsExToolWindowTaskbar   = 0x00000080
 	wsExAppWindowTaskbar    = 0x00040000
 	swpNoSizeTaskbar        = 0x0001

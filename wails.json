@@ -1,7 +1,7 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "BatchApiCheck",
-  "outputfilename": "batch-api-check",
+  "name": "AllApiDock",
+  "outputfilename": "all-api-dock",
   "frontend:dir": ".",
   "frontend:install": "node -e \"process.exit(0)\"",
   "frontend:build": "npm run build:web",
