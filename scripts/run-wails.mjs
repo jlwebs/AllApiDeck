@@ -15,10 +15,29 @@ const runnerLogPath = path.join(logDir, 'wails-dev-runner.log');
 const sidecarLogPath = path.join(logDir, 'wails-dev-sidecar.log');
 const viteLogPath = path.join(logDir, 'wails-dev-vite.log');
 const wailsLogPath = path.join(logDir, 'wails-dev-host.log');
+const trackedAppIconPath = path.join(projectRoot, 'assets', 'appicon.png');
+const trackedWindowsIconPath = path.join(projectRoot, 'assets', 'windows', 'icon.ico');
 
 function ensureLogDir() {
   if (!fs.existsSync(logDir)) {
     fs.mkdirSync(logDir, { recursive: true });
+  }
+}
+
+function ensureBuildAssets() {
+  const buildDir = path.join(projectRoot, 'build');
+  const windowsBuildDir = path.join(buildDir, 'windows');
+  const buildAppIconPath = path.join(buildDir, 'appicon.png');
+  const buildWindowsIconPath = path.join(windowsBuildDir, 'icon.ico');
+
+  fs.mkdirSync(windowsBuildDir, { recursive: true });
+
+  if (fs.existsSync(trackedAppIconPath)) {
+    fs.copyFileSync(trackedAppIconPath, buildAppIconPath);
+  }
+
+  if (fs.existsSync(trackedWindowsIconPath)) {
+    fs.copyFileSync(trackedWindowsIconPath, buildWindowsIconPath);
   }
 }
 
@@ -430,6 +449,8 @@ function buildPassthroughArgs() {
 }
 
 async function main() {
+  ensureBuildAssets();
+
   if (command === 'dev') {
     await runDevMode();
     return;
