@@ -63,6 +63,18 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      - name: Prepare Go caches
+        run: |
+          $gopath = Join-Path $env:RUNNER_TEMP "go"
+          $gomodcache = Join-Path $gopath "pkg/mod"
+          $gocache = Join-Path $env:RUNNER_TEMP "go-build"
+          New-Item -ItemType Directory -Path $gomodcache -Force | Out-Null
+          New-Item -ItemType Directory -Path $gocache -Force | Out-Null
+          "GOPATH=$gopath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "GOMODCACHE=$gomodcache" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "GOCACHE=$gocache" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        shell: pwsh
+
       - name: Install frontend dependencies
         run: |
           npm config set registry https://registry.npmjs.org
