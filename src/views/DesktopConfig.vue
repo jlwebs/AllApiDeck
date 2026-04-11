@@ -1,0 +1,527 @@
+<template>
+  <div class="desktop-config-view">
+    <div class="desktop-config-shell">
+      <div class="desktop-config-window-header">
+        <div class="desktop-config-window-copy">
+          <div class="desktop-config-window-title">专属一键配置</div>
+          <div class="desktop-config-window-subtitle">
+            {{ targetRecord ? `${targetRecord.siteName} | ${targetRecord.siteUrl}` : '选择一个密钥配置并生成预览' }}
+          </div>
+        </div>
+
+        <div class="desktop-config-window-actions">
+          <a-button @click="closeWindow">关闭</a-button>
+          <a-button
+            type="primary"
+            :loading="desktopConfigLoading"
+            :disabled="!targetRecord"
+            @click="generateDesktopConfigPreview"
+          >
+            生成变更预览
+          </a-button>
+        </div>
+      </div>
+
+      <a-alert
+        v-if="targetRecord"
+        type="info"
+        show-icon
+        class="desktop-config-alert"
+        :message="`${targetRecord.siteName} | ${targetRecord.siteUrl}`"
+        description="将读取本机应用配置，生成变更预览，确认后才会真正写入。"
+      />
+
+      <a-empty
+        v-if="!targetRecord"
+        description="未找到目标密钥记录，无法打开专属配置窗口。"
+      />
+
+      <div v-else class="desktop-config-layout">
+        <section class="desktop-app-panel">
+          <div class="desktop-panel-title">目标应用</div>
+          <div class="desktop-panel-hint">默认不勾选，按需点选后再生成变更预览。</div>
+          <div class="desktop-app-grid">
+            <button
+              v-for="app in DESKTOP_CONFIG_APPS"
+              :key="app.id"
+              type="button"
+              class="desktop-app-card"
+              :class="[`desktop-app-${app.id}`, { 'desktop-app-card-active': isDesktopAppSelected(app.id) }]"
+              @click="toggleDesktopAppSelection(app.id)"
+            >
+              <span class="desktop-app-logo">
+                <img :src="DESKTOP_APP_ICONS[app.id]" :alt="app.label" class="desktop-app-logo-image" />
+              </span>
+              <span class="desktop-app-name">{{ app.label }}</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="desktop-form-panel">
+          <a-form layout="vertical">
+            <div class="config-grid">
+              <a-form-item label="Provider 名称">
+                <a-input v-model:value="desktopConfigDraft.providerName" placeholder="例如 My Provider" />
+              </a-form-item>
+
+              <a-form-item label="Provider Key">
+                <a-input :value="desktopConfigDraft.forceCustomProviderKey ? 'custom' : '保持当前 provider key'" readonly />
+                <a-checkbox
+                  :checked="desktopConfigDraft.forceCustomProviderKey !== false"
+                  class="desktop-provider-checkbox"
+                  @change="handleDesktopProviderKeyModeChange"
+                >
+                  custom:统一化保证历史会话可见
+                </a-checkbox>
+                <div class="desktop-field-hint">
+                  默认勾选会统一写入 `custom`；取消后保持各应用修改前的当前 provider key。
+                </div>
+              </a-form-item>
+
+              <a-form-item label="API Key">
+                <a-input-password v-model:value="desktopConfigDraft.apiKey" placeholder="sk-..." />
+              </a-form-item>
+
+              <a-form-item label="默认模型">
+                <a-select
+                  v-model:value="desktopConfigDraft.model"
+                  :options="desktopConfigModelOptions"
+                  :loading="modelLoading"
+                  show-search
+                  :filter-option="true"
+                  option-filter-prop="label"
+                  placeholder="请选择当前记录模型"
+                  @dropdownVisibleChange="handleModelDropdownVisibleChange"
+                  @change="handleDesktopModelChange"
+                />
+              </a-form-item>
+
+              <a-form-item label="Claude Base URL">
+                <a-input v-model:value="desktopConfigDraft.claudeBaseUrl" />
+              </a-form-item>
+
+              <a-form-item label="Claude Key 字段">
+                <a-select v-model:value="desktopConfigDraft.claudeApiKeyField">
+                  <a-select-option value="ANTHROPIC_AUTH_TOKEN">ANTHROPIC_AUTH_TOKEN</a-select-option>
+                  <a-select-option value="ANTHROPIC_API_KEY">ANTHROPIC_API_KEY</a-select-option>
+                </a-select>
+              </a-form-item>
+
+              <a-form-item label="Codex Base URL">
+                <a-input v-model:value="desktopConfigDraft.codexBaseUrl" />
+              </a-form-item>
+
+              <a-form-item label="OpenCode Base URL">
+                <a-input v-model:value="desktopConfigDraft.opencodeBaseUrl" />
+              </a-form-item>
+
+              <a-form-item label="OpenCode Adapter">
+                <a-select v-model:value="desktopConfigDraft.opencodeNpm">
+                  <a-select-option value="@ai-sdk/openai-compatible">@ai-sdk/openai-compatible</a-select-option>
+                  <a-select-option value="@openrouter/ai-sdk-provider">@openrouter/ai-sdk-provider</a-select-option>
+                </a-select>
+              </a-form-item>
+
+              <a-form-item label="OpenClaw Base URL">
+                <a-input v-model:value="desktopConfigDraft.openclawBaseUrl" />
+              </a-form-item>
+
+              <a-form-item label="OpenClaw API 协议">
+                <a-select v-model:value="desktopConfigDraft.openclawApi">
+                  <a-select-option value="openai-completions">openai-completions</a-select-option>
+                  <a-select-option value="anthropic-messages">anthropic-messages</a-select-option>
+                </a-select>
+              </a-form-item>
+            </div>
+          </a-form>
+        </section>
+      </div>
+    </div>
+
+    <DesktopConfigDiffModal
+      :open="desktopConfigDiffOpen"
+      :preview="desktopConfigPreview"
+      :width="1080"
+      @cancel="desktopConfigDiffOpen = false"
+      @confirm="applyDesktopConfigPreview"
+    />
+  </div>
+</template>
+
+<script setup>
+import { computed, onMounted, reactive, ref } from 'vue';
+import { message } from 'ant-design-vue';
+import { GetLaunchRecordKey, RequestQuit } from '../../wailsjs/go/main/App.js';
+import DesktopConfigDiffModal from '../components/DesktopConfigDiffModal.vue';
+import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManagedAppConfigFiles } from '../utils/desktopConfigBridge.js';
+import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS } from '../utils/desktopConfigTransform.js';
+import { getRecordModelOptions, loadPanelRecords, loadRecordModelOptions, persistPanelRecords } from '../utils/keyPanelStore.js';
+import claudeAppIcon from '../assets/app-icons/claude.svg';
+import codexAppIcon from '../assets/app-icons/codex.svg';
+import opencodeAppIcon from '../assets/app-icons/opencode.svg';
+import openclawAppIcon from '../assets/app-icons/openclaw-fallback.svg';
+
+const DESKTOP_APP_ICONS = {
+  claude: claudeAppIcon,
+  codex: codexAppIcon,
+  opencode: opencodeAppIcon,
+  openclaw: openclawAppIcon,
+};
+
+const records = ref([]);
+const contextMap = ref(new Map());
+const targetRecord = ref(null);
+const desktopConfigLoading = ref(false);
+const desktopConfigDiffOpen = ref(false);
+const desktopConfigPreview = ref({ appGroups: [], writes: [], errors: [] });
+const desktopConfigDraft = reactive(createDesktopConfigDraft({}));
+const modelLoading = ref(false);
+
+const desktopConfigModelOptions = computed(() => {
+  const record = targetRecord.value;
+  if (!record) return [];
+  const options = getRecordModelOptions(record, contextMap.value);
+  const currentValue = String(desktopConfigDraft.model || '').trim();
+  if (!currentValue) return options;
+  return options.some(option => option.value === currentValue)
+    ? options
+    : [{ label: currentValue, value: currentValue }, ...options];
+});
+
+function overwriteDesktopConfigDraft(nextDraft) {
+  Object.keys(desktopConfigDraft).forEach(key => delete desktopConfigDraft[key]);
+  Object.assign(desktopConfigDraft, nextDraft);
+}
+
+function replaceTargetRecord(nextRecord, persist = false) {
+  targetRecord.value = nextRecord;
+  if (!nextRecord) return;
+  records.value = records.value.map(item => (item.rowKey === nextRecord.rowKey ? nextRecord : item));
+  if (persist) {
+    persistPanelRecords(records.value);
+  }
+}
+
+async function closeWindow() {
+  await RequestQuit();
+}
+
+function isDesktopAppSelected(appId) {
+  return Array.isArray(desktopConfigDraft.selectedApps) && desktopConfigDraft.selectedApps.includes(appId);
+}
+
+function toggleDesktopAppSelection(appId) {
+  const current = Array.isArray(desktopConfigDraft.selectedApps) ? [...desktopConfigDraft.selectedApps] : [];
+  if (current.includes(appId)) {
+    desktopConfigDraft.selectedApps = current.filter(item => item !== appId);
+  } else {
+    desktopConfigDraft.selectedApps = [...current, appId];
+  }
+}
+
+function handleDesktopProviderKeyModeChange(event) {
+  const checked = Boolean(event?.target?.checked);
+  desktopConfigDraft.forceCustomProviderKey = checked;
+  desktopConfigDraft.providerKey = checked ? 'custom' : '';
+}
+
+function handleDesktopModelChange(value) {
+  const selectedModel = String(value || '').trim();
+  desktopConfigDraft.model = selectedModel;
+  if (!targetRecord.value) return;
+  replaceTargetRecord({
+    ...targetRecord.value,
+    selectedModel,
+  }, true);
+}
+
+async function handleModelDropdownVisibleChange(open) {
+  if (!open || !targetRecord.value || modelLoading.value) return;
+
+  modelLoading.value = true;
+  try {
+    const nextRecord = await loadRecordModelOptions(targetRecord.value, contextMap.value, true);
+    replaceTargetRecord(nextRecord, true);
+    const currentModel = String(desktopConfigDraft.model || '').trim();
+    if (!currentModel || !nextRecord.modelsList?.includes(currentModel)) {
+      desktopConfigDraft.model = String(nextRecord.selectedModel || '').trim();
+    }
+  } catch (error) {
+    message.error(error?.message || '获取模型列表失败');
+  } finally {
+    modelLoading.value = false;
+  }
+}
+
+async function generateDesktopConfigPreview() {
+  if (!targetRecord.value) {
+    message.warning('未找到可用密钥记录');
+    return;
+  }
+  if (!desktopConfigDraft.selectedApps.length) {
+    message.warning('请至少选择一个目标应用');
+    return;
+  }
+  if (!isDesktopConfigBridgeAvailable()) {
+    message.warning('当前环境不支持桌面配置读写');
+    return;
+  }
+
+  desktopConfigLoading.value = true;
+  try {
+    const snapshot = await readManagedAppConfigFiles(desktopConfigDraft.selectedApps);
+    const preview = buildDesktopConfigPreview(desktopConfigDraft, snapshot);
+    desktopConfigPreview.value = preview;
+    if (!preview.appGroups.length && preview.errors.length) {
+      throw new Error(preview.errors.join('；'));
+    }
+    desktopConfigDiffOpen.value = true;
+    if (preview.errors.length) {
+      message.warning(`部分应用预览生成失败：${preview.errors.join('；')}`);
+    } else {
+      message.success(`已生成 ${preview.writes.length} 个配置文件的变更预览`);
+    }
+  } catch (error) {
+    console.error(error);
+    message.error(`生成配置预览失败：${error.message || '未知错误'}`);
+  } finally {
+    desktopConfigLoading.value = false;
+  }
+}
+
+async function applyDesktopConfigPreview() {
+  if (!desktopConfigPreview.value.writes.length) {
+    message.warning('没有可写入的配置变更');
+    return;
+  }
+
+  desktopConfigLoading.value = true;
+  try {
+    const result = await applyManagedAppConfigFiles(desktopConfigPreview.value.writes);
+    const appliedCount = Array.isArray(result?.applied) ? result.applied.length : 0;
+    desktopConfigDiffOpen.value = false;
+    message.success(`已写入 ${appliedCount} 个本地配置文件，并自动创建备份`);
+    window.setTimeout(() => {
+      void closeWindow();
+    }, 160);
+  } catch (error) {
+    console.error(error);
+    message.error(`写入本地配置失败：${error.message || '未知错误'}`);
+  } finally {
+    desktopConfigLoading.value = false;
+  }
+}
+
+async function bootstrap() {
+  const loaded = loadPanelRecords();
+  contextMap.value = loaded.contextMap || new Map();
+  records.value = loaded.records || [];
+
+  const rowKey = await GetLaunchRecordKey().catch(() => '');
+  const matched = rowKey
+    ? records.value.find(item => item.rowKey === rowKey) || null
+    : (records.value[0] || null);
+
+  if (!matched) {
+    message.error('未找到对应的密钥记录');
+    return;
+  }
+
+  replaceTargetRecord(matched, false);
+  overwriteDesktopConfigDraft(createDesktopConfigDraft(matched));
+}
+
+onMounted(() => {
+  void bootstrap();
+});
+</script>
+
+<style scoped>
+.desktop-config-view {
+  min-height: 100vh;
+  padding: 20px;
+  box-sizing: border-box;
+  background: linear-gradient(180deg, #eef4ea 0%, #e5efe0 100%);
+}
+
+.desktop-config-shell {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 22px;
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.14);
+}
+
+.desktop-config-window-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.desktop-config-window-copy {
+  min-width: 0;
+}
+
+.desktop-config-window-title {
+  font-size: 30px;
+  line-height: 1.1;
+  font-weight: 800;
+  color: #1f2937;
+}
+
+.desktop-config-window-subtitle {
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 14px;
+  word-break: break-all;
+}
+
+.desktop-config-window-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.desktop-config-alert {
+  margin-bottom: 18px;
+}
+
+.desktop-config-layout {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.desktop-app-panel,
+.desktop-form-panel {
+  border-radius: 24px;
+  background: linear-gradient(180deg, #f8fafc, #eef2ff);
+  padding: 18px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.desktop-panel-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.desktop-panel-hint,
+.desktop-field-hint {
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.desktop-app-grid {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.desktop-app-card {
+  border: 0;
+  border-radius: 22px;
+  padding: 16px 12px;
+  background: #fff;
+  color: #0f172a;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08), inset 0 0 0 1px rgba(148, 163, 184, 0.16);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.desktop-app-card:hover {
+  transform: translateY(-2px);
+}
+
+.desktop-app-card-active {
+  box-shadow: 0 14px 30px rgba(37, 99, 235, 0.16), inset 0 0 0 2px rgba(37, 99, 235, 0.45);
+  background: linear-gradient(180deg, #ffffff, #eff6ff);
+}
+
+.desktop-app-logo {
+  width: 58px;
+  height: 58px;
+  border-radius: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.desktop-app-logo-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.desktop-app-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.desktop-app-claude .desktop-app-logo {
+  background: linear-gradient(135deg, #fff7ed, #ffedd5);
+}
+
+.desktop-app-codex .desktop-app-logo {
+  background: linear-gradient(135deg, #ffffff, #f3f4f6);
+}
+
+.desktop-app-opencode .desktop-app-logo {
+  background: linear-gradient(135deg, #eef2ff, #dbeafe);
+}
+
+.desktop-app-openclaw .desktop-app-logo {
+  background: linear-gradient(135deg, #fff1f2, #ffe4e6);
+}
+
+.desktop-provider-checkbox {
+  margin-top: 10px;
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+
+@media (max-width: 980px) {
+  .desktop-config-view {
+    padding: 12px;
+  }
+
+  .desktop-config-shell {
+    padding: 16px;
+  }
+
+  .desktop-config-window-header {
+    flex-direction: column;
+  }
+
+  .desktop-config-window-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .desktop-config-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .config-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

@@ -422,6 +422,10 @@ function buildPassthroughArgs() {
   const args = rawArgs.length ? [...rawArgs] : [command];
   if (args[0] === 'dev' && !args.includes('-m')) args.push('-m');
   if (!args.includes('-nocolour')) args.push('-nocolour');
+  if (args[0] === 'build') {
+    if (!args.includes('-clean')) args.push('-clean');
+    if (!args.includes('-s')) args.push('-s');
+  }
   return args;
 }
 
@@ -429,6 +433,28 @@ async function main() {
   if (command === 'dev') {
     await runDevMode();
     return;
+  }
+
+  if (command === 'build') {
+    const frontendChild = spawn(process.execPath, [path.join(projectRoot, 'scripts', 'run-vite.mjs'), 'build'], {
+      cwd: projectRoot,
+      stdio: ['ignore', 'inherit', 'inherit'],
+      env: buildEnv(),
+    });
+    await new Promise((resolve, reject) => {
+      frontendChild.on('error', reject);
+      frontendChild.on('exit', (code, signal) => {
+        if (signal) {
+          reject(new Error(`frontend build terminated by signal ${signal}`));
+          return;
+        }
+        if ((code ?? 0) !== 0) {
+          reject(new Error(`frontend build failed with code ${code}`));
+          return;
+        }
+        resolve();
+      });
+    });
   }
 
   const child = spawn(resolveWailsExecutable(), buildPassthroughArgs(), {

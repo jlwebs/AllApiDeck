@@ -6,11 +6,41 @@ export function AppendClientLog(arg1:string,arg2:string):Promise<void>;
 
 export function ApplyManagedAppConfigFiles(arg1:main.ManagedAppConfigApplyRequest):Promise<main.ManagedAppConfigApplyResult>;
 
+export function CollapsePanel():Promise<void>;
+
+export function EnterSidebarMode():Promise<void>;
+
+export function ExitSidebarMode():Promise<void>;
+
+export function ExpandPanel():Promise<void>;
+
 export function ExtractChromeProfileTokens(arg1:main.ChromeProfileTokenRequest):Promise<main.ChromeProfileTokenResponse>;
+
+export function GetChromeProfileExtractProgress():Promise<main.fetchKeysProgressSnapshot>;
+
+export function GetLaunchMode():Promise<string>;
+
+export function GetLaunchRecordKey():Promise<string>;
+
+export function GetPanelDockState():Promise<string>;
+
+export function GetSidebarMode():Promise<boolean>;
+
+export function HideToTray():Promise<void>;
+
+export function HideToTrayPanel():Promise<void>;
 
 export function ImportExtensionAccounts():Promise<main.ExtensionImportResult>;
 
+export function InitPanelWindow(arg1:number,arg2:number):Promise<void>;
+
 export function ListDesktopLogFiles():Promise<main.DesktopLogSnapshot>;
+
+export function OpenDesktopConfigWindow(arg1:string):Promise<void>;
+
+export function OpenDesktopProfileAssist(arg1:Array<main.desktopProfileAssistOpenRequest>):Promise<Record<string, any>>;
+
+export function OpenKeyEditor(arg1:string):Promise<void>;
 
 export function PerformHttpRequest(arg1:string,arg2:string,arg3:string,arg4:string,arg5:number):Promise<string>;
 
@@ -19,3 +49,19 @@ export function PerformHttpRequestRaw(arg1:string):Promise<string>;
 export function ReadDesktopLogFile(arg1:string):Promise<main.DesktopLogContent>;
 
 export function ReadManagedAppConfigFiles(arg1:Array<string>):Promise<main.ManagedAppConfigSnapshot>;
+
+export function RequestMainWindowRestore():Promise<void>;
+
+export function RequestQuit():Promise<void>;
+
+export function ResetPanelExpandedWidth():Promise<void>;
+
+export function SetPanelCollapsed(arg1:number,arg2:number,arg3:boolean):Promise<void>;
+
+export function SetPanelExpandedWidth(arg1:number):Promise<void>;
+
+export function SetPanelInteractionLocked(arg1:boolean):Promise<void>;
+
+export function ShowMainWindow():Promise<void>;
+
+export function ToggleSidebarMode():Promise<void>;

@@ -1,9 +1,19 @@
 ﻿<template>
   <ConfigProvider :theme="configProviderTheme">
     <div class="wrapper batch-wrapper">
-      <div style="width: 100%;">
-        <div class="page-content" style="width: 100%">
-          <div class="container" style="max-width: 100% !important; margin: 0 !important; padding: 20px !important;">
+      <div class="batch-shell">
+        <div class="batch-forest-scene" aria-hidden="true">
+          <div class="forest-mist forest-mist-left"></div>
+          <div class="forest-mist forest-mist-right"></div>
+          <div class="forest-path-glow"></div>
+          <div class="forest-firegrass firegrass-left"></div>
+          <div class="forest-firegrass firegrass-right"></div>
+          <div class="forest-slime slime-a"></div>
+          <div class="forest-slime slime-b"></div>
+          <div class="forest-slime slime-c"></div>
+        </div>
+        <div class="page-content batch-page-content">
+          <div class="container batch-page-container">
             <!-- Header section, similar to Check.vue for consistency -->
             <AppHeader
               current-page="batch"
@@ -13,58 +23,108 @@
               @settings="openSettingsModal"
             />
 
-            <div class="page-title-row">
-              <h1 class="page-title">
-                批量并发检测
-              </h1>
-              <a-tooltip v-if="showBackendHealth" :title="backendHealthTooltip">
-                <div
-                  class="backend-health-pill"
-                  :class="{
-                    'backend-health-ok': backendHealth.ok,
-                    'backend-health-down': backendHealth.checked && !backendHealth.ok,
-                  }"
-                >
-                  <span class="backend-health-dot"></span>
-                  <span class="backend-health-label">
-                    {{ backendHealth.ok ? '本地后端正常' : (backendHealth.checked ? '本地后端异常' : '本地后端检测中') }}
-                  </span>
-                </div>
-              </a-tooltip>
-            </div>
-            <h3 style="text-align: center; color: #666; margin-bottom: 30px;">
-              （支持导入 accounts-backup JSON 进行批量筛查）
-            </h3>
+            <section class="batch-hero" :class="{ 'batch-hero-compact': step !== 1 }">
+              <div class="batch-hero-motion" aria-hidden="true">
+                <span class="leaf leaf-a"></span>
+                <span class="leaf leaf-b"></span>
+                <span class="leaf leaf-c"></span>
+                <span class="leaf leaf-d"></span>
+                <span class="grass grass-a"></span>
+                <span class="grass grass-b"></span>
+                <span class="grass grass-c"></span>
+              </div>
 
-            <!-- 步骤 1：上传备份文件 -->
-            <div v-show="step === 1" class="step-container">
-              <a-upload-dragger
-                name="file"
-                :multiple="false"
-                :before-upload="beforeUpload"
-                :show-upload-list="false"
-                accept=".json"
-              >
-                <p class="ant-upload-drag-icon">
-                  <InboxOutlined />
-                </p>
-                <p class="ant-upload-text">点击或将 accounts-backup.json 拖拽到此处</p>
-                <p class="ant-upload-hint">解析后将自动并发获取每个网站的模型列表</p>
-              </a-upload-dragger>
-              
-              <div style="margin-top: 20px; text-align: center;">
-                <a-space v-if="isWailsRuntime || hasHistory">
-                  <a-button
-                    v-if="isWailsRuntime"
-                    @click="importFromExtension"
-                    :disabled="isImportingExtension"
-                  >
-                    <InboxOutlined /> {{ isImportingExtension ? '正在读取扩展数据...' : '从浏览器扩展导入' }}
-                  </a-button>
-                  <a-button v-if="hasHistory" @click="loadHistory" type="dashed">
-                    <HistoryOutlined /> 查看上一次检测结果
-                  </a-button>
-                </a-space>
+              <div class="batch-hero-head">
+                <div class="batch-hero-copy">
+                  <p class="batch-hero-kicker">Batch Workspace</p>
+                  <div class="page-title-row">
+                    <div class="page-title-block">
+                      <h1 class="page-title">
+                        批量并发检测
+                      </h1>
+                      <p class="page-subtitle">
+                        优先从扩展导入，备用支持 `accounts-backup.json` 与历史结果恢复。
+                      </p>
+                    </div>
+                    <a-tooltip v-if="showBackendHealth" :title="backendHealthTooltip">
+                      <div
+                        class="backend-health-pill"
+                        :class="{
+                          'backend-health-ok': backendHealth.ok,
+                          'backend-health-down': backendHealth.checked && !backendHealth.ok,
+                        }"
+                      >
+                        <span class="backend-health-dot"></span>
+                        <span class="backend-health-label">
+                          {{ backendHealth.ok ? '本地后端正常' : (backendHealth.checked ? '本地后端异常' : '本地后端检测中') }}
+                        </span>
+                      </div>
+                    </a-tooltip>
+                  </div>
+                  <div class="batch-hero-meta">
+                    <span class="batch-hero-tag">扩展导入优先</span>
+                    <span class="batch-hero-tag">JSON 备用导入</span>
+                  </div>
+                </div>
+              </div>
+
+              <div v-show="step === 1" class="step-container step-container-hero">
+                <div class="hero-stage-grid">
+                  <div class="hero-left-stack">
+                    <div class="hero-action-card hero-action-card-primary hero-action-card-large">
+                      <div class="hero-action-copy">
+                        <h3>从浏览器扩展导入</h3>
+                        <p>主入口，直接读取扩展内站点与登录数据。</p>
+                      </div>
+                      <div class="hero-primary-inline">
+                        <a-button
+                          v-if="isWailsRuntime"
+                          type="primary"
+                          size="large"
+                          @click="importFromExtension"
+                          :disabled="isImportingExtension"
+                          class="hero-primary-button"
+                        >
+                          <InboxOutlined /> {{ isImportingExtension ? '正在读取扩展数据...' : '从浏览器扩展导入' }}
+                        </a-button>
+                        <p v-if="!isWailsRuntime" class="hero-action-note">当前环境非桌面模式，可改用右侧 JSON 导入。</p>
+                      </div>
+                    </div>
+
+                    <div class="hero-action-card hero-action-card-secondary hero-action-card-compact">
+                      <div class="hero-action-copy">
+                        <h3>查看上一次检测结果</h3>
+                        <p>直接回到最近一次结果树。</p>
+                      </div>
+                      <a-button v-if="hasHistory" @click="loadHistory" type="dashed" class="hero-secondary-button">
+                        <HistoryOutlined /> 查看上一次检测结果
+                      </a-button>
+                      <p v-else class="hero-action-note">当前还没有历史记录。</p>
+                    </div>
+                  </div>
+
+                  <div class="hero-upload-card hero-upload-card-right">
+                    <div class="hero-upload-copy">
+                      <h3>导入备份 JSON</h3>
+                      <p>备用入口，从All-API-Hub备份文件导入`。</p>
+                    </div>
+                    <a-upload-dragger
+                      name="file"
+                      :multiple="false"
+                      :before-upload="beforeUpload"
+                      :show-upload-list="false"
+                      accept=".json"
+                      class="hero-upload-dragger"
+                    >
+                      <p class="ant-upload-drag-icon">
+                        <InboxOutlined />
+                      </p>
+                      <p class="ant-upload-text">点击或拖入 accounts-backup.json</p>
+                      <p class="ant-upload-hint">解析后自动拉起模型列表读取</p>
+                    </a-upload-dragger>
+                  </div>
+                </div>
+
                 <div
                   v-if="isWailsRuntime && importExtensionStatusText"
                   class="extension-import-status-line"
@@ -72,7 +132,7 @@
                   <a-tag :color="importExtensionStatusColor">{{ importExtensionStatusText }}</a-tag>
                 </div>
               </div>
-            </div>
+            </section>
 
             <!-- 加载状态 -->
             <div v-show="isLoadingModels && step === -1" class="step-container loading-container">
@@ -216,11 +276,11 @@
                 </a-tree>
               </div>
 
-              <div class="settings-action-bar">
+                <div class="settings-action-bar">
                 <div class="batch-settings">
-                  <span style="font-size: 14px; margin-right: 10px;">并发数：</span>
+                  <span class="batch-settings-label" style="margin-right: 10px;">并发数：</span>
                   <a-input-number v-model:value="batchConcurrency" :min="1" :max="100" />
-                  <span style="font-size: 14px; margin-left: 20px; margin-right: 10px;">超时(秒)：</span>
+                  <span class="batch-settings-label" style="margin-left: 20px; margin-right: 10px;">超时(秒)：</span>
                   <a-input-number v-model:value="modelTimeout" :min="1" />
                 </div>
                 <div class="actions">
@@ -663,8 +723,10 @@ import { listDesktopLogFiles, readDesktopLogFile, isDesktopLogBridgeAvailable } 
 import { apiFetch, isProbablyWailsRuntime } from '../utils/runtimeApi.js';
 import { extractChromeProfileTokens, isChromeProfileAuthBridgeAvailable } from '../utils/profileAuthBridge.js';
 import { toggleTheme } from '../utils/theme.js';
+import { maximiseMainWindow } from '../utils/windowSizing.js';
 import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils/balance.js';
 import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
+import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
 
 const isWailsRuntime = isProbablyWailsRuntime();
 const { t } = useI18n();
@@ -709,6 +771,7 @@ const isSyncingLocalKeys = ref(false);
 
 const KEY_MANAGEMENT_STORAGE_KEY = 'api_check_key_management_records_v1';
 const KEY_MANAGEMENT_META_STORAGE_KEY = 'api_check_key_management_meta_v1';
+const KEY_MANAGEMENT_SYNC_EVENT = 'batch-api-check:key-management-sync';
 
 const appInfo = reactive({
   name: 'API Checker',
@@ -1754,7 +1817,7 @@ const getPayloadJson = (record) => {
     url: record.siteUrl ? record.siteUrl.replace(/\/+$/, '') : '',
     key: record.apiKey,
     model: record.modelName,
-    messages: [{ role: 'user', content: 'hello' }]
+    messages: buildQuickTestMessages()
   }, null, 2);
 };
 
@@ -2042,10 +2105,11 @@ onBeforeUnmount(() => {
   }
 });
 
-const loadHistory = () => {
+const loadHistory = async () => {
   const hist = localStorage.getItem('api_check_last_results');
   if (hist) {
     try {
+      await maximiseMainWindow();
       testResults.value = JSON.parse(hist);
       organizedSourceResults.value = [...testResults.value];
       step.value = 3;
@@ -2116,8 +2180,26 @@ const countUsableTokensForSite = (site) => {
   return tokens.filter(isUsableToken).length;
 };
 
-const shouldUseAnyrouterProfileAssist = (site) => (
-  isAnyrouterSite(site) &&
+const DESKTOP_PROFILE_ASSIST_HOSTS = new Set([
+  'anyrouter.top',
+  'elysiver.h-e.top',
+]);
+
+const isDesktopProfileAssistSite = (site) => {
+  if (isAnyrouterSite(site)) return true;
+  const rawUrl = String(site?.site_url || site?.siteUrl || '').trim();
+  if (!rawUrl) return false;
+  try {
+    const parsed = new URL(rawUrl);
+    const host = String(parsed.hostname || '').toLowerCase();
+    return DESKTOP_PROFILE_ASSIST_HOSTS.has(host);
+  } catch {
+    return false;
+  }
+};
+
+const shouldUseDesktopProfileAssist = (site) => (
+  isDesktopProfileAssistSite(site) &&
   (
     Boolean(site?.error) ||
     countUsableTokensForSite(site) <= 0
@@ -2377,6 +2459,24 @@ const openFailedSitesForManualLogin = async (sites) => {
   return urls.length;
 };
 
+const getProfileSiteErrorCode = (site) => normalizeErrorCodeForDisplay(site?.error || '');
+
+const autoOpenExpiredTokenSitesForRelogin = async (sites, reason = 'unknown') => {
+  const targets = (Array.isArray(sites) ? sites : [])
+    .filter(site => getProfileSiteErrorCode(site) === 'TOKEN_EXPIRED' && !site?._profileReloginOpened);
+  if (!targets.length) return 0;
+
+  const openedCount = await openFailedSitesForManualLogin(targets);
+  if (openedCount > 0) {
+    targets.forEach(site => {
+      site._profileReloginOpened = true;
+    });
+    message.warning(`检测到 ${openedCount} 个站点 Token 已失效，已在本机浏览器打开对应页面，请重新登录后再继续读取。`, 6);
+    console.log(`[ProfileRelogin] auto open (${reason}) opened=${openedCount}`);
+  }
+  return openedCount;
+};
+
 const isAnyrouterSite = (site) => {
   const siteType = String(site?.site_type || site?.siteType || '').trim().toLowerCase();
   if (siteType === 'anyrouter') return true;
@@ -2391,6 +2491,16 @@ const isAnyrouterSite = (site) => {
   }
 };
 
+const getNormalizedUrlHost = (rawUrl) => {
+  const text = String(rawUrl || '').trim();
+  if (!text) return '';
+  try {
+    return String(new URL(text).hostname || '').toLowerCase();
+  } catch {
+    return '';
+  }
+};
+
 const getDesktopProfileProgressDirect = async () => {
   const getter = window?.go?.main?.App?.GetChromeProfileExtractProgress;
   if (typeof getter !== 'function') {
@@ -2402,7 +2512,7 @@ const getDesktopProfileProgressDirect = async () => {
 const openDesktopProfileAssistSites = async (sites) => {
   const payload = (Array.isArray(sites) ? sites : [])
     .map(site => ({
-      siteName: String(site?.site_name || site?.siteName || '').trim() || 'Anyrouter',
+      siteName: String(site?.site_name || site?.siteName || '').trim() || '站点',
       siteUrl: String(site?.site_url || site?.siteUrl || '').replace(/\/+$/, '').trim(),
       siteType: String(site?.site_type || site?.siteType || '').trim(),
     }))
@@ -2446,26 +2556,26 @@ const openDesktopProfileAssistSites = async (sites) => {
   };
 };
 
-const autoOpenAnyrouterProfileAssist = async (sites, reason = 'unknown') => {
+const autoOpenDesktopProfileAssist = async (sites, reason = 'unknown') => {
   const targets = (Array.isArray(sites) ? sites : [])
-    .filter(site => shouldUseAnyrouterProfileAssist(site) && !site?._profileAssistOpened);
+    .filter(site => shouldUseDesktopProfileAssist(site) && !site?._profileAssistOpened);
   if (!targets.length) return { opened: 0, results: [], errors: [] };
 
   const assistResult = await openDesktopProfileAssistSites(targets);
   if (Number(assistResult?.opened || 0) > 0) {
-    const openedUrlSet = new Set(
+    const openedHostSet = new Set(
       (assistResult?.results || [])
-        .map(item => String(item?.siteUrl || '').replace(/\/+$/, '').trim())
+        .map(item => getNormalizedUrlHost(item?.siteUrl || ''))
         .filter(Boolean)
     );
     targets.forEach(site => {
-      const siteUrl = String(site?.site_url || site?.siteUrl || '').replace(/\/+$/, '').trim();
-      if (openedUrlSet.has(siteUrl)) {
+      const siteHost = getNormalizedUrlHost(site?.site_url || site?.siteUrl || '');
+      if (siteHost && openedHostSet.has(siteHost)) {
         site._profileAssistOpened = true;
       }
     });
     const cookieTotal = (assistResult?.results || []).reduce((sum, item) => sum + Number(item?.injectedCookies || 0), 0);
-    message.info(`Anyrouter 已自动打开内置 WebView2 (${assistResult.opened} 个)，并尝试注入 ${cookieTotal} 个 Chrome cookie。`, 5);
+    message.info(`已自动打开内置 WebView2 (${assistResult.opened} 个站点)，并尝试注入 ${cookieTotal} 个 Chrome cookie。`, 5);
     console.log(`[ProfileAssist] auto open (${reason}) opened=${assistResult.opened} cookieTotal=${cookieTotal}`);
   }
   if (Array.isArray(assistResult?.errors) && assistResult.errors.length > 0) {
@@ -2539,7 +2649,7 @@ const confirmProfileFileLoginRecovery = async (sites) => {
     return { shouldRetry: false, openedCount: 0 };
   }
 
-  const desktopAssistSites = isWailsRuntime ? normalizedSites.filter(site => isAnyrouterSite(site) && !site?._profileAssistOpened) : [];
+  const desktopAssistSites = isWailsRuntime ? normalizedSites.filter(site => isDesktopProfileAssistSite(site) && !site?._profileAssistOpened) : [];
   const browserSites = normalizedSites.filter(site => !desktopAssistSites.includes(site));
 
   let desktopAssistOpened = 0;
@@ -2552,14 +2662,14 @@ const confirmProfileFileLoginRecovery = async (sites) => {
           (sum, item) => sum + Number(item?.injectedCookies || 0),
           0
         );
-        message.info(`已为 ${desktopAssistOpened} 个 Anyrouter 站点打开内置 WebView2，并尝试注入 ${cookieTotal} 个 Chrome cookie。`, 5);
+        message.info(`已为 ${desktopAssistOpened} 个站点打开内置 WebView2，并尝试注入 ${cookieTotal} 个 Chrome cookie。`, 5);
       }
       if (Array.isArray(assistResult?.errors) && assistResult.errors.length > 0) {
         console.warn('[ProfileAssist] desktop assist warnings:', assistResult.errors.join(' | '));
       }
     } catch (assistError) {
       console.warn('[ProfileAssist] open desktop profile assist failed:', assistError?.message || String(assistError));
-      message.warning(`Anyrouter 内置登录窗口打开失败，将回退到系统浏览器：${assistError?.message || String(assistError)}`, 5);
+      message.warning(`内置登录窗口打开失败，将回退到系统浏览器：${assistError?.message || String(assistError)}`, 5);
       browserSites.push(...desktopAssistSites);
       desktopAssistOpened = 0;
     }
@@ -2575,7 +2685,7 @@ const confirmProfileFileLoginRecovery = async (sites) => {
   const shouldRetry = await confirmWithModal({
     title: '站点已打开',
     content: desktopAssistOpened > 0
-      ? `已打开 ${openedCount} 个失败站点，其中 ${desktopAssistOpened} 个 Anyrouter 站点使用内置 WebView2 尝试继承 Chrome Default 的 cookie/localStorage。请先确认这些窗口是否已自动带出登录态；若未自动登录，直接在该窗口中手动登录并完成刷新后，再点击“重新读取 Profile 文件”。`
+      ? `已打开 ${openedCount} 个失败站点，其中 ${desktopAssistOpened} 个站点使用内置 WebView2 尝试继承 Chrome Default 的 cookie/localStorage。请先确认这些窗口是否已自动带出登录态；若未自动登录，直接在该窗口中手动登录并完成刷新后，再点击“重新读取 Profile 文件”。系统随后会最多尝试重新读取 3 轮。`
       : `已在默认浏览器打开 ${openedCount} 个失败站点。请先在这些页面手动登录并完成刷新，然后点击“重新读取 Profile 文件”。此模式不会拉起受控浏览器，也不会切到 CDP 模式。`,
     okText: '我已登录，重新读取',
     cancelText: '稍后处理',
@@ -3776,6 +3886,8 @@ const processAccountsV2 = async (accounts) => {
   const normalizeErrorCodeForDisplay = (rawError) => {
     const text = String(rawError || '').trim();
     if (!text) return 'UNKNOWN';
+    if (text === 'token_expired') return 'TOKEN_EXPIRED';
+    if (text === 'user_banned' || /封禁|banned/i.test(text)) return 'USER_BANNED';
     if (/^http_\d+$/i.test(text)) return text.toUpperCase();
     if (/^business_code_/i.test(text)) return text.toUpperCase();
     if (/^exception_/i.test(text)) return 'EXCEPTION';
@@ -3798,6 +3910,10 @@ const processAccountsV2 = async (accounts) => {
   const getCommonErrorHint = (rawError) => {
     const code = normalizeErrorCodeForDisplay(rawError);
     switch (code) {
+      case 'TOKEN_EXPIRED':
+        return '常见原因：当前保存的 access token 已失效。请在打开的站点页面重新登录，刷新登录态后再重试。';
+      case 'USER_BANNED':
+        return '常见原因：该站点账号已被封禁，接口仍可访问但业务返回 success=false。';
       case 'PROFILE_STORAGE_NOT_FOUND':
         return '常见原因：当前 Chrome Default Profile 未找到该站点登录态，或登录信息存放在 Cookie/SessionStorage/其他域名。';
       case 'PROFILE_TOKEN_NOT_FOUND':
@@ -4342,12 +4458,17 @@ const processAccountsV2 = async (accounts) => {
       }
     }
 
-    let stillFailedAccounts = extractedSites.filter(site => isSiteFailed(site) || shouldUseAnyrouterProfileAssist(site));
+    let stillFailedAccounts = extractedSites.filter(site => isSiteFailed(site) || shouldUseDesktopProfileAssist(site));
     if (isWailsRuntime && extractionMode === 'profile_file') {
       try {
-        await autoOpenAnyrouterProfileAssist(stillFailedAccounts, 'initial-extract');
+        await autoOpenDesktopProfileAssist(stillFailedAccounts, 'initial-extract');
       } catch (assistError) {
         console.warn('[ProfileAssist] initial auto open failed:', assistError?.message || String(assistError));
+      }
+      try {
+        await autoOpenExpiredTokenSitesForRelogin(stillFailedAccounts, 'initial-extract');
+      } catch (reloginError) {
+        console.warn('[ProfileRelogin] initial auto open failed:', reloginError?.message || String(reloginError));
       }
     }
     updateBrowserSessionPendingSites(stillFailedAccounts);
@@ -4377,32 +4498,58 @@ const processAccountsV2 = async (accounts) => {
             return;
           }
 
-          message.loading({
-            key: profileRetryMessageKey,
-            content: '正在重新读取 Chrome Profile 文件...',
-            duration: 0,
-          });
+          const maxProfileRetryRounds = 3;
+          let totalMergeStats = {
+            mergedSites: 0,
+            recoveredSites: 0,
+            gainedTokens: 0,
+            gainedUsableTokens: 0,
+          };
 
-          const retryResponse = await extractChromeProfileTokens(stillFailedAccounts);
-          if (Array.isArray(retryResponse?.warnings) && retryResponse.warnings.length > 0) {
-            console.warn('[FetchKeys] Chrome Profile retry warnings:', retryResponse.warnings.join(' | '));
+          for (let round = 1; round <= maxProfileRetryRounds && stillFailedAccounts.length > 0; round += 1) {
+            message.loading({
+              key: profileRetryMessageKey,
+              content: `正在重新读取 Chrome Profile 文件（第 ${round}/${maxProfileRetryRounds} 轮）...`,
+              duration: 0,
+            });
+
+            const retryResponse = await extractChromeProfileTokens(stillFailedAccounts);
+            if (Array.isArray(retryResponse?.warnings) && retryResponse.warnings.length > 0) {
+              console.warn('[FetchKeys] Chrome Profile retry warnings:', retryResponse.warnings.join(' | '));
+            }
+
+            const retrySites = mergeChromeProfileExtractedSites(stillFailedAccounts, retryResponse);
+            const mergeStats = mergeExtractedSiteResults(extractedSites, retrySites);
+            totalMergeStats = {
+              mergedSites: totalMergeStats.mergedSites + mergeStats.mergedSites,
+              recoveredSites: totalMergeStats.recoveredSites + mergeStats.recoveredSites,
+              gainedTokens: totalMergeStats.gainedTokens + mergeStats.gainedTokens,
+              gainedUsableTokens: totalMergeStats.gainedUsableTokens + mergeStats.gainedUsableTokens,
+            };
+            validAccounts.value = extractedSites;
+            preloadAllQuotas(extractedSites);
+
+            stillFailedAccounts = extractedSites.filter(site => isSiteFailed(site) || shouldUseDesktopProfileAssist(site));
+            try {
+              await autoOpenDesktopProfileAssist(stillFailedAccounts, `profile-retry-${round}`);
+            } catch (assistError) {
+              console.warn('[ProfileAssist] retry auto open failed:', assistError?.message || String(assistError));
+            }
+            try {
+              await autoOpenExpiredTokenSitesForRelogin(stillFailedAccounts, `profile-retry-${round}`);
+            } catch (reloginError) {
+              console.warn('[ProfileRelogin] retry auto open failed:', reloginError?.message || String(reloginError));
+            }
+            summarizeStage(`Profile 文件模式手动登录后重试 round=${round}`, extractedSites, stillFailedAccounts);
+            console.log(`[FetchKeys] Profile 文件模式重试合并 round=${round}: mergedSites=${mergeStats.mergedSites}, recoveredSites=${mergeStats.recoveredSites}, gainedTokens=${mergeStats.gainedTokens}, gainedUsableTokens=${mergeStats.gainedUsableTokens}`);
+
+            if (stillFailedAccounts.length === 0) break;
+            if (round < maxProfileRetryRounds) {
+              await sleep(3000);
+            }
           }
 
-          const retrySites = mergeChromeProfileExtractedSites(stillFailedAccounts, retryResponse);
-          const mergeStats = mergeExtractedSiteResults(extractedSites, retrySites);
-          validAccounts.value = extractedSites;
-          preloadAllQuotas(extractedSites);
-
-          stillFailedAccounts = extractedSites.filter(site => isSiteFailed(site) || shouldUseAnyrouterProfileAssist(site));
-          try {
-            await autoOpenAnyrouterProfileAssist(stillFailedAccounts, 'profile-retry');
-          } catch (assistError) {
-            console.warn('[ProfileAssist] retry auto open failed:', assistError?.message || String(assistError));
-          }
-          summarizeStage('Profile 文件模式手动登录后重试', extractedSites, stillFailedAccounts);
-          console.log(`[FetchKeys] Profile 文件模式重试合并: mergedSites=${mergeStats.mergedSites}, recoveredSites=${mergeStats.recoveredSites}, gainedTokens=${mergeStats.gainedTokens}, gainedUsableTokens=${mergeStats.gainedUsableTokens}`);
-
-          if (mergeStats.gainedUsableTokens > 0) {
+          if (totalMergeStats.gainedUsableTokens > 0) {
             void requestDiscoveryRefresh('profile-file-manual-retry');
           }
 
@@ -4564,7 +4711,7 @@ const processAccountsV2 = async (accounts) => {
               validAccounts.value = extractedSites;
               preloadAllQuotas(extractedSites);
 
-              stillFailedAccounts = extractedSites.filter(site => isSiteFailed(site) || shouldUseAnyrouterProfileAssist(site));
+              stillFailedAccounts = extractedSites.filter(site => isSiteFailed(site) || shouldUseDesktopProfileAssist(site));
               browserSessionPolling.pending = stillFailedAccounts.length;
               updateBrowserSessionPendingSites(stillFailedAccounts);
               refreshTreePendingHints();
@@ -4834,6 +4981,12 @@ function syncDetectedKeysToLocalStorage(options = {}) {
         lastBatchFailedCount: records.filter(item => item.status !== 1).length,
       })
     );
+    window.dispatchEvent(new CustomEvent(KEY_MANAGEMENT_SYNC_EVENT, {
+      detail: {
+        recordsCount: records.length,
+        syncedAt: Date.now(),
+      },
+    }));
 
     if (!silent) {
       message.success(`已同步 ${records.length} 条 sk 密钥到本地存储`);
@@ -4910,7 +5063,7 @@ const runSingleTest = async (task, customPayload = null) => {
   const apiUrlValue = customPayload ? customPayload.url.replace(/\/+$/, '') : task.siteUrl.replace(/\/+$/, '');
   const modelToTest = customPayload ? customPayload.model : task.modelName;
   const keyToUse = customPayload ? customPayload.key : task.apiKey;
-  const messagesToUse = customPayload ? customPayload.messages : [{ role: 'user', content: 'hello' }];
+  const messagesToUse = customPayload ? customPayload.messages : buildQuickTestMessages();
 
   let backendTimeoutMs = modelTimeout.value * 1000;
   if (modelToTest.startsWith('o1-')) {
@@ -5197,6 +5350,12 @@ const copyOrganizedResults = () => {
   font-weight: 700;
   line-height: 1.2;
   white-space: nowrap;
+  color: #ffffff;
+}
+
+.batch-settings-label {
+  font-size: 14px;
+  color: #ffffff;
 }
 
 .selection-quick-filters {
@@ -5327,45 +5486,120 @@ const copyOrganizedResults = () => {
 }
 
 .extension-import-status-line {
-  margin-top: 10px;
-  min-height: 24px;
+  margin-top: 8px;
+  min-height: 18px;
+  text-align: left;
 }
 
 .loading-stage-status-line {
-  margin-top: 12px;
-  min-height: 24px;
+  margin-top: 8px;
+  min-height: 18px;
+}
+
+.batch-hero {
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 6px;
+  padding: 10px 12px 10px;
+  border-radius: 18px;
+  border: 1px solid rgba(90, 117, 79, 0.1);
+  background:
+    radial-gradient(circle at top right, rgba(255, 231, 161, 0.38), transparent 36%),
+    radial-gradient(circle at left center, rgba(204, 228, 184, 0.34), transparent 32%),
+    linear-gradient(145deg, rgba(255, 252, 244, 0.95), rgba(244, 249, 236, 0.9));
+  box-shadow:
+    0 36px 90px rgba(98, 119, 84, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.84);
+}
+
+.batch-hero-compact {
+  padding-bottom: 12px;
+}
+
+.batch-hero-head {
+  position: relative;
+  z-index: 1;
+}
+
+.batch-hero-copy {
+  max-width: 100%;
+}
+
+.batch-hero-kicker {
+  margin: 0 0 4px;
+  color: #8a936f;
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.batch-hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.batch-hero-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(90, 117, 79, 0.08);
+  color: #6e7c64;
+  font-size: 9px;
+  font-weight: 600;
 }
 
 .page-title-row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 12px;
-  margin-bottom: 20px;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 0;
   flex-wrap: wrap;
+}
+
+.page-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
 .page-title {
   margin: 0;
-  text-align: center;
+  text-align: left;
+  color: #31422f;
+  font: 700 clamp(20px, 2.4vw, 30px)/1 Georgia, 'Times New Roman', serif;
+  letter-spacing: -0.03em;
+}
+
+.page-subtitle {
+  margin: 0;
+  color: #72806c;
+  font-size: 10px;
+  line-height: 1.2;
 }
 
 .backend-health-pill {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 14px;
+  gap: 6px;
+  padding: 6px 10px;
   border-radius: 999px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  background: rgba(255, 255, 255, 0.92);
-  color: #334155;
-  font-size: 13px;
+  border: 1px solid rgba(90, 117, 79, 0.1);
+  background: rgba(255, 255, 255, 0.72);
+  color: #405240;
+  font-size: 10px;
   cursor: help;
+  box-shadow: 0 10px 22px rgba(98, 119, 84, 0.08);
 }
 
 .backend-health-dot {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
   background: #faad14;
   box-shadow: 0 0 0 4px rgba(250, 173, 20, 0.16);
@@ -5385,113 +5619,510 @@ const copyOrganizedResults = () => {
   font-weight: 600;
 }
 
-.header {
-  display: flex !important;
-  flex-direction: row !important;
-  flex-wrap: nowrap !important;
-  justify-content: flex-end !important;
-  align-items: center;
-  margin-bottom: 30px;
-  padding: 10px 20px;
-}
-
-#themeToggle {
-  margin-right: 25px; /* 增加与右侧图标组的间距 */
-  flex-shrink: 0;
-}
-
-.right-icons {
-  display: flex;
-  flex-wrap: nowrap !important;
-  gap: 22px; /* 进一步增加图标间距 */
-  align-items: center;
-  flex-shrink: 0;
-}
-
-.icon-button {
-  font-size: 24px; /* 进一步放大图标至 24px */
-  color: #666;
-  transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 8px;
-  cursor: pointer;
-}
-
-.dark-mode .icon-button {
-  color: #aaa;
-}
-
-.icon-button:hover {
-  color: #1677ff;
-  transform: scale(1.15);
-}
-
-.dark-mode .icon-button:hover {
-  color: #40a9ff;
-}
-
 .batch-wrapper {
-  min-height: 100vh;
+  min-height: calc(var(--vh, 1vh) * 100);
   padding: 0;
+  overflow: hidden;
 }
 /* 覆盖 global.css 里 .container 的 max-width: 800px 限制 */
-.container {
+.batch-page-container {
   max-width: 100% !important;
-  padding: 20px !important;
-  margin: 0 !important;
+  padding: 8px 8px 0 !important;
+  margin: 0 auto !important;
 }
-.page-content {
-  background-color: var(--container-bg);
+
+.batch-shell {
+  width: 100%;
+  min-height: calc(var(--vh, 1vh) * 100);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.batch-forest-scene {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(circle at 16% 18%, rgba(164, 213, 120, 0.14), transparent 24%),
+    radial-gradient(circle at 84% 14%, rgba(255, 213, 116, 0.14), transparent 22%),
+    linear-gradient(180deg, rgba(8, 18, 12, 0.14) 0%, rgba(8, 20, 13, 0.34) 42%, rgba(6, 16, 10, 0.62) 100%),
+    url('/forest-batch-bg-v2.png') center center / cover no-repeat;
+  opacity: 0.96;
+  animation: forestBackdropShift 26s ease-in-out infinite;
+}
+
+.batch-forest-scene > * {
+  display: block;
+}
+
+.forest-mist,
+.forest-path-glow,
+.forest-firegrass,
+.forest-slime {
+  position: absolute;
+}
+
+.forest-mist {
+  top: 8%;
+  width: 34%;
+  height: 44%;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(210, 255, 232, 0.12) 0%, rgba(210, 255, 232, 0.02) 56%, transparent 74%);
+  filter: blur(22px);
+  animation: forestMistDrift 18s ease-in-out infinite;
+}
+
+.forest-mist-left {
+  left: -10%;
+}
+
+.forest-mist-right {
+  right: -8%;
+  top: 12%;
+  animation-delay: -8s;
+}
+
+.forest-path-glow {
+  left: 50%;
+  bottom: -12%;
+  width: min(460px, 42vw);
+  height: 42%;
+  transform: translateX(-50%);
+  background:
+    radial-gradient(ellipse at center bottom, rgba(255, 214, 126, 0.22) 0%, rgba(212, 255, 182, 0.12) 24%, rgba(30, 58, 33, 0) 72%);
+  clip-path: polygon(47% 100%, 53% 100%, 65% 76%, 60% 56%, 67% 33%, 57% 0, 43% 0, 33% 33%, 40% 56%, 35% 76%);
+  filter: blur(12px);
+  opacity: 0.9;
+}
+
+.forest-firegrass {
+  bottom: -4px;
+  width: 188px;
+  height: 122px;
+  background: url('/forest-firegrass-sprite-v2.png') left bottom / auto 100% no-repeat;
+  filter: drop-shadow(0 8px 18px rgba(18, 38, 22, 0.24)) drop-shadow(0 0 16px rgba(255, 191, 97, 0.14));
+  opacity: 0.98;
+  animation: firegrassFrames 1.1s steps(8) infinite, firegrassDrift 5.8s ease-in-out infinite;
+}
+
+.firegrass-left {
+  left: 8px;
+}
+
+.firegrass-right {
+  right: 8px;
+  transform: scaleX(-1);
+  transform-origin: center bottom;
+  animation-delay: 0s, -2.8s;
+}
+
+.forest-slime {
+  bottom: 26px;
+  width: 26px;
+  height: 22px;
+  border-radius: 58% 58% 46% 46%;
+  background:
+    radial-gradient(circle at 36% 36%, rgba(255,255,255,0.9) 0 10%, transparent 11%),
+    radial-gradient(circle at 64% 36%, rgba(255,255,255,0.9) 0 10%, transparent 11%),
+    radial-gradient(circle at 40% 40%, rgba(20,34,21,0.86) 0 3%, transparent 4%),
+    radial-gradient(circle at 60% 40%, rgba(20,34,21,0.86) 0 3%, transparent 4%),
+    radial-gradient(circle at 50% 72%, rgba(18,72,42,0.44) 0 14%, transparent 15%),
+    linear-gradient(180deg, rgba(177, 255, 149, 0.98), rgba(70, 177, 88, 0.94));
+  box-shadow:
+    inset 0 2px 0 rgba(255,255,255,0.45),
+    0 10px 16px rgba(14, 38, 18, 0.24),
+    0 0 10px rgba(154, 255, 142, 0.18);
+}
+
+.forest-slime::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -4px;
+  width: 18px;
+  height: 7px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(28, 48, 30, 0.26);
+  filter: blur(2px);
+}
+
+.slime-a {
+  left: 44%;
+  animation: slimeHopA 6s ease-in-out infinite;
+}
+
+.slime-b {
+  left: 51%;
+  width: 20px;
+  height: 17px;
+  animation: slimeHopB 7s ease-in-out infinite;
+}
+
+.slime-c {
+  left: 57%;
+  width: 18px;
+  height: 15px;
+  animation: slimeHopC 8.2s ease-in-out infinite;
+}
+
+.batch-page-content {
+  background: transparent;
   border-radius: 0;
-  box-shadow: var(--shadow-color);
-  padding: 20px;
-  min-height: 100vh;
+  box-shadow: none;
+  padding: 2px;
+  min-height: calc(var(--vh, 1vh) * 100);
+  position: relative;
+  z-index: 1;
 }
 
 .step-container {
-  margin-top: 20px;
+  margin-top: 6px;
 }
+
+.step-container-hero {
+  position: relative;
+  z-index: 1;
+  margin-top: 4px;
+}
+
+.hero-stage-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.18fr) minmax(218px, 0.62fr);
+  gap: 6px;
+  align-items: start;
+}
+
+.hero-left-stack {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.hero-action-card,
+.hero-upload-card {
+  padding: 9px 10px;
+  border-radius: 16px;
+  border: 1px solid rgba(90, 117, 79, 0.08);
+  background: rgba(255, 255, 255, 0.56);
+  box-shadow:
+    0 8px 18px rgba(98, 119, 84, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.hero-action-card-primary {
+  background:
+    linear-gradient(145deg, rgba(235, 244, 212, 0.96), rgba(222, 236, 196, 0.88));
+}
+
+.hero-action-card-large {
+  min-height: 102px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.hero-action-card-secondary {
+  background:
+    linear-gradient(145deg, rgba(255, 253, 248, 0.92), rgba(246, 249, 238, 0.86));
+}
+
+.hero-action-card-compact {
+  min-height: 48px;
+}
+
+.hero-action-copy,
+.hero-upload-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-bottom: 4px;
+}
+
+.hero-action-card h3,
+.hero-upload-copy h3 {
+  margin: 0;
+  color: #314230;
+  font: 700 13px/1.12 Georgia, 'Times New Roman', serif;
+}
+
+.hero-action-card p,
+.hero-upload-copy p,
+.hero-action-note {
+  margin: 0;
+  color: #697766;
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.hero-primary-inline {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.hero-primary-button {
+  min-width: 176px;
+  height: 34px;
+  border-radius: 999px;
+  border: 0 !important;
+  background: linear-gradient(135deg, #476847, #6f8f55) !important;
+  box-shadow: 0 8px 16px rgba(87, 118, 76, 0.2) !important;
+}
+
+.hero-secondary-button {
+  min-height: 30px;
+  border-radius: 999px;
+  border-color: rgba(90, 117, 79, 0.18) !important;
+  color: #405240 !important;
+  background: rgba(255, 255, 255, 0.78) !important;
+}
+
+.hero-upload-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 156px;
+  padding: 9px 10px;
+}
+
+.hero-upload-dragger {
+  margin-top: 2px;
+}
+
+.hero-upload-dragger :deep(.ant-upload.ant-upload-drag) {
+  border-radius: 12px;
+  border: 1px dashed rgba(90, 117, 79, 0.24);
+  background: rgba(255, 255, 255, 0.78);
+  min-height: 96px;
+  padding: 10px 8px;
+}
+
+.hero-upload-dragger :deep(.ant-upload.ant-upload-drag:hover) {
+  border-color: rgba(90, 117, 79, 0.42);
+}
+
+.hero-upload-dragger :deep(.ant-upload-text) {
+  color: #314230;
+  font-weight: 700;
+  font-size: 10px;
+}
+
+.hero-upload-dragger :deep(.ant-upload-hint) {
+  color: #7b8776;
+  font-size: 9px;
+}
+
 .loading-container {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 50px 0;
+  padding: 28px 0;
+  border-radius: 30px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(90, 117, 79, 0.08);
 }
 .tree-wrapper {
-  background: var(--input-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(90, 117, 79, 0.12);
+  border-radius: 20px;
+  padding: 14px;
   margin-bottom: 20px;
   max-height: 420px;
   overflow-y: auto;
+  box-shadow: 0 16px 36px rgba(98, 119, 84, 0.08);
 }
 .settings-action-bar {
   display: flex;
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
-  border-top: 1px solid var(--border-color);
+  border-top: 1px solid rgba(90, 117, 79, 0.12);
   padding-top: 15px;
 }
 .result-container {
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 15px;
-  background-color: var(--input-bg);
+  border: 1px solid rgba(90, 117, 79, 0.12);
+  border-radius: 24px;
+  padding: 18px;
+  background-color: rgba(255, 255, 255, 0.74);
+  box-shadow: 0 20px 48px rgba(98, 119, 84, 0.08);
 }
 
 /* Organized Tree Styles */
 .organized-tree-wrapper {
-  background: var(--container-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 10px;
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(90, 117, 79, 0.12);
+  border-radius: 20px;
+  padding: 12px;
   max-height: 500px;
   overflow-y: auto;
+}
+
+.batch-hero-motion {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.leaf,
+.grass {
+  position: absolute;
+  opacity: 0.42;
+}
+
+.leaf {
+  width: 10px;
+  height: 20px;
+  border-radius: 70% 0 70% 0;
+  background: linear-gradient(180deg, rgba(170, 202, 127, 0.7), rgba(96, 131, 75, 0.42));
+  filter: blur(0.2px);
+  transform-origin: center bottom;
+  animation: leafFloat 8s ease-in-out infinite;
+}
+
+.leaf-a { top: 24%; right: 18%; animation-delay: 0s; }
+.leaf-b { top: 42%; right: 8%; width: 9px; height: 18px; animation-delay: 1.4s; }
+.leaf-c { bottom: 28%; left: 9%; width: 10px; height: 20px; animation-delay: 2.1s; }
+.leaf-d { bottom: 18%; right: 28%; width: 8px; height: 14px; animation-delay: 3.2s; }
+
+.grass {
+  bottom: -10px;
+  width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(121, 157, 96, 0), rgba(121, 157, 96, 0.58));
+  transform-origin: bottom center;
+  animation: grassSway 5s ease-in-out infinite;
+}
+
+.grass-a { left: 8%; height: 38px; animation-delay: 0s; }
+.grass-b { left: 11%; height: 30px; animation-delay: 1.2s; }
+.grass-c { right: 12%; height: 34px; animation-delay: 2.4s; }
+
+@keyframes leafFloat {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(-8deg); }
+  50% { transform: translate3d(0, -8px, 0) rotate(8deg); }
+}
+
+@keyframes grassSway {
+  0%, 100% { transform: rotate(-7deg) scaleY(1); }
+  50% { transform: rotate(7deg) scaleY(1.04); }
+}
+
+@keyframes firegrassFrames {
+  from { background-position-x: 0; }
+  to { background-position-x: -1504px; }
+}
+
+@keyframes firegrassDrift {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(0, -2px, 0); }
+}
+
+@keyframes forestMistDrift {
+  0%, 100% { transform: translate3d(0, 0, 0); opacity: 0.45; }
+  50% { transform: translate3d(18px, -6px, 0); opacity: 0.7; }
+}
+
+@keyframes slimeHopA {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  20% { transform: translate3d(8px, -3px, 0) scale(1.02, 0.94); }
+  32% { transform: translate3d(22px, -14px, 0) scale(0.96, 1.06); }
+  48% { transform: translate3d(34px, 0, 0) scale(1.02, 0.94); }
+  68% { transform: translate3d(18px, -8px, 0) scale(0.98, 1.02); }
+}
+
+@keyframes slimeHopB {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  18% { transform: translate3d(-6px, -2px, 0) scale(1.03, 0.92); }
+  34% { transform: translate3d(-18px, -10px, 0) scale(0.95, 1.08); }
+  52% { transform: translate3d(-28px, 0, 0) scale(1.02, 0.94); }
+  72% { transform: translate3d(-16px, -6px, 0) scale(0.98, 1.02); }
+}
+
+@keyframes slimeHopC {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  24% { transform: translate3d(5px, -2px, 0) scale(1.02, 0.94); }
+  38% { transform: translate3d(14px, -8px, 0) scale(0.96, 1.08); }
+  56% { transform: translate3d(22px, 0, 0) scale(1.02, 0.96); }
+  76% { transform: translate3d(12px, -5px, 0) scale(0.98, 1.02); }
+}
+
+@keyframes forestBackdropShift {
+  0%, 100% { background-position: center center, center center, center center, center center; }
+  50% { background-position: 48% 50%, 52% 50%, center center, 50.8% 49.4%; }
+}
+
+:deep(body.dark-mode) .batch-hero {
+  border-color: rgba(160, 189, 144, 0.12);
+  background:
+    radial-gradient(circle at top right, rgba(179, 147, 67, 0.24), transparent 34%),
+    radial-gradient(circle at left center, rgba(104, 149, 88, 0.2), transparent 34%),
+    linear-gradient(145deg, rgba(24, 38, 27, 0.95), rgba(35, 53, 39, 0.92));
+  box-shadow:
+    0 34px 90px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+:deep(body.dark-mode) .batch-forest-scene {
+  background:
+    radial-gradient(circle at 18% 18%, rgba(92, 161, 113, 0.14), transparent 24%),
+    radial-gradient(circle at 82% 15%, rgba(255, 206, 104, 0.1), transparent 22%),
+    linear-gradient(180deg, rgba(4, 10, 7, 0.42) 0%, rgba(4, 10, 7, 0.62) 42%, rgba(2, 6, 4, 0.86) 100%),
+    url('/forest-batch-bg-v2.png') center center / cover no-repeat;
+}
+
+:deep(body.dark-mode) .page-title,
+:deep(body.dark-mode) .hero-action-card h3,
+:deep(body.dark-mode) .hero-upload-copy h3 {
+  color: #eef5e6;
+}
+
+:deep(body.dark-mode) .page-subtitle,
+:deep(body.dark-mode) .hero-action-card p,
+:deep(body.dark-mode) .hero-upload-copy p,
+:deep(body.dark-mode) .hero-action-note,
+:deep(body.dark-mode) .backend-health-pill,
+:deep(body.dark-mode) .batch-hero-tag {
+  color: #b8c8b2;
+}
+
+:deep(body.dark-mode) .batch-hero-tag,
+:deep(body.dark-mode) .hero-action-card,
+:deep(body.dark-mode) .hero-upload-card,
+:deep(body.dark-mode) .loading-container,
+:deep(body.dark-mode) .tree-wrapper,
+:deep(body.dark-mode) .result-container,
+:deep(body.dark-mode) .organized-tree-wrapper {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(160, 189, 144, 0.12);
+}
+
+:deep(body.dark-mode) .hero-action-card-primary {
+  background:
+    linear-gradient(145deg, rgba(74, 102, 64, 0.44), rgba(53, 76, 48, 0.4));
+}
+
+:deep(body.dark-mode) .hero-action-card-secondary {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.06), rgba(160, 189, 144, 0.06));
+}
+
+:deep(body.dark-mode) .hero-upload-dragger :deep(.ant-upload.ant-upload-drag) {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(160, 189, 144, 0.2);
+}
+
+:deep(body.dark-mode) .hero-upload-dragger :deep(.ant-upload-text) {
+  color: #eef5e6;
+}
+
+:deep(body.dark-mode) .hero-upload-dragger :deep(.ant-upload-hint) {
+  color: #aab7a6;
 }
 
 .custom-tree-node {
@@ -5628,7 +6259,34 @@ const copyOrganizedResults = () => {
   text-shadow: 0 0 8px rgba(0, 123, 255, 0.4);
 }
 
-@media (max-width: 900px) {
+@media (max-width: 620px) {
+  .batch-hero {
+    padding: 12px 10px;
+  }
+
+  .page-title-row {
+    gap: 14px;
+  }
+
+  .hero-stage-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hero-action-card-large,
+  .hero-action-card-compact {
+    min-height: unset;
+  }
+
+  .forest-firegrass {
+    width: 136px;
+    height: 88px;
+  }
+
+  .hero-primary-button {
+    min-width: 0;
+    width: 100%;
+  }
+
   .result-topbar {
     grid-template-columns: minmax(0, 1fr);
   }

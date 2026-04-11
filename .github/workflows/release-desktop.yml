@@ -1,0 +1,155 @@
+name: Release Desktop
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v1.0.0"
+        required: true
+        type: string
+      prerelease:
+        description: "Publish as prerelease"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+  WAILS_VERSION: v2.12.0
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows EXE
+            os: windows-latest
+            platform: windows/amd64
+            artifact_name: batch-api-check-windows-amd64
+            release_file: batch-api-check-windows-amd64.exe
+            wails_output: batch-api-check-windows-amd64.exe
+          - label: macOS DMG
+            os: macos-latest
+            platform: darwin/universal
+            artifact_name: batch-api-check-macos-universal
+            release_file: batch-api-check-macos-universal.dmg
+            wails_output: batch-api-check-macos-universal
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        shell: pwsh
+
+      - name: Install Wails CLI
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@${env:WAILS_VERSION}
+          $gopath = go env GOPATH
+          "$gopath/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: pwsh
+
+      - name: Build Windows desktop binary
+        if: runner.os == 'Windows'
+        run: |
+          npm run build:desktop -- --platform ${{ matrix.platform }} -o ${{ matrix.wails_output }}
+          New-Item -ItemType Directory -Path release-assets -Force | Out-Null
+          Copy-Item "build/bin/${{ matrix.release_file }}" "release-assets/${{ matrix.release_file }}"
+        shell: pwsh
+
+      - name: Build macOS app bundle and package DMG
+        if: runner.os == 'macOS'
+        run: |
+          npm run build:desktop -- --platform ${{ matrix.platform }} -o ${{ matrix.wails_output }}
+          $app = Get-ChildItem "build/bin" -Filter "*.app" | Where-Object { $_.BaseName -eq "${{ matrix.wails_output }}" } | Select-Object -First 1
+          if (-not $app) {
+            $app = Get-ChildItem "build/bin" -Filter "*.app" | Select-Object -First 1
+          }
+          if (-not $app) {
+            throw "No macOS .app bundle found in build/bin"
+          }
+          New-Item -ItemType Directory -Path release-assets -Force | Out-Null
+          hdiutil create -volname $app.BaseName -srcfolder $app.FullName -ov -format UDZO "release-assets/${{ matrix.release_file }}"
+        shell: pwsh
+
+      - name: Upload platform artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: release-assets/${{ matrix.release_file }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=${{ inputs.prerelease }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+        shell: bash
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+        run: |
+          shopt -s nullglob
+          files=(release-assets/*)
+
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No release assets were downloaded." >&2
+            exit 1
+          fi
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+            exit 0
+          fi
+
+          args=(gh release create "$RELEASE_TAG" "${files[@]}" --title "$RELEASE_TAG" --generate-notes --target "$GITHUB_SHA")
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          "${args[@]}"
+        shell: bash

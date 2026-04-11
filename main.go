@@ -3,33 +3,85 @@ package main
 import (
 	"embed"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 )
 
 //go:embed all:dist
 var assets embed.FS
 
-func main() {
-	app := NewApp()
+type launchMode string
 
-	err := wails.Run(&options.App{
-		Title:            "Batch API Check",
-		Width:            1480,
-		Height:           960,
-		MinWidth:         1200,
-		MinHeight:        760,
-		BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 1},
+const (
+	launchModeMain          launchMode = "main"
+	launchModePanel         launchMode = "panel"
+	launchModeEditor        launchMode = "editor"
+	launchModeDesktopConfig launchMode = "desktop-config"
+)
+
+func main() {
+	enableProcessDPIAwareness()
+	mode, recordKey := resolveLaunchContext(os.Args[1:])
+	app := NewApp(mode, recordKey)
+
+	err := wails.Run(buildAppOptions(app, mode))
+
+	if err != nil {
+		println("Error:", err.Error())
+	}
+}
+
+func resolveLaunchContext(args []string) (launchMode, string) {
+	mode := launchModeMain
+	recordKey := ""
+	for index := 0; index < len(args); index += 1 {
+		arg := strings.TrimSpace(args[index])
+		if strings.EqualFold(arg, "--panel") {
+			mode = launchModePanel
+			continue
+		}
+		if strings.EqualFold(arg, "--editor") {
+			mode = launchModeEditor
+			continue
+		}
+		if strings.EqualFold(arg, "--desktop-config") {
+			mode = launchModeDesktopConfig
+			continue
+		}
+		if strings.EqualFold(arg, "--row-key") && index+1 < len(args) {
+			recordKey = args[index+1]
+			index += 1
+		}
+	}
+	return mode, recordKey
+}
+
+func buildAppOptions(app *App, mode launchMode) *options.App {
+	mainWidth, mainHeight, mainMinWidth, mainMinHeight := resolveMainWindowSize()
+	appOptions := &options.App{
+		Title:             "Batch API Check",
+		Width:             mainWidth,
+		Height:            mainHeight,
+		MinWidth:          mainMinWidth,
+		MinHeight:         mainMinHeight,
+		HideWindowOnClose: true,
+		BackgroundColour:  &options.RGBA{R: 255, G: 255, B: 255, A: 1},
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		Windows:       buildWindowsOptions(),
+		Windows:       buildWindowsOptions(mode),
+		Mac:           buildMacOptions(mode),
+		Linux:         buildLinuxOptions(mode),
 		OnStartup:     app.startup,
 		OnDomReady:    app.domReady,
 		OnBeforeClose: app.beforeClose,
@@ -37,17 +89,99 @@ func main() {
 		Bind: []interface{}{
 			app,
 		},
-	})
+	}
 
-	if err != nil {
-		println("Error:", err.Error())
+	if mode == launchModePanel {
+		appOptions.Title = "Batch API Check Panel"
+		appOptions.Width = 520
+		appOptions.Height = 780
+		appOptions.MinWidth = 192
+		appOptions.MaxWidth = 680
+		appOptions.MinHeight = 560
+		appOptions.DisableResize = true
+		appOptions.Frameless = true
+		appOptions.AlwaysOnTop = true
+		appOptions.HideWindowOnClose = false
+		appOptions.StartHidden = true
+		appOptions.BackgroundColour = &options.RGBA{R: 0, G: 0, B: 0, A: 0}
+	}
+	if mode == launchModeEditor {
+		appOptions.Title = "Key Editor"
+		appOptions.Width = 580
+		appOptions.Height = 760
+		appOptions.MinWidth = 520
+		appOptions.MinHeight = 680
+		appOptions.HideWindowOnClose = false
+		appOptions.AlwaysOnTop = true
+	}
+	if mode == launchModeDesktopConfig {
+		appOptions.Title = "Desktop Config"
+		appOptions.Width = 1180
+		appOptions.Height = 860
+		appOptions.MinWidth = 980
+		appOptions.MinHeight = 720
+		appOptions.HideWindowOnClose = false
+		appOptions.AlwaysOnTop = true
+	}
+
+	return appOptions
+}
+
+func resolveMainWindowSize() (width int, height int, minWidth int, minHeight int) {
+	width = 760
+	height = 460
+	minWidth = 720
+	minHeight = 460
+
+	workArea, err := getDesktopWorkArea()
+	if err != nil || workArea.Width() <= 0 || workArea.Height() <= 0 {
+		return
+	}
+
+	width = clampWindowSize(int(float64(workArea.Width())*0.35), minWidth, 860)
+	height = clampWindowSize(int(float64(workArea.Height())*0.42), minHeight, 560)
+	return
+}
+
+func clampWindowSize(value int, min int, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func buildWindowsOptions(mode launchMode) *windows.Options {
+	windowOptions := &windows.Options{
+		WebviewUserDataPath: resolveWebviewUserDataPath(),
+		WindowClassName:     "BatchApiCheckWindow",
+	}
+	if mode == launchModePanel {
+		windowOptions.WebviewIsTransparent = true
+		windowOptions.WindowIsTranslucent = true
+		windowOptions.DisableFramelessWindowDecorations = true
+	}
+	return windowOptions
+}
+
+func buildMacOptions(mode launchMode) *mac.Options {
+	if mode != launchModePanel {
+		return nil
+	}
+	return &mac.Options{
+		WebviewIsTransparent: true,
+		WindowIsTranslucent:  true,
 	}
 }
 
-func buildWindowsOptions() *windows.Options {
-	return &windows.Options{
-		WebviewUserDataPath: resolveWebviewUserDataPath(),
-		WindowClassName:     "BatchApiCheckWindow",
+func buildLinuxOptions(mode launchMode) *linux.Options {
+	if mode != launchModePanel {
+		return &linux.Options{}
+	}
+	return &linux.Options{
+		WindowIsTranslucent: true,
 	}
 }
 
@@ -77,7 +211,55 @@ func resolveWebviewUserDataPath() string {
 	if err := os.MkdirAll(webviewRoot, 0o755); err != nil {
 		return ""
 	}
+	cleanupStaleWebviewLocks(webviewRoot)
 	return webviewRoot
+}
+
+func cleanupStaleWebviewLocks(webviewRoot string) {
+	if runtime.GOOS == "windows" && hasAnotherBatchApiCheckProcess() {
+		return
+	}
+
+	lockPaths := []string{
+		filepath.Join(webviewRoot, "Default", "LOCK"),
+		filepath.Join(webviewRoot, "LOCK"),
+		filepath.Join(webviewRoot, "SingletonLock"),
+		filepath.Join(webviewRoot, "SingletonCookie"),
+	}
+
+	for _, path := range lockPaths {
+		if _, err := os.Stat(path); err == nil {
+			_ = os.Remove(path)
+		}
+	}
+}
+
+func hasAnotherBatchApiCheckProcess() bool {
+	exePath, err := os.Executable()
+	if err != nil {
+		return false
+	}
+
+	imageName := filepath.Base(exePath)
+	if imageName == "" {
+		return false
+	}
+
+	output, err := exec.Command("tasklist", "/FI", "IMAGENAME eq "+imageName, "/FO", "CSV", "/NH").Output()
+	if err != nil {
+		return false
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	count := 0
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(strings.ToUpper(line), "INFO:") {
+			continue
+		}
+		count += 1
+	}
+	return count > 1
 }
 
 func cleanupOldWebviewDevDirs(devRoot string) error {

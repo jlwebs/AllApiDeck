@@ -10,16 +10,76 @@ export function ApplyManagedAppConfigFiles(arg1) {
   return window['go']['main']['App']['ApplyManagedAppConfigFiles'](arg1);
 }
 
+export function CollapsePanel() {
+  return window['go']['main']['App']['CollapsePanel']();
+}
+
+export function EnterSidebarMode() {
+  return window['go']['main']['App']['EnterSidebarMode']();
+}
+
+export function ExitSidebarMode() {
+  return window['go']['main']['App']['ExitSidebarMode']();
+}
+
+export function ExpandPanel() {
+  return window['go']['main']['App']['ExpandPanel']();
+}
+
 export function ExtractChromeProfileTokens(arg1) {
   return window['go']['main']['App']['ExtractChromeProfileTokens'](arg1);
+}
+
+export function GetChromeProfileExtractProgress() {
+  return window['go']['main']['App']['GetChromeProfileExtractProgress']();
+}
+
+export function GetLaunchMode() {
+  return window['go']['main']['App']['GetLaunchMode']();
+}
+
+export function GetLaunchRecordKey() {
+  return window['go']['main']['App']['GetLaunchRecordKey']();
+}
+
+export function GetPanelDockState() {
+  return window['go']['main']['App']['GetPanelDockState']();
+}
+
+export function GetSidebarMode() {
+  return window['go']['main']['App']['GetSidebarMode']();
+}
+
+export function HideToTray() {
+  return window['go']['main']['App']['HideToTray']();
+}
+
+export function HideToTrayPanel() {
+  return window['go']['main']['App']['HideToTrayPanel']();
 }
 
 export function ImportExtensionAccounts() {
   return window['go']['main']['App']['ImportExtensionAccounts']();
 }
 
+export function InitPanelWindow(arg1, arg2) {
+  return window['go']['main']['App']['InitPanelWindow'](arg1, arg2);
+}
+
 export function ListDesktopLogFiles() {
   return window['go']['main']['App']['ListDesktopLogFiles']();
+}
+
+export function OpenDesktopConfigWindow(arg1) {
+  return window['go']['main']['App']['OpenDesktopConfigWindow'](arg1);
+}
+
+export function OpenDesktopProfileAssist(arg1) {
+  return window['go']['main']['App']['OpenDesktopProfileAssist'](arg1);
+}
+
+export function OpenKeyEditor(arg1) {
+  return window['go']['main']['App']['OpenKeyEditor'](arg1);
 }
 
 export function PerformHttpRequest(arg1, arg2, arg3, arg4, arg5) {
@@ -36,4 +96,36 @@ export function ReadDesktopLogFile(arg1) {
 
 export function ReadManagedAppConfigFiles(arg1) {
   return window['go']['main']['App']['ReadManagedAppConfigFiles'](arg1);
+}
+
+export function RequestMainWindowRestore() {
+  return window['go']['main']['App']['RequestMainWindowRestore']();
+}
+
+export function RequestQuit() {
+  return window['go']['main']['App']['RequestQuit']();
+}
+
+export function ResetPanelExpandedWidth() {
+  return window['go']['main']['App']['ResetPanelExpandedWidth']();
+}
+
+export function SetPanelCollapsed(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetPanelCollapsed'](arg1, arg2, arg3);
+}
+
+export function SetPanelExpandedWidth(arg1) {
+  return window['go']['main']['App']['SetPanelExpandedWidth'](arg1);
+}
+
+export function SetPanelInteractionLocked(arg1) {
+  return window['go']['main']['App']['SetPanelInteractionLocked'](arg1);
+}
+
+export function ShowMainWindow() {
+  return window['go']['main']['App']['ShowMainWindow']();
+}
+
+export function ToggleSidebarMode() {
+  return window['go']['main']['App']['ToggleSidebarMode']();
 }

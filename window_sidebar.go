@@ -1,0 +1,1126 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+)
+
+const (
+	mainWindowWidth        = 760
+	mainWindowHeight       = 460
+	mainWindowMinWidth     = 720
+	mainWindowMinHeight    = 460
+	panelWindowWidth       = 192
+	panelWideWindowWidth   = 520
+	panelMaxWindowWidth    = 680
+	panelWindowHeight      = 780
+	panelTriggerWidth      = 22
+	panelExpandedEdgeGap   = 0
+	panelDockThreshold     = 28
+	panelWindowMarginY     = 20
+	panelEdgeActivateGap   = 2
+	panelRightDockShiftPct = 0
+	panelHideGrace         = 180 * time.Millisecond
+	panelAutoTickInterval  = 60 * time.Millisecond
+	windowMonitorInterval  = 450 * time.Millisecond
+	panelRestoreSignal     = "panel-restore.signal"
+)
+
+type panelDockEdge string
+
+const (
+	panelDockLeft  panelDockEdge = "left"
+	panelDockRight panelDockEdge = "right"
+	panelDockFree  panelDockEdge = "free"
+)
+
+type sidebarWindowBounds struct {
+	Width  int
+	Height int
+	X      int
+	Y      int
+}
+
+type trayController interface {
+	Close()
+}
+
+type noopTrayController struct{}
+
+func (noopTrayController) Close() {}
+
+type panelWindowState struct {
+	screenWidth       int
+	screenHeight      int
+	collapsed         bool
+	expandedWidth     int
+	interactionLocked bool
+	preferredX        int
+	hasPreferredX     bool
+	preferredY        int
+	hasPreferredY     bool
+	dockEdge          panelDockEdge
+}
+
+type sidebarWindowState struct {
+	mu               sync.Mutex
+	quitRequested    atomic.Bool
+	lastNormalBounds sidebarWindowBounds
+	hasNormalBounds  bool
+	panel            panelWindowState
+}
+
+var appWindowState sidebarWindowState
+
+func (a *App) initWindowMonitor() {
+	a.windowMonitorStopMux.Lock()
+	defer a.windowMonitorStopMux.Unlock()
+	if a.windowMonitorStop != nil || a.isPanelMode() {
+		return
+	}
+	stopCh := make(chan struct{})
+	a.windowMonitorStop = stopCh
+	go a.runWindowMonitor(stopCh)
+}
+
+func (a *App) stopWindowMonitor() {
+	a.windowMonitorStopMux.Lock()
+	defer a.windowMonitorStopMux.Unlock()
+	if a.windowMonitorStop == nil {
+		return
+	}
+	close(a.windowMonitorStop)
+	a.windowMonitorStop = nil
+}
+
+func (a *App) startPanelAutoController() {
+	if !a.isPanelMode() || !nativePanelControllerSupported() {
+		return
+	}
+	a.panelAutoStopMux.Lock()
+	defer a.panelAutoStopMux.Unlock()
+	if a.panelAutoStop != nil {
+		return
+	}
+	stopCh := make(chan struct{})
+	a.panelAutoStop = stopCh
+	go a.runPanelAutoController(stopCh)
+}
+
+func (a *App) stopPanelAutoController() {
+	a.panelAutoStopMux.Lock()
+	defer a.panelAutoStopMux.Unlock()
+	if a.panelAutoStop == nil {
+		return
+	}
+	close(a.panelAutoStop)
+	a.panelAutoStop = nil
+}
+
+func (a *App) runWindowMonitor(stopCh <-chan struct{}) {
+	ticker := time.NewTicker(windowMonitorInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stopCh:
+			return
+		case <-ticker.C:
+			if a.ctx == nil || a.isQuitRequested() || a.isPanelMode() {
+				continue
+			}
+			if consumePanelRestoreSignal() {
+				_ = a.ShowMainWindow()
+				continue
+			}
+			if wruntime.WindowIsNormal(a.ctx) {
+				a.mainWindowSeenNormal.Store(true)
+				a.captureNormalWindowBounds()
+				continue
+			}
+			if wruntime.WindowIsMinimised(a.ctx) {
+				if !a.mainWindowSeenNormal.Load() {
+					debugLogf("window monitor skip minimise handling: main window not yet normal")
+					continue
+				}
+				if until := a.mainWindowGraceUntil.Load(); until > 0 && time.Now().UnixMilli() < until {
+					debugLogf("window monitor skip minimise handling during startup grace window")
+					continue
+				}
+				debugLogf("window monitor detected minimised main window; hiding to tray panel")
+				if err := a.HideToTrayPanel(); err != nil {
+					debugLogf("window monitor hide to tray panel failed: %v", err)
+				}
+				continue
+			}
+		}
+	}
+}
+
+func (a *App) runPanelAutoController(stopCh <-chan struct{}) {
+	ticker := time.NewTicker(panelAutoTickInterval)
+	defer ticker.Stop()
+
+	var lastInsideAt time.Time
+	lastInsideAt = time.Now()
+
+	for {
+		select {
+		case <-stopCh:
+			return
+		case <-ticker.C:
+			if a.ctx == nil || !a.isPanelMode() || a.isQuitRequested() {
+				continue
+			}
+
+			hwnd, err := findPanelWindowHandle()
+			if err != nil || hwnd == 0 {
+				continue
+			}
+
+			_ = hidePanelWindowFromTaskbar()
+
+			cursorX, cursorY, err := getCursorPosition()
+			if err != nil {
+				continue
+			}
+
+			workArea, err := getMonitorWorkAreaForPoint(cursorX, cursorY)
+			if err != nil || workArea.Width() <= 0 || workArea.Height() <= 0 {
+				workArea = resolvePanelWorkArea(0, 0)
+			}
+			visible := isNativePanelWindowVisible(hwnd)
+			state := a.getPanelStateSnapshot()
+			currentRect := desktopRect{}
+			if visible {
+				if rect, rectErr := getNativePanelWindowRect(hwnd); rectErr == nil && rect.Width() > 0 && rect.Height() > 0 {
+					currentRect = rect
+					state = a.captureNativePanelPlacement(workArea, rect)
+				}
+			}
+			bounds := a.resolveNativePanelBounds(workArea, state)
+			activeRect := boundsToDesktopRect(bounds)
+			if visible && currentRect.Width() > 0 && currentRect.Height() > 0 {
+				activeRect = currentRect
+			}
+			cursorInside := isPointInsideRect(cursorX, cursorY, activeRect)
+			locked := a.isPanelInteractionLocked()
+			foreground := isNativePanelWindowForeground(hwnd)
+
+			if visible && state.dockEdge == panelDockFree {
+				lastInsideAt = time.Now()
+				a.updatePanelRuntimeState(false, workArea, bounds, panelDockFree)
+				continue
+			}
+
+			if visible && (cursorInside || locked || foreground) {
+				lastInsideAt = time.Now()
+				if err := a.ensureNativePanelVisible(hwnd, bounds); err != nil {
+					debugLogf("panel show failed: %v", err)
+				}
+				a.updatePanelRuntimeState(false, workArea, bounds, state.dockEdge)
+				continue
+			}
+
+			withinMonitorY := cursorY >= int(workArea.Top) && cursorY < int(workArea.Bottom)
+			switch state.dockEdge {
+			case panelDockLeft:
+				nearLeftEdge := cursorX >= int(workArea.Left) && cursorX <= int(workArea.Left)+panelEdgeActivateGap
+				if nearLeftEdge && withinMonitorY {
+					lastInsideAt = time.Now()
+					if err := a.ensureNativePanelVisible(hwnd, bounds); err != nil {
+						debugLogf("panel edge-show failed: %v", err)
+					}
+					a.updatePanelRuntimeState(false, workArea, bounds, state.dockEdge)
+					continue
+				}
+			case panelDockRight:
+				nearRightEdge := cursorX >= int(workArea.Right)-panelEdgeActivateGap && cursorX <= int(workArea.Right)
+				if nearRightEdge && withinMonitorY {
+					lastInsideAt = time.Now()
+					if err := a.ensureNativePanelVisible(hwnd, bounds); err != nil {
+						debugLogf("panel edge-show failed: %v", err)
+					}
+					a.updatePanelRuntimeState(false, workArea, bounds, state.dockEdge)
+					continue
+				}
+			case panelDockFree:
+				lastInsideAt = time.Now()
+				a.updatePanelRuntimeState(false, workArea, bounds, panelDockFree)
+				continue
+			}
+
+			if !visible {
+				a.updatePanelRuntimeState(true, workArea, bounds, state.dockEdge)
+				continue
+			}
+
+			if time.Since(lastInsideAt) < panelHideGrace {
+				continue
+			}
+			if err := a.ensureNativePanelHidden(hwnd); err != nil {
+				debugLogf("panel hide failed: %v", err)
+			}
+			a.updatePanelRuntimeState(true, workArea, bounds, state.dockEdge)
+		}
+	}
+}
+
+func (a *App) captureNormalWindowBounds() {
+	if a.ctx == nil || a.isPanelMode() || !wruntime.WindowIsNormal(a.ctx) {
+		return
+	}
+
+	width, height := wruntime.WindowGetSize(a.ctx)
+	x, y := wruntime.WindowGetPosition(a.ctx)
+	if width <= 0 || height <= 0 {
+		return
+	}
+
+	appWindowState.mu.Lock()
+	appWindowState.lastNormalBounds = sidebarWindowBounds{
+		Width:  width,
+		Height: height,
+		X:      x,
+		Y:      y,
+	}
+	appWindowState.hasNormalBounds = true
+	appWindowState.mu.Unlock()
+}
+
+func (a *App) HideToTrayPanel() error {
+	if a.ctx == nil || a.isPanelMode() {
+		return nil
+	}
+
+	a.captureNormalWindowBounds()
+	if err := a.startPanelProcess(); err != nil {
+		return err
+	}
+
+	wruntime.WindowUnminimise(a.ctx)
+	wruntime.WindowHide(a.ctx)
+	wruntime.Hide(a.ctx)
+	return nil
+}
+
+func (a *App) HideToTray() error {
+	if a.ctx == nil || a.isPanelMode() {
+		return nil
+	}
+
+	a.captureNormalWindowBounds()
+	wruntime.WindowUnminimise(a.ctx)
+	wruntime.WindowHide(a.ctx)
+	wruntime.Hide(a.ctx)
+	return nil
+}
+
+func (a *App) ShowMainWindow() error {
+	if a.ctx == nil || a.isPanelMode() {
+		return nil
+	}
+
+	a.stopPanelProcess()
+	defaultWidth, defaultHeight, minWidth, minHeight := resolveMainWindowSize()
+
+	appWindowState.mu.Lock()
+	bounds := appWindowState.lastNormalBounds
+	hasBounds := appWindowState.hasNormalBounds
+	appWindowState.mu.Unlock()
+
+	wruntime.WindowSetAlwaysOnTop(a.ctx, false)
+	wruntime.WindowUnminimise(a.ctx)
+	wruntime.WindowShow(a.ctx)
+	wruntime.Show(a.ctx)
+	wruntime.WindowSetMinSize(a.ctx, minWidth, minHeight)
+
+	if hasBounds && bounds.Width > 0 && bounds.Height > 0 {
+		width := clampWindowSize(bounds.Width, minWidth, defaultWidth)
+		height := clampWindowSize(bounds.Height, minHeight, defaultHeight)
+		wruntime.WindowSetSize(a.ctx, width, height)
+		wruntime.WindowSetPosition(a.ctx, bounds.X, bounds.Y)
+		return nil
+	}
+
+	wruntime.WindowSetSize(a.ctx, defaultWidth, defaultHeight)
+	wruntime.WindowCenter(a.ctx)
+	return nil
+}
+
+func (a *App) RequestMainWindowRestore() error {
+	if !a.isPanelMode() {
+		return a.ShowMainWindow()
+	}
+	if err := writePanelRestoreSignal(); err != nil {
+		return err
+	}
+	if a.ctx != nil {
+		wruntime.Quit(a.ctx)
+	}
+	return nil
+}
+
+func (a *App) EnterSidebarMode() error {
+	return a.HideToTrayPanel()
+}
+
+func (a *App) ExitSidebarMode() error {
+	if a.isPanelMode() {
+		return a.RequestMainWindowRestore()
+	}
+	return a.ShowMainWindow()
+}
+
+func (a *App) ToggleSidebarMode() error {
+	if a.isPanelMode() {
+		if appWindowState.panel.collapsed {
+			return a.ExpandPanel()
+		}
+		return a.CollapsePanel()
+	}
+	return a.HideToTrayPanel()
+}
+
+func (a *App) GetSidebarMode() bool {
+	return a.panelProcessRunning()
+}
+
+func (a *App) RequestQuit() {
+	appWindowState.quitRequested.Store(true)
+	a.stopPanelProcess()
+	if a.ctx != nil {
+		wruntime.Quit(a.ctx)
+	}
+}
+
+func (a *App) isQuitRequested() bool {
+	return appWindowState.quitRequested.Load()
+}
+
+func (a *App) isPanelInteractionLocked() bool {
+	appWindowState.mu.Lock()
+	defer appWindowState.mu.Unlock()
+	return appWindowState.panel.interactionLocked
+}
+
+func (a *App) SetPanelInteractionLocked(locked bool) error {
+	appWindowState.mu.Lock()
+	appWindowState.panel.interactionLocked = locked
+	appWindowState.mu.Unlock()
+	return nil
+}
+
+func (a *App) getPanelStateSnapshot() panelWindowState {
+	appWindowState.mu.Lock()
+	defer appWindowState.mu.Unlock()
+	return appWindowState.panel
+}
+
+func (a *App) captureNativePanelPlacement(workArea desktopRect, rect desktopRect) panelWindowState {
+	appWindowState.mu.Lock()
+	defer appWindowState.mu.Unlock()
+
+	dockEdge := resolveNativePanelDockEdge(int(rect.Left), rect.Width(), workArea)
+	if rect.Width() > 0 {
+		appWindowState.panel.expandedWidth = rect.Width()
+	}
+	appWindowState.panel.screenWidth = workArea.Width()
+	appWindowState.panel.screenHeight = workArea.Height()
+	appWindowState.panel.collapsed = false
+	appWindowState.panel.preferredY = clampPanelY(int(rect.Top), rect.Height(), workArea)
+	appWindowState.panel.hasPreferredY = true
+	appWindowState.panel.dockEdge = dockEdge
+
+	if dockEdge == panelDockFree {
+		appWindowState.panel.preferredX = clampPanelX(int(rect.Left), rect.Width(), workArea)
+		appWindowState.panel.hasPreferredX = true
+	} else {
+		appWindowState.panel.preferredX = int(rect.Left)
+		appWindowState.panel.hasPreferredX = false
+	}
+
+	return appWindowState.panel
+}
+
+func (a *App) resolveNativePanelBounds(workArea desktopRect, state panelWindowState) sidebarWindowBounds {
+	width := panelWideWindowWidth
+	if state.expandedWidth > panelWindowWidth {
+		width = state.expandedWidth
+	}
+
+	if width < panelWindowWidth {
+		width = panelWindowWidth
+	}
+	if width > panelMaxWindowWidth {
+		width = panelMaxWindowWidth
+	}
+
+	height := panelWindowHeight
+	if maxHeight := workArea.Height() - panelWindowMarginY*2; maxHeight > 0 && height > maxHeight {
+		height = maxInt(420, maxHeight)
+	}
+	if height <= 0 {
+		height = panelWindowHeight
+	}
+
+	y := 0
+	if state.hasPreferredY {
+		y = clampPanelY(state.preferredY, height, workArea)
+	}
+
+	x := int(workArea.Right) - width - panelExpandedEdgeGap
+	switch state.dockEdge {
+	case panelDockLeft:
+		x = int(workArea.Left)
+	case panelDockFree:
+		if state.hasPreferredX {
+			x = clampPanelX(state.preferredX, width, workArea)
+		}
+	default:
+		x = int(workArea.Right) - width - panelExpandedEdgeGap - ((width * panelRightDockShiftPct) / 100)
+	}
+
+	return sidebarWindowBounds{
+		Width:  width,
+		Height: height,
+		X:      x,
+		Y:      y,
+	}
+}
+
+func (a *App) ensureNativePanelVisible(hwnd uintptr, bounds sidebarWindowBounds) error {
+	rect, err := getNativePanelWindowRect(hwnd)
+	if err == nil && isNativePanelWindowVisible(hwnd) && boundsMatchRect(bounds, rect) {
+		return nil
+	}
+	return showNativePanelWindow(hwnd, bounds)
+}
+
+func (a *App) ensureNativePanelHidden(hwnd uintptr) error {
+	if !isNativePanelWindowVisible(hwnd) {
+		return nil
+	}
+	return hideNativePanelWindow(hwnd)
+}
+
+func (a *App) updatePanelRuntimeState(collapsed bool, workArea desktopRect, bounds sidebarWindowBounds, dockEdge panelDockEdge) {
+	appWindowState.mu.Lock()
+	appWindowState.panel.screenWidth = workArea.Width()
+	appWindowState.panel.screenHeight = workArea.Height()
+	appWindowState.panel.collapsed = collapsed
+	appWindowState.panel.preferredX = bounds.X
+	appWindowState.panel.hasPreferredX = dockEdge == panelDockFree
+	appWindowState.panel.preferredY = bounds.Y
+	appWindowState.panel.hasPreferredY = true
+	appWindowState.panel.dockEdge = dockEdge
+	appWindowState.mu.Unlock()
+}
+
+func isPointInsideBounds(x int, y int, bounds sidebarWindowBounds) bool {
+	return x >= bounds.X && x < bounds.X+bounds.Width && y >= bounds.Y && y < bounds.Y+bounds.Height
+}
+
+func isPointInsideRect(x int, y int, rect desktopRect) bool {
+	return x >= int(rect.Left) && x < int(rect.Right) && y >= int(rect.Top) && y < int(rect.Bottom)
+}
+
+func boundsToDesktopRect(bounds sidebarWindowBounds) desktopRect {
+	return desktopRect{
+		Left:   int32(bounds.X),
+		Top:    int32(bounds.Y),
+		Right:  int32(bounds.X + bounds.Width),
+		Bottom: int32(bounds.Y + bounds.Height),
+	}
+}
+
+func clampPanelX(x int, width int, workArea desktopRect) int {
+	minX := int(workArea.Left)
+	maxX := int(workArea.Right) - width
+	if maxX < minX {
+		maxX = minX
+	}
+	if x < minX {
+		return minX
+	}
+	if x > maxX {
+		return maxX
+	}
+	return x
+}
+
+func clampPanelY(y int, height int, workArea desktopRect) int {
+	minY := int(workArea.Top)
+	maxY := int(workArea.Bottom) - height
+	if maxY < minY {
+		maxY = minY
+	}
+	if y < minY {
+		return minY
+	}
+	if y > maxY {
+		return maxY
+	}
+	return y
+}
+
+func boundsMatchRect(bounds sidebarWindowBounds, rect desktopRect) bool {
+	return bounds.X == int(rect.Left) &&
+		bounds.Y == int(rect.Top) &&
+		bounds.Width == rect.Width() &&
+		bounds.Height == rect.Height()
+}
+
+func (a *App) InitPanelWindow(screenWidth int, screenHeight int) error {
+	if !a.isPanelMode() || a.ctx == nil {
+		return nil
+	}
+	workArea := resolvePanelWorkArea(screenWidth, screenHeight)
+	appWindowState.mu.Lock()
+	appWindowState.panel.screenWidth = maxInt(workArea.Width(), screenWidth)
+	appWindowState.panel.screenHeight = maxInt(workArea.Height(), screenHeight)
+	if appWindowState.panel.expandedWidth <= panelWindowWidth {
+		appWindowState.panel.expandedWidth = panelWideWindowWidth
+	}
+	appWindowState.panel.collapsed = true
+	appWindowState.panel.preferredX = 0
+	appWindowState.panel.hasPreferredX = false
+	appWindowState.panel.preferredY = 0
+	appWindowState.panel.hasPreferredY = false
+	appWindowState.panel.dockEdge = panelDockRight
+	appWindowState.mu.Unlock()
+	if nativePanelControllerSupported() {
+		a.startPanelAutoController()
+		return nil
+	}
+	return a.applyPanelWindowState(screenWidth, screenHeight, true)
+}
+
+func (a *App) CollapsePanel() error {
+	if !a.isPanelMode() {
+		return nil
+	}
+	if nativePanelControllerSupported() {
+		appWindowState.mu.Lock()
+		appWindowState.panel.collapsed = true
+		appWindowState.mu.Unlock()
+		hwnd, err := findPanelWindowHandle()
+		if err == nil && hwnd != 0 {
+			return a.ensureNativePanelHidden(hwnd)
+		}
+		return nil
+	}
+	appWindowState.mu.Lock()
+	if appWindowState.panel.collapsed {
+		appWindowState.mu.Unlock()
+		return nil
+	}
+	screenWidth := appWindowState.panel.screenWidth
+	screenHeight := appWindowState.panel.screenHeight
+	appWindowState.mu.Unlock()
+	a.capturePanelPlacement()
+	return a.applyPanelWindowState(screenWidth, screenHeight, true)
+}
+
+func (a *App) ExpandPanel() error {
+	if !a.isPanelMode() {
+		return nil
+	}
+	if nativePanelControllerSupported() {
+		hwnd, err := findPanelWindowHandle()
+		if err != nil || hwnd == 0 {
+			return nil
+		}
+		cursorX, cursorY, cursorErr := getCursorPosition()
+		workArea := resolvePanelWorkArea(0, 0)
+		if cursorErr == nil {
+			if nextWorkArea, workErr := getMonitorWorkAreaForPoint(cursorX, cursorY); workErr == nil && nextWorkArea.Width() > 0 && nextWorkArea.Height() > 0 {
+				workArea = nextWorkArea
+			}
+		}
+		state := a.getPanelStateSnapshot()
+		bounds := a.resolveNativePanelBounds(workArea, state)
+		if err := a.ensureNativePanelVisible(hwnd, bounds); err != nil {
+			return err
+		}
+		a.updatePanelRuntimeState(false, workArea, bounds, state.dockEdge)
+		return nil
+	}
+	appWindowState.mu.Lock()
+	if !appWindowState.panel.collapsed {
+		appWindowState.mu.Unlock()
+		return nil
+	}
+	screenWidth := appWindowState.panel.screenWidth
+	screenHeight := appWindowState.panel.screenHeight
+	appWindowState.mu.Unlock()
+	return a.applyPanelWindowState(screenWidth, screenHeight, false)
+}
+
+func (a *App) SetPanelCollapsed(screenWidth int, screenHeight int, collapsed bool) error {
+	if !a.isPanelMode() {
+		return nil
+	}
+	if nativePanelControllerSupported() {
+		if collapsed {
+			return a.CollapsePanel()
+		}
+		return a.ExpandPanel()
+	}
+	return a.applyPanelWindowState(screenWidth, screenHeight, collapsed)
+}
+
+func (a *App) GetPanelDockState() string {
+	if !a.isPanelMode() {
+		return string(panelDockRight)
+	}
+	appWindowState.mu.Lock()
+	dockEdge := appWindowState.panel.dockEdge
+	appWindowState.mu.Unlock()
+	if dockEdge == "" {
+		dockEdge = panelDockRight
+	}
+	return string(dockEdge)
+}
+
+func (a *App) applyPanelWindowState(screenWidth int, screenHeight int, collapsed bool) error {
+	if a.ctx == nil {
+		return nil
+	}
+
+	width := panelWindowWidth
+	appWindowState.mu.Lock()
+	storedScreenWidth := appWindowState.panel.screenWidth
+	storedScreenHeight := appWindowState.panel.screenHeight
+	expandedWidth := appWindowState.panel.expandedWidth
+	appWindowState.mu.Unlock()
+	if screenWidth <= 0 {
+		screenWidth = storedScreenWidth
+	}
+	if screenHeight <= 0 {
+		screenHeight = storedScreenHeight
+	}
+	if expandedWidth <= panelWindowWidth {
+		expandedWidth = panelWideWindowWidth
+	}
+	dockEdge := panelDockRight
+	workArea := resolvePanelWorkArea(screenWidth, screenHeight)
+	if collapsed {
+		width = panelTriggerWidth
+	} else if expandedWidth > panelWindowWidth {
+		width = expandedWidth
+	}
+	if width > panelMaxWindowWidth {
+		width = panelMaxWindowWidth
+	}
+	height := panelWindowHeight
+	if height > workArea.Height()-panelWindowMarginY*2 {
+		height = maxInt(420, workArea.Height()-panelWindowMarginY*2)
+	}
+	if height <= 0 {
+		height = panelWindowHeight
+	}
+	x := int(workArea.Right) - width - panelExpandedEdgeGap
+	y := int(workArea.Top)
+
+	appWindowState.mu.Lock()
+	appWindowState.panel = panelWindowState{
+		screenWidth:   screenWidth,
+		screenHeight:  screenHeight,
+		collapsed:     collapsed,
+		expandedWidth: expandedWidth,
+		preferredX:    x,
+		hasPreferredX: false,
+		preferredY:    0,
+		hasPreferredY: false,
+		dockEdge:      panelDockRight,
+	}
+	appWindowState.mu.Unlock()
+	debugLogf(
+		"panel apply state: collapsed=%t dock=%s workArea=(%d,%d)-(%d,%d) size=%dx%d pos=(%d,%d) preferred=(%t,%t)",
+		collapsed,
+		dockEdge,
+		workArea.Left,
+		workArea.Top,
+		workArea.Right,
+		workArea.Bottom,
+		width,
+		height,
+		x,
+		y,
+		false,
+		false,
+	)
+
+	wruntime.WindowSetAlwaysOnTop(a.ctx, true)
+	wruntime.WindowSetMinSize(a.ctx, panelTriggerWidth, 420)
+	wruntime.WindowSetMaxSize(a.ctx, panelMaxWindowWidth, maxInt(panelWindowHeight, height))
+	wruntime.WindowSetSize(a.ctx, width, height)
+	wruntime.WindowSetPosition(a.ctx, x, y)
+	wruntime.WindowShow(a.ctx)
+	wruntime.Show(a.ctx)
+	return nil
+}
+
+func (a *App) capturePanelPlacement() {
+	if !a.isPanelMode() || a.ctx == nil {
+		return
+	}
+	appWindowState.mu.Lock()
+	appWindowState.panel.preferredX = 0
+	appWindowState.panel.hasPreferredX = false
+	appWindowState.panel.preferredY = 0
+	appWindowState.panel.hasPreferredY = false
+	appWindowState.panel.dockEdge = panelDockRight
+	appWindowState.mu.Unlock()
+}
+
+func resolvePanelDockEdge(x int, width int, workArea desktopRect) panelDockEdge {
+	leftDistance := x - int(workArea.Left)
+	rightDistance := int(workArea.Right) - (x + width)
+	isNearLeft := leftDistance <= panelDockThreshold
+	isNearRight := rightDistance <= panelDockThreshold
+
+	switch {
+	case isNearLeft && isNearRight:
+		if leftDistance <= rightDistance {
+			return panelDockLeft
+		}
+		return panelDockRight
+	case isNearLeft:
+		return panelDockLeft
+	case isNearRight:
+		return panelDockRight
+	default:
+		return panelDockFree
+	}
+}
+
+func resolveNativePanelDockEdge(x int, width int, workArea desktopRect) panelDockEdge {
+	leftDistance := x - int(workArea.Left)
+	rightDistance := int(workArea.Right) - (x + width)
+	rightDockX := int(workArea.Right) - width - panelExpandedEdgeGap - ((width * panelRightDockShiftPct) / 100)
+	rightDockDistance := absInt(x - rightDockX)
+
+	isNearLeft := leftDistance <= panelDockThreshold
+	isNearRight := rightDistance <= panelDockThreshold || rightDockDistance <= panelDockThreshold
+
+	switch {
+	case isNearLeft && isNearRight:
+		if leftDistance <= rightDistance {
+			return panelDockLeft
+		}
+		return panelDockRight
+	case isNearLeft:
+		return panelDockLeft
+	case isNearRight:
+		return panelDockRight
+	default:
+		return panelDockFree
+	}
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func resolvePanelMonitorProbe(x int, y int, width int, height int, dockEdge panelDockEdge, collapsed bool) (int, int) {
+	probeX := x + width/2
+	if collapsed {
+		switch dockEdge {
+		case panelDockLeft:
+			probeX = x + width - maxInt(panelTriggerWidth/2, 1)
+		case panelDockRight:
+			probeX = x + maxInt(panelTriggerWidth/2, 1)
+		}
+	}
+	return probeX, y + height/2
+}
+
+func (a *App) SetPanelExpandedWidth(width int) error {
+	if !a.isPanelMode() {
+		return nil
+	}
+	if width < panelWindowWidth {
+		width = panelWindowWidth
+	}
+	if width > panelMaxWindowWidth {
+		width = panelMaxWindowWidth
+	}
+	appWindowState.mu.Lock()
+	screenWidth := appWindowState.panel.screenWidth
+	screenHeight := appWindowState.panel.screenHeight
+	collapsed := appWindowState.panel.collapsed
+	appWindowState.panel.expandedWidth = width
+	appWindowState.mu.Unlock()
+	if nativePanelControllerSupported() {
+		if collapsed {
+			return nil
+		}
+		hwnd, err := findPanelWindowHandle()
+		if err != nil || hwnd == 0 {
+			return nil
+		}
+		workArea := resolvePanelWorkArea(screenWidth, screenHeight)
+		state := a.getPanelStateSnapshot()
+		bounds := a.resolveNativePanelBounds(workArea, state)
+		if err := a.ensureNativePanelVisible(hwnd, bounds); err != nil {
+			return err
+		}
+		a.updatePanelRuntimeState(false, workArea, bounds, state.dockEdge)
+		return nil
+	}
+	return a.applyPanelWindowState(screenWidth, screenHeight, collapsed)
+}
+
+func (a *App) ResetPanelExpandedWidth() error {
+	if !a.isPanelMode() {
+		return nil
+	}
+	appWindowState.mu.Lock()
+	screenWidth := appWindowState.panel.screenWidth
+	screenHeight := appWindowState.panel.screenHeight
+	collapsed := appWindowState.panel.collapsed
+	appWindowState.panel.expandedWidth = panelWideWindowWidth
+	appWindowState.mu.Unlock()
+	if nativePanelControllerSupported() {
+		if collapsed {
+			return nil
+		}
+		hwnd, err := findPanelWindowHandle()
+		if err != nil || hwnd == 0 {
+			return nil
+		}
+		workArea := resolvePanelWorkArea(screenWidth, screenHeight)
+		state := a.getPanelStateSnapshot()
+		bounds := a.resolveNativePanelBounds(workArea, state)
+		if err := a.ensureNativePanelVisible(hwnd, bounds); err != nil {
+			return err
+		}
+		a.updatePanelRuntimeState(false, workArea, bounds, state.dockEdge)
+		return nil
+	}
+	return a.applyPanelWindowState(screenWidth, screenHeight, collapsed)
+}
+
+func (a *App) initPanelWindow() {
+	if !a.isPanelMode() || a.ctx == nil {
+		return
+	}
+	appWindowState.mu.Lock()
+	appWindowState.panel.preferredX = 0
+	appWindowState.panel.hasPreferredX = false
+	appWindowState.panel.preferredY = 0
+	appWindowState.panel.hasPreferredY = false
+	appWindowState.panel.dockEdge = panelDockRight
+	appWindowState.mu.Unlock()
+	if nativePanelControllerSupported() {
+		a.startPanelAutoController()
+		delays := []time.Duration{
+			60 * time.Millisecond,
+			180 * time.Millisecond,
+			420 * time.Millisecond,
+			900 * time.Millisecond,
+		}
+		for _, delay := range delays {
+			time.Sleep(delay)
+			hwnd, err := findPanelWindowHandle()
+			if err == nil && hwnd != 0 {
+				_ = hideNativePanelWindow(hwnd)
+			}
+			_ = hidePanelWindowFromTaskbar()
+		}
+		return
+	}
+	_ = hidePanelWindowFromTaskbar()
+	delays := []time.Duration{
+		120 * time.Millisecond,
+		420 * time.Millisecond,
+		900 * time.Millisecond,
+	}
+	for _, delay := range delays {
+		time.Sleep(delay)
+		_ = hidePanelWindowFromTaskbar()
+	}
+}
+
+func (a *App) startPanelProcess() error {
+	if a.isPanelMode() {
+		return nil
+	}
+
+	a.panelMu.Lock()
+	defer a.panelMu.Unlock()
+
+	if a.panelCmd != nil && a.panelCmd.Process != nil {
+		if a.panelCmd.ProcessState == nil || !a.panelCmd.ProcessState.Exited() {
+			return nil
+		}
+		a.panelCmd = nil
+	}
+
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve executable failed: %w", err)
+	}
+
+	cmd := exec.Command(exePath, "--panel")
+	configureBackgroundCmd(cmd)
+	cmd.Dir = filepath.Dir(exePath)
+	cmd.Env = os.Environ()
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start panel failed: %w", err)
+	}
+	a.panelCmd = cmd
+
+	go func(process *exec.Cmd) {
+		_ = process.Wait()
+		a.panelMu.Lock()
+		if a.panelCmd == process {
+			a.panelCmd = nil
+		}
+		a.panelMu.Unlock()
+	}(cmd)
+
+	return nil
+}
+
+func (a *App) OpenKeyEditor(rowKey string) error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve executable failed: %w", err)
+	}
+
+	args := []string{"--editor"}
+	if rowKey != "" {
+		args = append(args, "--row-key", rowKey)
+	}
+
+	cmd := exec.Command(exePath, args...)
+	configureBackgroundCmd(cmd)
+	cmd.Dir = filepath.Dir(exePath)
+	cmd.Env = os.Environ()
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start key editor failed: %w", err)
+	}
+
+	go func(process *exec.Cmd) {
+		_ = process.Wait()
+	}(cmd)
+
+	return nil
+}
+
+func (a *App) OpenDesktopConfigWindow(rowKey string) error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve executable failed: %w", err)
+	}
+
+	args := []string{"--desktop-config"}
+	if rowKey != "" {
+		args = append(args, "--row-key", rowKey)
+	}
+
+	cmd := exec.Command(exePath, args...)
+	configureBackgroundCmd(cmd)
+	cmd.Dir = filepath.Dir(exePath)
+	cmd.Env = os.Environ()
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start desktop config failed: %w", err)
+	}
+
+	go func(process *exec.Cmd) {
+		_ = process.Wait()
+	}(cmd)
+
+	return nil
+}
+
+func (a *App) stopPanelProcess() {
+	a.panelMu.Lock()
+	defer a.panelMu.Unlock()
+
+	if a.panelCmd == nil || a.panelCmd.Process == nil {
+		return
+	}
+	killProcessTree(a.panelCmd.Process.Pid)
+	a.panelCmd = nil
+}
+
+func (a *App) panelProcessRunning() bool {
+	a.panelMu.Lock()
+	defer a.panelMu.Unlock()
+	return a.panelCmd != nil && a.panelCmd.Process != nil && (a.panelCmd.ProcessState == nil || !a.panelCmd.ProcessState.Exited())
+}
+
+func panelSignalPath() string {
+	return filepath.Join(resolveRuntimeRootDir(), panelRestoreSignal)
+}
+
+func writePanelRestoreSignal() error {
+	path := panelSignalPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(time.Now().Format(time.RFC3339Nano)), 0o644)
+}
+
+func consumePanelRestoreSignal() bool {
+	path := panelSignalPath()
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	_ = os.Remove(path)
+	return true
+}
+
+func maxInt(left int, right int) int {
+	if left > right {
+		return left
+	}
+	return right
+}
+
+func resolvePanelWorkArea(screenWidth int, screenHeight int) desktopRect {
+	if workArea, err := getCursorWorkArea(); err == nil && workArea.Width() > 0 && workArea.Height() > 0 {
+		return workArea
+	}
+	if workArea, err := getDesktopWorkArea(); err == nil && workArea.Width() > 0 && workArea.Height() > 0 {
+		return workArea
+	}
+	if screenWidth <= 0 {
+		screenWidth = panelWideWindowWidth + panelTriggerWidth + 12
+	}
+	if screenHeight <= 0 {
+		screenHeight = panelWindowHeight + panelWindowMarginY*2
+	}
+	return desktopRect{
+		Left:   0,
+		Top:    0,
+		Right:  int32(screenWidth),
+		Bottom: int32(screenHeight),
+	}
+}
+
+func resolvePanelDockWorkArea(screenWidth int, screenHeight int, dockEdge panelDockEdge) desktopRect {
+	if dockEdge != panelDockFree && screenWidth > 0 && screenHeight > 0 {
+		return desktopRect{
+			Left:   0,
+			Top:    0,
+			Right:  int32(screenWidth),
+			Bottom: int32(screenHeight),
+		}
+	}
+	return resolvePanelWorkArea(screenWidth, screenHeight)
+}

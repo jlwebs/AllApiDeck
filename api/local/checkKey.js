@@ -24,24 +24,136 @@ function buildCompatHeaders(uid) {
 }
 
 function createAbortErrorMessage(timeoutMs) {
-  return `请求超时 (${Math.round(timeoutMs / 1000)}s)`;
+  return `Request timed out (${Math.round(timeoutMs / 1000)}s)`;
 }
 
-export async function checkKey({ url, key, model, messages, uid, timeoutMs }, log = console.log) {
-  const baseUrl = String(url || '').replace(/\/+$/, '');
-  const targetUrl = `${baseUrl}/v1/chat/completions`;
-  const normalizedTimeoutMs = clampTimeoutMs(timeoutMs);
+function normalizeUrlInput(rawUrl) {
+  return String(rawUrl || '').trim().replace(/\/+$/, '');
+}
+
+function stripKnownEndpointSuffix(input) {
+  const patterns = [
+    /\/v\d+\/chat\/completions$/i,
+    /\/chat\/completions$/i,
+    /\/api\/user\/models$/i,
+    /\/api\/models$/i,
+    /\/api\/v\d+\/models$/i,
+    /\/v\d+\/models$/i,
+    /\/models$/i,
+    /\/api\/v\d+$/i,
+    /\/v\d+$/i,
+    /\/api$/i,
+  ];
+
+  for (const pattern of patterns) {
+    if (pattern.test(input)) {
+      return input.replace(pattern, '');
+    }
+  }
+
+  return input;
+}
+
+function buildChatEndpointCandidates(rawUrl) {
+  const input = normalizeUrlInput(rawUrl);
+  if (!input) {
+    return [];
+  }
+
+  const candidates = [];
+  const addCandidate = candidate => {
+    const normalizedCandidate = normalizeUrlInput(candidate);
+    if (!normalizedCandidate) return;
+    if (!candidates.includes(normalizedCandidate)) {
+      candidates.push(normalizedCandidate);
+    }
+  };
+
+  if (/\/chat\/completions$/i.test(input)) {
+    addCandidate(input);
+  }
+
+  const bases = new Set([input]);
+  const strippedInput = stripKnownEndpointSuffix(input);
+  if (strippedInput && strippedInput !== input) {
+    bases.add(strippedInput);
+  }
+
+  bases.forEach(base => {
+    if (!base) return;
+
+    if (/\/chat\/completions$/i.test(base)) {
+      addCandidate(base);
+      return;
+    }
+
+    if (/\/api\/v\d+$/i.test(base) || /\/v\d+$/i.test(base)) {
+      addCandidate(`${base}/chat/completions`);
+      return;
+    }
+
+    if (/\/api$/i.test(base)) {
+      addCandidate(`${base}/v1/chat/completions`);
+      addCandidate(`${base}/chat/completions`);
+      return;
+    }
+
+    addCandidate(`${base}/v1/chat/completions`);
+    addCandidate(`${base}/chat/completions`);
+    addCandidate(`${base}/api/v1/chat/completions`);
+  });
+
+  return candidates;
+}
+
+function isRetryableEndpointStatus(status) {
+  return status === 404 || status === 405;
+}
+
+function buildEndpointErrorMessage(message, status, endpoint) {
+  const fallback = `HTTP ${status}`;
+  const baseMessage = String(message || '').trim() || fallback;
+  if (!endpoint) return baseMessage;
+  if (baseMessage.includes(endpoint)) return baseMessage;
+  return `${baseMessage} @ ${endpoint}`;
+}
+
+function buildAttemptRecord({ endpoint, status, message, retryable }) {
+  return {
+    endpoint: String(endpoint || ''),
+    status: Number(status || 0),
+    message: String(message || '').trim(),
+    retryable: retryable === true,
+  };
+}
+
+function extractResponseErrorMessage(text, status) {
+  let message = `HTTP ${status}`;
+
+  try {
+    const errJson = JSON.parse(text);
+    return errJson?.error?.message || errJson?.message || message;
+  } catch {}
+
+  const titleMatch = String(text || '').match(/<title>(.*?)<\/title>/i);
+  if (titleMatch) {
+    message = `(HTML) ${titleMatch[1].substring(0, 100)}`;
+  }
+
+  return message;
+}
+
+async function requestChatCompletion({ endpoint, key, model, messages, uid, timeoutMs }, log = console.log) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const startTime = Date.now();
 
   log(
-    `[CHECK] 开始: ${baseUrl} | model=${model} | key=${String(key || '').slice(0, 12)}... | timeout=${normalizedTimeoutMs}ms`,
+    `[CHECK] trying endpoint=${endpoint} | model=${model} | key=${String(key || '').slice(0, 12)}... | timeout=${timeoutMs}ms`,
   );
 
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), normalizedTimeoutMs);
-    const startTime = Date.now();
-
-    const response = await fetch(targetUrl, {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${key}`,
@@ -57,26 +169,26 @@ export async function checkKey({ url, key, model, messages, uid, timeoutMs }, lo
       signal: controller.signal,
     });
 
-    clearTimeout(timer);
-
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     const status = response.status;
     const contentType = response.headers.get('content-type') || '';
 
     if (!response.ok) {
       const errText = await response.text();
-      let errMsg = `HTTP ${status}`;
-      try {
-        const errJson = JSON.parse(errText);
-        errMsg = errJson.error?.message || errJson.message || errMsg;
-      } catch {
-        const titleMatch = errText.match(/<title>(.*?)<\/title>/i);
-        if (titleMatch) {
-          errMsg = `(HTML) ${titleMatch[1].substring(0, 100)}`;
-        }
-      }
-      log(`[CHECK] 失败: ${baseUrl} | ${model} | ${errMsg} | ${duration}s`);
-      return { status, body: { error: { message: errMsg } } };
+      const errMsg = buildEndpointErrorMessage(extractResponseErrorMessage(errText, status), status, endpoint);
+      log(`[CHECK] failed: endpoint=${endpoint} | ${model} | ${errMsg} | ${duration}s`);
+      return {
+        ok: false,
+        attempt: buildAttemptRecord({
+          endpoint,
+          status,
+          message: errMsg,
+          retryable: isRetryableEndpointStatus(status),
+        }),
+        retryable: isRetryableEndpointStatus(status),
+        status,
+        message: errMsg,
+      };
     }
 
     if (contentType.includes('application/json')) {
@@ -89,21 +201,36 @@ export async function checkKey({ url, key, model, messages, uid, timeoutMs }, lo
       }
 
       if (data.choices) {
-        log(`[CHECK] 成功(JSON): ${baseUrl} | ${model} | ${duration}s`);
+        log(`[CHECK] success(JSON): endpoint=${endpoint} | ${model} | ${duration}s`);
         return {
-          status: 200,
-          body: {
-            model: data.model || model,
-            choices: data.choices,
-            usage: data.usage,
-            message: 'success',
+          ok: true,
+          endpoint,
+          result: {
+            status: 200,
+            body: {
+              model: data.model || model,
+              choices: data.choices,
+              usage: data.usage,
+              message: 'success',
+            },
           },
         };
       }
 
-      const errMsg = data.error?.message || data.message || 'Unknown error';
-      log(`[CHECK] 失败: ${baseUrl} | ${model} | ${errMsg} | ${duration}s`);
-      return { status: 400, body: { error: { message: errMsg } } };
+      const errMsg = buildEndpointErrorMessage(data?.error?.message || data?.message || 'Unknown error', 400, endpoint);
+      log(`[CHECK] failed: endpoint=${endpoint} | ${model} | ${errMsg} | ${duration}s`);
+      return {
+        ok: false,
+        attempt: buildAttemptRecord({
+          endpoint,
+          status: 400,
+          message: errMsg,
+          retryable: false,
+        }),
+        retryable: false,
+        status: 400,
+        message: errMsg,
+      };
     }
 
     const resText = await response.text();
@@ -139,34 +266,144 @@ export async function checkKey({ url, key, model, messages, uid, timeoutMs }, lo
 
     if (chunkCount > 0) {
       const isThinking = reasoningContent.length > 0;
-      log(`[CHECK] 成功(SSE): ${baseUrl} | ${model} | ${duration}s | chunks=${chunkCount}${isThinking ? ' thinking' : ''}`);
+      log(`[CHECK] success(SSE): endpoint=${endpoint} | ${model} | ${duration}s | chunks=${chunkCount}${isThinking ? ' thinking' : ''}`);
       return {
-        status: 200,
-        body: {
-          model: returnedModel || model,
-          choices: [
-            {
-              message: {
-                role: 'assistant',
-                content: content || null,
-                reasoning_content: reasoningContent || undefined,
+        ok: true,
+        endpoint,
+        result: {
+          status: 200,
+          body: {
+            model: returnedModel || model,
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: content || null,
+                  reasoning_content: reasoningContent || undefined,
+                },
               },
-            },
-          ],
-          usage,
-          isStreamAssembled: true,
-          message: 'success',
+            ],
+            usage,
+            isStreamAssembled: true,
+            message: 'success',
+          },
         },
       };
     }
 
-    log(`[CHECK] 失败: ${baseUrl} | ${model} | ${duration}s | no valid SSE chunks`);
-    return { status: 502, body: { error: { message: '流式响应无有效数据 (0 chunks)' } } };
+    const streamError = buildEndpointErrorMessage('Stream response did not contain valid chunks (0 chunks)', 502, endpoint);
+    log(`[CHECK] failed: endpoint=${endpoint} | ${model} | ${streamError} | ${duration}s`);
+    return {
+      ok: false,
+      attempt: buildAttemptRecord({
+        endpoint,
+        status: 502,
+        message: streamError,
+        retryable: false,
+      }),
+      retryable: false,
+      status: 502,
+      message: streamError,
+    };
   } catch (err) {
-    log(`[CHECK] 异常: ${baseUrl} | ${model} | ${err.message}`);
-    if (err.name === 'AbortError') {
-      return { status: 504, body: { error: { message: createAbortErrorMessage(normalizedTimeoutMs) } } };
-    }
-    return { status: 500, body: { error: { message: err.message } } };
+    const status = err?.name === 'AbortError' ? 504 : 500;
+    const errMsg = buildEndpointErrorMessage(
+      err?.name === 'AbortError' ? createAbortErrorMessage(timeoutMs) : err?.message,
+      status,
+      endpoint,
+    );
+    log(`[CHECK] exception: endpoint=${endpoint} | ${model} | ${errMsg}`);
+    return {
+      ok: false,
+      attempt: buildAttemptRecord({
+        endpoint,
+        status,
+        message: errMsg,
+        retryable: false,
+      }),
+      retryable: false,
+      status,
+      message: errMsg,
+    };
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+export async function checkKey({ url, key, model, messages, uid, timeoutMs }, log = console.log) {
+  const normalizedTimeoutMs = clampTimeoutMs(timeoutMs);
+  const inputUrl = normalizeUrlInput(url);
+  const endpoints = buildChatEndpointCandidates(inputUrl);
+  const attempts = [];
+
+  if (!inputUrl || endpoints.length === 0) {
+    return {
+      status: 400,
+      body: { error: { message: 'API URL is empty or invalid' } },
+    };
+  }
+
+  log(
+    `[CHECK] start ${inputUrl} | model=${model} | endpoints=${endpoints.length} | timeout=${normalizedTimeoutMs}ms`,
+  );
+
+  let lastFailure = null;
+  for (const endpoint of endpoints) {
+    const result = await requestChatCompletion({
+      endpoint,
+      key,
+      model,
+      messages,
+      uid,
+      timeoutMs: normalizedTimeoutMs,
+    }, log);
+
+    if (result.ok) {
+      result.result.body.diagnostics = {
+        inputUrl,
+        model: String(model || '').trim(),
+        timeoutMs: normalizedTimeoutMs,
+        resolvedEndpoint: result.endpoint,
+        attempts,
+      };
+      return result.result;
+    }
+
+    lastFailure = result;
+    if (result.attempt) {
+      attempts.push(result.attempt);
+    }
+    if (!result.retryable) {
+      return {
+        status: result.status,
+        body: {
+          error: {
+            message: result.message,
+            diagnostics: {
+              inputUrl,
+              model: String(model || '').trim(),
+              timeoutMs: normalizedTimeoutMs,
+              attempts,
+            },
+          },
+        },
+      };
+    }
+  }
+
+  const fallbackMessage = lastFailure?.message || 'No compatible chat completion endpoint found';
+  return {
+    status: lastFailure?.status || 404,
+    body: {
+      error: {
+        message: fallbackMessage,
+        diagnostics: {
+          inputUrl,
+          model: String(model || '').trim(),
+          timeoutMs: normalizedTimeoutMs,
+          attempts,
+        },
+      },
+    },
+  };
 }

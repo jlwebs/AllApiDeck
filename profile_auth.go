@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,6 +31,13 @@ var profileStorageKeys = map[string]bool{
 	"refresh_token":    true,
 	"token_expires_at": true,
 }
+
+const (
+	profileFetchTotalTimeout   = 7 * time.Second
+	profileFetchAttemptLimit   = 2
+	profilePerRequestTimeout   = 3 * time.Second
+	profileMinRequestTimeout   = 250 * time.Millisecond
+)
 
 type ChromeProfileTokenRequest struct {
 	Accounts []ChromeProfileAccount `json:"accounts"`
@@ -74,22 +83,30 @@ func (a *App) ExtractChromeProfileTokens(request ChromeProfileTokenRequest) (*Ch
 		return &ChromeProfileTokenResponse{Results: []ChromeProfileTokenResult{}}, nil
 	}
 
+	localFetchKeysProgressReset(len(request.Accounts))
+	localFetchKeysProgressSetStage("profile_prepare", "准备读取 Chrome Default Profile")
+	localFetchKeysProgressSetCurrentSite("Chrome Default Profile")
+
 	snapshot, warnings, err := loadChromeProfileAuthSnapshot()
 	if err != nil {
+		localFetchKeysProgressFinish()
 		return nil, err
 	}
 
 	results := make([]ChromeProfileTokenResult, len(request.Accounts))
 	jobCh := make(chan int)
 	var wg sync.WaitGroup
-	workerCount := minInt(6, len(request.Accounts))
+	workerCount := minInt(10, len(request.Accounts))
 
 	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for idx := range jobCh {
+				localFetchKeysProgressSetStage("extract_site", "逐站点提取 Token")
+				localFetchKeysProgressSetCurrentSite(request.Accounts[idx].SiteName)
 				results[idx] = snapshot.extractSiteTokens(request.Accounts[idx])
+				localFetchKeysProgressMark(results[idx])
 			}
 		}()
 	}
@@ -107,6 +124,7 @@ func (a *App) ExtractChromeProfileTokens(request ChromeProfileTokenRequest) (*Ch
 		}
 	}
 	debugLogf("profile auth extraction complete: successSites=%d/%d warnings=%d", successSites, len(results), len(warnings))
+	localFetchKeysProgressFinish()
 
 	return &ChromeProfileTokenResponse{
 		Results:  results,
@@ -121,12 +139,14 @@ func loadChromeProfileAuthSnapshot() (*profileAuthSnapshot, []string, error) {
 	}
 
 	leveldbDir := filepath.Join(localAppData, "Google", "Chrome", "User Data", "Default", "Local Storage", "leveldb")
+	localFetchKeysProgressSetStage("profile_copy", "复制 Chrome Local Storage 文件")
 	tmpDir, cleanup, err := copyDirToTemp(leveldbDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("copy Chrome Local Storage failed: %w", err)
 	}
 	defer cleanup()
 
+	localFetchKeysProgressSetStage("profile_scan", "扫描 Local Storage 键值")
 	db, err := leveldb.OpenFile(tmpDir, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open Chrome Local Storage failed: %w", err)
@@ -183,9 +203,8 @@ func (s *profileAuthSnapshot) extractSiteTokens(account ChromeProfileAccount) Ch
 	result.StorageOrigin = origin
 
 	storageValues := s.entries[origin]
-	if len(storageValues) == 0 {
-		result.Error = "profile_storage_not_found"
-		return result
+	if storageValues == nil {
+		storageValues = map[string]string{}
 	}
 
 	storageFields := make([]string, 0, len(storageValues))
@@ -205,6 +224,10 @@ func (s *profileAuthSnapshot) extractSiteTokens(account ChromeProfileAccount) Ch
 	result.ResolvedUserID = resolvedUserID
 
 	tokenCandidates := buildTokenCandidates(storageValues, authUserObj, userObj, strings.TrimSpace(account.AccountInfo.AccessToken))
+	if len(storageValues) == 0 && len(tokenCandidates) == 0 {
+		result.Error = "profile_storage_not_found"
+		return result
+	}
 	if len(tokenCandidates) == 0 {
 		result.Error = "profile_token_not_found"
 		return result
@@ -212,11 +235,12 @@ func (s *profileAuthSnapshot) extractSiteTokens(account ChromeProfileAccount) Ch
 
 	refreshToken := strings.TrimSpace(storageValues["refresh_token"])
 	tokenExpiresAt := parseInt64Loose(storageValues["token_expires_at"])
-	if refreshedToken := tryRefreshProfileToken(account, tokenCandidates, resolvedUserID, refreshToken, tokenExpiresAt); refreshedToken != "" {
+	deadline := time.Now().Add(profileFetchTotalTimeout)
+	if refreshedToken := tryRefreshProfileToken(account, tokenCandidates, resolvedUserID, refreshToken, tokenExpiresAt, deadline); refreshedToken != "" {
 		tokenCandidates = prependUnique(tokenCandidates, refreshedToken)
 	}
 
-	tokens, usedToken, err := fetchSiteTokenListByProfileAuth(account, tokenCandidates, resolvedUserID)
+	tokens, usedToken, err := fetchSiteTokenListByProfileAuth(account, tokenCandidates, resolvedUserID, deadline)
 	if err != nil {
 		result.Error = err.Error()
 		result.ResolvedAccessToken = usedToken
@@ -228,7 +252,7 @@ func (s *profileAuthSnapshot) extractSiteTokens(account ChromeProfileAccount) Ch
 	return result
 }
 
-func fetchSiteTokenListByProfileAuth(account ChromeProfileAccount, tokenCandidates []string, resolvedUserID string) ([]map[string]interface{}, string, error) {
+func fetchSiteTokenListByProfileAuth(account ChromeProfileAccount, tokenCandidates []string, resolvedUserID string, deadline time.Time) ([]map[string]interface{}, string, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(account.SiteURL), "/")
 	if baseURL == "" {
 		return nil, "", fmt.Errorf("site_url_missing")
@@ -244,38 +268,66 @@ func fetchSiteTokenListByProfileAuth(account ChromeProfileAccount, tokenCandidat
 		baseHeaders[key] = value
 	}
 
-	var lastErr error
+	var bestErr error
+	bestErrRank := -1
+	bestErrToken := ""
+	attempts := 0
+outer:
 	for _, token := range tokenCandidates {
 		token = strings.TrimSpace(strings.TrimPrefix(token, "Bearer "))
 		if token == "" {
 			continue
 		}
 		for _, endpoint := range endpoints {
-			items, err := requestTokenListEndpoint(baseURL, endpoint, token, baseHeaders)
+			if attempts >= profileFetchAttemptLimit {
+				break outer
+			}
+			if time.Now().After(deadline) {
+				bestErr = fmt.Errorf("profile_fetch_timeout")
+				bestErrToken = token
+				break outer
+			}
+			attempts += 1
+			items, err := requestTokenListEndpoint(baseURL, endpoint, token, baseHeaders, deadline)
 			if err != nil {
-				lastErr = err
+				rank := scoreProfileFetchError(endpoint, err)
+				if rank >= bestErrRank {
+					bestErr = err
+					bestErrRank = rank
+					bestErrToken = token
+				}
 				continue
 			}
 			if len(items) == 0 {
-				lastErr = fmt.Errorf("token_list_empty")
+				err = fmt.Errorf("token_list_empty")
+				rank := scoreProfileFetchError(endpoint, err)
+				if rank >= bestErrRank {
+					bestErr = err
+					bestErrRank = rank
+					bestErrToken = token
+				}
 				continue
 			}
 			return items, token, nil
 		}
 	}
 
-	if lastErr == nil {
-		lastErr = fmt.Errorf("profile_fetch_no_tokens")
+	if bestErr == nil {
+		if time.Now().After(deadline) {
+			bestErr = fmt.Errorf("profile_fetch_timeout")
+		} else {
+			bestErr = fmt.Errorf("profile_fetch_no_tokens")
+		}
 	}
-	return nil, "", lastErr
+	return nil, bestErrToken, bestErr
 }
 
-func requestTokenListEndpoint(baseURL string, endpoint string, token string, baseHeaders map[string]string) ([]map[string]interface{}, error) {
+func requestTokenListEndpoint(baseURL string, endpoint string, token string, baseHeaders map[string]string, deadline time.Time) ([]map[string]interface{}, error) {
 	urlValue := baseURL + endpoint
 	headers := cloneHeaderMap(baseHeaders)
 	headers["Authorization"] = "Bearer " + token
 
-	body, err := doProfileJSONRequest(http.MethodGet, urlValue, headers, nil)
+	body, err := doProfileJSONRequest(http.MethodGet, urlValue, headers, nil, profileRequestTimeout(deadline))
 	if err != nil {
 		return nil, err
 	}
@@ -292,8 +344,8 @@ func requestTokenListEndpoint(baseURL string, endpoint string, token string, bas
 		unresolved := false
 		tokenID := toStringValue(item["id"])
 
-		if isMaskedProfileToken(resolvedKey) && tokenID != "" {
-			if fullKey := resolveMaskedProfileKey(baseURL, tokenID, token, baseHeaders); fullKey != "" {
+		if isMaskedProfileToken(resolvedKey) && tokenID != "" && time.Now().Before(deadline) {
+			if fullKey := resolveMaskedProfileKey(baseURL, tokenID, token, baseHeaders, deadline); fullKey != "" {
 				resolvedKey = fullKey
 			}
 		}
@@ -313,7 +365,7 @@ func requestTokenListEndpoint(baseURL string, endpoint string, token string, bas
 	return resolvedItems, nil
 }
 
-func resolveMaskedProfileKey(baseURL string, tokenID string, token string, baseHeaders map[string]string) string {
+func resolveMaskedProfileKey(baseURL string, tokenID string, token string, baseHeaders map[string]string, deadline time.Time) string {
 	endpoints := []struct {
 		Path   string
 		Method string
@@ -325,12 +377,15 @@ func resolveMaskedProfileKey(baseURL string, tokenID string, token string, baseH
 	}
 
 	for _, endpoint := range endpoints {
+		if time.Now().After(deadline) {
+			return ""
+		}
 		headers := cloneHeaderMap(baseHeaders)
 		headers["Authorization"] = "Bearer " + token
 		if endpoint.Method != http.MethodGet {
 			headers["Content-Type"] = "application/json"
 		}
-		body, err := doProfileJSONRequest(endpoint.Method, baseURL+endpoint.Path, headers, nil)
+		body, err := doProfileJSONRequest(endpoint.Method, baseURL+endpoint.Path, headers, nil, profileRequestTimeout(deadline))
 		if err != nil {
 			continue
 		}
@@ -341,14 +396,14 @@ func resolveMaskedProfileKey(baseURL string, tokenID string, token string, baseH
 	return ""
 }
 
-func tryRefreshProfileToken(account ChromeProfileAccount, tokenCandidates []string, userID string, refreshToken string, tokenExpiresAt int64) string {
+func tryRefreshProfileToken(account ChromeProfileAccount, tokenCandidates []string, userID string, refreshToken string, tokenExpiresAt int64, deadline time.Time) string {
 	if account.SiteType != "sub2api" {
 		return ""
 	}
 	if strings.TrimSpace(refreshToken) == "" {
 		return ""
 	}
-	if tokenExpiresAt <= 0 || tokenExpiresAt-time.Now().UnixMilli() > 120000 {
+	if !shouldTryRefreshProfileToken(tokenCandidates, tokenExpiresAt) {
 		return ""
 	}
 
@@ -370,8 +425,9 @@ func tryRefreshProfileToken(account ChromeProfileAccount, tokenCandidates []stri
 
 	payload := map[string]string{"refresh_token": refreshToken}
 	bodyBytes, _ := json.Marshal(payload)
-	body, err := doProfileJSONRequest(http.MethodPost, baseURL+"/api/v1/auth/refresh", headers, bodyBytes)
+	body, err := doProfileJSONRequest(http.MethodPost, baseURL+"/api/v1/auth/refresh", headers, bodyBytes, profileRequestTimeout(deadline))
 	if err != nil {
+		debugLogf("profile token refresh failed: site=%s err=%v", account.SiteURL, err)
 		return ""
 	}
 
@@ -379,12 +435,19 @@ func tryRefreshProfileToken(account ChromeProfileAccount, tokenCandidates []stri
 		getNestedString(body, "data", "access_token"),
 		getNestedString(body, "access_token"),
 	); refreshed != "" {
+		debugLogf("profile token refresh succeeded: site=%s", account.SiteURL)
 		return strings.TrimSpace(strings.TrimPrefix(refreshed, "Bearer "))
 	}
 	return ""
 }
 
 func getProfileTokenEndpoints(siteType string) []string {
+	if siteType == "anyrouter" {
+		return []string{
+			"/api/token/?p=0&size=100",
+			"/api/token?p=0&size=100",
+		}
+	}
 	if siteType == "sub2api" {
 		return []string{
 			"/api/v1/keys?page=1&page_size=100",
@@ -430,7 +493,6 @@ func buildCompatHeaders(userID string) map[string]string {
 		return map[string]string{}
 	}
 	return map[string]string{
-		"new-api-user": userID,
 		"one-api-user": userID,
 		"New-API-User": userID,
 		"Veloera-User": userID,
@@ -441,7 +503,7 @@ func buildCompatHeaders(userID string) map[string]string {
 	}
 }
 
-func doProfileJSONRequest(method string, urlValue string, headers map[string]string, body []byte) (interface{}, error) {
+func doProfileJSONRequest(method string, urlValue string, headers map[string]string, body []byte, timeout time.Duration) (interface{}, error) {
 	var bodyReader *bytes.Reader
 	if body == nil {
 		bodyReader = bytes.NewReader(nil)
@@ -459,25 +521,48 @@ func doProfileJSONRequest(method string, urlValue string, headers map[string]str
 		}
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	if timeout <= 0 {
+		timeout = profileMinRequestTimeout
+	}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("http_%d", resp.StatusCode)
+	bodyBytes, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, readErr
 	}
 
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 	if strings.Contains(contentType, "html") {
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("http_%d", resp.StatusCode)
+		}
 		return nil, fmt.Errorf("html_response")
 	}
 
 	var payload interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("json_decode_failed")
+	if len(bytes.TrimSpace(bodyBytes)) > 0 {
+		if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				return nil, fmt.Errorf("http_%d", resp.StatusCode)
+			}
+			return nil, fmt.Errorf("json_decode_failed")
+		}
+	} else {
+		payload = map[string]interface{}{}
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if bodyMap, ok := payload.(map[string]interface{}); ok {
+			if classified := classifyProfileHTTPError(resp.StatusCode, bodyMap); classified != nil {
+				return nil, classified
+			}
+		}
+		return nil, fmt.Errorf("http_%d", resp.StatusCode)
 	}
 
 	if bodyMap, ok := payload.(map[string]interface{}); ok {
@@ -488,12 +573,23 @@ func doProfileJSONRequest(method string, urlValue string, headers map[string]str
 		}
 		if success, exists := bodyMap["success"]; exists {
 			if successBool, ok := success.(bool); ok && !successBool {
-				return nil, fmt.Errorf("business_success_false")
+				return nil, classifyProfileBusinessError(bodyMap)
 			}
 		}
 	}
 
 	return payload, nil
+}
+
+func profileRequestTimeout(deadline time.Time) time.Duration {
+	remaining := time.Until(deadline)
+	if remaining <= profileMinRequestTimeout {
+		return profileMinRequestTimeout
+	}
+	if remaining < profilePerRequestTimeout {
+		return remaining
+	}
+	return profilePerRequestTimeout
 }
 
 func extractProfileListItems(body interface{}) []map[string]interface{} {
@@ -791,6 +887,147 @@ func parseInt64Loose(value string) int64 {
 		return number
 	}
 	return 0
+}
+
+func normalizeProfileTokenExpiryMillis(value int64) int64 {
+	if value <= 0 {
+		return 0
+	}
+	if value < 1_000_000_000_000 {
+		return value * 1000
+	}
+	return value
+}
+
+func shouldTryRefreshProfileToken(tokenCandidates []string, tokenExpiresAt int64) bool {
+	nowMillis := time.Now().UnixMilli()
+	normalizedExpiry := normalizeProfileTokenExpiryMillis(tokenExpiresAt)
+	if normalizedExpiry > 0 {
+		return normalizedExpiry-nowMillis <= 120000
+	}
+
+	for _, token := range tokenCandidates {
+		if expiryMillis := extractJWTExpiryMillis(token); expiryMillis > 0 {
+			return expiryMillis-nowMillis <= 120000
+		}
+	}
+
+	return false
+}
+
+func extractJWTExpiryMillis(token string) int64 {
+	token = strings.TrimSpace(strings.TrimPrefix(token, "Bearer "))
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return 0
+	}
+
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return 0
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		return 0
+	}
+
+	expValue, ok := payload["exp"]
+	if !ok {
+		return 0
+	}
+
+	switch value := expValue.(type) {
+	case float64:
+		return int64(value * 1000)
+	case int64:
+		return value * 1000
+	case json.Number:
+		if parsed, err := value.Int64(); err == nil {
+			return parsed * 1000
+		}
+	}
+
+	return 0
+}
+
+func scoreProfileFetchError(endpoint string, err error) int {
+	if err == nil {
+		return -1
+	}
+
+	code := strings.TrimSpace(strings.ToLower(err.Error()))
+	switch code {
+	case "user_banned":
+		return 130
+	case "http_401":
+		return 120
+	case "http_403":
+		return 110
+	case "business_success_false":
+		return 100
+	case "html_response":
+		return 90
+	case "token_list_empty":
+		return 80
+	case "http_404":
+		if strings.Contains(endpoint, "/api/v1/keys") {
+			return 70
+		}
+		return 20
+	}
+
+	if strings.HasPrefix(code, "business_code_") {
+		return 85
+	}
+	if strings.HasPrefix(code, "http_5") {
+		return 60
+	}
+	if strings.HasPrefix(code, "http_4") {
+		return 50
+	}
+
+	return 40
+}
+
+func classifyProfileBusinessError(bodyMap map[string]interface{}) error {
+	messageText := firstNonEmpty(
+		toStringValue(bodyMap["message"]),
+		toStringValue(bodyMap["msg"]),
+		getNestedString(bodyMap, "error", "message"),
+	)
+	lowerMessage := strings.ToLower(strings.TrimSpace(messageText))
+	codeText := strings.ToLower(strings.TrimSpace(toStringValue(bodyMap["code"])))
+	switch {
+	case codeText == "token_expired" || strings.Contains(lowerMessage, "token has expired") || strings.Contains(messageText, "令牌已过期") || strings.Contains(messageText, "token已过期"):
+		return fmt.Errorf("token_expired")
+	case strings.Contains(messageText, "封禁") || strings.Contains(lowerMessage, "banned"):
+		return fmt.Errorf("user_banned")
+	case strings.Contains(messageText, "余额不足") || strings.Contains(lowerMessage, "insufficient balance"):
+		return fmt.Errorf("insufficient_balance")
+	case strings.Contains(messageText, "无权") || strings.Contains(lowerMessage, "unauthorized"):
+		return fmt.Errorf("http_401")
+	}
+	return fmt.Errorf("business_success_false")
+}
+
+func classifyProfileHTTPError(statusCode int, bodyMap map[string]interface{}) error {
+	codeText := strings.ToLower(strings.TrimSpace(toStringValue(bodyMap["code"])))
+	messageText := firstNonEmpty(
+		toStringValue(bodyMap["message"]),
+		toStringValue(bodyMap["msg"]),
+		getNestedString(bodyMap, "error", "message"),
+	)
+	lowerMessage := strings.ToLower(strings.TrimSpace(messageText))
+
+	switch {
+	case codeText == "token_expired" || strings.Contains(lowerMessage, "token has expired") || strings.Contains(messageText, "令牌已过期") || strings.Contains(messageText, "token已过期"):
+		return fmt.Errorf("token_expired")
+	case strings.Contains(messageText, "封禁") || strings.Contains(lowerMessage, "banned"):
+		return fmt.Errorf("user_banned")
+	}
+
+	return fmt.Errorf("http_%d", statusCode)
 }
 
 func prependUnique(items []string, value string) []string {

@@ -388,6 +388,51 @@ export namespace main {
 		    return a;
 		}
 	}
+	
+	export class desktopProfileAssistOpenRequest {
+	    siteName: string;
+	    siteUrl: string;
+	    siteType: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new desktopProfileAssistOpenRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.siteName = source["siteName"];
+	        this.siteUrl = source["siteUrl"];
+	        this.siteType = source["siteType"];
+	    }
+	}
+	export class fetchKeysProgressSnapshot {
+	    active: boolean;
+	    stage: string;
+	    detail: string;
+	    total: number;
+	    completed: number;
+	    successSites: number;
+	    lastSiteName: string;
+	    startedAt: number;
+	    lastUpdatedAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new fetchKeysProgressSnapshot(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.active = source["active"];
+	        this.stage = source["stage"];
+	        this.detail = source["detail"];
+	        this.total = source["total"];
+	        this.completed = source["completed"];
+	        this.successSites = source["successSites"];
+	        this.lastSiteName = source["lastSiteName"];
+	        this.startedAt = source["startedAt"];
+	        this.lastUpdatedAt = source["lastUpdatedAt"];
+	    }
+	}
 
 }
 

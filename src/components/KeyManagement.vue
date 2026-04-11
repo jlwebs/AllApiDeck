@@ -1,7 +1,9 @@
 <template>
   <ConfigProvider :theme="configProviderTheme">
-    <div class="key-management">
-      <AppHeader current-page="keys" :is-dark-mode="isDarkMode" @toggle-theme="handleToggleTheme" @experimental="showExperimentalFeatures = true" @settings="openSettingsHint" />
+    <div class="key-management" :class="{ 'key-management-compact': isCompactMode }">
+      <AppHeader v-if="!isCompactMode" current-page="keys" :is-dark-mode="isDarkMode" @toggle-theme="handleToggleTheme" @experimental="showExperimentalFeatures = true" @settings="openSettingsModal" />
+
+      <template v-if="!isCompactMode">
 
       <a-card title="批量同步密钥到本地库" class="sync-card">
         <div class="sync-toolbar">
@@ -16,12 +18,22 @@
         <a-alert v-if="!loading && failedSites.length > 0" type="warning" show-icon class="sync-alert" :message="`${failedSites.length} 个站点本次未获取到 key，详见 logs/fetch-keys.log`" :description="failedSiteNames" />
         <a-alert v-if="!loading" type="info" show-icon class="sync-alert" :message="syncSummary" />
       </a-card>
+      </template>
+
+      <div v-if="isCompactMode" class="compact-sidebar-summary">
+        <div class="compact-sidebar-heading">
+          <strong>密钥侧边栏</strong>
+          <span class="subtle-text">{{ displayedRows.length }} 条可见 / 正常 {{ healthyKeyCount }}</span>
+        </div>
+        <a-alert type="info" show-icon class="compact-sidebar-alert" :message="syncSummary" />
+      </div>
 
       <a-card title="本地密钥管理" class="inventory-card">
         <template #extra>
           <a-space wrap>
             <a-checkbox v-model:checked="hideInvalidKeys">隐藏无效密钥</a-checkbox>
             <a-button @click="openManualRecordModal()">手工添加</a-button>
+            <a-button v-if="isCompactMode" size="small" @click="exitCompactSidebar">展开</a-button>
             <a-popover trigger="hover" placement="bottom">
               <template #content>
                 <div class="import-export-menu">
@@ -31,15 +43,15 @@
               </template>
               <a-button type="primary">导入/导出</a-button>
             </a-popover>
-            <a-button :disabled="displayedRows.length === 0" @click="exportCsv">导出 CSV</a-button>
-            <a-popconfirm title="确认清空本地密钥库？" ok-text="清空" cancel-text="取消" @confirm="clearLocalRecords">
+            <a-button v-if="!isCompactMode" :disabled="displayedRows.length === 0" @click="exportCsv">导出 CSV</a-button>
+            <a-popconfirm v-if="!isCompactMode" title="确认清空本地密钥库？" ok-text="清空" cancel-text="取消" @confirm="clearLocalRecords">
               <a-button danger :disabled="tableData.length === 0">清空本地库</a-button>
             </a-popconfirm>
           </a-space>
         </template>
 
         <a-empty v-if="displayedRows.length === 0" description="暂无本地密钥记录，可从批量检测自动同步、剪贴板导入或手工添加。" />
-        <a-table v-else :columns="columns" :data-source="displayedRows" :row-key="record => record.rowKey" :pagination="{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'] }" :scroll="{ x: 1280 }" size="small" class="compact-key-table">
+        <a-table v-else :columns="activeColumns" :data-source="displayedRows" :row-key="record => record.rowKey" :pagination="isCompactMode ? false : { pageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'] }" :scroll="isCompactMode ? { x: 980 } : { x: 1280 }" size="small" class="compact-key-table">
           <template #bodyCell="{ column, record }">
             <template v-if="column.dataIndex === 'siteName'">
               <div class="site-cell">
@@ -48,8 +60,13 @@
                     <div class="site-heading">
                       <a-tag v-if="record.sourceType === 'manual'" color="blue">手工添加</a-tag>
                       <strong>{{ record.siteName }}</strong>
+                      <a-tag v-if="isCompactMode" :color="record.status === 1 ? 'green' : 'red'">{{ record.status === 1 ? '正常' : '异常' }}</a-tag>
                     </div>
                     <span class="subtle-text">{{ record.tokenName || '未命名 Token' }}</span>
+                    <div v-if="isCompactMode" class="compact-site-api-block">
+                      <a-typography-text :copyable="{ text: record.apiKey }" :ellipsis="{ tooltip: record.apiKey }" class="cell-copy-text compact-key-text">{{ maskApiKey(record.apiKey) }}</a-typography-text>
+                      <a-typography-text :copyable="{ text: record.siteUrl }" :ellipsis="{ tooltip: record.siteUrl }" class="cell-copy-text api-endpoint-text compact-endpoint-text">{{ record.siteUrl }}</a-typography-text>
+                    </div>
                   </div>
                   <div v-if="canRefreshBalance(record)" class="site-balance-panel" :title="getRecordBalanceTooltip(record)">
                     <div class="site-balance-meta">
@@ -257,15 +274,67 @@
       </a-modal>
 
       <DesktopConfigDiffModal :open="desktopConfigDiffOpen" :preview="desktopConfigPreview" @cancel="desktopConfigDiffOpen = false" @confirm="applyDesktopConfigPreview" />
+      <a-modal
+        v-model:open="showAppSettingsModal"
+        title="系统设置"
+        :footer="null"
+        :width="600"
+        @cancel="closeSettingsModal"
+        :centered="true"
+        :destroyOnClose="true"
+      >
+        <a-tabs>
+          <a-tab-pane key="1" tab="本地缓存">
+            <a-form @submit.prevent>
+              <a-row :gutter="16" type="flex" align="middle">
+                <a-col :span="16">
+                  <a-form-item label="API URL">
+                    <a-input v-model:value="settingsApiUrl" placeholder="请输入 API URL">
+                      <template #prefix><UserOutlined /></template>
+                    </a-input>
+                  </a-form-item>
+                  <a-form-item label="API Key">
+                    <a-input-password v-model:value="settingsApiKey" placeholder="请输入 API Key">
+                      <template #prefix><LockOutlined /></template>
+                    </a-input-password>
+                  </a-form-item>
+                </a-col>
+                <a-col :span="8">
+                  <a-button type="primary" @click="saveToLocal" block style="height: 104px;">
+                    保存到缓存
+                  </a-button>
+                </a-col>
+              </a-row>
+            </a-form>
+            <a-list :data-source="localCacheList" bordered style="margin-top: 15px; max-height: 300px; overflow-y: auto;">
+              <template #renderItem="{ item }">
+                <a-list-item>
+                  <div style="max-width: 70%;">
+                    <div style="font-weight: bold;">{{ item.name }}</div>
+                    <div style="font-size: 12px; color: #999; overflow: hidden; text-overflow: ellipsis;">{{ item.url }}</div>
+                  </div>
+                  <template #actions>
+                    <a @click="loadLocalRecord(item.id)">填充</a>
+                    <a-popconfirm title="确定删除此缓存？" @confirm="deleteLocalRecord(item.id)">
+                      <a style="color: #ff4d4f;">删除</a>
+                    </a-popconfirm>
+                  </template>
+                </a-list-item>
+              </template>
+            </a-list>
+          </a-tab-pane>
+        </a-tabs>
+      </a-modal>
       <a-modal v-model:open="showExperimentalFeatures" title="实验功能" :footer="null" @cancel="showExperimentalFeatures = false"><div class="experimental-modal"><p>实验功能仍在整理中，后续会继续补充。</p></div></a-modal>
     </div>
   </ConfigProvider>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue';
-import { ClockCircleOutlined, ReloadOutlined } from '@ant-design/icons-vue';
-import { ConfigProvider, message, theme } from 'ant-design-vue';
+import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { ClockCircleOutlined, LockOutlined, ReloadOutlined, UserOutlined } from '@ant-design/icons-vue';
+import { ConfigProvider, message, Modal, theme } from 'ant-design-vue';
+import { useRoute } from 'vue-router';
 import AppHeader from './AppHeader.vue';
 import DesktopConfigDiffModal from './DesktopConfigDiffModal.vue';
 import { fetchModelList } from '../utils/api.js';
@@ -275,6 +344,9 @@ import { toggleTheme } from '../utils/theme.js';
 import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManagedAppConfigFiles } from '../utils/desktopConfigBridge.js';
 import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS } from '../utils/desktopConfigTransform.js';
 import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils/balance.js';
+import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
+import { exitSidebarMode, isSidebarBridgeAvailable } from '../utils/windowMode.js';
+import { maximiseMainWindow } from '../utils/windowSizing.js';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
 import geminiAppIcon from '../assets/app-icons/gemini.svg';
@@ -287,6 +359,7 @@ const STORAGE_KEY = 'api_check_key_management_records_v1';
 const MANUAL_STORAGE_KEY = 'api_check_key_management_manual_records_v1';
 const META_STORAGE_KEY = 'api_check_key_management_meta_v1';
 const LAST_RESULTS_STORAGE_KEY = 'api_check_last_results';
+const KEY_MANAGEMENT_SYNC_EVENT = 'batch-api-check:key-management-sync';
 const DEFAULT_TEST_TIMEOUT_MS = 20000;
 const CC_SWITCH_TARGET_APPS = ['claude', 'codex', 'gemini', 'opencode', 'openclaw'];
 const DESKTOP_APP_ICONS = {
@@ -296,6 +369,7 @@ const DESKTOP_APP_ICONS = {
   opencode: opencodeAppIcon,
   openclaw: openclawAppIcon,
 };
+const route = useRoute();
 
 function createManualRecordDraft(record = null) {
   const modelsList = normalizeModels(record?.modelsList || record?.modelsText);
@@ -336,6 +410,11 @@ const manualModelOptions = ref([]);
 const manualModelLoading = ref(false);
 const manualModelFetchKey = ref('');
 const hideInvalidKeys = ref(true);
+const showAppSettingsModal = ref(false);
+const settingsApiUrl = ref('');
+const settingsApiKey = ref('');
+const localCacheList = ref([]);
+const isCompactMode = computed(() => route.query?.compact === '1');
 
 const configProviderTheme = computed(() => ({
   algorithm: isDarkMode.value ? theme.darkAlgorithm : theme.defaultAlgorithm,
@@ -351,7 +430,7 @@ const desktopConfigModelOptions = computed(() => {
     : [{ label: currentValue, value: currentValue }, ...options];
 });
 const columns = [
-  { title: '网站', dataIndex: 'siteName', key: 'siteName', width: 220, fixed: 'left', sorter: (a, b) => String(a.siteName || '').localeCompare(String(b.siteName || '')) },
+  { title: '网站', dataIndex: 'siteName', key: 'siteName', width: 220, sorter: (a, b) => String(a.siteName || '').localeCompare(String(b.siteName || '')) },
   { title: 'API Key', dataIndex: 'apiKey', key: 'apiKey', width: 210 },
   { title: '模型候选', dataIndex: 'modelsText', key: 'modelsText', width: 190 },
   { title: '状态', dataIndex: 'status', key: 'status', width: 88, sorter: (a, b) => Number(a.status || 0) - Number(b.status || 0) },
@@ -360,6 +439,9 @@ const columns = [
   { title: '操作', dataIndex: 'rowActions', key: 'rowActions', width: 110 },
   { title: '最近同步', dataIndex: 'updatedAt', key: 'updatedAt', width: 150, sorter: (a, b) => Number(a.updatedAt || 0) - Number(b.updatedAt || 0), defaultSortOrder: 'descend' },
 ];
+const activeColumns = computed(() => (isCompactMode.value
+  ? columns.filter(column => ['siteName', 'modelsText', 'exportActions', 'quickTest', 'rowActions'].includes(column.dataIndex))
+  : columns));
 const failedSites = computed(() => allResults.value.filter(result => !Array.isArray(result?.tokens) || result.tokens.length === 0));
 const failedSiteNames = computed(() => failedSites.value.map(site => site?.site_name || site?.id || '未命名站点').join('，'));
 const displayedRows = computed(() => {
@@ -372,13 +454,24 @@ const healthyKeyCount = computed(() => tableData.value.filter(record => record.s
 const syncSummary = computed(() => !syncMeta.value.lastBatchSyncAt ? '导入 accounts-backup JSON 后，会自动把获取到的 sk key 写入 localStorage。' : `最近一次批量同步写入 ${syncMeta.value.lastBatchSyncCount} 条记录，失败站点 ${syncMeta.value.lastBatchFailedCount} 个。`);
 
 onMounted(() => {
+  if (!isCompactMode.value) {
+    void maximiseMainWindow();
+  }
   if (!document.body.classList.contains('dark-mode') && !document.body.classList.contains('light-mode')) document.body.classList.add('light-mode');
   isDarkMode.value = document.body.classList.contains('dark-mode');
-  batchHistoryContextMap.value = loadBatchHistoryContextMap();
-  tableData.value = loadStoredRecords();
-  syncMeta.value = loadStoredMeta();
+  refreshManagedRecordsFromStorage();
   persistRecords();
-  void autoRefreshKeyBalancesOnce();
+  if (typeof window !== 'undefined') {
+    window.addEventListener(KEY_MANAGEMENT_SYNC_EVENT, handleManagedRecordSyncEvent);
+    window.addEventListener('storage', handleManagedRecordStorageEvent);
+  }
+});
+
+onBeforeUnmount(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener(KEY_MANAGEMENT_SYNC_EVENT, handleManagedRecordSyncEvent);
+    window.removeEventListener('storage', handleManagedRecordStorageEvent);
+  }
 });
 
 function handleToggleTheme() {
@@ -387,8 +480,82 @@ function handleToggleTheme() {
   document.body.classList.toggle('light-mode', !isDarkMode.value);
 }
 
-function openSettingsHint() {
-  message.info('密钥管理页暂时没有独立设置项，可在首页继续使用通用设置。');
+const openSettingsModal = () => {
+  showAppSettingsModal.value = true;
+  loadLocalCache();
+};
+
+const closeSettingsModal = () => {
+  showAppSettingsModal.value = false;
+};
+
+const loadLocalCache = () => {
+  const cache = localStorage.getItem('api_check_local_cache');
+  if (cache) {
+    try {
+      localCacheList.value = JSON.parse(cache);
+    } catch (e) {
+      localCacheList.value = [];
+    }
+  }
+};
+
+const saveToLocal = () => {
+  if (!settingsApiUrl.value || !settingsApiKey.value) {
+    message.warning('请输入完整的 API URL 和 Key');
+    return;
+  }
+  const newRecord = {
+    id: Date.now(),
+    name: new URL(settingsApiUrl.value).hostname,
+    url: settingsApiUrl.value,
+    apiKey: settingsApiKey.value
+  };
+  localCacheList.value.push(newRecord);
+  localStorage.setItem('api_check_local_cache', JSON.stringify(localCacheList.value));
+  message.success('保存成功');
+};
+
+const deleteLocalRecord = (id) => {
+  localCacheList.value = localCacheList.value.filter(r => r.id !== id);
+  localStorage.setItem('api_check_local_cache', JSON.stringify(localCacheList.value));
+};
+
+const loadLocalRecord = (id) => {
+  const record = localCacheList.value.find(r => r.id === id);
+  if (record) {
+    settingsApiUrl.value = record.url;
+    settingsApiKey.value = record.apiKey;
+    message.success('已加载到配置表单');
+  }
+};
+
+function refreshManagedRecordsFromStorage() {
+  batchHistoryContextMap.value = loadBatchHistoryContextMap();
+  tableData.value = loadStoredRecords();
+  syncMeta.value = loadStoredMeta();
+  keyBalanceRefreshBootstrapped.value = false;
+  void autoRefreshKeyBalancesOnce();
+}
+
+function handleManagedRecordSyncEvent() {
+  refreshManagedRecordsFromStorage();
+}
+
+function handleManagedRecordStorageEvent(event) {
+  const watchedKeys = [STORAGE_KEY, MANUAL_STORAGE_KEY, META_STORAGE_KEY, LAST_RESULTS_STORAGE_KEY];
+  if (event?.key && !watchedKeys.includes(event.key)) return;
+  refreshManagedRecordsFromStorage();
+}
+
+async function exitCompactSidebar() {
+  if (!isSidebarBridgeAvailable()) return;
+  try {
+    await exitSidebarMode();
+  } catch (error) {
+    console.error(error);
+    message.error(`展开主界面失败：${error.message || '未知错误'}`);
+  }
 }
 
 function beforeUpload(file) {
@@ -528,7 +695,11 @@ async function runQuickTest(record) {
     record.quickTestAt = Date.now();
     record.quickTestResponseTime = '';
     record.quickTestResponseContent = '';
+    const detail = String(error?.detail || error?.message || '快速测试失败').trim();
+    record.quickTestRemark = detail;
+    record.quickTestResponseContent = detail;
     persistRecords();
+    showQuickTestErrorDialog(detail);
     message.error(`快速测试失败：${error.message || '未知错误'}`);
   } finally {
     record.quickTestLoading = false;
@@ -570,11 +741,15 @@ async function executeQuickTest({ apiKey, siteUrl, model }) {
   const response = await apiFetch('/api/check-key', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: normalizeSiteUrl(siteUrl), key: apiKey, model, messages: [{ role: 'user', content: 'hello' }], timeoutMs, _isFirst: false }),
+    body: JSON.stringify({ url: normalizeSiteUrl(siteUrl), key: apiKey, model, messages: buildQuickTestMessages(), timeoutMs, _isFirst: false }),
   });
   if (!response.ok) {
     const rawError = await safeReadResponsePayload(response);
-    throw new Error(extractReadableError(rawError, response.status));
+    throw createQuickTestError(rawError, response.status, {
+      siteUrl: normalizeSiteUrl(siteUrl),
+      model,
+      timeoutMs,
+    });
   }
 
   let data = await response.json();
@@ -1311,6 +1486,62 @@ function extractReadableError(payload, statusCode) {
   return payload?.error?.message || payload?.message || `HTTP ${statusCode}`;
 }
 
+function buildQuickTestDiagnosticText(payload, statusCode, requestMeta = {}) {
+  const diagnostics = payload?.error?.diagnostics || payload?.diagnostics || null;
+  const lines = [extractReadableError(payload, statusCode)];
+
+  if (requestMeta?.siteUrl) {
+    lines.push(`输入地址: ${requestMeta.siteUrl}`);
+  }
+  if (requestMeta?.model) {
+    lines.push(`请求模型: ${requestMeta.model}`);
+  }
+  if (Number.isFinite(Number(requestMeta?.timeoutMs)) && Number(requestMeta.timeoutMs) > 0) {
+    lines.push(`超时设置: ${Math.round(Number(requestMeta.timeoutMs) / 1000)}s`);
+  }
+  if (diagnostics?.resolvedEndpoint) {
+    lines.push(`命中端点: ${diagnostics.resolvedEndpoint}`);
+  }
+
+  const attempts = Array.isArray(diagnostics?.attempts) ? diagnostics.attempts : [];
+  if (attempts.length) {
+    lines.push('尝试日志:');
+    attempts.forEach((attempt, index) => {
+      const status = Number(attempt?.status || 0);
+      const endpoint = String(attempt?.endpoint || '').trim();
+      const messageText = String(attempt?.message || '').trim();
+      lines.push(`${index + 1}. [${status || '?'}] ${endpoint}${messageText ? ` -> ${messageText}` : ''}`);
+    });
+  }
+
+  return lines.filter(Boolean).join('\n');
+}
+
+function createQuickTestError(payload, statusCode, requestMeta = {}) {
+  const error = new Error(extractReadableError(payload, statusCode));
+  error.detail = buildQuickTestDiagnosticText(payload, statusCode, requestMeta);
+  return error;
+}
+
+function showQuickTestErrorDialog(detailText) {
+  Modal.error({
+    title: '快速测活失败',
+    width: 760,
+    okText: '关闭',
+    content: h('div', {
+      style: {
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        maxHeight: '60vh',
+        overflow: 'auto',
+        fontSize: '12px',
+        lineHeight: '1.6',
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+      },
+    }, detailText),
+  });
+}
+
 function formatDateTime(timestamp) {
   if (!timestamp) return '未同步';
   try {
@@ -1714,7 +1945,12 @@ function persistMeta() {
 </script>
 
 <style scoped>
-.key-management{width:100%;padding:20px;display:flex;flex-direction:column;gap:20px}
+.key-management{width:100%;padding:16px;display:flex;flex-direction:column;gap:16px;position:relative;overflow:hidden;border-radius:28px;background:radial-gradient(circle at 14% 16%,rgba(196,226,163,.18),transparent 22%),radial-gradient(circle at 84% 12%,rgba(255,214,126,.18),transparent 18%),linear-gradient(180deg,rgba(8,18,12,.12) 0%,rgba(8,18,12,.28) 45%,rgba(8,18,12,.5) 100%),url('/forest-batch-bg-v2.png') center center/cover no-repeat;box-shadow:0 26px 56px rgba(76,92,64,.16),inset 0 1px 0 rgba(255,255,255,.42)}
+.key-management-compact{padding:12px;gap:12px;min-height:100vh;background:linear-gradient(180deg,#f8fafc,#eef2ff)}
+.key-management>*{position:relative;z-index:1}
+.compact-sidebar-summary{display:flex;flex-direction:column;gap:10px}
+.compact-sidebar-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.compact-sidebar-alert{margin:0}
 .sync-card,.inventory-card{width:100%}
 .sync-toolbar,.sync-meta,.quick-test-cell,.site-cell,.time-cell{display:flex;gap:12px;flex-wrap:wrap}
 .sync-toolbar{align-items:center;justify-content:space-between}
@@ -1723,6 +1959,8 @@ function persistMeta() {
 .site-cell{width:100%}
 .site-top-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;width:100%}
 .site-main-block{min-width:0;flex:1}
+.compact-site-api-block{margin-top:6px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.compact-key-text,.compact-endpoint-text{max-width:100%}
 .site-balance-panel{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:128px}
 .site-balance-meta{display:flex;align-items:center;justify-content:flex-start;gap:10px;width:100%;color:#9ca3af;font-size:11px}
 .site-balance-time{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
@@ -1790,5 +2028,36 @@ function persistMeta() {
 .desktop-app-opencode .desktop-app-logo{background:linear-gradient(135deg,#eef2ff,#dbeafe)}
 .desktop-app-openclaw .desktop-app-logo{background:linear-gradient(135deg,#fff1f2,#ffe4e6)}
 .config-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}
+.key-management :deep(.ant-card){border-radius:24px;border:1px solid rgba(90,117,79,.12);background:rgba(255,255,255,.7);box-shadow:0 14px 36px rgba(87,107,73,.1),inset 0 1px 0 rgba(255,255,255,.72);backdrop-filter:blur(12px)}
+.key-management :deep(.ant-card-head){min-height:56px;border-bottom-color:rgba(90,117,79,.1)}
+.key-management :deep(.ant-card-head-title){font:700 18px/1.1 Georgia,'Times New Roman',serif;color:#2d432f}
+.key-management :deep(.ant-card-extra),.key-management .sync-meta,.key-management .subtle-text,.key-management .api-endpoint-text,.key-management .desktop-panel-hint,.key-management .desktop-field-hint{color:#667760}
+.key-management :deep(.ant-table-wrapper),.key-management :deep(.ant-table-container){background:transparent}
+.key-management :deep(.ant-table-thead > tr > th){background:rgba(239,246,226,.72);color:#334634;font-weight:700}
+.key-management :deep(.ant-table-tbody > tr > td){background:rgba(255,255,255,.18)}
+.key-management .desktop-app-panel,.key-management .desktop-form-panel{background:linear-gradient(180deg,rgba(248,252,244,.92),rgba(236,245,226,.84));box-shadow:inset 0 1px 0 rgba(255,255,255,.78)}
+.key-management .desktop-panel-title,.key-management .desktop-app-name,.key-management .site-heading strong{font-family:Georgia,'Times New Roman',serif;color:#2d432f}
+.key-management .quick-test-button{border-radius:999px;background:linear-gradient(135deg,#476847,#6f8f55);border:0;box-shadow:0 8px 16px rgba(87,118,76,.18)}
+.key-management :deep(.ant-btn-default),.key-management :deep(.ant-btn-primary),.key-management :deep(.ant-select-selector),.key-management :deep(.ant-input),.key-management :deep(.ant-input-password),.key-management :deep(.ant-input-affix-wrapper){border-radius:12px}
+:deep(body.dark-mode) .key-management{background:radial-gradient(circle at 14% 16%,rgba(102,164,110,.18),transparent 22%),radial-gradient(circle at 84% 12%,rgba(255,194,96,.14),transparent 18%),linear-gradient(180deg,rgba(5,12,8,.42) 0%,rgba(5,12,8,.62) 45%,rgba(4,8,6,.82) 100%),url('/forest-batch-bg-v2.png') center center/cover no-repeat;box-shadow:0 28px 60px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.04)}
+:deep(body.dark-mode) .key-management :deep(.ant-card){background:rgba(255,255,255,.06);border-color:rgba(160,189,144,.14);box-shadow:0 18px 42px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.04)}
+:deep(body.dark-mode) .key-management :deep(.ant-card-head-title),:deep(body.dark-mode) .key-management .desktop-panel-title,:deep(body.dark-mode) .key-management .desktop-app-name,:deep(body.dark-mode) .key-management .site-heading strong{color:#edf5e6}
+:deep(body.dark-mode) .key-management :deep(.ant-card-extra),:deep(body.dark-mode) .key-management .sync-meta,:deep(body.dark-mode) .key-management .subtle-text,:deep(body.dark-mode) .key-management .api-endpoint-text,:deep(body.dark-mode) .key-management .desktop-panel-hint,:deep(body.dark-mode) .key-management .desktop-field-hint{color:#b6c7b1}
+:deep(body.dark-mode) .key-management :deep(.ant-table-thead > tr > th){background:rgba(255,255,255,.08);color:#edf5e6}
+:deep(body.dark-mode) .key-management :deep(.ant-table-tbody > tr > td){background:rgba(255,255,255,.03)}
+:deep(body.dark-mode) .key-management .desktop-app-panel,:deep(body.dark-mode) .key-management .desktop-form-panel{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(160,189,144,.06))}
+.key-management-compact :deep(.ant-card-head){padding-inline:12px;min-height:52px}
+.key-management-compact :deep(.ant-card-head-title){font-size:15px}
+.key-management-compact :deep(.ant-card-body){padding:12px}
+.key-management-compact :deep(.ant-card-extra){max-width:100%}
+.key-management-compact :deep(.ant-space){row-gap:8px}
+.key-management-compact .compact-key-table :deep(.ant-table-thead > tr > th){padding:10px 8px;font-size:12px}
+.key-management-compact .compact-key-table :deep(.ant-table-tbody > tr > td){padding:8px;vertical-align:top}
+.key-management-compact .quick-test-cell{padding-left:0}
+.key-management-compact .quick-test-button{padding-inline:12px}
+.key-management-compact .inline-export-actions{gap:6px}
+.key-management-compact .record-model-select :deep(.ant-select-selector){min-height:32px;padding-inline:8px !important}
+.key-management-compact .record-model-select :deep(.ant-select-selection-item),
+.key-management-compact .record-model-select :deep(.ant-select-selection-placeholder){font-size:11px;line-height:30px}
 @media (max-width:900px){.key-management{padding:16px}.desktop-config-layout{grid-template-columns:1fr}.desktop-app-grid{grid-template-columns:repeat(4,minmax(0,1fr));overflow:auto}.config-grid{grid-template-columns:1fr}}
 </style>

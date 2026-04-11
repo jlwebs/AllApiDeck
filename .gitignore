@@ -12,6 +12,18 @@ dist
 dist-ssr
 *.local
 /.*/
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
+
+build/
+.npmrc.wails
+.tmp-esbuild.exe
+package.json.md5
+tmp_*.go
+tmp_log*.txt
+tmp_reflog.txt
+test_output.txt
 
 # Editor directories and files
 .vscode/*

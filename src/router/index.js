@@ -5,6 +5,18 @@ import Layout from '../views/Layout.vue';
 
 const routes = [
   {
+    path: '/panel',
+    component: () => import('../views/Panel.vue'),
+  },
+  {
+    path: '/editor',
+    component: () => import('../views/Editor.vue'),
+  },
+  {
+    path: '/desktop-config',
+    component: () => import('../views/DesktopConfig.vue'),
+  },
+  {
     path: '/',
     component: Layout,
     children: [

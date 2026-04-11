@@ -2,7 +2,7 @@
   <a-modal
     :open="open"
     title="确认写入本地配置"
-    :width="1500"
+    :width="width"
     ok-text="确认写入"
     cancel-text="取消"
     :ok-button-props="{ disabled: !hasWritableFiles }"
@@ -133,6 +133,10 @@ const props = defineProps({
   preview: {
     type: Object,
     default: () => ({ appGroups: [], writes: [], errors: [] }),
+  },
+  width: {
+    type: Number,
+    default: 1500,
   },
 });
 

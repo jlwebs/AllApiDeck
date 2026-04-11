@@ -10,8 +10,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 const (
@@ -24,16 +28,43 @@ type App struct {
 	sidecarCmd *exec.Cmd
 	sidecarLog *os.File
 	sidecarMu  sync.Mutex
+	mode       launchMode
+	recordKey  string
+
+	tray                 trayController
+	windowMonitorStop    chan struct{}
+	windowMonitorStopMux sync.Mutex
+
+	panelCmd *exec.Cmd
+	panelMu  sync.Mutex
+
+	panelAutoStop    chan struct{}
+	panelAutoStopMux sync.Mutex
+
+	mainWindowGraceUntil atomic.Int64
+	mainWindowSeenNormal atomic.Bool
 }
 
-func NewApp() *App {
-	return &App{}
+func NewApp(mode launchMode, recordKey string) *App {
+	return &App{mode: mode, recordKey: recordKey}
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	debugLogf("startup begin")
-	if !shouldStartDevSidecar() {
+	if a.isMainMode() {
+		a.mainWindowSeenNormal.Store(false)
+		a.mainWindowGraceUntil.Store(time.Now().Add(4 * time.Second).UnixMilli())
+		a.terminateSiblingAppProcesses()
+		a.stopPanelProcess()
+		if err := a.initTray(); err != nil {
+			debugLogf("init tray failed: %v", err)
+		} else {
+			debugLogf("tray initialised")
+		}
+		a.initWindowMonitor()
+	}
+	if a.isPanelMode() || !shouldStartDevSidecar() {
 		debugLogf("startup skip dev sidecar: embedded bridge mode")
 		return
 	}
@@ -48,6 +79,10 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) shutdown(ctx context.Context) {
 	_ = ctx
 	debugLogf("shutdown begin")
+	a.stopWindowMonitor()
+	a.stopPanelAutoController()
+	a.closeTray()
+	a.stopPanelProcess()
 	a.stopSidecar()
 	debugLogf("shutdown complete")
 }
@@ -55,12 +90,103 @@ func (a *App) shutdown(ctx context.Context) {
 func (a *App) domReady(ctx context.Context) {
 	_ = ctx
 	debugLogf("dom ready")
+	if a.isPanelMode() {
+		go a.initPanelWindow()
+		return
+	}
+	if a.isMainMode() {
+		go a.ensureMainWindowVisible()
+	}
 }
 
 func (a *App) beforeClose(ctx context.Context) bool {
 	_ = ctx
 	debugLogf("before close")
-	return false
+	if a.isPanelMode() || a.isEditorMode() || a.isDesktopConfigMode() {
+		return false
+	}
+	if a.isQuitRequested() {
+		debugLogf("before close allowed: quit requested")
+		return false
+	}
+	if err := a.HideToTray(); err != nil {
+		debugLogf("before close hide to tray failed: %v", err)
+		return false
+	}
+	debugLogf("before close intercepted: hidden to tray")
+	return true
+}
+
+func (a *App) GetLaunchMode() string {
+	return string(a.mode)
+}
+
+func (a *App) GetLaunchRecordKey() string {
+	return a.recordKey
+}
+
+func (a *App) isPanelMode() bool {
+	return a.mode == launchModePanel
+}
+
+func (a *App) isEditorMode() bool {
+	return a.mode == launchModeEditor
+}
+
+func (a *App) isDesktopConfigMode() bool {
+	return a.mode == launchModeDesktopConfig
+}
+
+func (a *App) isMainMode() bool {
+	return a.mode == launchModeMain
+}
+
+func (a *App) terminateSiblingAppProcesses() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+
+	exePath, err := os.Executable()
+	if err != nil {
+		return
+	}
+
+	processName := strings.TrimSuffix(filepath.Base(exePath), filepath.Ext(exePath))
+	if processName == "" {
+		return
+	}
+
+	script := fmt.Sprintf(
+		"Get-Process -Name '%s' -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne %d } | Stop-Process -Force",
+		processName,
+		os.Getpid(),
+	)
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	configureBackgroundCmd(cmd)
+	if err := cmd.Run(); err != nil {
+		debugLogf("terminate sibling processes failed: %v", err)
+		return
+	}
+	debugLogf("terminated sibling %s processes", processName)
+}
+
+func (a *App) ensureMainWindowVisible() {
+	if a.ctx == nil || !a.isMainMode() {
+		return
+	}
+
+	time.Sleep(220 * time.Millisecond)
+	debugLogf("ensure main window visible")
+	defaultWidth, defaultHeight, minWidth, minHeight := resolveMainWindowSize()
+	wruntime.WindowSetAlwaysOnTop(a.ctx, false)
+	wruntime.WindowSetMinSize(a.ctx, minWidth, minHeight)
+	wruntime.WindowSetSize(a.ctx, defaultWidth, defaultHeight)
+	wruntime.WindowUnminimise(a.ctx)
+	wruntime.WindowShow(a.ctx)
+	wruntime.Show(a.ctx)
+	wruntime.WindowCenter(a.ctx)
+	a.mainWindowSeenNormal.Store(true)
+	a.mainWindowGraceUntil.Store(time.Now().Add(1800 * time.Millisecond).UnixMilli())
 }
 
 func (a *App) ensureSidecar() error {
@@ -117,6 +243,7 @@ func (a *App) ensureSidecar() error {
 	}
 
 	cmd := exec.Command(nodePath, viteBin, "--host", sidecarHost, "--port", fmt.Sprintf("%d", sidecarPort), "--strictPort")
+	configureBackgroundCmd(cmd)
 	cmd.Dir = projectRoot
 	cmd.Env = os.Environ()
 	cmd.Stdout = logFile
