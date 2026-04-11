@@ -69,7 +69,7 @@ func resolveLaunchContext(args []string) (launchMode, string) {
 func buildAppOptions(app *App, mode launchMode) *options.App {
 	mainWidth, mainHeight, mainMinWidth, mainMinHeight := resolveMainWindowSize()
 	appOptions := &options.App{
-		Title:             "Batch API Check",
+		Title:             "All API Dock",
 		Width:             mainWidth,
 		Height:            mainHeight,
 		MinWidth:          mainMinWidth,
@@ -92,7 +92,7 @@ func buildAppOptions(app *App, mode launchMode) *options.App {
 	}
 
 	if mode == launchModePanel {
-		appOptions.Title = "Batch API Check Panel"
+		appOptions.Title = "All API Dock Panel"
 		appOptions.Width = 520
 		appOptions.Height = 780
 		appOptions.MinWidth = 192
@@ -139,7 +139,7 @@ func resolveMainWindowSize() (width int, height int, minWidth int, minHeight int
 	}
 
 	width = clampWindowSize(int(float64(workArea.Width())*0.35), minWidth, 860)
-	height = clampWindowSize(int(float64(workArea.Height())*0.42), minHeight, 560)
+	height = clampWindowSize(int(float64(workArea.Height())*0.6), minHeight, 600)
 	return
 }
 
@@ -156,7 +156,7 @@ func clampWindowSize(value int, min int, max int) int {
 func buildWindowsOptions(mode launchMode) *windows.Options {
 	windowOptions := &windows.Options{
 		WebviewUserDataPath: resolveWebviewUserDataPath(),
-		WindowClassName:     "BatchApiCheckWindow",
+		WindowClassName:     "AllApiDockWindow",
 	}
 	if mode == launchModePanel {
 		windowOptions.WebviewIsTransparent = true
