@@ -18,3 +18,10 @@ func configureBackgroundCmd(cmd *exec.Cmd) {
 		CreationFlags: createNoWindow,
 	}
 }
+
+func configureWindowedAppCmd(cmd *exec.Cmd) {
+	if cmd == nil {
+		return
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{}
+}
