@@ -1,279 +1,186 @@
-<div align="center">
-<img src="./docs/images/logo.png" alt="logo.png" style="zoom:30%;" />
+# All API Dock
 
-# API CHECK
+桌面端批量 API 检测与密钥整理工具。
 
-</div>
+当前项目基于 `Wails + Vue 3`，主要服务于以下几类场景：
 
-**English** · [简体中文](./README_CN.md)
+- 从浏览器扩展或备份文件导入站点账号
+- 批量读取各站点模型列表
+- 批量检测模型可用性、余额、快速对话能力
+- 将结果整理进本地密钥面板
+- 一键生成 Claude / Codex / OpenCode / OpenClaw 等桌面客户端配置预览
 
-> [!TIP]
-> Click to try: https://check.crond.dev
+## 当前定位
 
-## Pure Front-End API Testing Tool
+这不是纯网页工具，而是偏桌面工作流的本地应用。
 
-- ✅ **Supports Liveness Testing for Various OpenAI API Proxies**
+项目目前包含三层能力：
 
-  - Compatible with OpenAI proxy APIs like oneapi and newapi, fully testing availability.
+- 桌面壳：`Wails`
+- 前端界面：`Vue 3 + Ant Design Vue + Vite`
+- 本地后端逻辑：`Go`
 
-- 🔒 **Pure Front-End Version for Enhanced Data Security**
+## 主要功能
 
-  - All operations are performed on the front end, eliminating concerns about network timeouts and ensuring data security.
+### 1. 扩展导入优先
 
-- 📊 **Detailed Testing Data**
+支持优先从浏览器扩展数据导入站点与账号信息，适合已有扩展使用场景。
 
-  - Displays response time, model consistency, and more, making test results clear at a glance.
+### 2. 备份 JSON 导入
 
-- 💾 **Cloud Storage and Local Storage**
+支持导入标准备份文件，例如：
 
-  - **Cloud Storage**: Save configurations to the cloud for multi-device sharing.
-  - **Local Storage**: Save frequently used configurations locally for quick loading and convenience.
+- `accounts-backup.json`
+- `accounts-backup-2026-04-01.json`
 
-- 🌙 **Theme and Language Switching**
+### 3. 批量模型发现
 
-  - **Dark/Light Mode**: Choose a theme that suits you to protect your eyesight.
-  - **Multi-Language Support**: Supports Chinese and English to meet different language needs.
+对导入的多个站点并发拉取模型列表，并支持失败诊断、状态追踪与标签分组。
 
-- 🖥️ **Multiple Deployment Methods**
-  - **Vercel Deployment**: Supports one-click deployment to Vercel for convenience.
-  - **Docker Deployment**
-  - **Cloudflare Deployment**
+### 4. 批量可用性检测
 
-## 📦 Getting Started
+支持对选定站点与模型执行批量检测，输出：
 
-### Vercel Deployment
+- 可用 / 异常状态
+- 错误码
+- 常见原因说明
+- 调研 trace 日志
+- fetch 复现片段
 
-1. Click the button on the right to start deployment:
-   [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/october-coder/api-check&env=PASSWORD&project-name=api-check&repository-name=api-check). Simply log in using your GitHub account, and remember to fill in the backend password on the environment variables page.
-2. After deployment, you can start using it.
-3. (Optional) To deploy the backend service, please refer to the [Detailed Tutorial](./docs/vercel.md).
-4. (Optional) [Bind a Custom Domain Name](https://vercel.com/docs/concepts/projects/domains/add-a-domain): The domain name assigned by Vercel may be polluted in some regions. Binding a custom domain name allows direct access.
+### 5. 本地 Profile / CDP 双模式
 
-### Docker Deployment
+支持两类登录态读取模式：
 
-1. One-click deployment command
+- `Profile 文件模式`
+- `CDP 重开模式`
 
-2. ```bash
-   docker run -d -p 13000:13000 \
-     -e PASSWORD=you_password \
-     -v you_path:/app/data \
-     --name api-check ghcr.io/rickcert/api-check:latest
-   ```
+设置页可切换，便于在不同站点兼容性之间取舍。
 
-### Cloudflare Backend Deployment
+### 6. 侧边面板
 
-1. Refer to the [Detailed Tutorial](./docs/cloudflare.md).
-2. It's best to bind a custom domain name.
+支持最小化到托盘后使用侧边面板管理密钥记录，包括：
 
-## 📜 Recent Updates
+- 快速刷新余额
+- 快速测试
+- 选择模型
+- 打开专属一键配置窗口
 
-<img src="./docs/images/testing.png" alt="Testing" style="zoom:50%;" />
+### 7. 专属一键配置
 
-### v2.1.0
+支持基于当前选中的站点记录，生成桌面客户端配置变更预览，并写入本机配置文件。
 
-🔔 **New Features and Optimizations**
+当前已覆盖的典型目标应用包括：
 
-- ✨ **Added Quick Chat Testing**
-  - Integrated with the modified NextChat for quick model testing.
-  - Added `closeChat` setting for convenient proxy usage.
-- 🧪 **Added Experimental Features Module** from [elfmaid](https://linux.do/u/elfmaid)
-  - Batch testing of GPT Refresh Tokens
-  - Batch testing of Claude Session Keys
-  - Batch testing of Gemini API Keys
-- ✂️ **Added Paste Button** by [fangyuan](https://linux.do/u/fangyuan99)
-- 📝 **Added Custom Conversation Verification**
-  - Quick prompt testing by [fangyuan](https://linux.do/u/fangyuan99)
+- Claude
+- Codex
+- OpenCode
+- OpenClaw
 
-🔧 **Optimizations and Fixes**
+## 项目结构
 
-- 🐳 **Optimized Dockerfile** to reduce image size.
-- 🎨 **Fixed Layout Issues** to improve interface display.
-
-### v2.0.0
-
-🔔 **Brand New Features and Optimizations**
-
-- 🌐 **Added Cloud Storage and Local Storage**
-  - **Cloud Storage**: Supports saving API configuration information to the cloud server for multi-device synchronization, allowing you to access your configurations anytime, anywhere.
-  - **Local Storage**: Provides a local caching function for quick local saves, avoiding repeated inputs and improving efficiency.
-  - **Data Management**: Added a settings panel for easy management of local and cloud configuration data.
-- ✨ **Supports Preset Parameters**
-  - **Convenient One-Click Configuration**
-  - **Quickly Bind to new-api**
-- 💻 **Supports One-Click Deployment with Vercel and Docker**
-- 🌙 **Added Dark Mode**
-  - **Theme Switching**: Supports switching between dark and light modes to suit different environments and user preferences.
-  - **Automatic Adaptation**: Can automatically switch themes based on system settings to protect your eyesight.
-- 🌐 **Internationalization Support**
-  - **Multi-Language**: Added internationalization support, currently supporting Chinese and English.
-- 📱 **Mobile Adaptation Optimization**
-- 🛠 **Other Optimizations and Fixes**
-
-### 🧪 Version History
-
-<details>
-
-### v1.5.0
-
-- 📱 Adapted for Mobile Mode
-- 🌙 Added Dark Theme
-- 🧠 Optimized o1 Model Testing
-
-### v1.4.0
-
-- 🔍 Added Temperature Verification
-- 📊 Added Function Verification
-- 🔧 Optimized Test Prompts
-
-### v1.3.0
-
-- 🔍 Added Official API Verification
-- 🖥️ Supports Filtering Queries
-
-### v1.2.0
-
-- 🖥️ Added Local One-Click Run
-- 🌐 Supports Pages Online Hosting
-- 📊 Improved Test Result Display
-
-### v1.0.0
-
-- ✨ Supports Multi-Model Testing
-- 💰 Added Quota Check
-- 📋 Implemented Model List Retrieval
-
-</details>
-
-## 📋 Feature Introduction
-
-- 🧪 Test the availability and consistency of multiple models
-- 💰 Check API account usage quota
-- 📋 Retrieve and display the list of available models
-- 📝 Intelligent extraction of API information
-- 🖱️ Convenient copy function
-- 💾 Cloud storage and local caching
-- 🌙 Theme and language switching
-- 🛠 Advanced Verification Features
-
-  - **Official Proxy Verification**: Verify the authenticity of the API and view system fingerprints.
-  - **Temperature Verification**: Verify the randomness and stability of the model.
-  - **Function Call Verification**: Test the model's function-calling capabilities.
-
-### 🛠 Cloud Storage
-
-- **Docker Deployment** backend URL: Please use `https://your_website/api`
-- **Vercel Deployment** backend URL: Please use `https://your_website/api`
-- **Cloudflare Deployment** backend URL: Please use `https://your_website`
-
-### 🛠 Preset Parameter Settings
-
-<img src="./docs/images/config.png" alt="Test Report" style="zoom:50%;" />
-
-🔗 url
-
-- **Description**: API endpoint address.
-- **Example**: `"url": "https://api.example.com"`
-
-📦 models
-
-- **Description**: An array of model names indicating which models are available.
-- **Example**: `"models": ["model1", "model2"]`
-
-⏱ timeout
-
-- **Description**: Request timeout in seconds.
-- **Example**: `"timeout": 30`
-
-🔁 concurrency
-
-- **Description**: Number of concurrent requests.
-- **Example**: `"concurrency": 5`
-
-🚫 closeAnnouncement **Convenient for Proxy Sites**
-
-- **Description**: Whether to disable the announcement display. Set to `true` to disable, or `false`/undefined to display announcements. **Convenient for proxy sites**
-- **Example**: `"closeAnnouncement": true`
-
-🚪 closeChat **Convenient for Proxy Sites**
-
-- **Description**: Whether to disable the quick chat function. Set to `true` to disable, or `false`/undefined to enable the chat function.
-- **Example**: `"closeChat": true`
-
-```url
-https://check.crond.dev/?settings={"key":"*sk*","url":"*api*","models":["gpt-4o-mini","gpt-4o"],"timeout":10,"concurrency":2,"closeAnnouncement":true,"closeChat":true}
+```text
+.
+├─ src/                     前端页面与组件
+├─ wailsjs/                 Wails 绑定代码
+├─ build/                   构建输出
+├─ logs/                    运行日志
+├─ scripts/                 开发与构建脚本
+├─ main.go                  Wails 入口
+├─ app.go                   应用生命周期与后端主逻辑
+├─ window_sidebar.go        托盘 / 侧边面板窗口逻辑
+└─ local_api.go             本地接口与请求处理
 ```
 
-Decoded JSON string:
+## 开发环境
 
-```json
-{
-  "key": "your_api_key",
-  "url": "https://api.example.com",
-  "models": ["gpt-4o-mini", "gpt-4o"],
-  "timeout": 10,
-  "concurrency": 2,
-  "closeAnnouncement": true,
-  "closeChat": true
-}
+建议环境：
+
+- Windows 10/11
+- Go 1.24+
+- Node.js 24+
+- npm 11+
+- WebView2 Runtime
+
+## 开发启动
+
+安装依赖：
+
+```bash
+npm install
 ```
 
-- **voapi** Example
+桌面开发模式：
 
-```json
-{
-  "name": "check",
-  "link": "https://check.crond.dev/?settings={%22key%22:%22*sk*%22,%22url%22:%22*api*%22,%22models%22:[%22gpt-4o-mini%22],%22timeout%22:10,%22concurrency%22:2,%22closeAnnouncement%22:true,%22closeChat%22:true}",
-  "icon": "https://check.crond.dev/logo.png"
-}
+```bash
+npm run dev
 ```
 
-- **newapi** Example
+仅前端开发：
 
-```json
-{
-  "CHECK": "https://check.crond.dev/?settings={\"key\":\"{key}\",\"url\":\"{address}\",\"models\":[\"gpt-4o-mini\"],\"timeout\":10,\"concurrency\":2,\"closeAnnouncement\":true,\"closeChat\":true}"
-}
+```bash
+npm run dev:web
 ```
 
-### 🛠 **Advanced Verification Features**
+## 构建
 
-#### 🕵️ Official API Verification
+桌面构建：
 
-1. 🔄 Send multiple identical requests.
-2. 📊 Analyze the consistency of the responses.
-3. 🔍 Check system fingerprints.
-4. 🧮 Calculate similarity scores.
+```bash
+wails build
+```
 
-#### 🕵️‍♀️ Temperature Verification
+或：
 
-1. 🧊 Set the temperature parameter to a low value (0.01).
-2. 🔄 Send multiple identical requests (e.g., calculating the next number in a specific sequence).
-3. 🎯 Check the hit rate based on the official API's reference values.
+```bash
+npm run build:desktop
+```
 
-### 🛠 Generate Reports
+构建产物默认位于：
 
-<img src="./docs/images/report.png" alt="Test Report" style="zoom:50%;" />
+```text
+build/bin/
+```
 
-## 🤝 Contributing
+## 日志
 
-We welcome suggestions and improvements! Feel free to submit pull requests or open issues. Let's make this tool even better together! 🌈
+常见日志目录：
 
-## 📜 License
+```text
+logs/
+```
 
-This project is licensed under the [Apache License 2.0](https://opensource.org/license/apache-2-0).
+其中通常会包含：
 
-## 🙏 Acknowledgments
+- `EXE_BACKEND_DEBUG.log`
+- `wails-dev-host.log`
+- `wails-dev-runner.log`
+- `wails-dev-vite.log`
 
-Special thanks to the following contributors whose efforts have made this project better:
+## 注意事项
 
-- [Rick](https://linux.do/u/rick)
-- [Megasoft](https://linux.do/u/zhong_little)
-- [fangyuan99](https://linux.do/u/fangyuan99)
-- [juzeon](https://github.com/juzeon)
+### 1. C 盘空间
 
-## Star History
+如果 `wails build` 在链接阶段报磁盘空间不足，通常不是代码问题，而是 Go 默认使用了系统临时目录。
 
-[![Star History Chart](https://api.star-history.com/svg?repos=october-coder/api-check&type=Date)](https://star-history.com/#october-coder/api-check&Date)
+可以将这些环境变量切到空间更大的磁盘：
 
-[![image](iframe组件截图图片链接)](https://yxvm.com/)
-[NodeSupport](https://github.com/NodeSeekDev/NodeSupport)赞助了本项目
+```powershell
+$env:TEMP='D:\tmp'
+$env:TMP='D:\tmp'
+$env:GOTMPDIR='D:\tmp-go'
+$env:GOCACHE='D:\tmp-cache'
+```
+
+### 2. Rollup 可选依赖缺失
+
+如果开发环境报错缺少 `@rollup/rollup-win32-x64-msvc`，通常是 npm 可选依赖安装不完整，重新安装依赖即可。
+
+### 3. 旧产物混用
+
+如果目录里同时存在多个历史 exe，请确认你实际启动的是最新构建产物，避免误判“代码未生效”。
+
+## GitHub
+
+项目主页：
+
+https://github.com/jlwebs/AllApiDeck
