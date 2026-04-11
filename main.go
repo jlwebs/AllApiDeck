@@ -116,10 +116,10 @@ func buildAppOptions(app *App, mode launchMode) *options.App {
 	}
 	if mode == launchModeDesktopConfig {
 		appOptions.Title = "Desktop Config"
-		appOptions.Width = 1180
-		appOptions.Height = 860
-		appOptions.MinWidth = 980
-		appOptions.MinHeight = 720
+		appOptions.Width = 840
+		appOptions.Height = 800
+		appOptions.MinWidth = 760
+		appOptions.MinHeight = 760
 		appOptions.HideWindowOnClose = false
 		appOptions.AlwaysOnTop = true
 	}
@@ -245,7 +245,9 @@ func hasAnotherBatchApiCheckProcess() bool {
 		return false
 	}
 
-	output, err := exec.Command("tasklist", "/FI", "IMAGENAME eq "+imageName, "/FO", "CSV", "/NH").Output()
+	cmd := exec.Command("tasklist", "/FI", "IMAGENAME eq "+imageName, "/FO", "CSV", "/NH")
+	configureBackgroundCmd(cmd)
+	output, err := cmd.Output()
 	if err != nil {
 		return false
 	}

@@ -325,7 +325,9 @@ func killProcessTree(pid int) {
 	}
 
 	if runtime.GOOS == "windows" {
-		_ = exec.Command("taskkill", "/PID", fmt.Sprintf("%d", pid), "/T", "/F").Run()
+		cmd := exec.Command("taskkill", "/PID", fmt.Sprintf("%d", pid), "/T", "/F")
+		configureBackgroundCmd(cmd)
+		_ = cmd.Run()
 		return
 	}
 

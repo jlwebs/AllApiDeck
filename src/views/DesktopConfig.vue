@@ -141,7 +141,7 @@
     <DesktopConfigDiffModal
       :open="desktopConfigDiffOpen"
       :preview="desktopConfigPreview"
-      :width="1080"
+      :width="1500"
       @cancel="desktopConfigDiffOpen = false"
       @confirm="applyDesktopConfigPreview"
     />
@@ -339,26 +339,32 @@ onMounted(() => {
 <style scoped>
 .desktop-config-view {
   min-height: 100vh;
-  padding: 20px;
+  padding: 10px;
   box-sizing: border-box;
   background: linear-gradient(180deg, #eef4ea 0%, #e5efe0 100%);
+  overflow: hidden;
 }
 
 .desktop-config-shell {
-  max-width: 1160px;
+  max-width: 100%;
   margin: 0 auto;
-  padding: 22px;
-  border-radius: 28px;
+  min-height: calc(100vh - 20px);
+  padding: 12px 14px;
+  border-radius: 20px;
   background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.14);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
 }
 
 .desktop-config-window-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 0;
 }
 
 .desktop-config-window-copy {
@@ -366,77 +372,82 @@ onMounted(() => {
 }
 
 .desktop-config-window-title {
-  font-size: 30px;
+  font-size: 22px;
   line-height: 1.1;
   font-weight: 800;
   color: #1f2937;
 }
 
 .desktop-config-window-subtitle {
-  margin-top: 8px;
+  margin-top: 4px;
   color: #64748b;
-  font-size: 14px;
+  font-size: 12px;
   word-break: break-all;
+  line-height: 1.4;
 }
 
 .desktop-config-window-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex: 0 0 auto;
 }
 
 .desktop-config-alert {
-  margin-bottom: 18px;
+  margin-bottom: 0;
 }
 
 .desktop-config-layout {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
-  gap: 20px;
-  align-items: start;
+  grid-template-columns: 228px minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .desktop-app-panel,
 .desktop-form-panel {
-  border-radius: 24px;
+  min-height: 0;
+  border-radius: 18px;
   background: linear-gradient(180deg, #f8fafc, #eef2ff);
-  padding: 18px;
+  padding: 12px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  overflow: auto;
 }
 
 .desktop-panel-title {
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 700;
   color: #0f172a;
 }
 
 .desktop-panel-hint,
 .desktop-field-hint {
-  margin-top: 8px;
+  margin-top: 4px;
   color: #64748b;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .desktop-app-grid {
-  margin-top: 16px;
+  margin-top: 10px;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 10px;
 }
 
 .desktop-app-card {
   border: 0;
-  border-radius: 22px;
-  padding: 16px 12px;
+  border-radius: 16px;
+  padding: 10px 8px;
   background: #fff;
   color: #0f172a;
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08), inset 0 0 0 1px rgba(148, 163, 184, 0.16);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   cursor: pointer;
   transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
 }
@@ -451,14 +462,14 @@ onMounted(() => {
 }
 
 .desktop-app-logo {
-  width: 58px;
-  height: 58px;
-  border-radius: 18px;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: #f8fafc;
-  padding: 10px;
+  padding: 8px;
 }
 
 .desktop-app-logo-image {
@@ -468,8 +479,10 @@ onMounted(() => {
 }
 
 .desktop-app-name {
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
 }
 
 .desktop-app-claude .desktop-app-logo {
@@ -489,26 +502,57 @@ onMounted(() => {
 }
 
 .desktop-provider-checkbox {
-  margin-top: 10px;
+  margin-top: 6px;
 }
 
 .config-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 16px;
+  gap: 0 12px;
 }
 
-@media (max-width: 980px) {
+ :deep(.desktop-form-panel .ant-form-item) {
+  margin-bottom: 10px;
+}
+
+:deep(.desktop-form-panel .ant-form-item-label > label) {
+  font-size: 12px;
+  line-height: 1.2;
+  height: auto;
+}
+
+:deep(.desktop-form-panel .ant-input),
+:deep(.desktop-form-panel .ant-input-password),
+:deep(.desktop-form-panel .ant-select-selector),
+:deep(.desktop-form-panel .ant-btn) {
+  min-height: 32px;
+  font-size: 12px;
+}
+
+:deep(.desktop-form-panel .ant-select-single:not(.ant-select-customize-input) .ant-select-selector) {
+  height: 32px;
+}
+
+:deep(.desktop-form-panel .ant-select-single .ant-select-selector .ant-select-selection-item),
+:deep(.desktop-form-panel .ant-select-single .ant-select-selector .ant-select-selection-placeholder) {
+  line-height: 30px;
+}
+
+@media (max-width: 720px) {
   .desktop-config-view {
     padding: 12px;
+    overflow: auto;
   }
 
   .desktop-config-shell {
     padding: 16px;
+    min-height: auto;
+    overflow: visible;
   }
 
   .desktop-config-window-header {
     flex-direction: column;
+    align-items: stretch;
   }
 
   .desktop-config-window-actions {
@@ -518,6 +562,7 @@ onMounted(() => {
 
   .desktop-config-layout {
     grid-template-columns: 1fr;
+    min-height: auto;
   }
 
   .config-grid {

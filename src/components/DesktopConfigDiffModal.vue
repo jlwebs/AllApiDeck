@@ -278,7 +278,8 @@ function focusFirstChange() {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  overflow-x: auto;
+  overflow-x: hidden;
+  min-width: 0;
 }
 
 .diff-errors {
@@ -302,10 +303,11 @@ function focusFirstChange() {
 
 .diff-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 56px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   min-height: 620px;
-  min-width: 980px;
+  min-width: 0;
+  width: 100%;
 }
 
 .diff-column {
@@ -386,10 +388,7 @@ function focusFirstChange() {
 }
 
 .diff-minimap {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  align-items: center;
+  display: none;
 }
 
 .diff-minimap-title {
@@ -423,9 +422,4 @@ function focusFirstChange() {
   transform: scaleX(1.08);
 }
 
-@media (max-width: 1280px) {
-  .diff-minimap {
-    display: none;
-  }
-}
 </style>

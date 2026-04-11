@@ -1373,7 +1373,9 @@ func isBrowserProcessRunningGo(browserType string) bool {
 	if normalizeBrowserType(browserType) == "edge" {
 		imageName = "msedge.exe"
 	}
-	output, err := exec.Command("tasklist.exe", "/FI", fmt.Sprintf("IMAGENAME eq %s", imageName)).CombinedOutput()
+	cmd := exec.Command("tasklist.exe", "/FI", fmt.Sprintf("IMAGENAME eq %s", imageName))
+	configureBackgroundCmd(cmd)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return false
 	}

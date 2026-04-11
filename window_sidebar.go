@@ -305,7 +305,6 @@ func (a *App) HideToTrayPanel() error {
 		return err
 	}
 
-	wruntime.WindowUnminimise(a.ctx)
 	wruntime.WindowHide(a.ctx)
 	wruntime.Hide(a.ctx)
 	return nil
@@ -317,7 +316,6 @@ func (a *App) HideToTray() error {
 	}
 
 	a.captureNormalWindowBounds()
-	wruntime.WindowUnminimise(a.ctx)
 	wruntime.WindowHide(a.ctx)
 	wruntime.Hide(a.ctx)
 	return nil
@@ -975,12 +973,13 @@ func (a *App) startPanelProcess() error {
 	}
 
 	cmd := exec.Command(exePath, "--panel")
-	configureBackgroundCmd(cmd)
+	configureWindowedAppCmd(cmd)
 	cmd.Dir = filepath.Dir(exePath)
 	cmd.Env = os.Environ()
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start panel failed: %w", err)
 	}
+	debugLogf("panel child launched pid=%d", cmd.Process.Pid)
 	a.panelCmd = cmd
 
 	go func(process *exec.Cmd) {
@@ -1007,12 +1006,13 @@ func (a *App) OpenKeyEditor(rowKey string) error {
 	}
 
 	cmd := exec.Command(exePath, args...)
-	configureBackgroundCmd(cmd)
+	configureWindowedAppCmd(cmd)
 	cmd.Dir = filepath.Dir(exePath)
 	cmd.Env = os.Environ()
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start key editor failed: %w", err)
 	}
+	debugLogf("key editor child launched pid=%d rowKey=%q", cmd.Process.Pid, rowKey)
 
 	go func(process *exec.Cmd) {
 		_ = process.Wait()
@@ -1033,12 +1033,13 @@ func (a *App) OpenDesktopConfigWindow(rowKey string) error {
 	}
 
 	cmd := exec.Command(exePath, args...)
-	configureBackgroundCmd(cmd)
+	configureWindowedAppCmd(cmd)
 	cmd.Dir = filepath.Dir(exePath)
 	cmd.Env = os.Environ()
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start desktop config failed: %w", err)
 	}
+	debugLogf("desktop config child launched pid=%d rowKey=%q", cmd.Process.Pid, rowKey)
 
 	go func(process *exec.Cmd) {
 		_ = process.Wait()
