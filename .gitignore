@@ -50,3 +50,6 @@ tput
 .ace-tool/
 *.err
 *.out
+
+# local nested repo / later cleanup
+all-api-hub/

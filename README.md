@@ -1,15 +1,22 @@
 # All API Dock
 
+[中文](./README.md) | [English](./README.en.md)
+
 桌面端批量 API 检测与密钥整理工具。
 
 当前项目基于 `Wails + Vue 3`，主要服务于以下几类场景：
 
 - 从浏览器扩展或备份文件导入站点账号
-- 批量读取各站点模型列表
+- 批量读取各站点模型列表，高效筛选强自定义，便捷地从海量站点中寻找有效自选模型
 - 批量检测模型可用性、余额、快速对话能力
-- 将结果整理进本地密钥面板
-- 一键生成 Claude / Codex / OpenCode / OpenClaw 等桌面客户端配置预览
+- CCSwitch能力的本地密钥面板，支持Windows侧边栏快速查看状态切换密钥
+- 切换模型时候有清晰的改动对照、切换后可支持历史对话
+- 一键切换 Claude / Codex / OpenCode / OpenClaw 等桌面客户端配置&&预览
 
+## 界面预览
+
+![All API Dock 首页预览](./allapideck.webp)
+![侧边栏](PixPin_2026-04-12_04-03-39.png)
 ## 当前定位
 
 这不是纯网页工具，而是偏桌面工作流的本地应用。
@@ -24,11 +31,12 @@
 
 ### 1. 扩展导入优先
 
-支持优先从浏览器扩展数据导入站点与账号信息，适合已有扩展使用场景。
+支持优先从浏览器扩展ALL-API-HUB数据文件直接导入站点与账号信息，适合已有扩展使用场景。
+比较方便，推荐
 
 ### 2. 备份 JSON 导入
 
-支持导入标准备份文件，例如：
+支持导入ALL-API-HUB插件导出的标准备份文件，例如：
 
 - `accounts-backup.json`
 - `accounts-backup-2026-04-01.json`
@@ -143,7 +151,7 @@ build/bin/
 
 ## 日志
 
-常见日志目录：
+设置里也可获取，对应日志目录：
 
 ```text
 logs/
@@ -155,29 +163,6 @@ logs/
 - `wails-dev-host.log`
 - `wails-dev-runner.log`
 - `wails-dev-vite.log`
-
-## 注意事项
-
-### 1. C 盘空间
-
-如果 `wails build` 在链接阶段报磁盘空间不足，通常不是代码问题，而是 Go 默认使用了系统临时目录。
-
-可以将这些环境变量切到空间更大的磁盘：
-
-```powershell
-$env:TEMP='D:\tmp'
-$env:TMP='D:\tmp'
-$env:GOTMPDIR='D:\tmp-go'
-$env:GOCACHE='D:\tmp-cache'
-```
-
-### 2. Rollup 可选依赖缺失
-
-如果开发环境报错缺少 `@rollup/rollup-win32-x64-msvc`，通常是 npm 可选依赖安装不完整，重新安装依赖即可。
-
-### 3. 旧产物混用
-
-如果目录里同时存在多个历史 exe，请确认你实际启动的是最新构建产物，避免误判“代码未生效”。
 
 ## GitHub
 
