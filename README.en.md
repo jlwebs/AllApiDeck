@@ -16,7 +16,7 @@ This project is built with `Wails + Vue 3`, mainly for the following workflows:
 ## Preview
 
 <img src="./allapideck.webp" alt="All API Dock Home" width="50%" />
-<img src="./PixPin_2026-04-12_04-03-39.png" alt="Side Panel" width="50%" />
+<img src="./PixPin_2026-04-12_04-03-39.png" alt="Side Panel" width="20%" />
 
 ## Positioning
 
