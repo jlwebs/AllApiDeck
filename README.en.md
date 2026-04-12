@@ -169,3 +169,7 @@ Typical files include:
 Project homepage:
 
 https://github.com/jlwebs/AllApiDeck
+
+## Acknowledgements
+
+Thanks to the [Linux.do](https://linux.do/) community for feedback, testing, and word-of-mouth support.
