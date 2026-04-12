@@ -169,3 +169,7 @@ logs/
 项目主页：
 
 https://github.com/jlwebs/AllApiDeck
+
+## 致谢
+
+感谢 [Linux.do](https://linux.do/) 社区提供的反馈、测试和传播支持。
