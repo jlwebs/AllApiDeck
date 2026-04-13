@@ -30,7 +30,8 @@ DEB_ARCH="amd64"
 APPIMAGE_ARCH="x86_64"
 ICON_PATH="$ROOT_DIR/assets/appicon.png"
 DESKTOP_FILE="$ROOT_DIR/build/linux/batch-api-check.desktop"
-APPDATA_FILE="$ROOT_DIR/build/linux/batch-api-check.appdata.xml"
+APPDATA_FILE="$ROOT_DIR/build/linux/io.github.jlwebs.batch-api-check.metainfo.xml"
+APPDATA_TARGET_NAME="$(basename "$APPDATA_FILE")"
 TMP_DIR="$ROOT_DIR/.tmp-linux-package"
 TOOLS_DIR="$TMP_DIR/tools"
 WORK_DIR="$TMP_DIR/work"
@@ -112,7 +113,7 @@ build_deb() {
   ln -s "/opt/$APP_SLUG/$APP_SLUG" "$DEB_ROOT/usr/bin/$APP_SLUG"
   install -m 644 "$DESKTOP_FILE" "$DEB_ROOT/usr/share/applications/$APP_SLUG.desktop"
   install -m 644 "$PACKAGING_ICON_PATH" "$DEB_ROOT/usr/share/icons/hicolor/512x512/apps/$APP_SLUG.png"
-  install -m 644 "$APPDATA_FILE" "$DEB_ROOT/usr/share/metainfo/$APP_SLUG.appdata.xml"
+  install -m 644 "$APPDATA_FILE" "$DEB_ROOT/usr/share/metainfo/$APPDATA_TARGET_NAME"
 
   cat > "$DEB_ROOT/DEBIAN/control" <<EOF
 Package: $DEB_PACKAGE_NAME
@@ -164,7 +165,7 @@ prepare_appdir() {
   install -m 755 "$BINARY_PATH" "$APPDIR/usr/bin/$APP_SLUG"
   install -m 644 "$DESKTOP_FILE" "$APPDIR/usr/share/applications/$APP_SLUG.desktop"
   install -m 644 "$PACKAGING_ICON_PATH" "$APPDIR/usr/share/icons/hicolor/512x512/apps/$APP_SLUG.png"
-  install -m 644 "$APPDATA_FILE" "$APPDIR/usr/share/metainfo/$APP_SLUG.appdata.xml"
+  install -m 644 "$APPDATA_FILE" "$APPDIR/usr/share/metainfo/$APPDATA_TARGET_NAME"
   install -m 644 "$DESKTOP_FILE" "$APPDIR/$APP_SLUG.desktop"
   install -m 644 "$PACKAGING_ICON_PATH" "$APPDIR/$APP_SLUG.png"
 
