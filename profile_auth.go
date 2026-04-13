@@ -135,12 +135,10 @@ func (a *App) ExtractChromeProfileTokens(request ChromeProfileTokenRequest) (*Ch
 }
 
 func loadChromeProfileAuthSnapshot() (*profileAuthSnapshot, []string, error) {
-	localAppData := os.Getenv("LOCALAPPDATA")
-	if strings.TrimSpace(localAppData) == "" {
-		return nil, nil, fmt.Errorf("LOCALAPPDATA is empty")
+	leveldbDir, err := resolveChromeDefaultLocalStorageDir()
+	if err != nil {
+		return nil, nil, err
 	}
-
-	leveldbDir := filepath.Join(localAppData, "Google", "Chrome", "User Data", "Default", "Local Storage", "leveldb")
 	localFetchKeysProgressSetStage("profile_copy", "复制 Chrome Local Storage 文件")
 	tmpDir, cleanup, err := copyDirToTemp(leveldbDir)
 	if err != nil {
@@ -187,6 +185,67 @@ func loadChromeProfileAuthSnapshot() (*profileAuthSnapshot, []string, error) {
 
 	debugLogf("loaded Chrome Local Storage auth snapshot: origins=%d", len(entries))
 	return &profileAuthSnapshot{entries: entries}, warnings, nil
+}
+
+func resolveChromeDefaultLocalStorageDir() (string, error) {
+	localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
+	homeDir, _ := os.UserHomeDir()
+	homeDir = strings.TrimSpace(homeDir)
+
+	candidates := chromeDefaultLocalStorageCandidates(runtime.GOOS, localAppData, homeDir)
+	for _, candidate := range candidates {
+		info, err := os.Stat(candidate)
+		if err == nil && info.IsDir() {
+			return candidate, nil
+		}
+	}
+
+	switch runtime.GOOS {
+	case "windows":
+		if localAppData == "" {
+			return "", fmt.Errorf("Windows Profile 文件提取失败: LOCALAPPDATA is empty")
+		}
+		return "", fmt.Errorf("未找到 Chrome Default Local Storage，请确认 Chrome 默认 Profile 存在")
+	case "darwin":
+		if homeDir == "" {
+			return "", fmt.Errorf("macOS Profile 文件提取失败: 无法解析用户目录")
+		}
+		return "", fmt.Errorf("未找到 Chrome Default Local Storage，请确认 Chrome 默认 Profile 位于 ~/Library/Application Support/Google/Chrome/Default")
+	default:
+		if len(candidates) == 0 {
+			return "", fmt.Errorf("当前系统暂不支持 Profile 文件模式: %s", runtime.GOOS)
+		}
+		return "", fmt.Errorf("未找到 Chrome Default Local Storage")
+	}
+}
+
+func chromeDefaultLocalStorageCandidates(goos string, localAppData string, homeDir string) []string {
+	switch goos {
+	case "windows":
+		if localAppData == "" {
+			return nil
+		}
+		return []string{
+			filepath.Join(localAppData, "Google", "Chrome", "User Data", "Default", "Local Storage", "leveldb"),
+		}
+	case "darwin":
+		if homeDir == "" {
+			return nil
+		}
+		return []string{
+			filepath.Join(homeDir, "Library", "Application Support", "Google", "Chrome", "Default", "Local Storage", "leveldb"),
+		}
+	case "linux":
+		if homeDir == "" {
+			return nil
+		}
+		return []string{
+			filepath.Join(homeDir, ".config", "google-chrome", "Default", "Local Storage", "leveldb"),
+			filepath.Join(homeDir, ".config", "chromium", "Default", "Local Storage", "leveldb"),
+		}
+	default:
+		return nil
+	}
 }
 
 func (s *profileAuthSnapshot) extractSiteTokens(account ChromeProfileAccount) ChromeProfileTokenResult {
