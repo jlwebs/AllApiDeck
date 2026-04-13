@@ -37,18 +37,23 @@ jobs:
             artifact_name: batch-api-check-windows-amd64
             release_file: batch-api-check-windows-amd64.exe
             wails_output: batch-api-check-windows-amd64.exe
+            upload_path: release-assets/batch-api-check-windows-amd64.exe
           - label: macOS DMG
             os: macos-latest
             platform: darwin/universal
             artifact_name: batch-api-check-macos-universal
             release_file: batch-api-check-macos-universal.dmg
             wails_output: batch-api-check-macos-universal
+            upload_path: release-assets/batch-api-check-macos-universal.dmg
           - label: Linux tar.gz
             os: ubuntu-24.04
             platform: linux/amd64
             artifact_name: batch-api-check-linux-amd64
-            release_file: batch-api-check-linux-amd64.tar.gz
             wails_output: batch-api-check-linux-amd64
+            upload_path: |
+              release-assets/batch-api-check-linux-amd64.tar.gz
+              release-assets/batch-api-check-linux-amd64.deb
+              release-assets/batch-api-check-linux-amd64.AppImage
 
     steps:
       - name: Checkout
@@ -99,7 +104,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev desktop-file-utils patchelf squashfs-tools zsync fakeroot
         shell: bash
 
       - name: Build Windows desktop binary
@@ -125,26 +130,18 @@ jobs:
           hdiutil create -volname $app.BaseName -srcfolder $app.FullName -ov -format UDZO "release-assets/${{ matrix.release_file }}"
         shell: pwsh
 
-      - name: Build Linux binary and package tarball
+      - name: Build Linux binary and package release assets
         if: runner.os == 'Linux'
         run: |
           npm run build:desktop -- --platform ${{ matrix.platform }} -tags webkit2_41 -o ${{ matrix.wails_output }}
-          binary_path="build/bin/${{ matrix.wails_output }}"
-          if [ ! -f "$binary_path" ]; then
-            echo "Expected Linux binary not found: $binary_path" >&2
-            ls -la build/bin >&2 || true
-            exit 1
-          fi
-          chmod +x "$binary_path"
-          mkdir -p release-assets
-          tar -C build/bin -czf "release-assets/${{ matrix.release_file }}" "${{ matrix.wails_output }}"
+          bash scripts/package-linux.sh "${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}" "build/bin/${{ matrix.wails_output }}" "release-assets"
         shell: bash
 
       - name: Upload platform artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: release-assets/${{ matrix.release_file }}
+          path: ${{ matrix.upload_path }}
           if-no-files-found: error
 
   release:

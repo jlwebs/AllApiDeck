@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.jlwebs.batch-api-check</id>
+  <name>Batch API Check</name>
+  <summary>Desktop client for API account import and key checks</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <developer_name>ding</developer_name>
+  <launchable type="desktop-id">batch-api-check.desktop</launchable>
+  <description>
+    <p>Batch API Check is a Wails desktop client for importing browser extension accounts, extracting tokens, and checking model availability.</p>
+  </description>
+  <url type="homepage">https://github.com/jlwebs/AllApiDeck</url>
+</component>

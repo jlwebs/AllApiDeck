@@ -57,26 +57,28 @@
           </div>
 
           <div class="panel-record-metrics">
-            <div class="panel-record-balance" :class="{ 'panel-record-balance-empty': !getCompactBalanceText(record) }">
-              <span class="panel-record-balance-label">余额</span>
-              <span class="panel-record-balance-value">{{ getCompactBalanceText(record) || '未刷新' }}</span>
+            <div class="panel-record-metrics-top">
+              <span class="panel-record-quick panel-record-quick-inline">{{ getQuickStatusSummary(record) }}</span>
+              <button
+                v-if="canRefreshBalance(record, contextMap)"
+                type="button"
+                class="panel-refresh-button"
+                :disabled="record.balanceLoading"
+                @click="handleRefreshBalance(record)"
+              >
+                <ReloadOutlined :class="{ 'panel-spinning': record.balanceLoading }" />
+              </button>
             </div>
-            <button
-              v-if="canRefreshBalance(record, contextMap)"
-              type="button"
-              class="panel-refresh-button"
-              :disabled="record.balanceLoading"
-              @click="handleRefreshBalance(record)"
+            <div
+              v-if="getCompactBalanceText(record)"
+              class="panel-record-balance"
             >
-              <ReloadOutlined :class="{ 'panel-spinning': record.balanceLoading }" />
-            </button>
+              <span class="panel-record-balance-label">余额</span>
+              <span class="panel-record-balance-value">{{ getCompactBalanceText(record) }}</span>
+            </div>
           </div>
 
           <div class="panel-record-extra">
-            <div class="panel-record-meta">
-              <span class="panel-record-quick">{{ getQuickStatusSummary(record) }}</span>
-            </div>
-
             <div class="panel-record-actions">
             <a-popover
               trigger="click"
@@ -977,29 +979,19 @@ onBeforeUnmount(() => {
 
 .panel-record-metrics {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 6px;
 }
 
-.panel-record-extra {
-  max-height: 0;
-  opacity: 0;
-  transform: translateY(-4px);
-  overflow: hidden;
-  transition: max-height 0.18s ease, opacity 0.16s ease, transform 0.18s ease;
-  pointer-events: none;
-}
-
-.panel-record:hover .panel-record-extra,
-.panel-record:focus-within .panel-record-extra {
-  max-height: 96px;
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
+.panel-record-metrics-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .panel-record-balance {
-  flex: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1064,6 +1056,27 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.panel-record-quick-inline {
+  flex: 1;
+}
+
+.panel-record-extra {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-4px);
+  overflow: hidden;
+  transition: max-height 0.18s ease, opacity 0.16s ease, transform 0.18s ease;
+  pointer-events: none;
+}
+
+.panel-record:hover .panel-record-extra,
+.panel-record:focus-within .panel-record-extra {
+  max-height: 96px;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
 }
 
 .panel-record-actions {

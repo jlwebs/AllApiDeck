@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Batch API Check
+Comment=Desktop client for API account import and key checks
+Exec=batch-api-check
+Icon=batch-api-check
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=true

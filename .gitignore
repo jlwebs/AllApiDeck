@@ -16,7 +16,10 @@ dist-ssr
 !.github/workflows/
 !.github/workflows/*.yml
 
-build/
+build/*
+!build/linux/
+!build/linux/*.desktop
+!build/linux/*.xml
 .npmrc.wails
 .tmp-esbuild.exe
 package.json.md5
