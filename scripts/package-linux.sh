@@ -29,6 +29,7 @@ DEB_PACKAGE_NAME="batch-api-check"
 DEB_ARCH="amd64"
 APPIMAGE_ARCH="x86_64"
 ICON_PATH="$ROOT_DIR/assets/appicon.png"
+PACKAGING_ICON_PATH="$WORK_DIR/$APP_SLUG-512.png"
 DESKTOP_FILE="$ROOT_DIR/build/linux/batch-api-check.desktop"
 APPDATA_FILE="$ROOT_DIR/build/linux/batch-api-check.appdata.xml"
 TMP_DIR="$ROOT_DIR/.tmp-linux-package"
@@ -59,6 +60,21 @@ download_tool() {
   chmod +x "$dest"
 }
 
+generate_packaging_icon() {
+  if command -v magick >/dev/null 2>&1; then
+    magick "$ICON_PATH" -resize 512x512 "$PACKAGING_ICON_PATH"
+    return
+  fi
+
+  if command -v convert >/dev/null 2>&1; then
+    convert "$ICON_PATH" -resize 512x512 "$PACKAGING_ICON_PATH"
+    return
+  fi
+
+  echo "ImageMagick is required to generate the Linux packaging icon" >&2
+  exit 1
+}
+
 prepare_workspace() {
   require_file "$BINARY_PATH"
   require_file "$ICON_PATH"
@@ -68,6 +84,7 @@ prepare_workspace() {
   rm -rf "$TMP_DIR"
   mkdir -p "$TOOLS_DIR" "$WORK_DIR" "$RELEASE_DIR"
   chmod +x "$BINARY_PATH"
+  generate_packaging_icon
 }
 
 build_tarball() {
@@ -75,7 +92,7 @@ build_tarball() {
   mkdir -p "$stage_dir"
   install -m 755 "$BINARY_PATH" "$stage_dir/$APP_SLUG"
   install -m 644 "$DESKTOP_FILE" "$stage_dir/$APP_SLUG.desktop"
-  install -m 644 "$ICON_PATH" "$stage_dir/$APP_SLUG.png"
+  install -m 644 "$PACKAGING_ICON_PATH" "$stage_dir/$APP_SLUG.png"
   tar -C "$TARBALL_STAGE_DIR" -czf "$RELEASE_DIR/$PACKAGE_PREFIX.tar.gz" "$APP_SLUG"
 }
 
@@ -94,7 +111,7 @@ build_deb() {
   install -m 755 "$BINARY_PATH" "$DEB_ROOT/opt/$APP_SLUG/$APP_SLUG"
   ln -s "/opt/$APP_SLUG/$APP_SLUG" "$DEB_ROOT/usr/bin/$APP_SLUG"
   install -m 644 "$DESKTOP_FILE" "$DEB_ROOT/usr/share/applications/$APP_SLUG.desktop"
-  install -m 644 "$ICON_PATH" "$DEB_ROOT/usr/share/icons/hicolor/512x512/apps/$APP_SLUG.png"
+  install -m 644 "$PACKAGING_ICON_PATH" "$DEB_ROOT/usr/share/icons/hicolor/512x512/apps/$APP_SLUG.png"
   install -m 644 "$APPDATA_FILE" "$DEB_ROOT/usr/share/metainfo/$APP_SLUG.appdata.xml"
 
   cat > "$DEB_ROOT/DEBIAN/control" <<EOF
@@ -146,10 +163,10 @@ prepare_appdir() {
 
   install -m 755 "$BINARY_PATH" "$APPDIR/usr/bin/$APP_SLUG"
   install -m 644 "$DESKTOP_FILE" "$APPDIR/usr/share/applications/$APP_SLUG.desktop"
-  install -m 644 "$ICON_PATH" "$APPDIR/usr/share/icons/hicolor/512x512/apps/$APP_SLUG.png"
+  install -m 644 "$PACKAGING_ICON_PATH" "$APPDIR/usr/share/icons/hicolor/512x512/apps/$APP_SLUG.png"
   install -m 644 "$APPDATA_FILE" "$APPDIR/usr/share/metainfo/$APP_SLUG.appdata.xml"
   install -m 644 "$DESKTOP_FILE" "$APPDIR/$APP_SLUG.desktop"
-  install -m 644 "$ICON_PATH" "$APPDIR/$APP_SLUG.png"
+  install -m 644 "$PACKAGING_ICON_PATH" "$APPDIR/$APP_SLUG.png"
 
   cat > "$APPDIR/AppRun" <<'EOF'
 #!/bin/sh
