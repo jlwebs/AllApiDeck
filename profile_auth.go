@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,10 +34,11 @@ var profileStorageKeys = map[string]bool{
 }
 
 const (
-	profileFetchTotalTimeout   = 7 * time.Second
-	profileFetchAttemptLimit   = 2
-	profilePerRequestTimeout   = 3 * time.Second
-	profileMinRequestTimeout   = 250 * time.Millisecond
+	profileFetchTotalTimeout = 7 * time.Second
+	profileFetchAttemptLimit = 2
+	profilePerRequestTimeout = 3 * time.Second
+	profileMinRequestTimeout = 250 * time.Millisecond
+	profileTokenExpiryLeeway = 5 * time.Second
 )
 
 type ChromeProfileTokenRequest struct {
@@ -278,6 +280,15 @@ outer:
 		if token == "" {
 			continue
 		}
+		if localErr := classifyProfileTokenCandidate(token); localErr != nil {
+			rank := scoreProfileFetchError("", localErr)
+			if rank >= bestErrRank {
+				bestErr = localErr
+				bestErrRank = rank
+				bestErrToken = token
+			}
+			continue
+		}
 		for _, endpoint := range endpoints {
 			if attempts >= profileFetchAttemptLimit {
 				break outer
@@ -295,6 +306,9 @@ outer:
 					bestErr = err
 					bestErrRank = rank
 					bestErrToken = token
+				}
+				if strings.EqualFold(strings.TrimSpace(err.Error()), "token_expired") {
+					break
 				}
 				continue
 			}
@@ -951,6 +965,17 @@ func extractJWTExpiryMillis(token string) int64 {
 	return 0
 }
 
+func classifyProfileTokenCandidate(token string) error {
+	expiryMillis := extractJWTExpiryMillis(token)
+	if expiryMillis <= 0 {
+		return nil
+	}
+	if time.Now().UnixMilli() > expiryMillis+profileTokenExpiryLeeway.Milliseconds() {
+		return fmt.Errorf("token_expired_local")
+	}
+	return nil
+}
+
 func scoreProfileFetchError(endpoint string, err error) int {
 	if err == nil {
 		return -1
@@ -958,6 +983,10 @@ func scoreProfileFetchError(endpoint string, err error) int {
 
 	code := strings.TrimSpace(strings.ToLower(err.Error()))
 	switch code {
+	case "token_expired_local":
+		return 145
+	case "token_expired":
+		return 140
 	case "user_banned":
 		return 130
 	case "http_401":

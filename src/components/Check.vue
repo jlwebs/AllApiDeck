@@ -1246,6 +1246,8 @@ const backendHealth = reactive({
   detail: '等待首次检测',
 });
 let backendHealthTimer = null;
+let apiInfoInputHandler = null;
+let viewportResizeHandler = null;
 const pagination = reactive({
   current: 1,
   pageSize: 8, // 默认每页显示8条，可以根据需要调整
@@ -1339,7 +1341,8 @@ onMounted(() => {
 
 onMounted(() => {
   // 智能提取 api info
-  document.getElementById('api_info').addEventListener('input', function () {
+  const apiInfoElement = document.getElementById('api_info');
+  apiInfoInputHandler = function () {
     let text = this.value;
     let { apiUrl: extractedUrl, apiKey: extractedKey } = extractApiInfo(text);
     if (extractedUrl) {
@@ -1348,23 +1351,36 @@ onMounted(() => {
     if (extractedKey) {
       apiKey.value = extractedKey;
     }
-  });
+  };
+  apiInfoElement?.addEventListener('input', apiInfoInputHandler);
 });
 
 // 设置高度单位 vh
 onMounted(() => {
-  const setVh = () => {
+  viewportResizeHandler = () => {
     const vh = window.innerHeight * 0.01;
     document.documentElement.style.setProperty('--vh', `${vh}px`);
   };
-  setVh();
-  window.addEventListener('resize', setVh);
+  viewportResizeHandler();
+  window.addEventListener('resize', viewportResizeHandler);
 });
 
 onBeforeUnmount(() => {
   if (backendHealthTimer) {
     clearInterval(backendHealthTimer);
     backendHealthTimer = null;
+  }
+  if (apiInfoInputHandler) {
+    document.getElementById('api_info')?.removeEventListener('input', apiInfoInputHandler);
+    apiInfoInputHandler = null;
+  }
+  if (viewportResizeHandler) {
+    window.removeEventListener('resize', viewportResizeHandler);
+    viewportResizeHandler = null;
+  }
+  if (chartInstance) {
+    chartInstance.dispose();
+    chartInstance = null;
   }
 });
 

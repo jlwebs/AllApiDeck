@@ -2,6 +2,8 @@
 
 [中文](./README.md) | [English](./README.en.md)
 
+<img src="./docs/images/logo.png" alt="All API Deck Logo" width="120" />
+
 桌面端批量 API 检测与密钥整理工具。
 
 当前项目基于 `Wails + Vue 3`，主要服务于以下几类场景：

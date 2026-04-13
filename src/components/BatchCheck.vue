@@ -1,7 +1,7 @@
 ﻿<template>
   <ConfigProvider :theme="configProviderTheme">
     <div class="wrapper batch-wrapper">
-      <div class="batch-shell">
+      <div class="batch-shell" :class="{ 'batch-shell-motion-active': step === 1 || step === -1 }">
         <div class="batch-forest-scene" aria-hidden="true">
           <div class="forest-mist forest-mist-left"></div>
           <div class="forest-mist forest-mist-right"></div>
@@ -227,10 +227,10 @@
               <div class="tree-wrapper">
                 <a-tree
                   v-model:checkedKeys="checkedKeys"
+                  :expanded-keys="selectionExpandedKeys"
                   :tree-data="treeData"
-                  :virtual="false"
                   checkable
-                  defaultExpandAll
+                  @expand="handleSelectionTreeExpand"
                 >
                   <template #title="node">
                     <div class="custom-tree-node-wrapper tree-provider-node-wrapper" style="display: flex; align-items: center;">
@@ -1214,6 +1214,7 @@ const validAccounts = ref([]);
 const treeData = ref([]);
 const checkedKeys = ref([]);
 const allKeys = ref([]); // Store all keys for easy 'Select All'
+const selectionExpandedKeys = ref([]);
 
 const loadedSitesCount = ref(0);
 const fetchKeysProgress = reactive({
@@ -1238,6 +1239,7 @@ let fetchKeysProgressTimer = null;
 
 // 按 siteUrl 缓存余额，确保其为响应式对象
 const siteQuotaCache = reactive({});
+const siteQuotaPendingMap = new Map();
 
 const batchConcurrency = ref(25);
 const modelTimeout = ref(15);
@@ -1267,10 +1269,15 @@ const toggleExpandAll = () => {
     expandedKeys.value = allKeys;
   }
 };
+const handleSelectionTreeExpand = (keys) => {
+  selectionExpandedKeys.value = Array.isArray(keys) ? [...keys] : [];
+};
 const testResults = ref([]); // all tasks
 const totalTasks = ref(0);
 const completedTasks = ref(0);
 const resultModelFilter = ref('');
+const organizedGroupIndex = ref([]);
+const organizedModelUniverse = ref([]);
 
 const ORGANIZED_REFRESH_INTERVAL_MS = 220;
 const organizedSourceResults = ref([]);
@@ -1330,42 +1337,19 @@ const buildQuickFilterOptionLabel = (category, version, sampleName) => {
   return normalizeQuickFilterName(sampleName || category);
 };
 
-const collectQuickFilterModelsFromTreeNodes = (nodes, bucket = []) => {
-  (Array.isArray(nodes) ? nodes : []).forEach(node => {
-    const children = Array.isArray(node?.children) ? node.children : [];
-    if (node?.isLeaf === true) {
-      const modelName = String(node?.title || '').trim();
-      if (modelName) bucket.push(modelName);
-      return;
-    }
-    if (children.length > 0) {
-      collectQuickFilterModelsFromTreeNodes(children, bucket);
-    }
-  });
-  return bucket;
-};
+const TASK_STATUS_ORDER = { success: 0, warning: 1, error: 2, testing: 3, pending: 4 };
 
 const quickFilterSourceModels = computed(() => {
   if (step.value === 2) {
     return Array.from(new Set(
-      collectQuickFilterModelsFromTreeNodes(treeData.value)
+      allKeys.value
+        .filter(isSelectableModelKey)
+        .map(getModelNameFromSelectableKey)
         .map(model => String(model || '').trim())
         .filter(Boolean)
     ));
   }
-
-  const resultModels = testResults.value
-    .map(item => String(item?.modelName || '').trim())
-    .filter(Boolean);
-  if (resultModels.length > 0) {
-    return Array.from(new Set(resultModels));
-  }
-
-  return Array.from(new Set(
-    organizedSourceResults.value
-      .map(item => String(item?.modelName || '').trim())
-      .filter(Boolean)
-  ));
+  return organizedModelUniverse.value;
 });
 
 const quickFilters = computed(() => {
@@ -1524,7 +1508,7 @@ const activeQuickFilterModelSet = computed(() => {
   return selectedModels;
 });
 
-watch([activeQuickFilterModelSet, treeData], ([currentModelSet], [previousModelSet]) => {
+watch([activeQuickFilterModelSet, allKeys], ([currentModelSet], [previousModelSet]) => {
   if (step.value !== 2) return;
   if (!(currentModelSet instanceof Set) || currentModelSet.size === 0) {
     if (quickFilterSelectionMode.value) {
@@ -1533,7 +1517,7 @@ watch([activeQuickFilterModelSet, treeData], ([currentModelSet], [previousModelS
     return;
   }
 
-  const selectableKeys = collectSelectableModelKeysFromTreeNodes(treeData.value);
+  const selectableKeys = allKeys.value.filter(isSelectableModelKey);
   const matchedKeys = selectableKeys.filter(key => currentModelSet.has(getModelNameFromSelectableKey(key)));
 
   // 第一次点击快捷筛选时，直接切换为“快捷筛选驱动勾选”。
@@ -1544,7 +1528,7 @@ watch([activeQuickFilterModelSet, treeData], ([currentModelSet], [previousModelS
   }
 
   checkedKeys.value = [...matchedKeys];
-}, { deep: true });
+});
 
 const activeQuickFilterSummary = computed(() => {
   const labels = [];
@@ -1667,125 +1651,165 @@ const testProgress = computed(() => {
   return Math.floor((completedTasks.value / totalTasks.value) * 100);
 });
 const browserSessionPendingSiteNameSet = computed(() => new Set(browserSessionPendingSiteNames.value));
+const organizedSearchKeywords = computed(() => String(searchQuery.value || '').trim().toLowerCase().split(/\s+/).filter(Boolean));
+const organizedModelKeywords = computed(() => String(resultModelFilter.value || '').trim().toLowerCase().split(/\s+/).filter(Boolean));
+
+const rebuildOrganizedGroupIndex = (results) => {
+  const sourceResults = Array.isArray(results) ? results : [];
+  if (!sourceResults.length) {
+    organizedGroupIndex.value = [];
+    organizedModelUniverse.value = [];
+    return;
+  }
+
+  const groups = new Map();
+  const modelUniverse = new Set();
+
+  sourceResults.forEach(task => {
+    const siteName = String(task?.siteName || '').trim();
+    const apiKey = String(task?.apiKey || '').trim();
+    const siteUrl = String(task?.siteUrl || '').trim();
+    const modelName = String(task?.modelName || '').trim();
+    const siteNameLower = siteName.toLowerCase();
+    const modelNameLower = modelName.toLowerCase();
+    if (modelName) {
+      modelUniverse.add(modelName);
+    }
+
+    const groupKey = `${siteName}|${apiKey}`;
+    if (!groups.has(groupKey)) {
+      groups.set(groupKey, {
+        key: groupKey,
+        siteName,
+        siteNameLower,
+        apiKey,
+        siteUrl,
+        tasks: [],
+      });
+    }
+
+    groups.get(groupKey).tasks.push({
+      task,
+      modelNameLower,
+    });
+  });
+
+  const nextGroups = Array.from(groups.values()).map(group => {
+    const sortedTasks = [...group.tasks].sort((left, right) => {
+      const leftOrder = TASK_STATUS_ORDER[left.task?.status] ?? 99;
+      const rightOrder = TASK_STATUS_ORDER[right.task?.status] ?? 99;
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+      return String(left.task?.modelName || '').localeCompare(String(right.task?.modelName || ''));
+    });
+
+    const hasSuccess = sortedTasks.some(item => item.task?.status === 'success');
+    const hasWarning = sortedTasks.some(item => item.task?.status === 'warning');
+
+    return {
+      ...group,
+      tasks: sortedTasks,
+      hasSuccess,
+      hasWarning,
+    };
+  }).sort((left, right) => {
+    if (left.hasSuccess && !right.hasSuccess) return -1;
+    if (!left.hasSuccess && right.hasSuccess) return 1;
+    if (left.hasWarning && !right.hasWarning) return -1;
+    if (!left.hasWarning && right.hasWarning) return 1;
+    return String(left.siteName || '').localeCompare(String(right.siteName || ''));
+  });
+
+  organizedGroupIndex.value = nextGroups;
+  organizedModelUniverse.value = Array.from(modelUniverse).sort((left, right) => left.localeCompare(right));
+};
+
+watch(organizedSourceResults, (results) => {
+  rebuildOrganizedGroupIndex(results);
+}, { immediate: true });
+
+const matchesResultTaskByFilters = (task, options = {}) => {
+  const { includeSearch = false, includeSuccessFilter = false } = options;
+  const modelName = String(task?.modelName || '').trim();
+  const modelNameLower = modelName.toLowerCase();
+  const siteNameLower = String(task?.siteName || '').toLowerCase();
+
+  if (includeSuccessFilter && filterOnlySuccess.value && task?.status === 'error') {
+    return false;
+  }
+
+  if (activeQuickFilterModelSet.value.size > 0 && !activeQuickFilterModelSet.value.has(modelName)) {
+    return false;
+  }
+
+  if (organizedModelKeywords.value.length > 0 && !organizedModelKeywords.value.some(keyword => modelNameLower.includes(keyword))) {
+    return false;
+  }
+
+  if (includeSearch && organizedSearchKeywords.value.length > 0) {
+    const matched = organizedSearchKeywords.value.some(keyword =>
+      siteNameLower.includes(keyword) || modelNameLower.includes(keyword)
+    );
+    if (!matched) return false;
+  }
+
+  return true;
+};
 
 // --- NEW Core Computed: Organized & Filtered Tree Data ---
 const organizedTreeData = computed(() => {
-  const results = organizedSourceResults.value;
-  if (results.length === 0) return [];
+  if (!organizedGroupIndex.value.length) return [];
 
-  const keywords = searchQuery.value.trim().toLowerCase().split(/\s+/).filter(k => k);
-  const modelKeywords = resultModelFilter.value.trim().toLowerCase().split(/\s+/).filter(k => k);
-  
-  // Grouping
-  const groups = new Map();
-  results.forEach(task => {
-    const matchQuickFilter =
-      activeQuickFilterModelSet.value.size === 0 ||
-      activeQuickFilterModelSet.value.has(task.modelName);
-    const matchModel = modelKeywords.length === 0 || modelKeywords.some(k => task.modelName.toLowerCase().includes(k));
-    // Keyword match: site name or model name matches ANY of symbols
-    const matchSearch = keywords.length === 0 || keywords.some(k => 
-      task.siteName.toLowerCase().includes(k) || 
-      task.modelName.toLowerCase().includes(k)
-    );
-    
-    // Status match
-    const isError = task.status === 'error';
-    if (filterOnlySuccess.value && isError) return;
-    if (!matchQuickFilter) return;
-    if (!matchModel) return;
-    if (!matchSearch) return;
+  return organizedGroupIndex.value.reduce((bucket, group) => {
+    const filteredTasks = group.tasks
+      .filter(item => matchesResultTaskByFilters(item.task, { includeSearch: true, includeSuccessFilter: true }))
+      .map(item => item.task);
 
-    const groupKey = `${task.siteName}|${task.apiKey}`;
-    if (!groups.has(groupKey)) {
-      groups.set(groupKey, {
-        siteName: task.siteName,
-        apiKey: task.apiKey,
-        siteUrl: task.siteUrl,
-        tasks: [],
-        hasSuccess: false,
-        hasWarning: false,
-      });
+    if (!filteredTasks.length) {
+      return bucket;
     }
-    const g = groups.get(groupKey);
-    g.tasks.push(task);
-    if (task.status === 'success') g.hasSuccess = true;
-    if (task.status === 'warning') g.hasWarning = true;
-  });
 
-  // Convert to tree data & Sort
-  const treeItems = Array.from(groups.values()).map(g => {
-    const sortedTasks = [...g.tasks].sort((a, b) => {
-      const order = { 'success': 0, 'warning': 1, 'error': 2, 'testing': 3, 'pending': 4 };
-      return order[a.status] - order[b.status];
-    });
-
-    const siteKey = g.siteUrl?.replace(/\/+$/, '') || '';
+    const hasSuccess = filteredTasks.some(task => task.status === 'success');
+    const hasWarning = filteredTasks.some(task => task.status === 'warning');
+    const siteKey = group.siteUrl?.replace(/\/+$/, '') || '';
     const quota = siteQuotaCache[siteKey];
     const quotaStr = (quota && !['获取中...', '无授权', '请求超时', '网络错误'].includes(quota)) 
       ? ` (剩余: ${quota.replace('$', '')} $)` 
       : '';
 
-    // Determine node color/style
     let titleClass = 'tree-node-grey';
-    if (g.hasSuccess) titleClass = 'tree-node-green';
-    else if (g.hasWarning) titleClass = 'tree-node-orange';
-    const isBrowserPending = browserSessionPolling.active && browserSessionPendingSiteNameSet.value.has(g.siteName);
+    if (hasSuccess) titleClass = 'tree-node-green';
+    else if (hasWarning) titleClass = 'tree-node-orange';
+    const isBrowserPending = browserSessionPolling.active && browserSessionPendingSiteNameSet.value.has(group.siteName);
     const pendingHint = isBrowserPending
       ? `后台检测中（第 ${Math.max(browserSessionPolling.round, 1)}/${Math.max(browserSessionPolling.totalRounds, 1)} 轮）`
       : '';
 
-    return {
-      title: `[${g.siteName}] ${g.apiKey.slice(0, 15)}...${quotaStr}`,
-      key: `${g.siteName}|${g.apiKey}`,
+    bucket.push({
+      title: `[${group.siteName}] ${group.apiKey.slice(0, 15)}...${quotaStr}`,
+      key: group.key,
       class: titleClass,
       isBrowserPending,
       pendingHint,
-      children: sortedTasks.map(t => ({
+      children: filteredTasks.map(t => ({
         title: `${t.modelName}${t.modelSuffix || ''} - ${t.statusText} (${t.responseTime}s)`,
         displayTitle: t.displaySuffixHtml ? `${t.modelName}${t.displaySuffixHtml} - ${t.statusText} (${t.responseTime}s)` : null,
         key: t.id,
         isLeaf: true,
         class: `status-${t.status}`,
-        // 核心修复：透传导出及拉起应用必备字段
         siteName: t.siteName,
         siteUrl: t.siteUrl,
         apiKey: t.apiKey,
         model: t.modelName
       })),
-      hasSuccess: g.hasSuccess,
-      hasWarning: g.hasWarning
-    };
-  });
-
-  // Global Sort: Green > Orange > Grey
-  return treeItems.sort((a, b) => {
-    if (a.hasSuccess && !b.hasSuccess) return -1;
-    if (!a.hasSuccess && b.hasSuccess) return 1;
-    if (a.hasWarning && !b.hasWarning) return -1;
-    if (!a.hasWarning && b.hasWarning) return 1;
-    return 0;
-  });
+      hasSuccess,
+      hasWarning,
+    });
+    return bucket;
+  }, []);
 });
 
 const currentResultData = computed(() => {
-  let filtered = testResults.value;
-
-  // 1. Apply active quick filters if any
-  if (activeQuickFilterModelSet.value.size > 0) {
-    filtered = filtered.filter(item => activeQuickFilterModelSet.value.has(item.modelName));
-  }
-
-  // 2. Apply search keywords
-  const keywords = resultModelFilter.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  if (keywords.length > 0) {
-    filtered = filtered.filter(item => {
-      const model = String(item?.modelName || '').toLowerCase();
-      return keywords.some(k => model.includes(k));
-    });
-  }
-
-  return filtered;
+  return organizedSourceResults.value.filter(item => matchesResultTaskByFilters(item));
 });
 
 const resultColumns = [
@@ -1904,33 +1928,92 @@ const hoverQuota = (record) => {
 
   record.quota = '获取中...';
 
-  // 非阻塞异步：用 access_token 请求 /api/user/self，取 quota 字段（插件同款）
-  (async () => {
+  void loadQuotaForRecord(record);
+};
+
+const loadQuotaForRecord = async (record, { force = false } = {}) => {
+  const siteKey = record?.siteUrl?.replace(/\/+$/, '') || '';
+  if (!siteKey) return '';
+
+  if (!force && siteQuotaCache[siteKey] !== undefined) {
+    record.quota = siteQuotaCache[siteKey];
+    return siteQuotaCache[siteKey];
+  }
+
+  if (!force && siteQuotaPendingMap.has(siteKey)) {
+    return siteQuotaPendingMap.get(siteKey);
+  }
+
+  const pending = (async () => {
     const label = await fetchQuotaLabelWithBatchLogic({
       apiFetch,
       site: record.accountData,
       siteUrl: siteKey,
     });
     siteQuotaCache[siteKey] = label;
-    testResults.value.forEach(r => { if (r.siteUrl?.replace(/\/+$/, '') === siteKey) r.quota = label; });
+    testResults.value.forEach(r => {
+      if (r.siteUrl?.replace(/\/+$/, '') === siteKey) {
+        r.quota = label;
+      }
+    });
+    return label;
   })();
+
+  siteQuotaPendingMap.set(siteKey, pending);
+  try {
+    return await pending;
+  } finally {
+    siteQuotaPendingMap.delete(siteKey);
+  }
 };
 
 // ── NEW: 导入文件后直接预取所有额度 ──
-const preloadAllQuotas = (extractedSites) => {
-  if (!extractedSites || extractedSites.length === 0) return;
-  
-  extractedSites.forEach(site => {
-    if (!site.site_url || site.error) return;
-    
-    // 模拟一个 record 结构调用 hoverQuota
-    const mockRecord = {
-      siteUrl: site.site_url,
-      accountData: site
-    };
-    hoverQuota(mockRecord);
-  });
+const preloadAllQuotas = async (extractedSites) => {
+  if (!Array.isArray(extractedSites) || extractedSites.length === 0) return;
+
+  const uniqueSiteRecords = Array.from(new Map(
+    extractedSites
+      .filter(site => site?.site_url && !site?.error)
+      .map(site => [String(site.site_url).replace(/\/+$/, ''), {
+        siteUrl: site.site_url,
+        accountData: site,
+      }])
+  ).values());
+
+  const concurrency = 4;
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < uniqueSiteRecords.length) {
+      const currentIndex = cursor;
+      cursor += 1;
+      const record = uniqueSiteRecords[currentIndex];
+      if (!record) continue;
+      try {
+        await loadQuotaForRecord(record);
+      } catch {}
+    }
+  };
+
+  await Promise.allSettled(
+    Array.from({ length: Math.min(concurrency, uniqueSiteRecords.length) }, () => worker())
+  );
 };
+
+watch(step, (value) => {
+  if (value !== 2) {
+    selectionExpandedKeys.value = [];
+  }
+});
+
+watch(searchQuery, (value) => {
+  const hasKeyword = Boolean(String(value || '').trim());
+  if (hasKeyword && treeData.value.length > 0 && selectionExpandedKeys.value.length === 0) {
+    selectionExpandedKeys.value = treeData.value
+      .map(node => node?.key)
+      .filter(Boolean)
+      .slice(0, 24);
+  }
+});
 
 // ── NEW: 批量异步强制刷新所有已选站点的余额 ──
 const refreshAllBalances = async () => {
@@ -1960,7 +2043,7 @@ const refreshAllBalances = async () => {
   const promises = Array.from(uniqueSites.values()).map(record => {
     // 强制重置当前记录的 quota 状态，触发 hoverQuota 的重新获取
     delete record.quota; 
-    return hoverQuota(record);
+    return loadQuotaForRecord(record, { force: true });
   });
 
   await Promise.allSettled(promises);
@@ -2135,6 +2218,7 @@ const resetStep1 = () => {
   validAccounts.value = [];
   testResults.value = [];
   organizedSourceResults.value = [];
+  selectionExpandedKeys.value = [];
 };
 
 const resetStep2 = () => {
@@ -2463,7 +2547,7 @@ const getProfileSiteErrorCode = (site) => normalizeErrorCodeForDisplay(site?.err
 
 const autoOpenExpiredTokenSitesForRelogin = async (sites, reason = 'unknown') => {
   const targets = (Array.isArray(sites) ? sites : [])
-    .filter(site => getProfileSiteErrorCode(site) === 'TOKEN_EXPIRED' && !site?._profileReloginOpened);
+    .filter(site => ['TOKEN_EXPIRED', 'TOKEN_EXPIRED_LOCAL'].includes(getProfileSiteErrorCode(site)) && !site?._profileReloginOpened);
   if (!targets.length) return 0;
 
   const openedCount = await openFailedSitesForManualLogin(targets);
@@ -3836,6 +3920,7 @@ const processAccountsV2 = async (accounts) => {
   treeData.value = [];
   checkedKeys.value = [];
   allKeys.value = [];
+  selectionExpandedKeys.value = [];
 
   browserSessionPolling.active = false;
   browserSessionPolling.round = 0;
@@ -3886,6 +3971,7 @@ const processAccountsV2 = async (accounts) => {
   const normalizeErrorCodeForDisplay = (rawError) => {
     const text = String(rawError || '').trim();
     if (!text) return 'UNKNOWN';
+    if (text === 'token_expired_local') return 'TOKEN_EXPIRED_LOCAL';
     if (text === 'token_expired') return 'TOKEN_EXPIRED';
     if (text === 'user_banned' || /封禁|banned/i.test(text)) return 'USER_BANNED';
     if (/^http_\d+$/i.test(text)) return text.toUpperCase();
@@ -3910,6 +3996,8 @@ const processAccountsV2 = async (accounts) => {
   const getCommonErrorHint = (rawError) => {
     const code = normalizeErrorCodeForDisplay(rawError);
     switch (code) {
+      case 'TOKEN_EXPIRED_LOCAL':
+        return '常见原因：本地解析到当前保存的 JWT access token 已过期；该结论基于 token exp 字段预判，未依赖远程接口返回。请重新登录后刷新登录态再重试。';
       case 'TOKEN_EXPIRED':
         return '常见原因：当前保存的 access token 已失效。请在打开的站点页面重新登录，刷新登录态后再重试。';
       case 'USER_BANNED':
@@ -4473,7 +4561,7 @@ const processAccountsV2 = async (accounts) => {
     }
     updateBrowserSessionPendingSites(stillFailedAccounts);
     validAccounts.value = extractedSites;
-    preloadAllQuotas(extractedSites);
+    void preloadAllQuotas(extractedSites);
 
     summarizeStage('提取阶段完成', extractedSites, stillFailedAccounts);
 
@@ -4527,7 +4615,7 @@ const processAccountsV2 = async (accounts) => {
               gainedUsableTokens: totalMergeStats.gainedUsableTokens + mergeStats.gainedUsableTokens,
             };
             validAccounts.value = extractedSites;
-            preloadAllQuotas(extractedSites);
+            void preloadAllQuotas(extractedSites);
 
             stillFailedAccounts = extractedSites.filter(site => isSiteFailed(site) || shouldUseDesktopProfileAssist(site));
             try {
@@ -4597,7 +4685,7 @@ const processAccountsV2 = async (accounts) => {
               const browserSessionResults = await browserSessionFetchForAccounts(stillFailedAccounts, browserType, round, maxRetryRounds);
               const mergeStats = mergeExtractedSiteResults(extractedSites, browserSessionResults);
               validAccounts.value = extractedSites;
-              preloadAllQuotas(extractedSites);
+              void preloadAllQuotas(extractedSites);
 
               stillFailedAccounts = extractedSites.filter(isSiteFailed);
               browserSessionPolling.pending = stillFailedAccounts.length;
@@ -4709,7 +4797,7 @@ const processAccountsV2 = async (accounts) => {
               const browserSessionResults = await browserSessionFetchForAccounts(stillFailedAccounts, browserType, round, maxRetryRounds);
               const mergeStats = mergeExtractedSiteResults(extractedSites, browserSessionResults);
               validAccounts.value = extractedSites;
-              preloadAllQuotas(extractedSites);
+              void preloadAllQuotas(extractedSites);
 
               stillFailedAccounts = extractedSites.filter(site => isSiteFailed(site) || shouldUseDesktopProfileAssist(site));
               browserSessionPolling.pending = stillFailedAccounts.length;
@@ -5650,8 +5738,8 @@ const copyOrganizedResults = () => {
     radial-gradient(circle at 84% 14%, rgba(255, 213, 116, 0.14), transparent 22%),
     linear-gradient(180deg, rgba(8, 18, 12, 0.14) 0%, rgba(8, 20, 13, 0.34) 42%, rgba(6, 16, 10, 0.62) 100%),
     url('/forest-batch-bg-v2.png') center center / cover no-repeat;
-  opacity: 0.96;
-  animation: forestBackdropShift 26s ease-in-out infinite;
+  opacity: 0.92;
+  animation: none;
 }
 
 .batch-forest-scene > * {
@@ -5671,8 +5759,8 @@ const copyOrganizedResults = () => {
   height: 44%;
   border-radius: 999px;
   background: radial-gradient(circle, rgba(210, 255, 232, 0.12) 0%, rgba(210, 255, 232, 0.02) 56%, transparent 74%);
-  filter: blur(22px);
-  animation: forestMistDrift 18s ease-in-out infinite;
+  filter: blur(12px);
+  animation: none;
 }
 
 .forest-mist-left {
@@ -5694,7 +5782,7 @@ const copyOrganizedResults = () => {
   background:
     radial-gradient(ellipse at center bottom, rgba(255, 214, 126, 0.22) 0%, rgba(212, 255, 182, 0.12) 24%, rgba(30, 58, 33, 0) 72%);
   clip-path: polygon(47% 100%, 53% 100%, 65% 76%, 60% 56%, 67% 33%, 57% 0, 43% 0, 33% 33%, 40% 56%, 35% 76%);
-  filter: blur(12px);
+  filter: blur(8px);
   opacity: 0.9;
 }
 
@@ -5703,9 +5791,9 @@ const copyOrganizedResults = () => {
   width: 188px;
   height: 122px;
   background: url('/forest-firegrass-sprite-v2.png') left bottom / auto 100% no-repeat;
-  filter: drop-shadow(0 8px 18px rgba(18, 38, 22, 0.24)) drop-shadow(0 0 16px rgba(255, 191, 97, 0.14));
+  filter: drop-shadow(0 6px 12px rgba(18, 38, 22, 0.2));
   opacity: 0.98;
-  animation: firegrassFrames 1.1s steps(8) infinite, firegrassDrift 5.8s ease-in-out infinite;
+  animation: none;
 }
 
 .firegrass-left {
@@ -5752,21 +5840,21 @@ const copyOrganizedResults = () => {
 
 .slime-a {
   left: 44%;
-  animation: slimeHopA 6s ease-in-out infinite;
+  animation: none;
 }
 
 .slime-b {
   left: 51%;
   width: 20px;
   height: 17px;
-  animation: slimeHopB 7s ease-in-out infinite;
+  animation: none;
 }
 
 .slime-c {
   left: 57%;
   width: 18px;
   height: 15px;
-  animation: slimeHopC 8.2s ease-in-out infinite;
+  animation: none;
 }
 
 .batch-page-content {
@@ -5936,6 +6024,7 @@ const copyOrganizedResults = () => {
   max-height: 420px;
   overflow-y: auto;
   box-shadow: 0 16px 36px rgba(98, 119, 84, 0.08);
+  contain: layout paint;
 }
 .settings-action-bar {
   display: flex;
@@ -5951,6 +6040,7 @@ const copyOrganizedResults = () => {
   padding: 18px;
   background-color: rgba(255, 255, 255, 0.74);
   box-shadow: 0 20px 48px rgba(98, 119, 84, 0.08);
+  contain: layout paint;
 }
 
 /* Organized Tree Styles */
@@ -5961,6 +6051,7 @@ const copyOrganizedResults = () => {
   padding: 12px;
   max-height: 500px;
   overflow-y: auto;
+  contain: layout paint;
 }
 
 .batch-hero-motion {
@@ -5982,7 +6073,7 @@ const copyOrganizedResults = () => {
   background: linear-gradient(180deg, rgba(170, 202, 127, 0.7), rgba(96, 131, 75, 0.42));
   filter: blur(0.2px);
   transform-origin: center bottom;
-  animation: leafFloat 8s ease-in-out infinite;
+  animation: none;
 }
 
 .leaf-a { top: 24%; right: 18%; animation-delay: 0s; }
@@ -5996,7 +6087,39 @@ const copyOrganizedResults = () => {
   border-radius: 999px;
   background: linear-gradient(180deg, rgba(121, 157, 96, 0), rgba(121, 157, 96, 0.58));
   transform-origin: bottom center;
-  animation: grassSway 5s ease-in-out infinite;
+  animation: none;
+}
+
+.batch-shell-motion-active .batch-forest-scene {
+  animation: forestBackdropShift 36s ease-in-out infinite;
+}
+
+.batch-shell-motion-active .forest-mist {
+  animation: forestMistDrift 24s ease-in-out infinite;
+}
+
+.batch-shell-motion-active .forest-firegrass {
+  animation: firegrassFrames 1.35s steps(8) infinite;
+}
+
+.batch-shell-motion-active .slime-a {
+  animation: slimeHopA 7.4s ease-in-out infinite;
+}
+
+.batch-shell-motion-active .slime-b {
+  animation: slimeHopB 8.2s ease-in-out infinite;
+}
+
+.batch-shell-motion-active .slime-c {
+  animation: slimeHopC 9.2s ease-in-out infinite;
+}
+
+.batch-shell-motion-active .leaf {
+  animation: leafFloat 10s ease-in-out infinite;
+}
+
+.batch-shell-motion-active .grass {
+  animation: grassSway 7s ease-in-out infinite;
 }
 
 .grass-a { left: 8%; height: 38px; animation-delay: 0s; }

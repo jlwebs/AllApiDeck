@@ -5,18 +5,26 @@
 
       <template v-if="!isCompactMode">
 
-      <a-card title="批量同步密钥到本地库" class="sync-card">
+      <a-card class="sync-card sync-card-inline-title">
         <div class="sync-toolbar">
+          <div class="sync-title-wrap">
+            <span class="sync-title-text">同步密钥历史</span>
+          </div>
           <div class="sync-meta">
             <span>本地记录：{{ tableData.length }}</span>
             <span>状态正常：{{ healthyKeyCount }}</span>
-            <span>上次同步：{{ formatDateTime(syncMeta.lastBatchSyncAt) }}</span>
+            <span class="sync-meta-time sync-meta-time-row">上次同步：{{ formatCompactDateTime(syncMeta.lastBatchSyncAt) }}</span>
+          </div>
+          <div v-if="!loading && failedSites.length === 0" class="sync-summary-slot">
+            <a-alert type="info" show-icon class="sync-alert sync-alert-inline" :message="syncSummary" />
           </div>
         </div>
 
         <div v-if="loading" class="sync-loading"><a-spin /><span>正在批量提取 sk key，并写入 localStorage...</span></div>
-        <a-alert v-if="!loading && failedSites.length > 0" type="warning" show-icon class="sync-alert" :message="`${failedSites.length} 个站点本次未获取到 key，详见 logs/fetch-keys.log`" :description="failedSiteNames" />
-        <a-alert v-if="!loading" type="info" show-icon class="sync-alert" :message="syncSummary" />
+        <div v-else-if="failedSites.length > 0" class="sync-feedback">
+          <a-alert type="warning" show-icon class="sync-alert sync-alert-warning" :message="`${failedSites.length} 个站点本次未获取到 key，详见 logs/fetch-keys.log`" :description="failedSiteNames" />
+          <a-alert type="info" show-icon class="sync-alert sync-alert-inline" :message="syncSummary" />
+        </div>
       </a-card>
       </template>
 
@@ -51,18 +59,20 @@
         </template>
 
         <a-empty v-if="displayedRows.length === 0" description="暂无本地密钥记录，可从批量检测自动同步、剪贴板导入或手工添加。" />
-        <a-table v-else :columns="activeColumns" :data-source="displayedRows" :row-key="record => record.rowKey" :pagination="isCompactMode ? false : { pageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'] }" :scroll="isCompactMode ? { x: 980 } : { x: 1280 }" size="small" class="compact-key-table">
+        <a-table v-else :columns="activeColumns" :data-source="displayedRows" :row-key="record => record.rowKey" :pagination="isCompactMode ? false : { pageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'] }" :scroll="isCompactMode ? { x: 650 } : { x: 800 }" size="small" class="compact-key-table">
           <template #bodyCell="{ column, record }">
             <template v-if="column.dataIndex === 'siteName'">
               <div class="site-cell">
                 <div class="site-top-row">
                   <div class="site-main-block">
                     <div class="site-heading">
-                      <a-tag v-if="record.sourceType === 'manual'" color="blue">手工添加</a-tag>
-                      <strong>{{ record.siteName }}</strong>
+                      <strong class="site-title-text" :style="getSiteTitleStyle(record.siteName)">{{ record.siteName }}</strong>
                       <a-tag v-if="isCompactMode" :color="record.status === 1 ? 'green' : 'red'">{{ record.status === 1 ? '正常' : '异常' }}</a-tag>
                     </div>
-                    <span class="subtle-text">{{ record.tokenName || '未命名 Token' }}</span>
+                    <div class="site-subline">
+                      <a-tag v-if="record.sourceType === 'manual'" color="blue">手工添加</a-tag>
+                      <span class="subtle-text">{{ record.tokenName || '未命名 Token' }}</span>
+                    </div>
                     <div v-if="isCompactMode" class="compact-site-api-block">
                       <a-typography-text :copyable="{ text: record.apiKey }" :ellipsis="{ tooltip: record.apiKey }" class="cell-copy-text compact-key-text">{{ maskApiKey(record.apiKey) }}</a-typography-text>
                       <a-typography-text :copyable="{ text: record.siteUrl }" :ellipsis="{ tooltip: record.siteUrl }" class="cell-copy-text api-endpoint-text compact-endpoint-text">{{ record.siteUrl }}</a-typography-text>
@@ -91,6 +101,23 @@
               <div class="api-combined-cell">
                 <a-typography-text :copyable="{ text: record.apiKey }" :ellipsis="{ tooltip: record.apiKey }" class="cell-copy-text">{{ maskApiKey(record.apiKey) }}</a-typography-text>
                 <a-typography-text :copyable="{ text: record.siteUrl }" :ellipsis="{ tooltip: record.siteUrl }" class="cell-copy-text api-endpoint-text">{{ record.siteUrl }}</a-typography-text>
+                <div v-if="!isCompactMode" class="api-model-row">
+                  <a-tooltip :title="getRecordModelTooltip(record)">
+                    <a-select
+                      size="small"
+                      class="record-model-select api-model-select"
+                      popup-class-name="record-model-dropdown"
+                      :value="record.selectedModel || undefined"
+                      :options="getRecordModelOptions(record)"
+                      :loading="record.modelLoading"
+                      :filter-option="true"
+                      option-filter-prop="label"
+                      :placeholder="record.modelsList?.length ? '选择模型' : '点击拉取模型列表'"
+                      @dropdownVisibleChange="open => handleRecordModelDropdownVisibleChange(record, open)"
+                      @change="value => handleRecordModelSelectionChange(record, value)"
+                    />
+                  </a-tooltip>
+                </div>
               </div>
             </template>
             <template v-else-if="column.dataIndex === 'modelsText'">
@@ -98,6 +125,7 @@
                 <a-select
                   size="small"
                   class="record-model-select"
+                  popup-class-name="record-model-dropdown"
                   :value="record.selectedModel || undefined"
                   :options="getRecordModelOptions(record)"
                   :loading="record.modelLoading"
@@ -113,63 +141,65 @@
               <a-tag :color="record.status === 1 ? 'green' : 'red'">{{ record.status === 1 ? '正常' : '禁用/异常' }}</a-tag>
             </template>
             <template v-else-if="column.dataIndex === 'exportActions'">
-              <div class="inline-export-actions">
-                <a-tooltip title="便捷一键设置">
-                  <button type="button" class="export-icon-button export-desktop" @click="openDesktopConfigWizard(record)">
-                    <img :src="quickSetupIcon" alt="便捷一键设置" class="export-icon-image" />
-                  </button>
-                </a-tooltip>
-                <a-tooltip title="导出到 Cherry Studio">
-                  <button type="button" class="export-icon-button export-cherry" @click="launchCherryStudio(record)">
-                    <span class="export-icon-glyph">🍒</span>
-                  </button>
-                </a-tooltip>
-                <a-popover trigger="hover" placement="bottom">
-                  <template #content>
-                    <div class="switch-app-menu">
-                      <button
-                        v-for="app in CC_SWITCH_TARGET_APPS"
-                        :key="app"
-                        type="button"
-                        class="switch-app-item"
-                        @click="launchCCSwitch(record, app)"
-                      >
-                        {{ app }}
-                      </button>
-                    </div>
-                  </template>
-                  <a-tooltip title="导出到 CC Switch">
-                    <button type="button" class="export-icon-button export-switch">
-                      <img :src="ccSwitchIcon" alt="CC Switch" class="export-icon-image export-icon-image-switch" />
+              <div class="export-actions-cell">
+                <div class="inline-export-actions">
+                  <a-tooltip title="便捷一键设置">
+                    <button type="button" class="export-icon-button export-desktop" @click="openDesktopConfigWizard(record)">
+                      <img :src="quickSetupIcon" alt="便捷一键设置" class="export-icon-image" />
                     </button>
                   </a-tooltip>
-                </a-popover>
-                <a-tooltip title="复制为单个 sk:// 导入命令">
-                  <button type="button" class="export-icon-button export-copy" @click="copySingleImportCommand(record)">
-                    <span class="export-icon-glyph">⧉</span>
-                  </button>
-                </a-tooltip>
-              </div>
-            </template>
-            <template v-else-if="column.dataIndex === 'quickTest'">
-              <div class="quick-test-cell">
-                <a-button type="primary" size="small" class="quick-test-button" :loading="record.quickTestLoading" @click="runQuickTest(record)">快速测</a-button>
-                <a-tooltip :title="getQuickTestTooltip(record)">
-                  <a-tag v-if="record.quickTestStatus" :color="getQuickTestColor(record.quickTestStatus)" class="quick-test-tag">{{ record.quickTestLabel || record.quickTestStatus }}</a-tag>
-                  <span v-else class="subtle-text">未测速</span>
-                </a-tooltip>
+                  <a-tooltip title="导出到 Cherry Studio">
+                    <button type="button" class="export-icon-button export-cherry" @click="launchCherryStudio(record)">
+                      <span class="export-icon-glyph">🍒</span>
+                    </button>
+                  </a-tooltip>
+                  <a-popover trigger="hover" placement="bottom">
+                    <template #content>
+                      <div class="switch-app-menu">
+                        <button
+                          v-for="app in CC_SWITCH_TARGET_APPS"
+                          :key="app"
+                          type="button"
+                          class="switch-app-item"
+                          @click="launchCCSwitch(record, app)"
+                        >
+                          {{ app }}
+                        </button>
+                      </div>
+                    </template>
+                    <a-tooltip title="导出到 CC Switch">
+                      <button type="button" class="export-icon-button export-switch">
+                        <img :src="ccSwitchIcon" alt="CC Switch" class="export-icon-image export-icon-image-switch" />
+                      </button>
+                    </a-tooltip>
+                  </a-popover>
+                  <a-tooltip title="复制为单个 sk:// 导入命令">
+                    <button type="button" class="export-icon-button export-copy" @click="copySingleImportCommand(record)">
+                      <span class="export-icon-glyph">⧉</span>
+                    </button>
+                  </a-tooltip>
+                </div>
+                <div class="quick-test-cell export-quick-test-row">
+                  <a-button type="primary" size="small" class="quick-test-button" :loading="record.quickTestLoading" @click="runQuickTest(record)">快速测</a-button>
+                  <div class="quick-test-status-row">
+                    <a-tooltip :title="getQuickTestTooltip(record)">
+                      <a-tag v-if="record.quickTestStatus" :color="getQuickTestColor(record.quickTestStatus)" class="quick-test-tag">{{ record.quickTestLabel || record.quickTestStatus }}</a-tag>
+                      <span v-else class="subtle-text">未测速</span>
+                    </a-tooltip>
+                  </div>
+                </div>
               </div>
             </template>
             <template v-else-if="column.dataIndex === 'updatedAt'">
               <div class="time-cell"><span>{{ formatDateTime(record.updatedAt) }}</span><span class="subtle-text">{{ record.quickTestAt ? `快测 ${formatDateTime(record.quickTestAt)}` : '暂无快测记录' }}</span></div>
             </template>
             <template v-else-if="column.dataIndex === 'rowActions'">
-              <a-space wrap size="small">
+              <div class="row-actions-stack">
                 <a-button size="small" @click="openManualRecordModal(record)">编辑</a-button>
                 <a-popconfirm title="确认删除这条记录？" ok-text="删除" cancel-text="取消" @confirm="deleteRecord(record)">
                   <a-button size="small" danger>删除</a-button>
                 </a-popconfirm>
-              </a-space>
+              </div>
             </template>
           </template>
         </a-table>
@@ -346,7 +376,6 @@ import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APP
 import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils/balance.js';
 import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
 import { exitSidebarMode, isSidebarBridgeAvailable } from '../utils/windowMode.js';
-import { maximiseMainWindow } from '../utils/windowSizing.js';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
 import geminiAppIcon from '../assets/app-icons/gemini.svg';
@@ -415,6 +444,10 @@ const settingsApiUrl = ref('');
 const settingsApiKey = ref('');
 const localCacheList = ref([]);
 const isCompactMode = computed(() => route.query?.compact === '1');
+const PERSIST_DEBOUNCE_MS = 240;
+let persistRecordsTimer = null;
+let lastPersistedRecordsSnapshot = '';
+const recordRenderMetaCache = new Map();
 
 const configProviderTheme = computed(() => ({
   algorithm: isDarkMode.value ? theme.darkAlgorithm : theme.defaultAlgorithm,
@@ -430,17 +463,15 @@ const desktopConfigModelOptions = computed(() => {
     : [{ label: currentValue, value: currentValue }, ...options];
 });
 const columns = [
-  { title: '网站', dataIndex: 'siteName', key: 'siteName', width: 220, sorter: (a, b) => String(a.siteName || '').localeCompare(String(b.siteName || '')) },
-  { title: 'API Key', dataIndex: 'apiKey', key: 'apiKey', width: 210 },
-  { title: '模型候选', dataIndex: 'modelsText', key: 'modelsText', width: 190 },
-  { title: '状态', dataIndex: 'status', key: 'status', width: 88, sorter: (a, b) => Number(a.status || 0) - Number(b.status || 0) },
-  { title: '专属导出', dataIndex: 'exportActions', key: 'exportActions', width: 190 },
-  { title: '快速测有效', dataIndex: 'quickTest', key: 'quickTest', width: 190 },
-  { title: '操作', dataIndex: 'rowActions', key: 'rowActions', width: 110 },
-  { title: '最近同步', dataIndex: 'updatedAt', key: 'updatedAt', width: 150, sorter: (a, b) => Number(a.updatedAt || 0) - Number(b.updatedAt || 0), defaultSortOrder: 'descend' },
+  { title: '网站', dataIndex: 'siteName', key: 'siteName', width: 154, sorter: (a, b) => String(a.siteName || '').localeCompare(String(b.siteName || '')) },
+  { title: 'API Key', dataIndex: 'apiKey', key: 'apiKey', width: 120, className: 'api-key-column' },
+  { title: '状态', dataIndex: 'status', key: 'status', width: 56, sorter: (a, b) => Number(a.status || 0) - Number(b.status || 0) },
+  { title: '专属导出', dataIndex: 'exportActions', key: 'exportActions', width: 116 },
+  { title: '操作', dataIndex: 'rowActions', key: 'rowActions', width: 56 },
+  { title: '最近同步', dataIndex: 'updatedAt', key: 'updatedAt', width: 138, sorter: (a, b) => Number(a.updatedAt || 0) - Number(b.updatedAt || 0), defaultSortOrder: 'descend' },
 ];
 const activeColumns = computed(() => (isCompactMode.value
-  ? columns.filter(column => ['siteName', 'modelsText', 'exportActions', 'quickTest', 'rowActions'].includes(column.dataIndex))
+  ? columns.filter(column => ['siteName', 'exportActions', 'rowActions'].includes(column.dataIndex))
   : columns));
 const failedSites = computed(() => allResults.value.filter(result => !Array.isArray(result?.tokens) || result.tokens.length === 0));
 const failedSiteNames = computed(() => failedSites.value.map(site => site?.site_name || site?.id || '未命名站点').join('，'));
@@ -454,13 +485,9 @@ const healthyKeyCount = computed(() => tableData.value.filter(record => record.s
 const syncSummary = computed(() => !syncMeta.value.lastBatchSyncAt ? '导入 accounts-backup JSON 后，会自动把获取到的 sk key 写入 localStorage。' : `最近一次批量同步写入 ${syncMeta.value.lastBatchSyncCount} 条记录，失败站点 ${syncMeta.value.lastBatchFailedCount} 个。`);
 
 onMounted(() => {
-  if (!isCompactMode.value) {
-    void maximiseMainWindow();
-  }
   if (!document.body.classList.contains('dark-mode') && !document.body.classList.contains('light-mode')) document.body.classList.add('light-mode');
   isDarkMode.value = document.body.classList.contains('dark-mode');
   refreshManagedRecordsFromStorage();
-  persistRecords();
   if (typeof window !== 'undefined') {
     window.addEventListener(KEY_MANAGEMENT_SYNC_EVENT, handleManagedRecordSyncEvent);
     window.addEventListener('storage', handleManagedRecordStorageEvent);
@@ -468,6 +495,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  flushPersistRecords();
   if (typeof window !== 'undefined') {
     window.removeEventListener(KEY_MANAGEMENT_SYNC_EVENT, handleManagedRecordSyncEvent);
     window.removeEventListener('storage', handleManagedRecordStorageEvent);
@@ -531,6 +559,7 @@ const loadLocalRecord = (id) => {
 };
 
 function refreshManagedRecordsFromStorage() {
+  recordRenderMetaCache.clear();
   batchHistoryContextMap.value = loadBatchHistoryContextMap();
   tableData.value = loadStoredRecords();
   syncMeta.value = loadStoredMeta();
@@ -1460,6 +1489,22 @@ function pickPreferredModel(candidates) {
   return chatCandidates.find(model => preferredPatterns.some(pattern => pattern.test(model))) || chatCandidates[0];
 }
 
+function getSiteTitleStyle(siteName) {
+  const text = String(siteName || '').trim();
+  const chars = Array.from(text);
+  const minWidth = 80;
+  const maxWidth = 106;
+  const width = Math.max(minWidth, Math.min(maxWidth, 58 + Math.min(chars.length, 8) * 6));
+  const visualUnits = chars.reduce((sum, ch) => sum + (/[\u4e00-\u9fff]/.test(ch) ? 1 : 0.58), 0) || 1;
+  const fontSize = Math.max(10, Math.min(17, (width - 4) / visualUnits));
+  return {
+    width: `${width}px`,
+    maxWidth: '100%',
+    fontSize: `${fontSize}px`,
+    lineHeight: '1.08',
+  };
+}
+
 function isLikelyChatModel(model) {
   return !/(embedding|tts|whisper|speech|audio|image|video|vision|flux|midjourney|mj|rerank|bge|stability|playground|suno|music|ocr|moderation|asr)/i.test(String(model || ''));
 }
@@ -1548,6 +1593,22 @@ function formatDateTime(timestamp) {
     return new Date(timestamp).toLocaleString();
   } catch (error) {
     console.warn('Failed to format timestamp', error);
+    return '时间异常';
+  }
+}
+
+function formatCompactDateTime(timestamp) {
+  if (!timestamp) return '未同步';
+  try {
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) return '未同步';
+    const month = date.getMonth() + 1;
+    const day = date.getDate();
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${month}/${day} ${hours}:${minutes}`;
+  } catch (error) {
+    console.warn('Failed to format compact timestamp', error);
     return '时间异常';
   }
 }
@@ -1814,27 +1875,49 @@ function hydrateRecordModelSelection(record) {
   };
 }
 
-function getRecordModelOptions(record) {
+function getRecordRenderMeta(record) {
   const context = getBatchHistoryContext(record);
+  const baseModels = Array.isArray(record?.modelsList) ? record.modelsList : normalizeModels(record?.modelsText);
+  const signature = [
+    record?.rowKey || '',
+    Number(context?.updatedAt || 0),
+    String(record?.selectedModel || '').trim(),
+    String(record?.quickTestModel || '').trim(),
+    baseModels.join('|'),
+  ].join('::');
+
+  const cached = recordRenderMetaCache.get(record?.rowKey || '');
+  if (cached?.signature === signature) {
+    return cached.value;
+  }
+
+  const modelsList = buildMergedModelList(record, context);
   const taskMap = new Map((Array.isArray(context?.tasks) ? context.tasks : []).map(task => [task.modelName, task]));
-  return buildMergedModelList(record, context).map(model => ({
-    label: buildModelOptionLabel(model, taskMap.get(model) || null),
-    value: model,
-  }));
+  const selectedModel = String(record?.selectedModel || '').trim();
+  const selectedTask = selectedModel ? (taskMap.get(selectedModel) || null) : null;
+  const summary = buildHistoryTaskSummary(selectedTask);
+  const value = {
+    options: modelsList.map(model => ({
+      label: buildModelOptionLabel(model, taskMap.get(model) || null),
+      value: model,
+    })),
+    selectedTask,
+    tooltip: selectedModel ? (summary ? `${selectedModel} (${summary})` : selectedModel) : (record?.modelsText || '未提供模型信息'),
+  };
+  recordRenderMetaCache.set(record?.rowKey || '', { signature, value });
+  return value;
+}
+
+function getRecordModelOptions(record) {
+  return getRecordRenderMeta(record).options;
 }
 
 function getRecordSelectedModelTask(record) {
-  const context = getBatchHistoryContext(record);
-  const selectedModel = String(record?.selectedModel || '').trim();
-  if (!selectedModel || !Array.isArray(context?.tasks)) return null;
-  return context.tasks.find(task => task.modelName === selectedModel) || null;
+  return getRecordRenderMeta(record).selectedTask || null;
 }
 
 function getRecordModelTooltip(record) {
-  const selectedModel = String(record?.selectedModel || '').trim();
-  if (!selectedModel) return record.modelsText || '未提供模型信息';
-  const summary = buildHistoryTaskSummary(getRecordSelectedModelTask(record));
-  return summary ? `${selectedModel} (${summary})` : selectedModel;
+  return getRecordRenderMeta(record).tooltip;
 }
 
 async function loadRecordModelOptions(record, force = false) {
@@ -1913,6 +1996,10 @@ async function autoRefreshKeyBalancesOnce() {
 }
 
 function persistRecords() {
+  schedulePersistRecords();
+}
+
+function createPersistRecordsSnapshot() {
   const autoRecords = [];
   const manualRecords = [];
   tableData.value.forEach(({ quickTestLoading, balanceLoading, modelLoading, modelFetchKey, ...record }) => {
@@ -1927,16 +2014,33 @@ function persistRecords() {
     if (normalizedRecord.sourceType === 'manual') manualRecords.push(normalizedRecord);
     else autoRecords.push(normalizedRecord);
   });
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(autoRecords));
-  localStorage.setItem(MANUAL_STORAGE_KEY, JSON.stringify(manualRecords));
-  return;
+  return {
+    autoJson: JSON.stringify(autoRecords),
+    manualJson: JSON.stringify(manualRecords),
+  };
+}
 
-  const serializable = tableData.value.map(({ quickTestLoading, balanceLoading, modelLoading, modelFetchKey, ...record }) => ({
-    ...record,
-    modelsList: normalizeModels(record.modelsList || record.modelsText),
-    rowKey: record.rowKey || buildRowKey(record.siteUrl, record.apiKey),
-  }));
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(serializable));
+function flushPersistRecords() {
+  if (persistRecordsTimer) {
+    clearTimeout(persistRecordsTimer);
+    persistRecordsTimer = null;
+  }
+  const snapshot = createPersistRecordsSnapshot();
+  const signature = `${snapshot.autoJson}\n${snapshot.manualJson}`;
+  if (signature === lastPersistedRecordsSnapshot) return;
+  localStorage.setItem(STORAGE_KEY, snapshot.autoJson);
+  localStorage.setItem(MANUAL_STORAGE_KEY, snapshot.manualJson);
+  lastPersistedRecordsSnapshot = signature;
+}
+
+function schedulePersistRecords() {
+  if (persistRecordsTimer) {
+    clearTimeout(persistRecordsTimer);
+  }
+  persistRecordsTimer = setTimeout(() => {
+    persistRecordsTimer = null;
+    flushPersistRecords();
+  }, PERSIST_DEBOUNCE_MS);
 }
 
 function persistMeta() {
@@ -1952,13 +2056,24 @@ function persistMeta() {
 .compact-sidebar-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .compact-sidebar-alert{margin:0}
 .sync-card,.inventory-card{width:100%}
+.sync-card :deep(.ant-card-body){padding:12px 24px}
 .sync-toolbar,.sync-meta,.quick-test-cell,.site-cell,.time-cell{display:flex;gap:12px;flex-wrap:wrap}
-.sync-toolbar{align-items:center;justify-content:space-between}
+.sync-toolbar{display:grid;grid-template-columns:max-content max-content minmax(240px,1fr);align-items:center;column-gap:14px;row-gap:6px}
 .sync-meta,.site-cell,.time-cell,.quick-test-cell{flex-direction:column;gap:3px}
-.site-heading{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.site-cell{width:100%}
+.sync-toolbar{margin-bottom:0}
+.sync-meta{display:grid;grid-template-columns:repeat(2,max-content);align-items:center;gap:4px 14px}
+.sync-meta span{white-space:nowrap}
+.sync-meta-time{font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.sync-meta-time-row{grid-column:1 / -1}
+.sync-summary-slot{min-width:0;display:flex;justify-content:flex-start}
+.sync-title-wrap{display:flex;align-items:center;padding-right:14px;margin-right:2px;border-right:1px solid rgba(90,117,79,.18);min-height:28px}
+.sync-title-text{font:700 18px/1.1 Georgia,'Times New Roman',serif;color:#2d432f;white-space:nowrap}
+.site-heading{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0}
+.site-subline{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
+.site-title-text{display:block;flex:0 1 auto;min-width:0;overflow:hidden;white-space:nowrap}
+.site-cell{width:100%;position:relative}
 .site-top-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;width:100%}
-.site-main-block{min-width:0;flex:1}
+.site-main-block{min-width:80px;max-width:106px;flex:0 1 106px}
 .compact-site-api-block{margin-top:6px;display:flex;flex-direction:column;gap:4px;min-width:0}
 .compact-key-text,.compact-endpoint-text{max-width:100%}
 .site-balance-panel{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:128px}
@@ -1973,19 +2088,33 @@ function persistMeta() {
 .site-balance-unit{color:#6b7280;font-size:11px}
 .site-balance-refresh-icon{font-size:14px}
 .site-balance-refresh-icon-spinning{animation:spin 1s linear infinite}
-.sync-meta,.subtle-text{color:#64748b;font-size:12px}
-.sync-loading{margin-top:16px;display:flex;align-items:center;gap:10px}
-.sync-alert{margin-top:16px}
+.sync-meta,.subtle-text{color:#64748b;font-size:11px}
+.sync-loading{margin-top:6px;display:flex;align-items:center;gap:8px}
+.sync-alert{margin-top:6px}
+.sync-feedback{margin-top:6px;display:flex;align-items:flex-start;gap:6px;flex-wrap:wrap}
+.sync-card :deep(.ant-alert){padding:6px 10px;border-radius:12px}
+.sync-card :deep(.ant-alert-message){font-size:11px;line-height:1.25}
+.sync-card :deep(.sync-alert-inline.ant-alert){margin:0;display:inline-flex;width:fit-content;max-width:100%;align-items:center}
+.sync-card :deep(.sync-alert-inline.ant-alert .ant-alert-content){min-width:0}
+.sync-card :deep(.sync-alert-warning.ant-alert){margin:0;flex:1 1 360px;min-width:min(100%,360px)}
 .cell-copy-text{max-width:240px;display:inline-block}
-.api-combined-cell{display:flex;flex-direction:column;gap:4px;min-width:0}
-.api-endpoint-text{font-size:12px;color:#64748b}
+.api-combined-cell{display:flex;flex-direction:column;gap:2px;min-width:0}
+.api-model-row{margin-top:8px;min-width:0;width:130%;max-width:none}
+.api-endpoint-text{font-size:12px;color:#64748b;line-height:1.1;margin-top:-1px}
 .models-text{display:block;width:100%;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .record-model-select{width:100%;min-width:0}
-.record-model-select :deep(.ant-select-selector){border-radius:10px;padding-inline:10px !important;min-height:34px}
-.record-model-select :deep(.ant-select-selection-item){overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:32px}
-.record-model-select :deep(.ant-select-arrow){font-size:12px}
-.record-model-select :deep(.ant-select-selection-placeholder){font-size:12px;line-height:32px}
+.api-model-select{width:100%;max-width:none}
+.inline-record-model-select{flex:1 1 auto;min-width:0}
+.record-model-select :deep(.ant-select-selector){border-radius:8px;padding-inline:9px !important;min-height:24px}
+.record-model-select :deep(.ant-select-selection-item){overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:22px}
+.record-model-select :deep(.ant-select-arrow){font-size:11px}
+.record-model-select :deep(.ant-select-selection-placeholder){font-size:11px;line-height:22px}
+:deep(.record-model-dropdown .ant-select-item-option-content){font-size:11px;line-height:1.35}
+:deep(.record-model-dropdown .ant-select-item){font-size:11px;min-height:34px;padding-block:6px}
 .import-export-menu{min-width:170px;display:flex;flex-direction:column;gap:8px}
+.export-actions-cell{display:flex;flex-direction:column;align-items:flex-start;gap:10px;min-width:0}
+.row-actions-stack{display:flex;flex-direction:column;align-items:stretch;gap:8px;width:100%}
+.row-actions-stack :deep(.ant-btn),.row-actions-stack :deep(.ant-popconfirm){width:100%}
 .inline-export-actions{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;min-width:max-content}
 .export-icon-button{width:32px;height:32px;border:0;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .18s ease, box-shadow .18s ease, filter .18s ease;background:linear-gradient(135deg,#f8fafc,#e2e8f0);box-shadow:inset 0 0 0 1px rgba(148,163,184,.28);flex:0 0 auto}
 .export-icon-button:hover{transform:translateY(-1px) scale(1.06);filter:saturate(1.08)}
@@ -2000,13 +2129,17 @@ function persistMeta() {
 .switch-app-item{border:0;border-radius:10px;background:#f8fafc;color:#0f172a;padding:8px 10px;text-align:left;cursor:pointer;transition:background .18s ease,color .18s ease}
 .switch-app-item:hover{background:#e0ecff;color:#1d4ed8}
 .quick-test-tag{width:fit-content}
-.quick-test-cell{gap:8px;min-width:0;align-items:flex-start;padding-left:10px}
+.quick-test-cell{gap:6px;min-width:0;align-items:flex-start;padding-left:0}
+.export-quick-test-row{width:100%;flex-direction:row;align-items:center;gap:8px;flex-wrap:nowrap}
+.quick-test-status-row{width:100%;min-width:0}
 .quick-test-button{align-self:flex-start;padding-inline:18px;border-radius:12px;flex:0 0 auto}
 .compact-key-table :deep(table){table-layout:fixed}
 .compact-key-table :deep(.ant-table-thead > tr > th){padding:12px 12px}
-.compact-key-table :deep(.ant-table-tbody > tr > td){padding:10px 12px;vertical-align:top}
+.compact-key-table :deep(.ant-table-tbody > tr > td){padding:10px 12px 0;vertical-align:top}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .compact-key-table :deep(.ant-table-cell){overflow:hidden}
+.compact-key-table :deep(.ant-table-tbody > tr > td.api-key-column){overflow:visible;position:relative;z-index:2}
+.compact-key-table :deep(.ant-table-tbody > tr > td:first-child){overflow:visible;position:relative;z-index:3}
 .desktop-config-modal{display:flex;flex-direction:column;gap:16px}
 .desktop-config-alert{margin-bottom:4px}
 .desktop-config-layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:20px;align-items:start}
@@ -2028,7 +2161,7 @@ function persistMeta() {
 .desktop-app-opencode .desktop-app-logo{background:linear-gradient(135deg,#eef2ff,#dbeafe)}
 .desktop-app-openclaw .desktop-app-logo{background:linear-gradient(135deg,#fff1f2,#ffe4e6)}
 .config-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}
-.key-management :deep(.ant-card){border-radius:24px;border:1px solid rgba(90,117,79,.12);background:rgba(255,255,255,.7);box-shadow:0 14px 36px rgba(87,107,73,.1),inset 0 1px 0 rgba(255,255,255,.72);backdrop-filter:blur(12px)}
+.key-management :deep(.ant-card){border-radius:24px;border:1px solid rgba(90,117,79,.12);background:rgba(255,255,255,.7);box-shadow:0 14px 36px rgba(87,107,73,.1),inset 0 1px 0 rgba(255,255,255,.72);backdrop-filter:blur(6px);contain:layout paint}
 .key-management :deep(.ant-card-head){min-height:56px;border-bottom-color:rgba(90,117,79,.1)}
 .key-management :deep(.ant-card-head-title){font:700 18px/1.1 Georgia,'Times New Roman',serif;color:#2d432f}
 .key-management :deep(.ant-card-extra),.key-management .sync-meta,.key-management .subtle-text,.key-management .api-endpoint-text,.key-management .desktop-panel-hint,.key-management .desktop-field-hint{color:#667760}
@@ -2036,12 +2169,14 @@ function persistMeta() {
 .key-management :deep(.ant-table-thead > tr > th){background:rgba(239,246,226,.72);color:#334634;font-weight:700}
 .key-management :deep(.ant-table-tbody > tr > td){background:rgba(255,255,255,.18)}
 .key-management .desktop-app-panel,.key-management .desktop-form-panel{background:linear-gradient(180deg,rgba(248,252,244,.92),rgba(236,245,226,.84));box-shadow:inset 0 1px 0 rgba(255,255,255,.78)}
-.key-management .desktop-panel-title,.key-management .desktop-app-name,.key-management .site-heading strong{font-family:Georgia,'Times New Roman',serif;color:#2d432f}
+.key-management .desktop-panel-title,.key-management .desktop-app-name,.key-management .site-title-text{font-family:Georgia,'Times New Roman',serif;color:#2d432f}
 .key-management .quick-test-button{border-radius:999px;background:linear-gradient(135deg,#476847,#6f8f55);border:0;box-shadow:0 8px 16px rgba(87,118,76,.18)}
 .key-management :deep(.ant-btn-default),.key-management :deep(.ant-btn-primary),.key-management :deep(.ant-select-selector),.key-management :deep(.ant-input),.key-management :deep(.ant-input-password),.key-management :deep(.ant-input-affix-wrapper){border-radius:12px}
+.key-management .sync-card :deep(.ant-card-head){display:none}
+.key-management .sync-card :deep(.ant-card-body){padding:12px 24px}
 :deep(body.dark-mode) .key-management{background:radial-gradient(circle at 14% 16%,rgba(102,164,110,.18),transparent 22%),radial-gradient(circle at 84% 12%,rgba(255,194,96,.14),transparent 18%),linear-gradient(180deg,rgba(5,12,8,.42) 0%,rgba(5,12,8,.62) 45%,rgba(4,8,6,.82) 100%),url('/forest-batch-bg-v2.png') center center/cover no-repeat;box-shadow:0 28px 60px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.04)}
 :deep(body.dark-mode) .key-management :deep(.ant-card){background:rgba(255,255,255,.06);border-color:rgba(160,189,144,.14);box-shadow:0 18px 42px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.04)}
-:deep(body.dark-mode) .key-management :deep(.ant-card-head-title),:deep(body.dark-mode) .key-management .desktop-panel-title,:deep(body.dark-mode) .key-management .desktop-app-name,:deep(body.dark-mode) .key-management .site-heading strong{color:#edf5e6}
+:deep(body.dark-mode) .key-management :deep(.ant-card-head-title),:deep(body.dark-mode) .key-management .desktop-panel-title,:deep(body.dark-mode) .key-management .desktop-app-name,:deep(body.dark-mode) .key-management .site-title-text{color:#edf5e6}
 :deep(body.dark-mode) .key-management :deep(.ant-card-extra),:deep(body.dark-mode) .key-management .sync-meta,:deep(body.dark-mode) .key-management .subtle-text,:deep(body.dark-mode) .key-management .api-endpoint-text,:deep(body.dark-mode) .key-management .desktop-panel-hint,:deep(body.dark-mode) .key-management .desktop-field-hint{color:#b6c7b1}
 :deep(body.dark-mode) .key-management :deep(.ant-table-thead > tr > th){background:rgba(255,255,255,.08);color:#edf5e6}
 :deep(body.dark-mode) .key-management :deep(.ant-table-tbody > tr > td){background:rgba(255,255,255,.03)}
@@ -2051,13 +2186,17 @@ function persistMeta() {
 .key-management-compact :deep(.ant-card-body){padding:12px}
 .key-management-compact :deep(.ant-card-extra){max-width:100%}
 .key-management-compact :deep(.ant-space){row-gap:8px}
+.key-management-compact .site-main-block{min-width:0;max-width:none;flex:1 1 auto}
 .key-management-compact .compact-key-table :deep(.ant-table-thead > tr > th){padding:10px 8px;font-size:12px}
-.key-management-compact .compact-key-table :deep(.ant-table-tbody > tr > td){padding:8px;vertical-align:top}
+.key-management-compact .compact-key-table :deep(.ant-table-tbody > tr > td){padding:8px 8px 0;vertical-align:top}
+.key-management-compact .site-cell{padding-bottom:0}
 .key-management-compact .quick-test-cell{padding-left:0}
 .key-management-compact .quick-test-button{padding-inline:12px}
 .key-management-compact .inline-export-actions{gap:6px}
-.key-management-compact .record-model-select :deep(.ant-select-selector){min-height:32px;padding-inline:8px !important}
+.key-management-compact .export-actions-cell{gap:8px}
+.key-management-compact .export-quick-test-row{gap:6px}
+.key-management-compact .record-model-select :deep(.ant-select-selector){min-height:26px;padding-inline:8px !important}
 .key-management-compact .record-model-select :deep(.ant-select-selection-item),
-.key-management-compact .record-model-select :deep(.ant-select-selection-placeholder){font-size:11px;line-height:30px}
+.key-management-compact .record-model-select :deep(.ant-select-selection-placeholder){font-size:11px;line-height:24px}
 @media (max-width:900px){.key-management{padding:16px}.desktop-config-layout{grid-template-columns:1fr}.desktop-app-grid{grid-template-columns:repeat(4,minmax(0,1fr));overflow:auto}.config-grid{grid-template-columns:1fr}}
 </style>

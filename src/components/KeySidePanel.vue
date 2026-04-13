@@ -199,8 +199,10 @@ const activeModelDropdownRowKey = ref('');
 const panelBodyRef = ref(null);
 const panelScrollRatio = ref(0);
 const hasScrollableContent = ref(false);
+const PANEL_PERSIST_DEBOUNCE_MS = 120;
 
 let panelBodyResizeObserver = null;
+let panelPersistTimer = null;
 
 const visibleRecords = computed(() => records.value.filter(record => Number(record?.status || 0) === 1));
 const panelScrollDotStyle = computed(() => {
@@ -338,9 +340,29 @@ async function handleQuickSetup(record) {
 }
 
 function updateRecord(nextRecord) {
-  records.value = records.value.map(item => (item.rowKey === nextRecord.rowKey ? nextRecord : item));
-  persistPanelRecords(records.value);
-  reloadRecords();
+  const targetIndex = records.value.findIndex(item => item.rowKey === nextRecord.rowKey);
+  if (targetIndex === -1) return;
+  records.value[targetIndex] = nextRecord;
+  schedulePanelPersist();
+  void nextTick(syncScrollIndicator);
+}
+
+function flushPanelPersist() {
+  if (panelPersistTimer) {
+    clearTimeout(panelPersistTimer);
+    panelPersistTimer = null;
+  }
+  persistPanelRecords(records.value, { broadcast: false });
+}
+
+function schedulePanelPersist() {
+  if (panelPersistTimer) {
+    clearTimeout(panelPersistTimer);
+  }
+  panelPersistTimer = setTimeout(() => {
+    panelPersistTimer = null;
+    flushPanelPersist();
+  }, PANEL_PERSIST_DEBOUNCE_MS);
 }
 
 async function handlePopoverToggle(record, open) {
@@ -475,6 +497,7 @@ watch(visibleRecords, async () => {
 }, { flush: 'post' });
 
 onBeforeUnmount(() => {
+  flushPanelPersist();
   void setPanelInteractionLocked(false);
   panelBodyResizeObserver?.disconnect?.();
   panelBodyResizeObserver = null;
@@ -524,7 +547,7 @@ onBeforeUnmount(() => {
   box-shadow:
     0 28px 54px rgba(16, 19, 25, 0.26),
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(18px) saturate(114%);
+  backdrop-filter: blur(10px) saturate(108%);
   overflow: hidden;
   overflow-x: hidden;
   transition: opacity 0.16s ease, transform 0.16s ease;
@@ -549,7 +572,7 @@ onBeforeUnmount(() => {
 .panel-ambient {
   position: absolute;
   border-radius: 999px;
-  filter: blur(4px);
+  filter: blur(2px);
   pointer-events: none;
 }
 
@@ -807,11 +830,11 @@ onBeforeUnmount(() => {
   padding: 13px 12px 14px;
   border-radius: 22px;
   background: var(--panel-card);
-  box-shadow: 0 16px 34px rgba(21, 22, 28, 0.14);
+  box-shadow: 0 10px 20px rgba(21, 22, 28, 0.1);
   overflow: hidden;
-  animation: panel-card-in 0.34s ease both;
   border: 1px solid rgba(255, 255, 255, 0.52);
   transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+  contain: layout paint;
 }
 
 .panel-record::before {

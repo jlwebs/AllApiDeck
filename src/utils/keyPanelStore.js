@@ -10,6 +10,10 @@ export const LAST_RESULTS_STORAGE_KEY = 'api_check_last_results';
 export const KEY_MANAGEMENT_SYNC_EVENT = 'batch-api-check:key-management-sync';
 
 const DEFAULT_TEST_TIMEOUT_MS = 18000;
+let cachedHistoryContextRaw = null;
+let cachedHistoryContextMap = null;
+let cachedHistoryBalanceRaw = null;
+let cachedHistoryBalanceMap = null;
 
 export function normalizeApiKey(rawKey) {
   let apiKey = String(rawKey || '').trim();
@@ -100,6 +104,9 @@ function pickPreferredModel(candidates) {
 function loadBatchHistoryBalanceMap() {
   try {
     const raw = localStorage.getItem(LAST_RESULTS_STORAGE_KEY);
+    if (raw === cachedHistoryBalanceRaw && cachedHistoryBalanceMap instanceof Map) {
+      return cachedHistoryBalanceMap;
+    }
     const parsed = JSON.parse(raw || '[]');
     if (!Array.isArray(parsed)) return new Map();
 
@@ -119,6 +126,8 @@ function loadBatchHistoryBalanceMap() {
         });
       }
     });
+    cachedHistoryBalanceRaw = raw;
+    cachedHistoryBalanceMap = balanceMap;
     return balanceMap;
   } catch (error) {
     console.error(error);
@@ -129,6 +138,9 @@ function loadBatchHistoryBalanceMap() {
 export function loadBatchHistoryContextMap() {
   try {
     const raw = localStorage.getItem(LAST_RESULTS_STORAGE_KEY);
+    if (raw === cachedHistoryContextRaw && cachedHistoryContextMap instanceof Map) {
+      return cachedHistoryContextMap;
+    }
     const parsed = JSON.parse(raw || '[]');
     if (!Array.isArray(parsed)) return new Map();
 
@@ -179,6 +191,8 @@ export function loadBatchHistoryContextMap() {
         preferredModel: preferredTask?.modelName || '',
       });
     });
+    cachedHistoryContextRaw = raw;
+    cachedHistoryContextMap = contextMap;
     return contextMap;
   } catch (error) {
     console.error(error);
@@ -294,7 +308,8 @@ export function loadPanelRecords() {
   }
 }
 
-export function persistPanelRecords(records) {
+export function persistPanelRecords(records, options = {}) {
+  const { broadcast = true } = options;
   const autoRecords = [];
   const manualRecords = [];
 
@@ -317,7 +332,7 @@ export function persistPanelRecords(records) {
 
   localStorage.setItem(STORAGE_KEY, JSON.stringify(autoRecords));
   localStorage.setItem(MANUAL_STORAGE_KEY, JSON.stringify(manualRecords));
-  if (typeof window !== 'undefined') {
+  if (broadcast && typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(KEY_MANAGEMENT_SYNC_EVENT));
   }
 }

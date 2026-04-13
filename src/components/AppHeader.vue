@@ -107,7 +107,6 @@
 <script setup>
 import { useRouter } from 'vue-router';
 import appLogo from '../assets/logo.png';
-import { maximiseMainWindow, restoreMainWindowFromMaximised } from '../utils/windowSizing.js';
 import {
   AppstoreAddOutlined,
   ExperimentOutlined,
@@ -140,11 +139,6 @@ defineProps({
 const router = useRouter();
 
 const navigate = async path => {
-  if (path === '/keys') {
-    await maximiseMainWindow();
-  } else if (path === '/') {
-    await restoreMainWindowFromMaximised();
-  }
   if (router.currentRoute.value.path !== path) {
     router.push(path);
   }
