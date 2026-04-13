@@ -69,7 +69,7 @@ func resolveLaunchContext(args []string) (launchMode, string) {
 func buildAppOptions(app *App, mode launchMode) *options.App {
 	mainWidth, mainHeight, mainMinWidth, mainMinHeight := resolveMainWindowSize()
 	appOptions := &options.App{
-		Title:             "All API Dock",
+		Title:             "All API Deck",
 		Width:             mainWidth,
 		Height:            mainHeight,
 		MinWidth:          mainMinWidth,
@@ -92,7 +92,7 @@ func buildAppOptions(app *App, mode launchMode) *options.App {
 	}
 
 	if mode == launchModePanel {
-		appOptions.Title = "All API Dock Panel"
+		appOptions.Title = "All API Deck Panel"
 		appOptions.Width = 520
 		appOptions.Height = 780
 		appOptions.MinWidth = 192
@@ -128,7 +128,7 @@ func buildAppOptions(app *App, mode launchMode) *options.App {
 }
 
 func resolveMainWindowSize() (width int, height int, minWidth int, minHeight int) {
-	width = 760
+	width = 800
 	height = 460
 	minWidth = 720
 	minHeight = 460
@@ -156,7 +156,7 @@ func clampWindowSize(value int, min int, max int) int {
 func buildWindowsOptions(mode launchMode) *windows.Options {
 	windowOptions := &windows.Options{
 		WebviewUserDataPath: resolveWebviewUserDataPath(),
-		WindowClassName:     "AllApiDockWindow",
+		WindowClassName:     "AllApiDeckWindow",
 	}
 	if mode == launchModePanel {
 		windowOptions.WebviewIsTransparent = true

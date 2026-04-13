@@ -4,7 +4,7 @@
       <span class="spring-brand-mark">
         <img :src="appLogo" alt="" class="spring-brand-icon" />
       </span>
-      <span class="spring-brand-title">All API Dock</span>
+      <span class="spring-brand-title">All API Deck</span>
     </button>
 
     <nav class="spring-toolbar">

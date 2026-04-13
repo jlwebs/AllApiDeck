@@ -1,7 +1,7 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "AllApiDock",
-  "outputfilename": "all-api-dock",
+  "name": "AllApiDeck",
+  "outputfilename": "all-api-deck",
   "frontend:dir": ".",
   "frontend:install": "node -e \"process.exit(0)\"",
   "frontend:build": "npm run build:web",

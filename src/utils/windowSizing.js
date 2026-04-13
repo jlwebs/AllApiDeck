@@ -6,7 +6,7 @@ import {
   WindowUnmaximise,
 } from '../../wailsjs/runtime/runtime.js';
 
-const MAIN_WINDOW_WIDTH = 760;
+const MAIN_WINDOW_WIDTH = 800;
 const MAIN_WINDOW_HEIGHT = 460;
 
 function canControlWindow() {

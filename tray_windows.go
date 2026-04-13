@@ -168,7 +168,7 @@ func newWindowsTray(showWindow func(), quitApp func()) (*windowsTray, error) {
 		showWindow: showWindow,
 		quitApp:    quitApp,
 		instance:   instance,
-		className:  "AllApiDockTrayWindowClass",
+		className:  "AllApiDeckTrayWindowClass",
 	}
 
 	errCh := make(chan error, 1)
@@ -268,7 +268,7 @@ func (t *windowsTray) addNotifyIcon() error {
 		UCallbackMessage: trayWMAppCallback,
 		HIcon:            t.icon,
 	}
-	copyTrayUTF16(notify.SzTip[:], "All API Dock")
+	copyTrayUTF16(notify.SzTip[:], "All API Deck")
 	result, _, err := trayNotifyIcon.Call(trayNIMAdd, uintptr(unsafe.Pointer(&notify)))
 	if result == 0 {
 		return err

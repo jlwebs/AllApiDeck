@@ -17,7 +17,7 @@
 
 ## 界面预览
 
-<img src="./allapideck.webp" alt="All API Dock 首页预览" width="50%" />
+<img src="./allapideck.webp" alt="All API Deck 首页预览" width="50%" />
 <img src="./PixPin_2026-04-12_04-03-39.png" alt="侧边栏" width="20%" />
 ## 当前定位
 

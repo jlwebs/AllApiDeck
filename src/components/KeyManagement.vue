@@ -2072,11 +2072,11 @@ function persistMeta() {
 .site-subline{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
 .site-title-text{display:block;flex:0 1 auto;min-width:0;overflow:hidden;white-space:nowrap}
 .site-cell{width:100%;position:relative}
-.site-top-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;width:100%}
-.site-main-block{min-width:80px;max-width:106px;flex:0 1 106px}
+.site-top-row{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:2px;width:100%}
+.site-main-block{min-width:80px;max-width:106px;width:106px;flex:0 0 auto}
 .compact-site-api-block{margin-top:6px;display:flex;flex-direction:column;gap:4px;min-width:0}
 .compact-key-text,.compact-endpoint-text{max-width:100%}
-.site-balance-panel{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:128px}
+.site-balance-panel{display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:128px;margin-top:0}
 .site-balance-meta{display:flex;align-items:center;justify-content:flex-start;gap:10px;width:100%;color:#9ca3af;font-size:11px}
 .site-balance-time{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .site-balance-refresh-icon-button{border:0;background:transparent;color:#6b7280;padding:0;margin-left:2px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
@@ -2089,6 +2089,8 @@ function persistMeta() {
 .site-balance-refresh-icon{font-size:14px}
 .site-balance-refresh-icon-spinning{animation:spin 1s linear infinite}
 .sync-meta,.subtle-text{color:#64748b;font-size:11px}
+.time-cell{width:120px;min-width:120px}
+.time-cell span{display:block;line-height:1.2}
 .sync-loading{margin-top:6px;display:flex;align-items:center;gap:8px}
 .sync-alert{margin-top:6px}
 .sync-feedback{margin-top:6px;display:flex;align-items:flex-start;gap:6px;flex-wrap:wrap}
@@ -2099,7 +2101,7 @@ function persistMeta() {
 .sync-card :deep(.sync-alert-warning.ant-alert){margin:0;flex:1 1 360px;min-width:min(100%,360px)}
 .cell-copy-text{max-width:240px;display:inline-block}
 .api-combined-cell{display:flex;flex-direction:column;gap:2px;min-width:0}
-.api-model-row{margin-top:8px;min-width:0;width:130%;max-width:none}
+.api-model-row{margin-top:8px;min-width:0;width:120%;max-width:none}
 .api-endpoint-text{font-size:12px;color:#64748b;line-height:1.1;margin-top:-1px}
 .models-text{display:block;width:100%;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .record-model-select{width:100%;min-width:0}
