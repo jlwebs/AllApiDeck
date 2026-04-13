@@ -135,6 +135,7 @@ var (
 )
 
 const (
+	profileAssistDisableInjection    = true
 	profileAssistWSOverlappedWindow  = 0x00CF0000
 	profileAssistSWShow              = 5
 	profileAssistWMDestroy           = 0x0002
@@ -402,7 +403,18 @@ func runDesktopProfileAssistWindow(request desktopProfileAssistOpenRequest, resu
 		}
 	}
 
+	disableInjection := profileAssistDisableInjection
+	if disableInjection {
+		cookies = []desktopProfileAssistCookie{}
+		storageValues = map[string]string{}
+		storageFields = []string{}
+	}
+
 	shouldInjectStorage, storageSkipReason := shouldInjectProfileAssistStorage(request, host, storageValues, cookies)
+	if disableInjection {
+		shouldInjectStorage = false
+		storageSkipReason = "disabled"
+	}
 	if !shouldInjectStorage && storageSkipReason != "" {
 		appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] storage injection skipped %s | reason=%s", siteURL, storageSkipReason))
 		storageValues = map[string]string{}
@@ -568,16 +580,24 @@ func runDesktopProfileAssistWindow(request desktopProfileAssistOpenRequest, resu
 	chromium.AddWebResourceRequestedFilter("*", edge.COREWEBVIEW2_WEB_RESOURCE_CONTEXT_OTHER)
 	logProfileAssistWebViewSettings(siteURL, chromium)
 
-	if script := buildProfileAssistStorageBootstrapScript(origin, storageValues); script != "" {
-		chromium.Init(script)
+	if !disableInjection {
+		if script := buildProfileAssistStorageBootstrapScript(origin, storageValues); script != "" {
+			chromium.Init(script)
+		}
 	}
 	if traceScript := buildProfileAssistTraceScript(origin); traceScript != "" {
 		chromium.Init(traceScript)
 	}
 
-	injectedCookieNames, err := injectChromeCookiesIntoWebView(chromium, cookies)
-	if err != nil {
-		appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] inject cookies failed %s | %v", siteURL, err))
+	injectedCookieNames := []string{}
+	if !disableInjection {
+		var err error
+		injectedCookieNames, err = injectChromeCookiesIntoWebView(chromium, cookies)
+		if err != nil {
+			appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] inject cookies failed %s | %v", siteURL, err))
+		}
+	} else {
+		appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] injection disabled %s", siteURL))
 	}
 
 	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] open window %s | cookies=%d | storageFields=%d", siteURL, len(injectedCookieNames), len(storageFields)))
@@ -600,7 +620,7 @@ func runDesktopProfileAssistWindow(request desktopProfileAssistOpenRequest, resu
 		InjectedCookies:     len(injectedCookieNames),
 		InjectedCookieNames: injectedCookieNames,
 		StorageFields:       storageFields,
-		Message:             fmt.Sprintf("Opened WebView2 and attempted to inject %d cookies and %d storage fields", len(injectedCookieNames), len(storageFields)),
+		Message:             fmt.Sprintf("Opened WebView2 (inject disabled=%t), cookies=%d storageFields=%d", disableInjection, len(injectedCookieNames), len(storageFields)),
 	}
 	resultCh <- desktopProfileAssistWindowOpenResult{result: result}
 	runProfileAssistMessageLoop(hwnd, chromium)

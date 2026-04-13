@@ -757,6 +757,7 @@ const settingsApiUrl = ref('');
 const settingsApiKey = ref('');
 const localCacheList = ref([]);
 const desktopTokenSourceMode = ref('profile_file');
+const activeExtractionMode = ref('');
 const desktopLogsLoading = ref(false);
 const desktopLogContentLoading = ref(false);
 const desktopLogFiles = ref([]);
@@ -1550,8 +1551,14 @@ const loadingStagePercent = computed(() => {
   return Math.max(0, Math.min(100, Math.floor((completed / total) * 100)));
 });
 
+const resolveLoadingMode = () => (
+  activeExtractionMode.value ||
+  (isWailsRuntime ? normalizeDesktopTokenSourceMode(desktopTokenSourceMode.value) : 'browser_direct')
+);
+
 const loadingStageTitle = computed(() => {
-  if (isWailsRuntime && desktopTokenSourceMode.value === 'profile_file' && fetchKeysProgress.total > 0) {
+  const loadingMode = resolveLoadingMode();
+  if (isWailsRuntime && loadingMode === 'profile_file' && fetchKeysProgress.total > 0) {
     if (fetchKeysProgress.stage === 'profile_copy') return '正在复制 Chrome Local Storage';
     if (fetchKeysProgress.stage === 'profile_scan') return '正在扫描 Chrome Local Storage';
     if (fetchKeysProgress.stage === 'extract_site') return '正在逐站点提取 Token';
@@ -1565,7 +1572,8 @@ const loadingStageTitle = computed(() => {
 const loadingStageDescription = computed(() => {
   const total = fetchKeysProgress.total || totalAccountsCount.value;
   const completed = fetchKeysProgress.completed || 0;
-  if (isWailsRuntime && desktopTokenSourceMode.value === 'profile_file' && total > 0) {
+  const loadingMode = resolveLoadingMode();
+  if (isWailsRuntime && loadingMode === 'profile_file' && total > 0) {
     if (fetchKeysProgress.stage === 'profile_copy' || fetchKeysProgress.stage === 'profile_scan') {
       return `${fetchKeysProgress.detail || '正在读取本地 Chrome Profile 数据'}，完成后将开始逐站点提取`;
     }
@@ -1580,7 +1588,8 @@ const loadingStageDescription = computed(() => {
 const loadingStageMeta = computed(() => {
   const meta = [];
   const refreshedAt = fetchKeysProgress.lastUpdatedAt || Date.now();
-  if (fetchKeysProgress.detail && !(isWailsRuntime && desktopTokenSourceMode.value === 'profile_file' && (fetchKeysProgress.stage === 'profile_copy' || fetchKeysProgress.stage === 'profile_scan'))) {
+  const loadingMode = resolveLoadingMode();
+  if (fetchKeysProgress.detail && !(isWailsRuntime && loadingMode === 'profile_file' && (fetchKeysProgress.stage === 'profile_copy' || fetchKeysProgress.stage === 'profile_scan'))) {
     meta.push(fetchKeysProgress.detail);
   }
   if (fetchKeysProgress.lastSiteName) {
@@ -1595,7 +1604,8 @@ const loadingStageMeta = computed(() => {
 const loadingStageStatusText = computed(() => {
   if (step.value !== -1 || !isLoadingModels.value) return '';
 
-  if (isWailsRuntime && desktopTokenSourceMode.value === 'profile_file' && fetchKeysProgress.total > 0) {
+  const loadingMode = resolveLoadingMode();
+  if (isWailsRuntime && loadingMode === 'profile_file' && fetchKeysProgress.total > 0) {
     const total = fetchKeysProgress.total || totalAccountsCount.value;
     const completed = fetchKeysProgress.completed || 0;
     if (fetchKeysProgress.stage === 'profile_copy') {
@@ -2311,6 +2321,39 @@ const markLocalProfileExtractionDone = (sites) => {
   fetchKeysProgress.completed = safeSites.length;
   fetchKeysProgress.successSites = safeSites.filter(site => Array.isArray(site?.tokens) && site.tokens.length > 0).length;
   fetchKeysProgress.lastSiteName = 'Chrome Default Profile';
+  fetchKeysProgress.lastUpdatedAt = Date.now();
+};
+
+const markBrowserExtractionStart = (total) => {
+  resetFetchKeysProgress();
+  fetchKeysProgress.active = true;
+  fetchKeysProgress.stage = 'extract_site';
+  fetchKeysProgress.detail = '正在提取站点 Token';
+  fetchKeysProgress.total = Number(total || 0);
+  fetchKeysProgress.completed = 0;
+  fetchKeysProgress.successSites = 0;
+  fetchKeysProgress.lastSiteName = '';
+  fetchKeysProgress.startedAt = Date.now();
+  fetchKeysProgress.lastUpdatedAt = Date.now();
+};
+
+const markBrowserExtractionProgress = (siteName, succeeded) => {
+  fetchKeysProgress.completed = Math.min(fetchKeysProgress.completed + 1, fetchKeysProgress.total || 0);
+  if (succeeded) {
+    fetchKeysProgress.successSites += 1;
+  }
+  fetchKeysProgress.lastSiteName = String(siteName || '').trim();
+  fetchKeysProgress.lastUpdatedAt = Date.now();
+};
+
+const markBrowserExtractionDone = (sites) => {
+  const safeSites = Array.isArray(sites) ? sites : [];
+  fetchKeysProgress.active = false;
+  fetchKeysProgress.stage = 'done';
+  fetchKeysProgress.detail = '提取完成，正在整理结果';
+  fetchKeysProgress.completed = safeSites.length;
+  fetchKeysProgress.successSites = safeSites.filter(site => Array.isArray(site?.tokens) && site.tokens.length > 0).length;
+  fetchKeysProgress.lastSiteName = '';
   fetchKeysProgress.lastUpdatedAt = Date.now();
 };
 
@@ -3272,75 +3315,121 @@ const fetchTokensForAccountFromBrowserV2 = async (acc) => {
     return '';
   };
 
-  for (const endpoint of endpoints) {
-    try {
+  const ENDPOINT_TIMEOUT_MS = 8000;
+  const ENDPOINT_MAX_RETRIES = 2; // total attempts = 1 + retries
+  const maxAttempts = ENDPOINT_MAX_RETRIES + 1;
+  const activeControllers = new Set();
+  let resolved = false;
+
+  const abortAll = () => {
+    activeControllers.forEach(controller => controller.abort());
+    activeControllers.clear();
+  };
+
+  const attemptEndpoint = async (endpoint) => {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      if (resolved) throw new Error('resolved_by_other');
       const url = `${baseUrl}${endpoint}`;
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
+      activeControllers.add(controller);
+      const timeout = setTimeout(() => controller.abort(), ENDPOINT_TIMEOUT_MS);
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          headers,
+          signal: controller.signal,
+          credentials: 'include',
+          mode: 'cors',
+          referrer: `${baseUrl}/`,
+        });
+        clearTimeout(timeout);
+        activeControllers.delete(controller);
 
-      const response = await fetch(url, {
-        method: 'GET',
-        headers,
-        signal: controller.signal,
-        credentials: 'include',
-        mode: 'cors',
-        referrer: `${baseUrl}/`,
-      });
-      clearTimeout(timeout);
-
-      if (!response.ok) {
-        if (response.status === 403) {
-          const ct = response.headers.get('content-type') || '';
-          if (/html/i.test(ct)) continue;
+        if (!response.ok) {
+          if (response.status === 403) {
+            const ct = response.headers.get('content-type') || '';
+            if (/html/i.test(ct)) continue;
+          }
+          continue;
         }
+
+        const ct = response.headers.get('content-type') || '';
+        if (/html/i.test(ct)) continue;
+
+        const body = await response.json().catch(() => null);
+        if (!body) continue;
+
+        const items = extractBrowserListItems(body);
+        if (!items.length) continue;
+
+        const resolvedItems = [];
+        for (const item of items) {
+          const rawKey = item?.key || item?.access_token || item?.token || item?.api_key || item?.apikey || (typeof item === 'string' ? item : '');
+          let key = String(rawKey || '').trim();
+          if (isMaskedKey(key) && item?.id) {
+            const fullKey = await resolveMaskedKey(item.id);
+            if (fullKey) key = fullKey;
+          }
+          resolvedItems.push({
+            ...item,
+            key: key || '未知格式Token',
+            unresolved: isMaskedKey(key),
+          });
+        }
+
+        if (resolvedItems.length > 0) {
+          const usableCount = resolvedItems.filter(isUsableToken).length;
+          const unresolvedCount = resolvedItems.length - usableCount;
+          const detailPreview = resolvedItems
+            .slice(0, 5)
+            .map((token, idx) => {
+              const tokenId = token?.id ?? token?.token_id ?? `idx${idx + 1}`;
+              const tokenKey = String(token?.key || '').trim();
+              const keyPreview = tokenKey ? `${tokenKey.slice(0, 12)}...${tokenKey.slice(-4)}` : '(empty-key)';
+              const tokenName = String(token?.name || token?.token_name || '').trim();
+              return `#${tokenId}${tokenName ? `(${tokenName})` : ''}:${keyPreview}`;
+            })
+            .join(' | ');
+          console.log(`[BrowserFetch] [${site_name}] ${endpoint} 获取成功: count=${resolvedItems.length}, usable=${usableCount}, unresolved=${unresolvedCount}, 明细=${detailPreview || '(no-preview)'}`);
+          return { id, site_name, site_url, tokens: resolvedItems, endpoint, account_info, _browserFetched: true };
+        }
+      } catch (err) {
+        clearTimeout(timeout);
+        activeControllers.delete(controller);
+        if (err?.name === 'AbortError') continue;
+        if (resolved) throw new Error('resolved_by_other');
         continue;
       }
-
-      const ct = response.headers.get('content-type') || '';
-      if (/html/i.test(ct)) continue;
-
-      const body = await response.json().catch(() => null);
-      if (!body) continue;
-
-      const items = extractBrowserListItems(body);
-      if (!items.length) continue;
-
-      const resolvedItems = [];
-      for (const item of items) {
-        const rawKey = item?.key || item?.access_token || item?.token || item?.api_key || item?.apikey || (typeof item === 'string' ? item : '');
-        let key = String(rawKey || '').trim();
-        if (isMaskedKey(key) && item?.id) {
-          const fullKey = await resolveMaskedKey(item.id);
-          if (fullKey) key = fullKey;
-        }
-        resolvedItems.push({
-          ...item,
-          key: key || '未知格式Token',
-          unresolved: isMaskedKey(key),
-        });
-      }
-
-      if (resolvedItems.length > 0) {
-        const usableCount = resolvedItems.filter(isUsableToken).length;
-        const unresolvedCount = resolvedItems.length - usableCount;
-        const detailPreview = resolvedItems
-          .slice(0, 5)
-          .map((token, idx) => {
-            const tokenId = token?.id ?? token?.token_id ?? `idx${idx + 1}`;
-            const tokenKey = String(token?.key || '').trim();
-            const keyPreview = tokenKey ? `${tokenKey.slice(0, 12)}...${tokenKey.slice(-4)}` : '(empty-key)';
-            const tokenName = String(token?.name || token?.token_name || '').trim();
-            return `#${tokenId}${tokenName ? `(${tokenName})` : ''}:${keyPreview}`;
-          })
-          .join(' | ');
-        console.log(`[BrowserFetch] [${site_name}] ${endpoint} 获取成功: count=${resolvedItems.length}, usable=${usableCount}, unresolved=${unresolvedCount}, 明细=${detailPreview || '(no-preview)'}`);
-        return { id, site_name, site_url, tokens: resolvedItems, endpoint, account_info, _browserFetched: true };
-      }
-    } catch (err) {
-      if (err?.name === 'AbortError') continue;
-      console.debug(`[BrowserFetch] ${site_name} | ${endpoint} CORS/网络错误:`, err?.message || String(err));
-      continue;
     }
+    throw new Error('endpoint_failed');
+  };
+
+  const endpointTasks = endpoints.map(endpoint => attemptEndpoint(endpoint));
+  try {
+    let result = null;
+    if (typeof Promise.any === 'function') {
+      result = await Promise.any(endpointTasks);
+    } else {
+      result = await new Promise((resolve, reject) => {
+        let pending = endpointTasks.length;
+        let lastError = null;
+        endpointTasks.forEach(task => {
+          task
+            .then(resolve)
+            .catch((err) => {
+              lastError = err;
+              pending -= 1;
+              if (pending <= 0) reject(lastError);
+            });
+        });
+      });
+    }
+    resolved = true;
+    abortAll();
+    return result;
+  } catch {
+    resolved = true;
+    abortAll();
   }
 
   return {
@@ -4075,6 +4164,7 @@ const processAccountsV2 = async (accounts, options = {}) => {
   let extractionMode = forcedExtractionMode || (isWailsRuntime
     ? normalizeDesktopTokenSourceMode(desktopTokenSourceMode.value)
     : 'browser_direct');
+  activeExtractionMode.value = extractionMode;
   let cdpModeContext = null;
   let initialDiscoveryCompleted = false;
   let discoveryInFlight = false;
@@ -4527,6 +4617,9 @@ const processAccountsV2 = async (accounts, options = {}) => {
       }
     }
     if (!isWailsRuntime || extractionMode === 'browser_direct') {
+      if (extractionMode === 'browser_direct') {
+        markBrowserExtractionStart(accountsToFetch.length);
+      }
       if (isWailsRuntime && importSource === 'json_backup') {
         console.log(`[FetchKeys] JSON backup import detected, skip profile_file and use browser_direct extraction for ${accountsToFetch.length} sites`);
       } else if (isWailsRuntime && importSource === 'extension_import') {
@@ -4539,7 +4632,13 @@ const processAccountsV2 = async (accounts, options = {}) => {
       const browserFetchWorker = async () => {
         while (currentIdx < accountsToFetch.length) {
           const idx = currentIdx++;
-          browserResults[idx] = await fetchTokensForAccountFromBrowserV2(accountsToFetch[idx]);
+          const result = await fetchTokensForAccountFromBrowserV2(accountsToFetch[idx]);
+          browserResults[idx] = result;
+          if (extractionMode === 'browser_direct') {
+            const siteName = String(accountsToFetch[idx]?.site_name || '').trim();
+            const succeeded = Array.isArray(result?.tokens) && result.tokens.length > 0;
+            markBrowserExtractionProgress(siteName, succeeded);
+          }
         }
       };
 
@@ -4551,6 +4650,9 @@ const processAccountsV2 = async (accounts, options = {}) => {
       );
 
       extractedSites = browserResults;
+      if (extractionMode === 'browser_direct') {
+        markBrowserExtractionDone(extractedSites);
+      }
 
       const failedAccounts = accountsToFetch.filter((acc, i) => browserResults[i]?._needServerFallback === true);
       if (failedAccounts.length > 0) {
@@ -4570,6 +4672,9 @@ const processAccountsV2 = async (accounts, options = {}) => {
         } catch (e) {
           console.warn('[FetchKeys] 服务端兜底失败:', e?.message || String(e));
         }
+      }
+      if (extractionMode === 'browser_direct') {
+        markBrowserExtractionDone(extractedSites);
       }
     }
 
@@ -4864,6 +4969,8 @@ const processAccountsV2 = async (accounts, options = {}) => {
     isLoadingModels.value = false;
     isDiscoveringModels.value = false;
     step.value = 1;
+  } finally {
+    activeExtractionMode.value = '';
   }
 };
 
