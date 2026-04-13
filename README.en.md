@@ -2,7 +2,7 @@
 
 [中文](./README.md) | [English](./README.en.md)
 
-<img src="./docs/images/logo.png" alt="All API Dock Logo" width="120" />
+<img src="./assets/appicon.png" alt="All API Dock Logo" width="120" />
 
 A desktop tool for large-scale API checking and key management.
 

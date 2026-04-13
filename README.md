@@ -2,7 +2,7 @@
 
 [中文](./README.md) | [English](./README.en.md)
 
-<img src="./docs/images/logo.png" alt="All API Deck Logo" width="120" />
+<img src="./assets/appicon.png" alt="All API Deck Logo" width="120" />
 
 桌面端批量 API 检测与密钥整理工具。
 

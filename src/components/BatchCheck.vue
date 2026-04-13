@@ -3362,7 +3362,10 @@ const beforeUpload = (file) => {
     try {
       const data = JSON.parse(e.target.result);
       if (data && data.accounts && Array.isArray(data.accounts.accounts)) {
-        processAccountsV2(data.accounts.accounts);
+        processAccountsV2(data.accounts.accounts, {
+          importSource: 'json_backup',
+          forceExtractionMode: 'browser_direct',
+        });
       } else {
         message.error('无效的文件格式: 缺少 accounts 数组');
       }
@@ -3486,7 +3489,10 @@ const importFromExtension = async () => {
     setImportExtensionStatus(`已读取 ${accounts.length} 个账号，正在构建检测任务`, 'success');
     await waitForUiPaint();
     message.success(`已从扩展导入 ${accounts.length} 个账号`);
-    await processAccountsV2(accounts);
+    await processAccountsV2(accounts, {
+      importSource: 'extension_import',
+      fallbackOnProfileFailure: true,
+    });
   } catch (err) {
     stopFetchKeysProgressPolling();
     setImportExtensionStatus(err?.message || '扩展导入失败', 'error');
@@ -3899,13 +3905,16 @@ const processAccounts = async (accounts) => {
     step.value = 2; // 进入树形选择器
   };
   
-const processAccountsV2 = async (accounts) => {
+const processAccountsV2 = async (accounts, options = {}) => {
   const accountsToFetch = (Array.isArray(accounts) ? accounts : []).filter(acc =>
     !acc?.disabled &&
     acc?.site_url &&
     acc?.account_info &&
     acc?.account_info?.access_token
   );
+  const importSource = String(options?.importSource || '').trim();
+  const forcedExtractionMode = String(options?.forceExtractionMode || '').trim();
+  const fallbackOnProfileFailure = options?.fallbackOnProfileFailure === true;
 
   if (accountsToFetch.length === 0) {
     message.warning('备份文件中未找到可用账号配置');
@@ -4063,9 +4072,9 @@ const processAccountsV2 = async (accounts) => {
   };
 
   let extractedSites = [];
-  let extractionMode = isWailsRuntime
+  let extractionMode = forcedExtractionMode || (isWailsRuntime
     ? normalizeDesktopTokenSourceMode(desktopTokenSourceMode.value)
-    : 'browser_direct';
+    : 'browser_direct');
   let cdpModeContext = null;
   let initialDiscoveryCompleted = false;
   let discoveryInFlight = false;
@@ -4460,20 +4469,32 @@ const processAccountsV2 = async (accounts) => {
   };
 
   try {
-    if (isWailsRuntime) {
+    if (isWailsRuntime && extractionMode !== 'browser_direct') {
       if (extractionMode === 'profile_file' && isChromeProfileAuthAvailable.value) {
         console.log(`[FetchKeys] Wails WebView detected, use Chrome Profile extraction for ${accountsToFetch.length} sites`);
         markLocalProfileExtractionStart(accountsToFetch.length);
         startFetchKeysProgressPolling();
+        let profileExtractError = null;
         try {
           const response = await extractChromeProfileTokens(accountsToFetch);
           if (Array.isArray(response?.warnings) && response.warnings.length > 0) {
             console.warn('[FetchKeys] Chrome Profile extraction warnings:', response.warnings.join(' | '));
           }
           extractedSites = mergeChromeProfileExtractedSites(accountsToFetch, response);
+        } catch (err) {
+          profileExtractError = err;
         } finally {
           stopFetchKeysProgressPolling();
           markLocalProfileExtractionDone(extractedSites);
+        }
+        if (profileExtractError) {
+          if (fallbackOnProfileFailure) {
+            console.warn(`[FetchKeys] Profile extraction failed for ${importSource || 'unknown_source'}, fallback to browser_direct:`, profileExtractError?.message || String(profileExtractError));
+            message.warning(`Profile 文件提取失败，已自动改用导入登录态继续提取：${profileExtractError?.message || String(profileExtractError)}`);
+            extractionMode = 'browser_direct';
+          } else {
+            throw profileExtractError;
+          }
         }
       } else if (extractionMode === 'profile_file') {
         throw new Error('当前桌面端尚未暴露 Profile 文件提取接口，无法使用 Profile 文件模式');
@@ -4504,7 +4525,13 @@ const processAccountsV2 = async (accounts) => {
       } else {
         throw new Error(`未知桌面端提取模式: ${extractionMode}`);
       }
-    } else {
+    }
+    if (!isWailsRuntime || extractionMode === 'browser_direct') {
+      if (isWailsRuntime && importSource === 'json_backup') {
+        console.log(`[FetchKeys] JSON backup import detected, skip profile_file and use browser_direct extraction for ${accountsToFetch.length} sites`);
+      } else if (isWailsRuntime && importSource === 'extension_import') {
+        console.log(`[FetchKeys] Extension import extraction via browser_direct for ${accountsToFetch.length} sites`);
+      }
       const BROWSER_FETCH_CONCURRENCY = 25;
       const browserResults = new Array(accountsToFetch.length);
       let currentIdx = 0;
