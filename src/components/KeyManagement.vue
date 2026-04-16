@@ -2049,7 +2049,7 @@ function persistMeta() {
 </script>
 
 <style scoped>
-.key-management{width:100%;padding:16px;display:flex;flex-direction:column;gap:16px;position:relative;overflow:hidden;border-radius:28px;background:radial-gradient(circle at 14% 16%,rgba(196,226,163,.18),transparent 22%),radial-gradient(circle at 84% 12%,rgba(255,214,126,.18),transparent 18%),linear-gradient(180deg,rgba(8,18,12,.12) 0%,rgba(8,18,12,.28) 45%,rgba(8,18,12,.5) 100%),url('/forest-batch-bg-v2.png') center center/cover no-repeat;box-shadow:0 26px 56px rgba(76,92,64,.16),inset 0 1px 0 rgba(255,255,255,.42)}
+.key-management{width:100%;padding:8px 8px 0;display:flex;flex-direction:column;gap:16px;position:relative;overflow:hidden;border-radius:28px;background:radial-gradient(circle at 14% 16%,rgba(196,226,163,.18),transparent 22%),radial-gradient(circle at 84% 12%,rgba(255,214,126,.18),transparent 18%),linear-gradient(180deg,rgba(8,18,12,.12) 0%,rgba(8,18,12,.28) 45%,rgba(8,18,12,.5) 100%),url('/forest-batch-bg-v2.png') center center/cover no-repeat;box-shadow:0 26px 56px rgba(76,92,64,.16),inset 0 1px 0 rgba(255,255,255,.42)}
 .key-management-compact{padding:12px;gap:12px;min-height:100vh;background:linear-gradient(180deg,#f8fafc,#eef2ff)}
 .key-management>*{position:relative;z-index:1}
 .compact-sidebar-summary{display:flex;flex-direction:column;gap:10px}
@@ -2200,5 +2200,5 @@ function persistMeta() {
 .key-management-compact .record-model-select :deep(.ant-select-selector){min-height:26px;padding-inline:8px !important}
 .key-management-compact .record-model-select :deep(.ant-select-selection-item),
 .key-management-compact .record-model-select :deep(.ant-select-selection-placeholder){font-size:11px;line-height:24px}
-@media (max-width:900px){.key-management{padding:16px}.desktop-config-layout{grid-template-columns:1fr}.desktop-app-grid{grid-template-columns:repeat(4,minmax(0,1fr));overflow:auto}.config-grid{grid-template-columns:1fr}}
+@media (max-width:900px){.key-management{padding:8px 8px 0}.desktop-config-layout{grid-template-columns:1fr}.desktop-app-grid{grid-template-columns:repeat(4,minmax(0,1fr));overflow:auto}.config-grid{grid-template-columns:1fr}}
 </style>

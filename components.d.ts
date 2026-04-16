@@ -65,5 +65,6 @@ declare module 'vue' {
     KeySidePanel: typeof import('./src/components/KeySidePanel.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    SiteManagement: typeof import('./src/components/SiteManagement.vue')['default']
   }
 }

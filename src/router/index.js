@@ -36,6 +36,10 @@ const routes = [
         path: 'keys',
         component: () => import('../views/Keys.vue'),
       },
+      {
+        path: 'sites',
+        component: () => import('../views/Sites.vue'),
+      },
     ],
   },
 ];

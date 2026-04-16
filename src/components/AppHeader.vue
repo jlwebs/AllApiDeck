@@ -18,6 +18,28 @@
         <span>批量检测</span>
       </button>
 
+      <span class="spring-flow-arrow" aria-hidden="true">
+        <svg viewBox="0 0 34 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M3 10H24M24 10L17 3M24 10L17 17" />
+        </svg>
+      </span>
+
+      <button
+        type="button"
+        class="spring-pill"
+        :class="{ 'spring-pill-active': currentPage === 'sites' }"
+        @click="navigate('/sites')"
+      >
+        <DatabaseOutlined />
+        <span>站点管理</span>
+      </button>
+
+      <span class="spring-flow-arrow" aria-hidden="true">
+        <svg viewBox="0 0 34 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M3 10H24M24 10L17 3M24 10L17 17" />
+        </svg>
+      </span>
+
       <button
         type="button"
         class="spring-pill"
@@ -109,6 +131,7 @@ import { useRouter } from 'vue-router';
 import appLogo from '../assets/logo.png';
 import {
   AppstoreAddOutlined,
+  DatabaseOutlined,
   ExperimentOutlined,
   GithubOutlined,
   KeyOutlined,
@@ -138,7 +161,7 @@ defineProps({
 
 const router = useRouter();
 
-const navigate = async path => {
+const navigate = path => {
   if (router.currentRoute.value.path !== path) {
     router.push(path);
   }
@@ -211,7 +234,7 @@ const openGitHub = () => {
   align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -237,6 +260,32 @@ const openGitHub = () => {
     background-color 0.2s ease,
     color 0.2s ease,
     box-shadow 0.2s ease;
+}
+
+.spring-flow-arrow {
+  width: 24px;
+  height: 32px;
+  flex: 0 0 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(105, 123, 95, 0.82);
+  margin: 0 -1px;
+  pointer-events: none;
+}
+
+.spring-flow-arrow svg {
+  width: 24px;
+  height: 16px;
+  overflow: visible;
+  filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.72));
+}
+
+.spring-flow-arrow path {
+  stroke: currentColor;
+  stroke-width: 3.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .spring-pill-active {
@@ -305,6 +354,10 @@ const openGitHub = () => {
 :deep(body.dark-mode) .spring-pill:hover {
   background: rgba(172, 199, 151, 0.12);
   color: #f7fcf1;
+}
+
+:deep(body.dark-mode) .spring-flow-arrow {
+  color: rgba(198, 218, 187, 0.72);
 }
 
 @media (max-width: 620px) {

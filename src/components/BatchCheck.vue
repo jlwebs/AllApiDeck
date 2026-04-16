@@ -238,7 +238,7 @@
                         <button
                           v-if="canOpenProviderSiteFromTreeNode(node) && getProviderTreeTitle(node)"
                           type="button"
-                          :class="['provider-tree-link', { 'is-grey': node.isProviderDiagnostic || node.titleClass === 'tree-node-grey' }]"
+                          :class="['provider-tree-link', { 'is-grey': node.isProviderDiagnostic || node.titleClass === 'tree-node-grey' || node.siteDisabled }]"
                           @click.stop="openProviderSiteFromTreeNode(node)"
                         >
                           {{ getProviderTreeTitle(node) }}
@@ -255,11 +255,52 @@
                         >
                           {{ node.title }}
                         </span>
+                        <span v-if="node.isManualToken" class="site-tree-inline-tag">手动添加</span>
+                        <a-popconfirm
+                          v-if="node.isManualToken"
+                          title="确认删除这个手动添加的 key？"
+                          @confirm="handleTreeManualTokenDelete(node)"
+                        >
+                          <button type="button" class="site-tree-inline-delete-btn" @click.stop>
+                            <DeleteOutlined />
+                          </button>
+                        </a-popconfirm>
+                        <span v-if="node.isSiteRoot && node.siteNote" class="site-tree-note-badge">
+                          {{ node.siteNote }}
+                        </span>
                       </div>
                       <span v-if="node.isModelDiscovering || node.isBrowserPending" class="tree-node-pending-hint">
                         <a-spin size="small" />
                         <span>{{ node.isModelDiscovering ? (node.modelDiscoveringHint || '模型检测中') : node.pendingHint }}</span>
                       </span>
+                      <div v-if="node.isSiteRoot" class="site-tree-actions">
+                        <a-tooltip title="基于缓存用户态 token 重新读取站点数据">
+                          <button type="button" class="site-tree-action-btn" @click.stop="handleTreeSiteRefresh(node)">
+                            <ReloadOutlined />
+                          </button>
+                        </a-tooltip>
+                        <a-tooltip title="手动追加自定义 sk">
+                          <button type="button" class="site-tree-action-btn" @click.stop="handleTreeSiteCustomSk(node)">
+                            <LockOutlined />
+                          </button>
+                        </a-tooltip>
+                        <a-tooltip :title="node.siteDisabled ? '激活该站点' : '禁用该站点'">
+                          <button type="button" class="site-tree-action-btn" @click.stop="handleTreeSiteToggleDisabled(node)">
+                            <CheckCircleOutlined v-if="node.siteDisabled" />
+                            <StopOutlined v-else />
+                          </button>
+                        </a-tooltip>
+                        <a-tooltip title="设置 10 字以内备注">
+                          <button type="button" class="site-tree-action-btn" @click.stop="handleTreeSiteEditNote(node)">
+                            <MessageOutlined />
+                          </button>
+                        </a-tooltip>
+                        <a-popconfirm title="确认删除该站点缓存？" @confirm="handleTreeSiteDelete(node)">
+                          <button type="button" class="site-tree-action-btn is-danger" @click.stop>
+                            <DeleteOutlined />
+                          </button>
+                        </a-popconfirm>
+                      </div>
                       <div v-if="isProviderDiagnosticTreeNode(node)" class="provider-tree-actions">
                         <a-popover trigger="hover" placement="rightTop" overlayClassName="provider-diagnostic-popover">
                           <template #content>
@@ -572,6 +613,49 @@
               </div>
             </a-modal>
 
+            <a-modal
+              v-model:open="showKeySyncStrategyModal"
+              title="请选择密钥更新策略"
+              :mask-closable="false"
+              :keyboard="false"
+              :closable="false"
+              @cancel="resolveKeySyncStrategy('keep')"
+            >
+              <div class="key-sync-strategy-modal">
+                <p class="key-sync-strategy-summary">
+                  本次检测获取到 {{ pendingKeySyncIncomingCount }} 条密钥，当前密钥管理中已有 {{ pendingKeySyncExistingCount }} 条自动同步记录。
+                </p>
+                <div class="key-sync-strategy-option">
+                  <span class="key-sync-strategy-index">1.</span>
+                  <div>
+                    <div class="key-sync-strategy-title">增量更新</div>
+                    <div class="key-sync-strategy-desc">保留现有自动记录，仅覆盖相同网站 + API Key 的重复项，并追加新的密钥。</div>
+                  </div>
+                </div>
+                <div class="key-sync-strategy-option">
+                  <span class="key-sync-strategy-index">2.</span>
+                  <div>
+                    <div class="key-sync-strategy-title">清空覆盖</div>
+                    <div class="key-sync-strategy-desc">清空当前自动同步记录，再用本次检测结果整体重建。</div>
+                  </div>
+                </div>
+                <div class="key-sync-strategy-option">
+                  <span class="key-sync-strategy-index">3.</span>
+                  <div>
+                    <div class="key-sync-strategy-title">不改变</div>
+                    <div class="key-sync-strategy-desc">保留现有密钥管理数据，不写入本次自动同步结果。</div>
+                  </div>
+                </div>
+              </div>
+              <template #footer>
+                <a-space>
+                  <a-button type="primary" @click="resolveKeySyncStrategy('merge')">增量更新</a-button>
+                  <a-button danger @click="resolveKeySyncStrategy('replace')">清空覆盖</a-button>
+                  <a-button @click="resolveKeySyncStrategy('keep')">不改变</a-button>
+                </a-space>
+              </template>
+            </a-modal>
+
             <!-- Settings Modal (Aligned with Check.vue console style) -->
             <a-modal
               v-model:open="showAppSettingsModal"
@@ -715,8 +799,9 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRouter } from 'vue-router';
 import { ConfigProvider, message, theme, Modal } from 'ant-design-vue';
-import { HomeOutlined, ReloadOutlined, MenuUnfoldOutlined, MenuFoldOutlined, InboxOutlined, PlayCircleOutlined, SearchOutlined, CopyOutlined, FilterOutlined, HistoryOutlined, ShareAltOutlined, DownOutlined, RightOutlined, UserOutlined, LockOutlined, MessageOutlined, CopyFilled, SmileOutlined, RedoOutlined, CloudSyncOutlined } from '@ant-design/icons-vue';
+import { HomeOutlined, ReloadOutlined, MenuUnfoldOutlined, MenuFoldOutlined, InboxOutlined, PlayCircleOutlined, SearchOutlined, CopyOutlined, FilterOutlined, HistoryOutlined, ShareAltOutlined, DownOutlined, RightOutlined, UserOutlined, LockOutlined, MessageOutlined, CopyFilled, SmileOutlined, RedoOutlined, CloudSyncOutlined, StopOutlined, CheckCircleOutlined, DeleteOutlined } from '@ant-design/icons-vue';
 import AppHeader from './AppHeader.vue';
 import { fetchModelList } from '../utils/api.js';
 import { listDesktopLogFiles, readDesktopLogFile, isDesktopLogBridgeAvailable } from '../utils/desktopLogBridge.js';
@@ -727,9 +812,27 @@ import { maximiseMainWindow } from '../utils/windowSizing.js';
 import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils/balance.js';
 import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
 import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
+import {
+  appendCustomKeysToSiteCache,
+  buildSiteCacheKey,
+  buildBatchSitesFromCache,
+  consumePendingBatchStart,
+  consumePendingSiteRestore,
+  deleteSiteCacheRecord,
+  findAnySiteCacheRecord,
+  loadAllSiteCacheRecords,
+  mergeExtractedSitesIntoTempCache,
+  mergeExtractedSitesIntoCache,
+  normalizeSiteUrl,
+  removeCustomKeyFromSiteCache,
+  setSiteCacheDisabled,
+  updateSiteCacheTreeNodes,
+  updateSiteCacheNote,
+} from '../utils/siteCacheStore.js';
 
 const isWailsRuntime = isProbablyWailsRuntime();
 const { t } = useI18n();
+const router = useRouter();
 const isDarkMode = ref(false);
 const configProviderTheme = computed(() => ({
   algorithm: isDarkMode.value ? theme.darkAlgorithm : theme.defaultAlgorithm,
@@ -769,10 +872,26 @@ const cloudUrl = ref('');
 const cloudPassword = ref('');
 const cloudDataList = ref([]);
 const isSyncingLocalKeys = ref(false);
+const showKeySyncStrategyModal = ref(false);
+const pendingKeySyncExistingCount = ref(0);
+const pendingKeySyncIncomingCount = ref(0);
 
 const KEY_MANAGEMENT_STORAGE_KEY = 'api_check_key_management_records_v1';
 const KEY_MANAGEMENT_META_STORAGE_KEY = 'api_check_key_management_meta_v1';
 const KEY_MANAGEMENT_SYNC_EVENT = 'batch-api-check:key-management-sync';
+const SITE_NOTE_MAX_LENGTH = 10;
+// Temporary kill switch:
+// Profile file mode no longer auto-enters the WebView/Profile Assist fallback flow.
+// Keep the core profile extraction, but skip all follow-up popups / prompts / WebView guidance
+// until this path is redesigned.
+const PROFILE_FILE_WEBVIEW_FALLBACK_ENABLED = false;
+let keySyncStrategyResolver = null;
+const activeSiteTreeSession = {
+  replaceSites: null,
+  requestDiscoveryRefresh: null,
+  syncCacheSnapshot: null,
+  currentSites: [],
+};
 
 const appInfo = reactive({
   name: 'API Checker',
@@ -1170,6 +1289,241 @@ const copyProviderTraceLog = async (node) => {
   } catch (error) {
     message.error(error?.message || '复制 trace 日志失败');
   }
+};
+
+const attachSiteRuntimeMeta = (site, importSource = '') => {
+  if (!site || typeof site !== 'object') return site;
+  const siteCacheKey = String(site?._siteCacheKey || site?.siteCacheKey || buildSiteCacheKey(site)).trim();
+  const nextImportSource = String(site?._lastImportSource || site?.lastImportSource || importSource || '').trim();
+  return {
+    ...site,
+    _siteCacheKey: siteCacheKey,
+    _lastImportSource: nextImportSource,
+  };
+};
+
+const updateActiveSiteSessionSnapshot = (sites, importSource = '') => {
+  activeSiteTreeSession.currentSites = (Array.isArray(sites) ? sites : []).map(site => attachSiteRuntimeMeta(site, importSource));
+  return activeSiteTreeSession.currentSites;
+};
+
+const getActiveSessionSiteRecord = siteCacheKey => {
+  const key = String(siteCacheKey || '').trim();
+  if (!key) return null;
+  return activeSiteTreeSession.currentSites.find(site => String(site?._siteCacheKey || '').trim() === key) || null;
+};
+
+const syncSiteCacheSnapshot = (sites, options = {}) => {
+  const importSource = String(options?.importSource || '').trim();
+  const normalizedSites = updateActiveSiteSessionSnapshot(sites, importSource);
+  mergeExtractedSitesIntoTempCache(normalizedSites, options);
+  if (!Array.isArray(sites) || sites.length === 0) return [];
+  try {
+    return mergeExtractedSitesIntoCache(normalizedSites, options);
+  } catch (error) {
+    console.warn('[SiteCache] sync failed:', error?.message || String(error));
+    return [];
+  }
+};
+
+const buildBatchSiteFromCachedRecord = (siteCacheKey) => {
+  const record = findAnySiteCacheRecord(siteCacheKey);
+  const restored = buildBatchSitesFromCache(record ? [record] : [], { includeDisabled: true });
+  return restored[0] || null;
+};
+
+const replaceActiveSiteFromCacheRecord = async (siteCacheKey, reason = 'site-cache-update') => {
+  if (typeof activeSiteTreeSession.replaceSites !== 'function') return;
+  const restoredSite = buildBatchSiteFromCachedRecord(siteCacheKey);
+  if (!restoredSite) return;
+
+  await activeSiteTreeSession.replaceSites(currentSites => currentSites.map(site => {
+    const currentKey = String(site?._siteCacheKey || '').trim();
+    if (currentKey !== siteCacheKey) return site;
+    return {
+      ...site,
+      ...restoredSite,
+      _siteCacheKey: siteCacheKey,
+      _localDisabled: restoredSite._localDisabled === true,
+      _localNote: String(restoredSite._localNote || '').trim(),
+    };
+  }), reason, { syncCache: false });
+};
+
+const promptSiteNote = (initialValue = '') => {
+  const next = window.prompt(`请输入 ${SITE_NOTE_MAX_LENGTH} 个字以内备注`, String(initialValue || ''));
+  if (next == null) return null;
+  return String(next || '').trim().slice(0, SITE_NOTE_MAX_LENGTH);
+};
+
+const promptCustomSkInput = () => {
+  const next = window.prompt('请输入一个或多个 sk，支持换行、空格、逗号分隔');
+  if (next == null) return null;
+  return String(next || '').trim();
+};
+
+const getManualTokenKeyFromTreeNode = node => {
+  const key = String(node?.key || '').trim();
+  if (!key.startsWith('token|')) return '';
+  const parts = key.split('|');
+  return String(parts[2] || '').trim();
+};
+
+const handleTreeSiteRefresh = async node => {
+  const siteCacheKey = String(node?.siteCacheKey || '').trim();
+  if (!siteCacheKey) {
+    message.warning('当前节点缺少站点缓存标识');
+    return;
+  }
+
+  try {
+    const record = getActiveSessionSiteRecord(siteCacheKey) || findAnySiteCacheRecord(siteCacheKey);
+    if (!record) {
+      message.warning('当前未找到该站点的中间态缓存');
+      return;
+    }
+
+    let refreshSeed = attachSiteRuntimeMeta({
+      ...record,
+      site_name: record?.site_name || record?.siteName,
+      site_url: record?.site_url || record?.siteUrl,
+      site_type: record?.site_type || record?.siteType,
+      api_key: record?.api_key || record?.apiBaseUrl,
+      account_info: record?.account_info || record?.accountInfo || {},
+      resolved_access_token: record?.resolved_access_token || record?.resolvedAccessToken,
+      resolved_user_id: record?.resolved_user_id || record?.resolvedUserId,
+    }, record?._lastImportSource || record?.lastImportSource || '');
+    const importSource = String(refreshSeed?._lastImportSource || refreshSeed?.lastImportSource || '').trim();
+
+    if (isWailsRuntime && /extension_import/i.test(importSource)) {
+      const importer = window?.go?.main?.App?.ImportExtensionAccounts;
+      if (typeof importer === 'function') {
+        try {
+          const extensionResult = await importer();
+          const extensionAccounts = extensionResult?.payload?.accounts?.accounts;
+          const matchedAccount = (Array.isArray(extensionAccounts) ? extensionAccounts : []).find(account =>
+            normalizeSiteUrl(account?.site_url) === normalizeSiteUrl(refreshSeed?.siteUrl || refreshSeed?.site_url)
+          );
+          if (matchedAccount?.account_info?.access_token) {
+            refreshSeed = attachSiteRuntimeMeta({
+              ...refreshSeed,
+              ...matchedAccount,
+              account_info: {
+                ...(refreshSeed?.account_info || refreshSeed?.accountInfo || {}),
+                ...(matchedAccount?.account_info || {}),
+              },
+            }, 'extension_import_refresh');
+          }
+        } catch (error) {
+          console.warn('[SiteRefresh] extension reimport failed:', error?.message || String(error));
+        }
+      }
+    }
+
+    let refreshed = await fetchTokensForAccountFromBrowserV2(refreshSeed);
+    if ((!Array.isArray(refreshed?.tokens) || refreshed.tokens.length === 0) && refreshed?._needServerFallback !== false) {
+      const serverResults = await fetchTokensForAccountsViaServer([refreshSeed]).catch(() => []);
+      const serverResult = Array.isArray(serverResults) ? serverResults[0] : null;
+      if (serverResult) {
+        refreshed = {
+          ...refreshSeed,
+          ...serverResult,
+          account_info: {
+            ...(refreshSeed?.account_info || {}),
+            ...(serverResult?.account_info || {}),
+          },
+        };
+      }
+    }
+
+    if ((!Array.isArray(refreshed?.tokens) || refreshed.tokens.length === 0) && isWailsRuntime && isChromeProfileAuthAvailable.value) {
+      try {
+        const profileResponse = await extractChromeProfileTokens([refreshSeed]);
+        const profileResult = Array.isArray(profileResponse?.results) ? profileResponse.results[0] : null;
+        if (profileResult) {
+          refreshed = attachSiteRuntimeMeta({
+            ...refreshSeed,
+            ...profileResult,
+            account_info: {
+              ...(refreshSeed?.account_info || {}),
+              ...(profileResult?.account_info || {}),
+            },
+            resolved_access_token: profileResult?.resolved_access_token || refreshSeed?.account_info?.access_token,
+            resolved_user_id: profileResult?.resolved_user_id || refreshSeed?.account_info?.id,
+          }, importSource || 'profile_refresh');
+        }
+      } catch (error) {
+        console.warn('[SiteRefresh] profile fallback failed:', error?.message || String(error));
+      }
+    }
+
+    refreshed = attachSiteRuntimeMeta({
+      ...refreshSeed,
+      ...refreshed,
+      _localDisabled: refreshSeed?._localDisabled,
+      _localNote: refreshSeed?._localNote,
+    }, importSource);
+    syncSiteCacheSnapshot([refreshed], {
+      importSource: 'site_tree_refresh',
+      refreshedAt: Date.now(),
+    });
+    await replaceActiveSiteFromCacheRecord(siteCacheKey, 'site-tree-refresh');
+    message.success(`已刷新 ${record.siteName || record.site_name || '站点'}`);
+  } catch (error) {
+    message.error(error?.message || '站点刷新失败');
+  }
+};
+
+const handleTreeSiteCustomSk = async node => {
+  const siteCacheKey = String(node?.siteCacheKey || '').trim();
+  if (!siteCacheKey) return;
+  const raw = promptCustomSkInput();
+  if (!raw) return;
+  appendCustomKeysToSiteCache(siteCacheKey, raw);
+  await replaceActiveSiteFromCacheRecord(siteCacheKey, 'site-tree-custom-sk');
+  message.success('自定义 SK 已追加');
+};
+
+const handleTreeManualTokenDelete = async node => {
+  const siteCacheKey = String(node?.siteCacheKey || '').trim();
+  const tokenKey = getManualTokenKeyFromTreeNode(node);
+  if (!siteCacheKey || !tokenKey) return;
+  removeCustomKeyFromSiteCache(siteCacheKey, tokenKey);
+  await replaceActiveSiteFromCacheRecord(siteCacheKey, 'site-tree-manual-sk-delete');
+  message.success('手动添加的 key 已删除');
+};
+
+const handleTreeSiteToggleDisabled = async node => {
+  const siteCacheKey = String(node?.siteCacheKey || '').trim();
+  if (!siteCacheKey) return;
+  const currentDisabled = node?.siteDisabled === true;
+  setSiteCacheDisabled(siteCacheKey, !currentDisabled);
+  await replaceActiveSiteFromCacheRecord(siteCacheKey, 'site-tree-toggle-disabled');
+  message.success(currentDisabled ? '站点已激活' : '站点已禁用');
+};
+
+const handleTreeSiteEditNote = async node => {
+  const siteCacheKey = String(node?.siteCacheKey || '').trim();
+  if (!siteCacheKey) return;
+  const nextNote = promptSiteNote(node?.siteNote || '');
+  if (nextNote == null) return;
+  updateSiteCacheNote(siteCacheKey, nextNote);
+  await replaceActiveSiteFromCacheRecord(siteCacheKey, 'site-tree-note');
+  message.success('备注已更新');
+};
+
+const handleTreeSiteDelete = async node => {
+  const siteCacheKey = String(node?.siteCacheKey || '').trim();
+  if (!siteCacheKey) return;
+  deleteSiteCacheRecord(siteCacheKey);
+  if (typeof activeSiteTreeSession.replaceSites === 'function') {
+    await activeSiteTreeSession.replaceSites(
+      currentSites => currentSites.filter(site => String(site?._siteCacheKey || '').trim() !== siteCacheKey),
+      'site-tree-delete',
+      { syncCache: false }
+    );
+  }
+  message.success('站点缓存已删除');
 };
 
 const isTableExpanded = ref(true);
@@ -2163,7 +2517,31 @@ onMounted(() => {
       if (Array.isArray(parsed) && parsed.length > 0) {
         hasHistory.value = true;
       }
-    } catch(e) {}
+  } catch(e) {}
+  }
+  const pendingBatchStart = consumePendingBatchStart();
+  const pendingRestoreKeys = consumePendingSiteRestore();
+  if (pendingRestoreKeys.length > 0) {
+    const cachedSites = buildBatchSitesFromCache(loadAllSiteCacheRecords(), {
+      siteCacheKeys: pendingRestoreKeys,
+      includeDisabled: true,
+    });
+    if (cachedSites.length > 0) {
+      void maximiseMainWindow();
+      void processAccountsV2(cachedSites, {
+        importSource: 'site_cache_restore',
+        prefetchedSites: cachedSites,
+      }).then(async () => {
+        if (!pendingBatchStart?.autoStart) return;
+        batchConcurrency.value = Number(pendingBatchStart?.batchConcurrency || batchConcurrency.value || 25);
+        modelTimeout.value = Number(pendingBatchStart?.modelTimeout || modelTimeout.value || 15);
+        if (Array.isArray(pendingBatchStart?.checkedKeys) && pendingBatchStart.checkedKeys.length > 0) {
+          checkedKeys.value = pendingBatchStart.checkedKeys.map(item => String(item || '').trim()).filter(Boolean);
+        }
+        await nextTick();
+        await startBatchCheck();
+      });
+    }
   }
 });
 
@@ -2192,6 +2570,9 @@ watch(selectedDesktopLogGroup, (groupKey) => {
 onBeforeUnmount(() => {
   resetImportExtensionState();
   stopFetchKeysProgressPolling();
+  activeSiteTreeSession.replaceSites = null;
+  activeSiteTreeSession.requestDiscoveryRefresh = null;
+  activeSiteTreeSession.syncCacheSnapshot = null;
   if (backendHealthTimer) {
     clearInterval(backendHealthTimer);
     backendHealthTimer = null;
@@ -2203,8 +2584,23 @@ const loadHistory = async () => {
   if (hist) {
     try {
       await maximiseMainWindow();
-      testResults.value = JSON.parse(hist);
+      const parsed = JSON.parse(hist);
+      testResults.value = (Array.isArray(parsed) ? parsed : []).map((task, index) => ({
+        ...task,
+        id: String(task?.id || `history_task_${index}`),
+        siteId: String(task?.siteId || '').trim(),
+        siteName: String(task?.siteName || '未命名站点').trim() || '未命名站点',
+        siteUrl: String(task?.siteUrl || '').trim(),
+        apiKey: String(task?.apiKey || '').trim(),
+        modelName: String(task?.modelName || '').trim(),
+        status: String(task?.status || 'pending').trim() || 'pending',
+        statusText: String(task?.statusText || '').trim() || '等待重测',
+        responseTime: String(task?.responseTime || '-').trim() || '-',
+        remark: String(task?.remark || '-').trim() || '-',
+      })).filter(task => task.siteUrl && task.apiKey && task.modelName);
       organizedSourceResults.value = [...testResults.value];
+      totalTasks.value = testResults.value.length;
+      completedTasks.value = testResults.value.filter(task => !['pending', 'testing'].includes(String(task?.status || ''))).length;
       step.value = 3;
       message.success('历史检测结果已恢复');
     } catch (e) {
@@ -3492,14 +3888,15 @@ const fetchTokensForAccountFromBrowserV2 = async (acc) => {
 // --- Upload and Parse ---
 const beforeUpload = (file) => {
   const reader = new FileReader();
-  reader.onload = (e) => {
+  reader.onload = async (e) => {
     try {
       const data = JSON.parse(e.target.result);
       if (data && data.accounts && Array.isArray(data.accounts.accounts)) {
-        processAccountsV2(data.accounts.accounts, {
+        await processAccountsV2(data.accounts.accounts, {
           importSource: 'json_backup',
           forceExtractionMode: 'browser_direct',
         });
+        await router.push('/sites');
       } else {
         message.error('无效的文件格式: 缺少 accounts 数组');
       }
@@ -3627,6 +4024,7 @@ const importFromExtension = async () => {
       importSource: 'extension_import',
       fallbackOnProfileFailure: true,
     });
+    await router.push('/sites');
   } catch (err) {
     stopFetchKeysProgressPolling();
     setImportExtensionStatus(err?.message || '扩展导入失败', 'error');
@@ -4040,18 +4438,21 @@ const processAccounts = async (accounts) => {
   };
   
 const processAccountsV2 = async (accounts, options = {}) => {
-  const accountsToFetch = (Array.isArray(accounts) ? accounts : []).filter(acc =>
-    !acc?.disabled &&
-    acc?.site_url &&
-    acc?.account_info &&
-    acc?.account_info?.access_token
-  );
+  const prefetchedSites = Array.isArray(options?.prefetchedSites) ? options.prefetchedSites : null;
+  const accountsToFetch = prefetchedSites
+    ? prefetchedSites.filter(site => !site?.disabled && site?.site_url)
+    : (Array.isArray(accounts) ? accounts : []).filter(acc =>
+      !acc?.disabled &&
+      acc?.site_url &&
+      acc?.account_info &&
+      acc?.account_info?.access_token
+    );
   const importSource = String(options?.importSource || '').trim();
   const forcedExtractionMode = String(options?.forceExtractionMode || '').trim();
   const fallbackOnProfileFailure = options?.fallbackOnProfileFailure === true;
 
   if (accountsToFetch.length === 0) {
-    message.warning('备份文件中未找到可用账号配置');
+    message.warning(prefetchedSites ? '站点缓存中没有可恢复的站点' : '备份文件中未找到可用账号配置');
     return;
   }
 
@@ -4110,6 +4511,11 @@ const processAccountsV2 = async (accounts, options = {}) => {
   const refreshTreePendingHints = () => {
     if (!Array.isArray(treeData.value) || treeData.value.length === 0) return;
     treeData.value = treeData.value.map(node => withPendingMeta(node?.siteName || '', node));
+  };
+  const updateActiveSiteSession = (replaceSites, requestDiscoveryRefreshFn) => {
+    activeSiteTreeSession.replaceSites = replaceSites;
+    activeSiteTreeSession.requestDiscoveryRefresh = requestDiscoveryRefreshFn;
+    activeSiteTreeSession.syncCacheSnapshot = syncSiteCacheSnapshot;
   };
   const normalizeErrorCodeForDisplay = (rawError) => {
     const text = String(rawError || '').trim();
@@ -4232,13 +4638,22 @@ const processAccountsV2 = async (accounts, options = {}) => {
     let currentIndex = 0;
     let noModelSiteCount = 0;
     const isInitialDiscovery = reason === 'initial' || !initialDiscoveryCompleted;
-    const existingNodesBySiteName = new Map();
+    const persistSiteNodeSnapshot = (siteCacheKey, nodes) => {
+      const key = String(siteCacheKey || '').trim();
+      if (!key) return;
+      try {
+        updateSiteCacheTreeNodes(key, Array.isArray(nodes) ? nodes : []);
+      } catch (error) {
+        console.warn('[SiteCache] tree snapshot sync failed:', error?.message || String(error));
+      }
+    };
+    const existingNodesBySiteCacheKey = new Map();
     if (!isInitialDiscovery && Array.isArray(treeData.value)) {
       treeData.value.forEach(node => {
-        const name = String(node?.siteName || '').trim();
-        if (!name) return;
-        if (!existingNodesBySiteName.has(name)) existingNodesBySiteName.set(name, []);
-        existingNodesBySiteName.get(name).push(node);
+        const key = String(node?.siteCacheKey || node?.siteName || '').trim();
+        if (!key) return;
+        if (!existingNodesBySiteCacheKey.has(key)) existingNodesBySiteCacheKey.set(key, []);
+        existingNodesBySiteCacheKey.get(key).push(node);
       });
     }
 
@@ -4247,6 +4662,7 @@ const processAccountsV2 = async (accounts, options = {}) => {
 
     snapshot.forEach((site, idx) => {
       const siteName = String(site?.site_name || `站点${idx + 1}`);
+      const siteCacheKey = String(site?._siteCacheKey || site?.siteCacheKey || buildSiteCacheKey(site)).trim();
       if (isInitialDiscovery) {
         siteNodes[idx] = [
           withPendingMeta(siteName, {
@@ -4256,11 +4672,13 @@ const processAccountsV2 = async (accounts, options = {}) => {
             selectable: false,
             isModelDiscovering: true,
             modelDiscoveringHint: '模型检测中',
+            siteCacheKey,
             children: [],
           }),
         ];
+        persistSiteNodeSnapshot(siteCacheKey, siteNodes[idx]);
       } else {
-        const existing = existingNodesBySiteName.get(siteName);
+        const existing = existingNodesBySiteCacheKey.get(siteCacheKey);
         siteNodes[idx] = Array.isArray(existing) && existing.length
           ? existing.map(node => withPendingMeta(siteName, { ...node, isModelDiscovering: false }))
           : [];
@@ -4275,9 +4693,14 @@ const processAccountsV2 = async (accounts, options = {}) => {
       const siteName = String(site?.site_name || `站点${globalIdx + 1}`);
       const siteUrl = String(site?.site_url || '').replace(/\/+$/, '').trim();
       const siteDisplayTitle = `${globalIdx + 1}. [${siteName}]`;
-      const currentSiteNodes = [];
+      const siteCacheKey = String(site?._siteCacheKey || site?.siteCacheKey || buildSiteCacheKey(site)).trim();
+      const siteDisabled = site?._localDisabled === true;
+      const siteNote = String(site?._localNote || '').trim();
       const existingSiteNodes = Array.isArray(siteNodes[globalIdx]) ? siteNodes[globalIdx] : [];
-      const hasExistingModelNodes = existingSiteNodes.some(node => String(node?.key || '').startsWith('token|'));
+      const hasExistingModelNodes = existingSiteNodes.some(node => {
+        if (String(node?.key || '').startsWith('token|')) return true;
+        return Array.isArray(node?.children) && node.children.some(child => String(child?.key || '').startsWith('token|'));
+      });
       const rawDiscoveryId = site?.account_info?.id || site?.id || site?.uid || site?.user_id || '';
       const discoveryUid = /^\d+$/.test(String(rawDiscoveryId)) ? String(rawDiscoveryId) : '';
       const extractionToken = String(site?.resolved_access_token || site?.account_info?.access_token || '').trim();
@@ -4291,6 +4714,31 @@ const processAccountsV2 = async (accounts, options = {}) => {
           }),
         }))
         : [];
+      const createSiteRootNode = (statusText, children = [], extra = {}) => withPendingMeta(siteName, {
+        title: siteDisplayTitle,
+        key: `site-root|${siteCacheKey}`,
+        disableCheckbox: true,
+        selectable: false,
+        isModelDiscovering: false,
+        isSiteRoot: true,
+        siteCacheKey,
+        siteDisabled,
+        siteNote,
+        titleClass: siteDisabled ? 'tree-site-disabled' : (extra?.titleClass || ''),
+        providerTitleText: siteDisplayTitle,
+        providerStatusText: statusText,
+        providerSiteUrl: siteUrl,
+        children,
+        ...extra,
+      });
+
+      if (siteDisabled) {
+        return [
+          createSiteRootNode('- 已禁用', [], {
+            isProviderDiagnostic: false,
+          }),
+        ];
+      }
 
       if (isSiteFailed(site)) {
         if (!isInitialDiscovery && hasExistingModelNodes) {
@@ -4299,16 +4747,9 @@ const processAccountsV2 = async (accounts, options = {}) => {
         }
         const rawError = String(site?.error || '获取令牌失败').trim();
         const errorMsg = formatUserFacingErrorText(rawError);
-        currentSiteNodes.push(withPendingMeta(siteName, {
-          title: `${siteDisplayTitle} - ❌ ${errorMsg}`,
-          key: `fail-site|${site?.id || globalIdx}`,
-          disableCheckbox: true,
-          selectable: false,
-          isModelDiscovering: false,
+        return [createSiteRootNode(`- ❌ ${errorMsg}`, [], {
+          key: `fail-site|${siteCacheKey}|${globalIdx}`,
           titleClass: 'tree-node-grey',
-          providerTitleText: siteDisplayTitle,
-          providerStatusText: `- ❌ ${errorMsg}`,
-          providerSiteUrl: siteUrl,
           isProviderDiagnostic: true,
           providerDiagnostic: {
             stage: 'token_extract',
@@ -4338,9 +4779,7 @@ const processAccountsV2 = async (accounts, options = {}) => {
                 : '',
             ].filter(Boolean),
           },
-          children: [],
-        }));
-        return currentSiteNodes;
+        })];
       }
 
       const usableTokens = (site.tokens || []).filter(isUsableToken);
@@ -4350,16 +4789,9 @@ const processAccountsV2 = async (accounts, options = {}) => {
           return existingSiteNodes.map(node => withPendingMeta(siteName, { ...node, isModelDiscovering: false }));
         }
         noModelSiteCount += 1;
-        currentSiteNodes.push(withPendingMeta(siteName, {
-          title: `${siteDisplayTitle} - ⏳ Token 已取到，但可用 Key 为 0（等待后台补全）`,
-          key: `no-usable-token-site|${site.id || globalIdx}`,
-          disableCheckbox: true,
-          selectable: false,
-          isModelDiscovering: false,
+        return [createSiteRootNode('- ⏳ Token 已取到，但可用 Key 为 0（等待后台补全）', [], {
+          key: `no-usable-token-site|${siteCacheKey}|${globalIdx}`,
           titleClass: 'tree-node-grey',
-          providerTitleText: siteDisplayTitle,
-          providerStatusText: '- ⏳ Token 已取到，但可用 Key 为 0（等待后台补全）',
-          providerSiteUrl: siteUrl,
           isProviderDiagnostic: true,
           providerDiagnostic: {
             stage: 'token_extract',
@@ -4389,9 +4821,7 @@ const processAccountsV2 = async (accounts, options = {}) => {
                 : '',
             ].filter(Boolean),
           },
-          children: [],
-        }));
-        return currentSiteNodes;
+        })];
       }
 
       let effectiveBaseUrl = String(site.site_url || '').replace(/\/+$/, '');
@@ -4484,16 +4914,9 @@ const processAccountsV2 = async (accounts, options = {}) => {
         noModelSiteCount += 1;
         console.log(`[FetchKeys] 模型发现失败: [${siteName}] usableTokens=${usableTokens.length}, reason=${discoveryReason}`);
         const discoveryReasonText = formatUserFacingErrorText(discoveryReason);
-        currentSiteNodes.push(withPendingMeta(siteName, {
-          title: `${siteDisplayTitle} - ⚠️ 未能探测到可用模型列表（usable=${usableTokens.length}，${discoveryReasonText}）`,
-          key: `no-model-site|${site.id || globalIdx}`,
-          disableCheckbox: true,
-          selectable: false,
-          isModelDiscovering: false,
+        return [createSiteRootNode(`- ⚠️ 未能探测到可用模型列表（usable=${usableTokens.length}，${discoveryReasonText}）`, [], {
+          key: `no-model-site|${siteCacheKey}|${globalIdx}`,
           titleClass: 'tree-node-grey',
-          providerTitleText: siteDisplayTitle,
-          providerStatusText: `- ⚠️ 未能探测到可用模型列表（usable=${usableTokens.length}，${discoveryReasonText}）`,
-          providerSiteUrl: siteUrl,
           isProviderDiagnostic: true,
           providerDiagnostic: {
             stage: 'model_discovery',
@@ -4508,27 +4931,27 @@ const processAccountsV2 = async (accounts, options = {}) => {
             replayRequest,
             traceLines,
           },
-          children: [],
-        }));
-        return currentSiteNodes;
+        })];
       }
 
       console.log(`[FetchKeys] 模型发现成功: [${siteName}] models=${supportedModels.length}, usableTokens=${usableTokens.length}, token=${tokenUsed.slice(0, 12)}...`);
+      const tokenChildren = [];
       usableTokens.forEach((token, idx) => {
         const tokenKey = String(token.key || token.access_token || '').trim();
         if (!tokenKey) return;
         const tokenName = String(token.name || `Token ${idx + 1}`).trim();
-        const tokenNodeKey = `token|${site.id}|${tokenKey}`;
+        const tokenNodeKey = `token|${siteCacheKey}|${tokenKey}`;
         const children = supportedModels.map(model => {
-          const itemKey = `${site.id}|${tokenKey}|${model}`;
+          const itemKey = `${siteCacheKey}|${tokenKey}|${model}`;
           fullAllKeys.push(itemKey);
           return { title: model, key: itemKey, isLeaf: true };
         });
         fullAllKeys.push(tokenNodeKey);
-        currentSiteNodes.push(withPendingMeta(siteName, {
+        tokenChildren.push(withPendingMeta(siteName, {
           title: `${siteDisplayTitle} ${tokenName} (${tokenKey.slice(0, 15)}...)`,
           key: tokenNodeKey,
           isModelDiscovering: false,
+          isManualToken: String(token?.source || '').trim() === 'manual',
           providerTitleText: siteDisplayTitle,
           providerStatusText: `${tokenName} (${tokenKey.slice(0, 15)}...)`,
           providerSiteUrl: siteUrl,
@@ -4536,7 +4959,7 @@ const processAccountsV2 = async (accounts, options = {}) => {
         }));
       });
 
-      return currentSiteNodes;
+      return [createSiteRootNode(`- ${usableTokens.length} 个可用 Key / ${supportedModels.length} 个模型`, tokenChildren)];
     };
 
     const worker = async () => {
@@ -4546,6 +4969,8 @@ const processAccountsV2 = async (accounts, options = {}) => {
         const nodes = await discoverOne(idx);
         if (runVersion !== discoveryVersion) return;
         siteNodes[idx] = nodes;
+        const snapshotSite = snapshot[idx] || extractedSites[idx];
+        persistSiteNodeSnapshot(snapshotSite?._siteCacheKey || snapshotSite?.siteCacheKey || buildSiteCacheKey(snapshotSite), nodes);
         loadedSitesCount.value += 1;
         treeData.value = siteNodes.flat().filter(Boolean);
       }
@@ -4602,6 +5027,40 @@ const processAccountsV2 = async (accounts, options = {}) => {
       discoveryInFlight = false;
     }
   };
+  const replaceExtractedSites = async (updater, reason = 'site-cache-update', options = {}) => {
+    const nextSites = typeof updater === 'function' ? updater([...extractedSites]) : updater;
+    extractedSites = Array.isArray(nextSites) ? nextSites : [];
+    validAccounts.value = extractedSites;
+    if (options?.syncCache !== false) {
+      syncSiteCacheSnapshot(extractedSites, {
+        importSource: importSource || 'site_tree_runtime',
+        refreshedAt: Date.now(),
+      });
+    }
+    await requestDiscoveryRefresh(reason);
+  };
+  updateActiveSiteSession(replaceExtractedSites, requestDiscoveryRefresh);
+
+  if (prefetchedSites) {
+    extractedSites = [...prefetchedSites].map(site => ({
+      ...site,
+      _siteCacheKey: String(site?._siteCacheKey || site?.siteCacheKey || buildSiteCacheKey(site)).trim(),
+      _localDisabled: site?._localDisabled === true,
+      _localNote: String(site?._localNote || '').trim(),
+    }));
+    validAccounts.value = extractedSites;
+    syncSiteCacheSnapshot(extractedSites, {
+      importSource: importSource || 'site_cache_restore',
+      refreshedAt: Date.now(),
+    });
+    void preloadAllQuotas(extractedSites);
+    summarizeStage('站点缓存恢复', extractedSites, []);
+    step.value = 2;
+    isLoadingModels.value = false;
+    await requestDiscoveryRefresh('site-cache-restore');
+    activeExtractionMode.value = '';
+    return;
+  }
 
   try {
     if (isWailsRuntime && extractionMode !== 'browser_direct') {
@@ -4616,6 +5075,10 @@ const processAccountsV2 = async (accounts, options = {}) => {
             console.warn('[FetchKeys] Chrome Profile extraction warnings:', response.warnings.join(' | '));
           }
           extractedSites = mergeChromeProfileExtractedSites(accountsToFetch, response);
+          syncSiteCacheSnapshot(extractedSites, {
+            importSource: importSource || 'profile_file',
+            refreshedAt: Date.now(),
+          });
         } catch (err) {
           profileExtractError = err;
         } finally {
@@ -4657,6 +5120,10 @@ const processAccountsV2 = async (accounts, options = {}) => {
         }
         cdpModeContext = cdpStart;
         extractedSites = cdpStart.extractedSites;
+        syncSiteCacheSnapshot(extractedSites, {
+          importSource: importSource || 'cdp_restart',
+          refreshedAt: Date.now(),
+        });
       } else {
         throw new Error(`未知桌面端提取模式: ${extractionMode}`);
       }
@@ -4695,6 +5162,10 @@ const processAccountsV2 = async (accounts, options = {}) => {
       );
 
       extractedSites = browserResults;
+      syncSiteCacheSnapshot(extractedSites, {
+        importSource: importSource || extractionMode || 'browser_direct',
+        refreshedAt: Date.now(),
+      });
       if (extractionMode === 'browser_direct') {
         markBrowserExtractionDone(extractedSites);
       }
@@ -4712,6 +5183,10 @@ const processAccountsV2 = async (accounts, options = {}) => {
             const serverData = await serverResponse.json();
             const serverResults = Array.isArray(serverData?.results) ? serverData.results : [];
             const mergeStats = mergeExtractedSiteResults(extractedSites, serverResults);
+            syncSiteCacheSnapshot(extractedSites, {
+              importSource: `${importSource || 'browser_direct'}_server_fallback`,
+              refreshedAt: Date.now(),
+            });
             console.log(`[FetchKeys] 服务端兜底合并: mergedSites=${mergeStats.mergedSites}, recoveredSites=${mergeStats.recoveredSites}, gainedTokens=${mergeStats.gainedTokens}, gainedUsableTokens=${mergeStats.gainedUsableTokens}`);
           }
         } catch (e) {
@@ -4723,8 +5198,13 @@ const processAccountsV2 = async (accounts, options = {}) => {
       }
     }
 
-    let stillFailedAccounts = extractedSites.filter(site => isSiteFailed(site) || shouldUseDesktopProfileAssist(site));
-    if (isWailsRuntime && extractionMode === 'profile_file') {
+    let stillFailedAccounts = extractedSites.filter(site => (
+      isSiteFailed(site) || (
+        PROFILE_FILE_WEBVIEW_FALLBACK_ENABLED &&
+        shouldUseDesktopProfileAssist(site)
+      )
+    ));
+    if (PROFILE_FILE_WEBVIEW_FALLBACK_ENABLED && isWailsRuntime && extractionMode === 'profile_file') {
       try {
         await autoOpenDesktopProfileAssist(stillFailedAccounts, 'initial-extract');
       } catch (assistError) {
@@ -4738,8 +5218,12 @@ const processAccountsV2 = async (accounts, options = {}) => {
     }
     updateBrowserSessionPendingSites(stillFailedAccounts);
     validAccounts.value = extractedSites;
+    syncSiteCacheSnapshot(extractedSites, {
+      importSource: importSource || extractionMode || 'initial_extract',
+      refreshedAt: Date.now(),
+    });
     void preloadAllQuotas(extractedSites);
-    if (isWailsRuntime && extractionMode === 'profile_file') {
+    if (PROFILE_FILE_WEBVIEW_FALLBACK_ENABLED && isWailsRuntime && extractionMode === 'profile_file') {
       void closeDesktopProfileAssistForRecoveredSites(extractedSites, 'initial-extract');
     }
 
@@ -4754,7 +5238,7 @@ const processAccountsV2 = async (accounts, options = {}) => {
       clearBrowserSessionState();
     }
 
-    if (isWailsRuntime && extractionMode === 'profile_file' && stillFailedAccounts.length > 0) {
+    if (PROFILE_FILE_WEBVIEW_FALLBACK_ENABLED && isWailsRuntime && extractionMode === 'profile_file' && stillFailedAccounts.length > 0) {
       void (async () => {
         const profileRetryMessageKey = 'profile-file-retry';
         try {
@@ -4788,6 +5272,10 @@ const processAccountsV2 = async (accounts, options = {}) => {
 
             const retrySites = mergeChromeProfileExtractedSites(stillFailedAccounts, retryResponse);
             const mergeStats = mergeExtractedSiteResults(extractedSites, retrySites);
+            syncSiteCacheSnapshot(extractedSites, {
+              importSource: 'profile_file_retry',
+              refreshedAt: Date.now(),
+            });
             totalMergeStats = {
               mergedSites: totalMergeStats.mergedSites + mergeStats.mergedSites,
               recoveredSites: totalMergeStats.recoveredSites + mergeStats.recoveredSites,
@@ -4796,11 +5284,16 @@ const processAccountsV2 = async (accounts, options = {}) => {
             };
             validAccounts.value = extractedSites;
             void preloadAllQuotas(extractedSites);
-            if (isWailsRuntime && extractionMode === 'profile_file') {
+            if (PROFILE_FILE_WEBVIEW_FALLBACK_ENABLED && isWailsRuntime && extractionMode === 'profile_file') {
               void closeDesktopProfileAssistForRecoveredSites(extractedSites, `profile-retry-${round}`);
             }
 
-            stillFailedAccounts = extractedSites.filter(site => isSiteFailed(site) || shouldUseDesktopProfileAssist(site));
+            stillFailedAccounts = extractedSites.filter(site => (
+              isSiteFailed(site) || (
+                PROFILE_FILE_WEBVIEW_FALLBACK_ENABLED &&
+                shouldUseDesktopProfileAssist(site)
+              )
+            ));
             try {
               await autoOpenDesktopProfileAssist(stillFailedAccounts, `profile-retry-${round}`);
             } catch (assistError) {
@@ -4867,6 +5360,10 @@ const processAccountsV2 = async (accounts, options = {}) => {
 
               const browserSessionResults = await browserSessionFetchForAccounts(stillFailedAccounts, browserType, round, maxRetryRounds);
               const mergeStats = mergeExtractedSiteResults(extractedSites, browserSessionResults);
+              syncSiteCacheSnapshot(extractedSites, {
+                importSource: 'cdp_restart_polling',
+                refreshedAt: Date.now(),
+              });
               validAccounts.value = extractedSites;
               void preloadAllQuotas(extractedSites);
 
@@ -4979,6 +5476,10 @@ const processAccountsV2 = async (accounts, options = {}) => {
 
               const browserSessionResults = await browserSessionFetchForAccounts(stillFailedAccounts, browserType, round, maxRetryRounds);
               const mergeStats = mergeExtractedSiteResults(extractedSites, browserSessionResults);
+              syncSiteCacheSnapshot(extractedSites, {
+                importSource: 'browser_session_polling',
+                refreshedAt: Date.now(),
+              });
               validAccounts.value = extractedSites;
               void preloadAllQuotas(extractedSites);
 
@@ -5142,7 +5643,7 @@ const startBatchCheck = async () => {
   if (testing.value) {
     testing.value = false;
     scheduleOrganizedSourceRefresh(true);
-    syncDetectedKeysToLocalStorage({ silent: true });
+    await syncDetectedKeysToLocalStorage({ silent: true });
     message.success('批量检测完成！');
     // Save to history
     localStorage.setItem('api_check_last_results', JSON.stringify(testResults.value));
@@ -5157,7 +5658,97 @@ const stopTesting = () => {
   message.info('已停止检测');
 };
 
-function syncDetectedKeysToLocalStorage(options = {}) {
+function normalizeKeyManagementSiteUrl(rawUrl) {
+  return String(rawUrl || '').trim().replace(/\/+$/, '');
+}
+
+function buildKeyManagementRowKey(siteUrl, apiKey) {
+  return `${normalizeKeyManagementSiteUrl(siteUrl)}::${String(apiKey || '').trim()}`;
+}
+
+function loadStoredAutoKeyManagementRecords() {
+  try {
+    const raw = localStorage.getItem(KEY_MANAGEMENT_STORAGE_KEY);
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    console.error('Load stored key management records failed', error);
+    return [];
+  }
+}
+
+function mergeDetectedKeyManagementRecords(existingRecords, incomingRecords) {
+  const mergedMap = new Map();
+
+  (Array.isArray(existingRecords) ? existingRecords : []).forEach(record => {
+    const rowKey = String(record?.rowKey || buildKeyManagementRowKey(record?.siteUrl, record?.apiKey)).trim();
+    if (!rowKey) return;
+    mergedMap.set(rowKey, {
+      ...record,
+      rowKey,
+    });
+  });
+
+  (Array.isArray(incomingRecords) ? incomingRecords : []).forEach(record => {
+    const rowKey = String(record?.rowKey || buildKeyManagementRowKey(record?.siteUrl, record?.apiKey)).trim();
+    if (!rowKey) return;
+    const existing = mergedMap.get(rowKey) || {};
+    const modelsList = Array.from(new Set([
+      ...(Array.isArray(existing?.modelsList) ? existing.modelsList : []),
+      ...(Array.isArray(record?.modelsList) ? record.modelsList : []),
+    ].map(item => String(item || '').trim()).filter(Boolean))).sort((left, right) => left.localeCompare(right));
+
+    mergedMap.set(rowKey, {
+      ...existing,
+      ...record,
+      rowKey,
+      sourceType: 'auto',
+      createdAt: existing?.createdAt || record?.createdAt || Date.now(),
+      updatedAt: record?.updatedAt || Date.now(),
+      modelsList,
+      modelsText: modelsList.length ? modelsList.join(', ') : (record?.modelsText || existing?.modelsText || '未提供模型信息'),
+      selectedModel: record?.selectedModel || existing?.selectedModel || '',
+      quickTestStatus: existing?.quickTestStatus || '',
+      quickTestLabel: existing?.quickTestLabel || '',
+      quickTestModel: existing?.quickTestModel || '',
+      quickTestRemark: existing?.quickTestRemark || '',
+      quickTestAt: existing?.quickTestAt || null,
+      quickTestResponseTime: existing?.quickTestResponseTime || '',
+      quickTestResponseContent: existing?.quickTestResponseContent || '',
+      balanceLabel: record?.balanceLabel || existing?.balanceLabel || '',
+      balanceUpdatedAt: record?.balanceUpdatedAt || existing?.balanceUpdatedAt || null,
+      balanceError: existing?.balanceError || '',
+      remainQuota: record?.remainQuota ?? existing?.remainQuota ?? null,
+      usedQuota: record?.usedQuota ?? existing?.usedQuota ?? null,
+      unlimitedQuota: record?.unlimitedQuota === true || existing?.unlimitedQuota === true,
+    });
+  });
+
+  return Array.from(mergedMap.values());
+}
+
+function promptKeySyncStrategy(existingCount, incomingCount) {
+  if (existingCount <= 0) {
+    return Promise.resolve('replace');
+  }
+  pendingKeySyncExistingCount.value = existingCount;
+  pendingKeySyncIncomingCount.value = incomingCount;
+  showKeySyncStrategyModal.value = true;
+  return new Promise(resolve => {
+    keySyncStrategyResolver = resolve;
+  });
+}
+
+function resolveKeySyncStrategy(strategy = 'keep') {
+  showKeySyncStrategyModal.value = false;
+  const resolver = keySyncStrategyResolver;
+  keySyncStrategyResolver = null;
+  if (typeof resolver === 'function') {
+    resolver(strategy);
+  }
+}
+
+async function syncDetectedKeysToLocalStorage(options = {}) {
   const { silent = false } = options;
   const sourceResults = Array.isArray(testResults.value) ? testResults.value : [];
   const finishedResults = sourceResults.filter(task =>
@@ -5178,6 +5769,7 @@ function syncDetectedKeysToLocalStorage(options = {}) {
   isSyncingLocalKeys.value = true;
   try {
     const grouped = new Map();
+    const now = Date.now();
     finishedResults.forEach(task => {
       const siteUrl = String(task.siteUrl || '').replace(/\/+$/, '').trim();
       const apiKey = String(task.apiKey || '').trim();
@@ -5193,8 +5785,8 @@ function syncDetectedKeysToLocalStorage(options = {}) {
           apiKey,
           modelsSet: new Set(),
           statuses: [],
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
+          createdAt: now,
+          updatedAt: now,
           quickTestStatus: '',
           quickTestLabel: '',
           quickTestModel: '',
@@ -5208,18 +5800,18 @@ function syncDetectedKeysToLocalStorage(options = {}) {
 
       const record = grouped.get(key);
       record.siteName = record.siteName || String(task.siteName || '').trim() || '未命名站点';
-      record.updatedAt = Date.now();
+      record.updatedAt = now;
       record.statuses.push(String(task.status || ''));
       if (task.modelName) {
         record.modelsSet.add(String(task.modelName).trim());
       }
       if (!record.balanceLabel && isDisplayableQuotaLabel(task.quota)) {
         record.balanceLabel = String(task.quota).trim();
-        record.balanceUpdatedAt = Date.now();
+        record.balanceUpdatedAt = now;
       }
     });
 
-    const records = Array.from(grouped.values()).map(record => {
+    const incomingRecords = Array.from(grouped.values()).map(record => {
       const modelsList = Array.from(record.modelsSet).filter(Boolean).sort();
       const status = record.statuses.some(item => item === 'success' || item === 'warning') ? 1 : 2;
       return {
@@ -5245,24 +5837,40 @@ function syncDetectedKeysToLocalStorage(options = {}) {
       };
     });
 
+    const existingAutoRecords = loadStoredAutoKeyManagementRecords();
+    const strategy = await promptKeySyncStrategy(existingAutoRecords.length, incomingRecords.length);
+    if (strategy === 'keep') {
+      if (!silent) {
+        message.info('已保留当前密钥管理数据，本次检测结果未写入');
+      }
+      return false;
+    }
+
+    const records = strategy === 'merge'
+      ? mergeDetectedKeyManagementRecords(existingAutoRecords, incomingRecords)
+      : incomingRecords;
+
     localStorage.setItem(KEY_MANAGEMENT_STORAGE_KEY, JSON.stringify(records));
     localStorage.setItem(
       KEY_MANAGEMENT_META_STORAGE_KEY,
       JSON.stringify({
-        lastBatchSyncAt: Date.now(),
-        lastBatchSyncCount: records.length,
+        lastBatchSyncAt: now,
+        lastBatchSyncCount: incomingRecords.length,
         lastBatchFailedCount: records.filter(item => item.status !== 1).length,
+        lastBatchSyncStrategy: strategy,
       })
     );
     window.dispatchEvent(new CustomEvent(KEY_MANAGEMENT_SYNC_EVENT, {
       detail: {
         recordsCount: records.length,
-        syncedAt: Date.now(),
+        syncedAt: now,
+        strategy,
       },
     }));
 
     if (!silent) {
-      message.success(`已同步 ${records.length} 条 sk 密钥到本地存储`);
+      const strategyLabel = strategy === 'merge' ? '增量更新' : '清空覆盖';
+      message.success(`已按${strategyLabel}写入 ${incomingRecords.length} 条 sk 密钥`);
     }
     return true;
   } catch (error) {
@@ -5282,16 +5890,30 @@ const retestAllFromResults = async () => {
     message.warning('当前没有任务可测试');
     return;
   }
+
+  const tasksQueue = testResults.value
+    .map((task, index) => ({
+      ...task,
+      id: String(task?.id || `history_task_${index}`),
+      siteId: String(task?.siteId || '').trim(),
+      siteName: String(task?.siteName || '未命名站点').trim() || '未命名站点',
+      siteUrl: String(task?.siteUrl || '').trim(),
+      apiKey: String(task?.apiKey || '').trim(),
+      modelName: String(task?.modelName || '').trim(),
+      status: 'pending',
+      statusText: '排队中',
+      responseTime: '-',
+      remark: '-',
+    }))
+    .filter(task => task.siteUrl && task.apiKey && task.modelName);
+
+  if (tasksQueue.length === 0) {
+    message.warning('历史结果缺少可重测的完整请求参数');
+    return;
+  }
   
-  // 重置任务状态
-  tasksQueue.length = 0;
-  testResults.value.forEach(task => {
-    task.status = 'pending';
-    task.statusText = '排队中';
-    task.responseTime = '-';
-    task.remark = '-';
-    tasksQueue.push(task);
-  });
+  testResults.value = tasksQueue;
+  organizedSourceResults.value = [...tasksQueue];
   
   testing.value = true;
   totalTasks.value = tasksQueue.length;
@@ -5325,7 +5947,7 @@ const retestAllFromResults = async () => {
   if (testing.value) {
     testing.value = false;
     scheduleOrganizedSourceRefresh(true);
-    syncDetectedKeysToLocalStorage({ silent: true });
+    await syncDetectedKeysToLocalStorage({ silent: true });
     message.success('再次批量检测完成！');
     localStorage.setItem('api_check_last_results', JSON.stringify(testResults.value));
     hasHistory.value = true;
@@ -6514,6 +7136,121 @@ const copyOrganizedResults = () => {
   opacity: 1;
 }
 
+.site-tree-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.12;
+  transition: opacity 0.2s ease;
+}
+
+.tree-provider-node-wrapper:hover .site-tree-actions {
+  opacity: 1;
+}
+
+.site-tree-action-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(22, 119, 255, 0.08);
+  color: #1677ff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.site-tree-action-btn:hover {
+  background: rgba(22, 119, 255, 0.16);
+}
+
+.site-tree-action-btn.is-danger {
+  background: rgba(255, 77, 79, 0.08);
+  color: #ff4d4f;
+}
+
+.site-tree-note-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 120px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(245, 208, 112, 0.2);
+  color: #8a5a00;
+  font-size: 11px;
+  line-height: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.site-tree-inline-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(22, 119, 255, 0.12);
+  color: #1677ff;
+  font-size: 11px;
+  line-height: 20px;
+  user-select: none;
+}
+
+.site-tree-inline-delete-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 77, 79, 0.08);
+  color: #ff4d4f;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.site-tree-inline-delete-btn:hover {
+  background: rgba(255, 77, 79, 0.16);
+}
+
+.tree-site-disabled {
+  color: #8c8c8c;
+  text-decoration: line-through;
+  opacity: 0.76;
+}
+
+:deep(body.dark-mode) .site-tree-action-btn {
+  background: rgba(172, 199, 151, 0.12);
+  color: #dfead8;
+}
+
+:deep(body.dark-mode) .site-tree-action-btn:hover {
+  background: rgba(172, 199, 151, 0.22);
+}
+
+:deep(body.dark-mode) .site-tree-action-btn.is-danger {
+  background: rgba(255, 77, 79, 0.16);
+  color: #ffb6b7;
+}
+
+:deep(body.dark-mode) .site-tree-note-badge {
+  background: rgba(245, 208, 112, 0.18);
+  color: #ffd98b;
+}
+
+:deep(body.dark-mode) .site-tree-inline-tag {
+  background: rgba(92, 164, 255, 0.18);
+  color: #a9d0ff;
+}
+
+:deep(body.dark-mode) .site-tree-inline-delete-btn {
+  background: rgba(255, 77, 79, 0.16);
+  color: #ffb6b7;
+}
+
 .provider-diagnostic-trigger {
   display: inline-flex;
   align-items: center;
@@ -6565,6 +7302,65 @@ const copyOrganizedResults = () => {
 
 .switch-icon:hover {
   text-shadow: 0 0 8px rgba(0, 123, 255, 0.4);
+}
+
+.key-sync-strategy-modal {
+  display: grid;
+  gap: 12px;
+}
+
+.key-sync-strategy-summary {
+  margin: 0;
+  color: #4f5f49;
+  line-height: 1.7;
+}
+
+.key-sync-strategy-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(245, 249, 242, 0.96);
+  border: 1px solid rgba(137, 165, 126, 0.18);
+}
+
+.key-sync-strategy-index {
+  font-weight: 700;
+  color: #3f6f35;
+}
+
+.key-sync-strategy-title {
+  font-weight: 700;
+  color: #23311d;
+  margin-bottom: 4px;
+}
+
+.key-sync-strategy-desc {
+  color: #65735d;
+  line-height: 1.65;
+}
+
+:deep(body.dark-mode) .key-sync-strategy-summary {
+  color: #d5e6cf;
+}
+
+:deep(body.dark-mode) .key-sync-strategy-option {
+  background: rgba(24, 32, 25, 0.92);
+  border-color: rgba(154, 191, 142, 0.2);
+}
+
+:deep(body.dark-mode) .key-sync-strategy-index {
+  color: #9fcc8a;
+}
+
+:deep(body.dark-mode) .key-sync-strategy-title {
+  color: #ecf8e7;
+}
+
+:deep(body.dark-mode) .key-sync-strategy-desc {
+  color: #b8cbb1;
 }
 
 @media (max-width: 620px) {
