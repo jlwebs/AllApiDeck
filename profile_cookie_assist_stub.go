@@ -22,3 +22,8 @@ type desktopProfileAssistWindowResult struct {
 func openDesktopProfileAssistWindow(request desktopProfileAssistOpenRequest) (*desktopProfileAssistWindowResult, error) {
 	return nil, fmt.Errorf("profile assist window is only available on Windows")
 }
+
+func closeProfileAssistWindowsByHosts(hosts []string) int {
+	_ = hosts
+	return 0
+}

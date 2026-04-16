@@ -6,6 +6,8 @@ export function AppendClientLog(arg1:string,arg2:string):Promise<void>;
 
 export function ApplyManagedAppConfigFiles(arg1:main.ManagedAppConfigApplyRequest):Promise<main.ManagedAppConfigApplyResult>;
 
+export function CloseDesktopProfileAssist(arg1:Array<string>):Promise<Record<string, any>>;
+
 export function CollapsePanel():Promise<void>;
 
 export function EnterSidebarMode():Promise<void>;

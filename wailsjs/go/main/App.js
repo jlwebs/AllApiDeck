@@ -10,6 +10,10 @@ export function ApplyManagedAppConfigFiles(arg1) {
   return window['go']['main']['App']['ApplyManagedAppConfigFiles'](arg1);
 }
 
+export function CloseDesktopProfileAssist(arg1) {
+  return window['go']['main']['App']['CloseDesktopProfileAssist'](arg1);
+}
+
 export function CollapsePanel() {
   return window['go']['main']['App']['CollapsePanel']();
 }

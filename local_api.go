@@ -94,6 +94,9 @@ func (a *App) OpenDesktopProfileAssist(sites []desktopProfileAssistOpenRequest) 
 	results := make([]*desktopProfileAssistWindowResult, 0, len(sites))
 	openErrors := make([]string, 0, len(sites))
 	opened := 0
+	if len(sites) > 0 {
+		appendLine(filepath.Join(resolveRuntimeLogDir(), "profile-assist.log"), fmt.Sprintf("[ASSIST] api open | sites=%d", len(sites)))
+	}
 
 	for _, site := range sites {
 		result, err := openDesktopProfileAssistWindow(site)
@@ -112,6 +115,17 @@ func (a *App) OpenDesktopProfileAssist(sites []desktopProfileAssistOpenRequest) 
 		"opened":  opened,
 		"results": results,
 		"errors":  openErrors,
+	}
+}
+
+func (a *App) CloseDesktopProfileAssist(hosts []string) map[string]any {
+	if len(hosts) > 0 {
+		appendLine(filepath.Join(resolveRuntimeLogDir(), "profile-assist.log"), fmt.Sprintf("[ASSIST] api close | hosts=%v", hosts))
+	}
+	closed := closeProfileAssistWindowsByHosts(hosts)
+	return map[string]any{
+		"success": closed > 0,
+		"closed":  closed,
 	}
 }
 
@@ -203,6 +217,8 @@ func (a *App) handleLocalAPIRequest(method string, rawURL string, headers map[st
 		return jsonBridgeResponse(http.StatusOK, localFetchKeysProgressSnapshot()), nil
 	case "/api/profile-assist/open":
 		return handleLocalProfileAssistOpen(method, body)
+	case "/api/profile-assist/close":
+		return handleLocalProfileAssistClose(method, body)
 	case "/api/clear-logs":
 		return handleLocalClearLogs(method, parsed)
 	case "/api/browser-session/browsers":
@@ -409,6 +425,36 @@ func handleLocalProfileAssistOpen(method string, body string) (*bridgeHTTPRespon
 	}
 
 	return jsonBridgeResponse(status, payload), nil
+}
+
+func handleLocalProfileAssistClose(method string, body string) (*bridgeHTTPResponse, error) {
+	if method != http.MethodPost {
+		return &bridgeHTTPResponse{Status: http.StatusMethodNotAllowed, Body: ""}, nil
+	}
+
+	var request struct {
+		Hosts []string `json:"hosts"`
+		Sites []string `json:"sites"`
+	}
+	if err := json.Unmarshal([]byte(body), &request); err != nil {
+		return jsonBridgeResponse(http.StatusBadRequest, map[string]any{
+			"success": false,
+			"message": "invalid json body",
+		}), nil
+	}
+	hosts := request.Hosts
+	if len(hosts) == 0 {
+		hosts = request.Sites
+	}
+	if len(hosts) == 0 {
+		return jsonBridgeResponse(http.StatusBadRequest, map[string]any{
+			"success": false,
+			"message": "hosts cannot be empty",
+		}), nil
+	}
+
+	payload := (&App{}).CloseDesktopProfileAssist(hosts)
+	return jsonBridgeResponse(http.StatusOK, payload), nil
 }
 
 type normalizedCheckKeyPayload struct {

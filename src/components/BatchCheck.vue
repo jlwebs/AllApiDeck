@@ -2279,7 +2279,10 @@ const DESKTOP_PROFILE_ASSIST_HOSTS = new Set([
   'elysiver.h-e.top',
 ]);
 
+const PROFILE_ASSIST_ENABLED = true;
+
 const isDesktopProfileAssistSite = (site) => {
+  if (!PROFILE_ASSIST_ENABLED) return false;
   if (isAnyrouterSite(site)) return true;
   const rawUrl = String(site?.site_url || site?.siteUrl || '').trim();
   if (!rawUrl) return false;
@@ -2293,6 +2296,7 @@ const isDesktopProfileAssistSite = (site) => {
 };
 
 const shouldUseDesktopProfileAssist = (site) => (
+  PROFILE_ASSIST_ENABLED &&
   isDesktopProfileAssistSite(site) &&
   (
     Boolean(site?.error) ||
@@ -2683,6 +2687,52 @@ const openDesktopProfileAssistSites = async (sites) => {
   };
 };
 
+const closeDesktopProfileAssistSites = async (sites, reason = 'unknown') => {
+  if (!isWailsRuntime) return 0;
+  const hostSet = new Set(
+    (Array.isArray(sites) ? sites : [])
+      .map(site => getNormalizedUrlHost(site?.site_url || site?.siteUrl || ''))
+      .filter(Boolean)
+  );
+  const hosts = Array.from(hostSet);
+  if (!hosts.length) return 0;
+
+  try {
+    const closer = window?.go?.main?.App?.CloseDesktopProfileAssist;
+    if (typeof closer === 'function') {
+      const res = await closer(hosts);
+      const closed = Number(res?.closed || 0);
+      if (closed > 0) {
+        console.log(`[ProfileAssist] auto close (${reason}) closed=${closed}`);
+      }
+      return closed;
+    }
+
+    const res = await apiFetch('/api/profile-assist/close', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hosts }),
+    });
+    const data = await res.json().catch(() => ({}));
+    const closed = Number(data?.closed || 0);
+    if (closed > 0) {
+      console.log(`[ProfileAssist] auto close (${reason}) closed=${closed}`);
+    }
+    return closed;
+  } catch (err) {
+    console.warn('[ProfileAssist] auto close failed:', err?.message || String(err));
+    return 0;
+  }
+};
+
+const closeDesktopProfileAssistForRecoveredSites = async (sites, reason = 'unknown') => {
+  const targets = (Array.isArray(sites) ? sites : [])
+    .filter(site => isDesktopProfileAssistSite(site) && site?._profileAssistOpened)
+    .filter(site => !isSiteFailed(site) && Array.isArray(site?.tokens) && site.tokens.length > 0);
+  if (!targets.length) return 0;
+  return await closeDesktopProfileAssistSites(targets, reason);
+};
+
 const autoOpenDesktopProfileAssist = async (sites, reason = 'unknown') => {
   const targets = (Array.isArray(sites) ? sites : [])
     .filter(site => shouldUseDesktopProfileAssist(site) && !site?._profileAssistOpened);
@@ -2701,9 +2751,8 @@ const autoOpenDesktopProfileAssist = async (sites, reason = 'unknown') => {
         site._profileAssistOpened = true;
       }
     });
-    const cookieTotal = (assistResult?.results || []).reduce((sum, item) => sum + Number(item?.injectedCookies || 0), 0);
-    message.info(`已自动打开内置 WebView2 (${assistResult.opened} 个站点)，并尝试注入 ${cookieTotal} 个 Chrome cookie。`, 5);
-    console.log(`[ProfileAssist] auto open (${reason}) opened=${assistResult.opened} cookieTotal=${cookieTotal}`);
+    message.info(`已自动打开内置 WebView2 (${assistResult.opened} 个站点)，请在窗口内完成登录，系统检测到 Token 后会自动关闭。`, 5);
+    console.log(`[ProfileAssist] auto open (${reason}) opened=${assistResult.opened}`);
   }
   if (Array.isArray(assistResult?.errors) && assistResult.errors.length > 0) {
     console.warn(`[ProfileAssist] auto open warnings(${reason}):`, assistResult.errors.join(' | '));
@@ -2785,11 +2834,7 @@ const confirmProfileFileLoginRecovery = async (sites) => {
       const assistResult = await openDesktopProfileAssistSites(desktopAssistSites);
       desktopAssistOpened = Number(assistResult?.opened || 0);
       if (desktopAssistOpened > 0) {
-        const cookieTotal = (assistResult?.results || []).reduce(
-          (sum, item) => sum + Number(item?.injectedCookies || 0),
-          0
-        );
-        message.info(`已为 ${desktopAssistOpened} 个站点打开内置 WebView2，并尝试注入 ${cookieTotal} 个 Chrome cookie。`, 5);
+        message.info(`已为 ${desktopAssistOpened} 个站点打开内置 WebView2，请在窗口内完成登录。`, 5);
       }
       if (Array.isArray(assistResult?.errors) && assistResult.errors.length > 0) {
         console.warn('[ProfileAssist] desktop assist warnings:', assistResult.errors.join(' | '));
@@ -2812,7 +2857,7 @@ const confirmProfileFileLoginRecovery = async (sites) => {
   const shouldRetry = await confirmWithModal({
     title: '站点已打开',
     content: desktopAssistOpened > 0
-      ? `已打开 ${openedCount} 个失败站点，其中 ${desktopAssistOpened} 个站点使用内置 WebView2 尝试继承 Chrome Default 的 cookie/localStorage。请先确认这些窗口是否已自动带出登录态；若未自动登录，直接在该窗口中手动登录并完成刷新后，再点击“重新读取 Profile 文件”。系统随后会最多尝试重新读取 3 轮。`
+      ? `已打开 ${openedCount} 个失败站点，其中 ${desktopAssistOpened} 个站点使用内置 WebView2 直接打开登录页。请在这些窗口中手动登录并完成刷新后，再点击“重新读取 Profile 文件”。系统随后会最多尝试重新读取 3 轮。`
       : `已在默认浏览器打开 ${openedCount} 个失败站点。请先在这些页面手动登录并完成刷新，然后点击“重新读取 Profile 文件”。此模式不会拉起受控浏览器，也不会切到 CDP 模式。`,
     okText: '我已登录，重新读取',
     cancelText: '稍后处理',
@@ -4694,6 +4739,9 @@ const processAccountsV2 = async (accounts, options = {}) => {
     updateBrowserSessionPendingSites(stillFailedAccounts);
     validAccounts.value = extractedSites;
     void preloadAllQuotas(extractedSites);
+    if (isWailsRuntime && extractionMode === 'profile_file') {
+      void closeDesktopProfileAssistForRecoveredSites(extractedSites, 'initial-extract');
+    }
 
     summarizeStage('提取阶段完成', extractedSites, stillFailedAccounts);
 
@@ -4748,6 +4796,9 @@ const processAccountsV2 = async (accounts, options = {}) => {
             };
             validAccounts.value = extractedSites;
             void preloadAllQuotas(extractedSites);
+            if (isWailsRuntime && extractionMode === 'profile_file') {
+              void closeDesktopProfileAssistForRecoveredSites(extractedSites, `profile-retry-${round}`);
+            }
 
             stillFailedAccounts = extractedSites.filter(site => isSiteFailed(site) || shouldUseDesktopProfileAssist(site));
             try {

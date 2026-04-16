@@ -127,6 +127,8 @@ var (
 	profileAssistWindowClassErr     error
 	profileAssistWindowStateMu      sync.Mutex
 	profileAssistWindowStates       = map[uintptr]*profileAssistWindowState{}
+	profileAssistWindowHostMu       sync.Mutex
+	profileAssistWindowHosts        = map[string]map[uintptr]struct{}{}
 	profileAssistBackgroundBrush    windows.Handle
 	crypt32DLL                      = syscall.NewLazyDLL("crypt32.dll")
 	kernel32DLL                     = syscall.NewLazyDLL("kernel32.dll")
@@ -135,7 +137,10 @@ var (
 )
 
 const (
+	profileAssistDisabled            = false
 	profileAssistDisableInjection    = true
+	profileAssistMinimalMode         = true
+	profileAssistTraceMinimal        = false
 	profileAssistWSOverlappedWindow  = 0x00CF0000
 	profileAssistSWShow              = 5
 	profileAssistWMDestroy           = 0x0002
@@ -143,6 +148,8 @@ const (
 	profileAssistWMPaint             = 0x000F
 	profileAssistWMClose             = 0x0010
 	profileAssistWMQuit              = 0x0012
+	profileAssistWMApp               = 0x8000
+	profileAssistWMRetryNavigate     = profileAssistWMApp + 1
 	profileAssistSystemMetricsCxIcon = 11
 	profileAssistSystemMetricsCyIcon = 12
 	profileAssistLRLoadFromFile      = 0x00000010
@@ -194,6 +201,8 @@ type profileAssistWindowState struct {
 	chromium     *edge.Chromium
 	loadingTitle string
 	loadingHint  string
+	host         string
+	retryURL     string
 }
 
 type profileAssistPaintStruct struct {
@@ -347,6 +356,25 @@ func parseProfileAssistWebMessage(raw string) *profileAssistWebMessage {
 }
 
 func openDesktopProfileAssistWindow(request desktopProfileAssistOpenRequest) (*desktopProfileAssistWindowResult, error) {
+	if profileAssistDisabled {
+		return nil, fmt.Errorf("profile assist disabled")
+	}
+	hostKey := ""
+	if parsed, err := url.Parse(strings.TrimSpace(request.SiteURL)); err == nil {
+		hostKey = strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	}
+	if hostKey != "" {
+		if reused, ok := focusProfileAssistWindowByHost(hostKey); ok && reused {
+			return &desktopProfileAssistWindowResult{
+				SiteName:            strings.TrimSpace(request.SiteName),
+				SiteURL:             strings.TrimSpace(request.SiteURL),
+				InjectedCookies:     0,
+				InjectedCookieNames: []string{},
+				StorageFields:       []string{},
+				Message:             "Profile assist window already open, focused existing window",
+			}, nil
+		}
+	}
 	resultCh := make(chan desktopProfileAssistWindowOpenResult, 1)
 
 	go func() {
@@ -369,6 +397,7 @@ func runDesktopProfileAssistWindow(request desktopProfileAssistOpenRequest, resu
 		resultCh <- desktopProfileAssistWindowOpenResult{err: fmt.Errorf("site url is empty")}
 		return
 	}
+	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] start | site=%s name=%s type=%s", siteURL, strings.TrimSpace(request.SiteName), strings.TrimSpace(request.SiteType)))
 
 	origin, err := normalizeURLOrigin(siteURL)
 	if err != nil {
@@ -387,27 +416,26 @@ func runDesktopProfileAssistWindow(request desktopProfileAssistOpenRequest, resu
 		siteName = host
 	}
 
-	cookies, err := loadChromeCookiesForHost(host)
-	if err != nil {
-		appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] %s cookies load failed | %v", siteURL, err))
-	}
-
+	disableInjection := profileAssistDisableInjection || profileAssistMinimalMode
+	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] mode | site=%s minimal=%t disableInjection=%t", siteURL, profileAssistMinimalMode, disableInjection))
+	cookies := []desktopProfileAssistCookie{}
 	storageValues := map[string]string{}
 	storageFields := []string{}
-	if snapshot, _, snapshotErr := loadChromeProfileAuthSnapshot(); snapshotErr == nil && snapshot != nil {
-		if rawValues := snapshot.entries[origin]; len(rawValues) > 0 {
-			storageValues = cloneStringMap(rawValues)
-			for key := range rawValues {
-				storageFields = append(storageFields, key)
+	if !disableInjection {
+		var err error
+		cookies, err = loadChromeCookiesForHost(host)
+		if err != nil {
+			appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] %s cookies load failed | %v", siteURL, err))
+		}
+
+		if snapshot, _, snapshotErr := loadChromeProfileAuthSnapshot(); snapshotErr == nil && snapshot != nil {
+			if rawValues := snapshot.entries[origin]; len(rawValues) > 0 {
+				storageValues = cloneStringMap(rawValues)
+				for key := range rawValues {
+					storageFields = append(storageFields, key)
+				}
 			}
 		}
-	}
-
-	disableInjection := profileAssistDisableInjection
-	if disableInjection {
-		cookies = []desktopProfileAssistCookie{}
-		storageValues = map[string]string{}
-		storageFields = []string{}
 	}
 
 	shouldInjectStorage, storageSkipReason := shouldInjectProfileAssistStorage(request, host, storageValues, cookies)
@@ -421,7 +449,9 @@ func runDesktopProfileAssistWindow(request desktopProfileAssistOpenRequest, resu
 		storageFields = []string{}
 	}
 	initialNavigateURL := resolveProfileAssistInitialURL(origin, request, host, len(cookies), shouldInjectStorage)
+	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] resolve | site=%s host=%s origin=%s initial=%s cookies=%d storage=%d inject=%t", siteURL, host, origin, initialNavigateURL, len(cookies), len(storageFields), shouldInjectStorage))
 
+	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] com init | site=%s", siteURL))
 	if err := windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED); err != nil && !errors.Is(err, syscall.Errno(0x00000001)) {
 		resultCh <- desktopProfileAssistWindowOpenResult{err: fmt.Errorf("CoInitializeEx failed: %w", err)}
 		return
@@ -455,11 +485,17 @@ func runDesktopProfileAssistWindow(request desktopProfileAssistOpenRequest, resu
 		resultCh <- desktopProfileAssistWindowOpenResult{err: fmt.Errorf("CreateWindowExW failed: %v", createErr)}
 		return
 	}
+	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] window created | site=%s hwnd=0x%X", siteURL, hwnd))
 
 	chromium := edge.NewChromium()
+	loadingHint := fmt.Sprintf("Preparing %s login environment...", siteName)
+	if disableInjection {
+		loadingHint = fmt.Sprintf("Opening %s login page...", siteName)
+	}
 	state := &profileAssistWindowState{
 		loadingTitle: "Profile Assist",
-		loadingHint:  fmt.Sprintf("Preparing %s login environment...", siteName),
+		loadingHint:  loadingHint,
+		host:         host,
 	}
 	var closeWindowOnce sync.Once
 	closeWindow := func(reason string) {
@@ -474,94 +510,97 @@ func runDesktopProfileAssistWindow(request desktopProfileAssistOpenRequest, resu
 			}
 		})
 	}
-	chromium.MessageCallback = func(message string, sender *edge.ICoreWebView2, args *edge.ICoreWebView2WebMessageReceivedEventArgs) {
-		_ = sender
-		_ = args
-		appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] web message %s | %s", siteURL, truncateProfileAssistLogText(message, 800)))
-		payload := parseProfileAssistWebMessage(message)
-		if payload == nil || !strings.EqualFold(strings.TrimSpace(payload.Source), "profile-assist") {
-			return
-		}
-		switch strings.TrimSpace(payload.Type) {
-		case "auth-ready":
-			closeWindow("auth-ready")
-		case "assist-timeout":
-			closeWindow("assist-timeout")
-		}
-	}
-	chromium.SetErrorCallback(func(webErr error) {
-		appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] webview error %s | %v", siteURL, webErr))
-	})
+	var navigationCount int32
+	var documentRequestCount int32
+	resourceRequestCounts := map[string]int{}
+	traceEvents := !profileAssistMinimalMode || profileAssistTraceMinimal
 	chromium.DataPath = buildProfileAssistSessionDataPath(host)
 	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] data path %s | %s", siteURL, chromium.DataPath))
-	var navigationCount int32
-	documentRequestCount := 0
-	resourceRequestCounts := map[string]int{}
-	chromium.WebResourceRequestedCallback = func(request *edge.ICoreWebView2WebResourceRequest, args *edge.ICoreWebView2WebResourceRequestedEventArgs) {
-		if request == nil {
-			return
+	if !profileAssistMinimalMode {
+		chromium.MessageCallback = func(message string, sender *edge.ICoreWebView2, args *edge.ICoreWebView2WebMessageReceivedEventArgs) {
+			_ = sender
+			_ = args
+			appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] web message %s | %s", siteURL, truncateProfileAssistLogText(message, 800)))
+			payload := parseProfileAssistWebMessage(message)
+			if payload == nil || !strings.EqualFold(strings.TrimSpace(payload.Source), "profile-assist") {
+				return
+			}
+			switch strings.TrimSpace(payload.Type) {
+			case "auth-ready":
+				closeWindow("auth-ready")
+			case "assist-timeout":
+				closeWindow("assist-timeout")
+			}
 		}
-
-		method, _ := request.GetMethod()
-		uri, _ := request.GetUri()
-		context, contextErr := profileAssistGetWebResourceContext(args)
-		contextName := profileAssistResourceContextName(context)
-		resourceRequestCounts[contextName]++
-		if context == edge.COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT {
-			documentRequestCount++
-		}
-
-		if contextErr != nil {
-			appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] resource context read failed %s | %v", siteURL, contextErr))
-		}
-
-		if !profileAssistShouldTraceURL(siteURL, uri) && context != edge.COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT {
-			return
-		}
-
-		headers, _ := request.GetHeaders()
-		hasCookieHeader := false
-		hasAuthorizationHeader := false
-		originHeader := ""
-		refererHeader := ""
-		if headers != nil {
-			hasCookieHeader = profileAssistGetHeaderValue(headers, "Cookie") != ""
-			hasAuthorizationHeader = profileAssistGetHeaderValue(headers, "Authorization") != ""
-			originHeader = truncateProfileAssistLogText(profileAssistGetHeaderValue(headers, "Origin"), 180)
-			refererHeader = truncateProfileAssistLogText(profileAssistGetHeaderValue(headers, "Referer"), 180)
-			_ = headers.Release()
-		}
-
-		appendLine(profileAssistLogPath(), fmt.Sprintf(
-			"[ASSIST] resource request %s | ctx=%s count=%d docCount=%d auth=%t cookie=%t origin=%s referer=%s | %s %s",
-			siteURL,
-			contextName,
-			resourceRequestCounts[contextName],
-			documentRequestCount,
-			hasAuthorizationHeader,
-			hasCookieHeader,
-			originHeader,
-			refererHeader,
-			strings.TrimSpace(method),
-			truncateProfileAssistLogText(uri, 600),
-		))
 	}
-	chromium.NavigationCompletedCallback = func(sender *edge.ICoreWebView2, args *edge.ICoreWebView2NavigationCompletedEventArgs) {
-		_ = args
-		count := atomic.AddInt32(&navigationCount, 1)
-		currentURL := ""
-		if sender != nil {
-			currentURL, _ = sender.GetSource()
+	if traceEvents {
+		chromium.SetErrorCallback(func(webErr error) {
+			appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] webview error %s | %v", siteURL, webErr))
+		})
+		chromium.WebResourceRequestedCallback = func(request *edge.ICoreWebView2WebResourceRequest, args *edge.ICoreWebView2WebResourceRequestedEventArgs) {
+			if request == nil {
+				return
+			}
+
+			method, _ := request.GetMethod()
+			uri, _ := request.GetUri()
+			context, contextErr := profileAssistGetWebResourceContext(args)
+			contextName := profileAssistResourceContextName(context)
+			resourceRequestCounts[contextName]++
+			if context == edge.COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT {
+				documentRequestCount++
+			}
+
+			if contextErr != nil {
+				appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] resource context read failed %s | %v", siteURL, contextErr))
+			}
+
+			if !profileAssistShouldTraceURL(siteURL, uri) && context != edge.COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT {
+				return
+			}
+
+			headers, _ := request.GetHeaders()
+			hasCookieHeader := false
+			hasAuthorizationHeader := false
+			originHeader := ""
+			refererHeader := ""
+			if headers != nil {
+				hasCookieHeader = profileAssistGetHeaderValue(headers, "Cookie") != ""
+				hasAuthorizationHeader = profileAssistGetHeaderValue(headers, "Authorization") != ""
+				originHeader = truncateProfileAssistLogText(profileAssistGetHeaderValue(headers, "Origin"), 180)
+				refererHeader = truncateProfileAssistLogText(profileAssistGetHeaderValue(headers, "Referer"), 180)
+				_ = headers.Release()
+			}
+
+			appendLine(profileAssistLogPath(), fmt.Sprintf(
+				"[ASSIST] resource request %s | ctx=%s count=%d docCount=%d auth=%t cookie=%t origin=%s referer=%s | %s %s",
+				siteURL,
+				contextName,
+				resourceRequestCounts[contextName],
+				documentRequestCount,
+				hasAuthorizationHeader,
+				hasCookieHeader,
+				originHeader,
+				refererHeader,
+				strings.TrimSpace(method),
+				truncateProfileAssistLogText(uri, 600),
+			))
 		}
-		appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] navigation completed %s | count=%d | url=%s", siteURL, count, currentURL))
+		chromium.NavigationCompletedCallback = func(sender *edge.ICoreWebView2, args *edge.ICoreWebView2NavigationCompletedEventArgs) {
+			_ = args
+			count := atomic.AddInt32(&navigationCount, 1)
+			currentURL := ""
+			if sender != nil {
+				currentURL, _ = sender.GetSource()
+			}
+			appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] navigation completed %s | count=%d | url=%s", siteURL, count, currentURL))
+		}
 	}
 
 	registerProfileAssistWindowState(hwnd, state)
+	registerProfileAssistHostWindow(host, hwnd)
 	defer unregisterProfileAssistWindowState(hwnd)
-
-	_, _, _ = procShowWindow.Call(hwnd, profileAssistSWShow)
-	_, _, _ = procUpdateWindow.Call(hwnd)
-	_, _, _ = procSetFocus.Call(hwnd)
+	defer unregisterProfileAssistHostWindow(host, hwnd)
 
 	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] embed start %s", siteURL))
 	if ok := chromium.Embed(hwnd); !ok {
@@ -570,49 +609,69 @@ func runDesktopProfileAssistWindow(request desktopProfileAssistOpenRequest, resu
 		return
 	}
 	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] embed ready %s", siteURL))
+	if controller := chromium.GetController(); controller == nil {
+		appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] controller nil after embed %s", siteURL))
+	}
 	state.chromium = chromium
 	chromium.Resize()
-	chromium.SetBackgroundColour(12, 16, 24, 255)
-	chromium.AddWebResourceRequestedFilter("*", edge.COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT)
-	chromium.AddWebResourceRequestedFilter("*", edge.COREWEBVIEW2_WEB_RESOURCE_CONTEXT_SCRIPT)
-	chromium.AddWebResourceRequestedFilter("*", edge.COREWEBVIEW2_WEB_RESOURCE_CONTEXT_XML_HTTP_REQUEST)
-	chromium.AddWebResourceRequestedFilter("*", edge.COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FETCH)
-	chromium.AddWebResourceRequestedFilter("*", edge.COREWEBVIEW2_WEB_RESOURCE_CONTEXT_OTHER)
-	logProfileAssistWebViewSettings(siteURL, chromium)
-
-	if !disableInjection {
-		if script := buildProfileAssistStorageBootstrapScript(origin, storageValues); script != "" {
-			chromium.Init(script)
-		}
+	chromium.SetBackgroundColour(255, 255, 255, 255)
+	if err := chromium.Show(); err != nil {
+		appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] show failed %s | %v", siteURL, err))
 	}
-	if traceScript := buildProfileAssistTraceScript(origin); traceScript != "" {
-		chromium.Init(traceScript)
+	if traceEvents {
+		chromium.AddWebResourceRequestedFilter("*", edge.COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT)
+		chromium.AddWebResourceRequestedFilter("*", edge.COREWEBVIEW2_WEB_RESOURCE_CONTEXT_SCRIPT)
+		chromium.AddWebResourceRequestedFilter("*", edge.COREWEBVIEW2_WEB_RESOURCE_CONTEXT_XML_HTTP_REQUEST)
+		chromium.AddWebResourceRequestedFilter("*", edge.COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FETCH)
+		chromium.AddWebResourceRequestedFilter("*", edge.COREWEBVIEW2_WEB_RESOURCE_CONTEXT_OTHER)
+		logProfileAssistWebViewSettings(siteURL, chromium)
+	}
+	if !profileAssistMinimalMode {
+
+		if !disableInjection {
+			if script := buildProfileAssistStorageBootstrapScript(origin, storageValues); script != "" {
+				chromium.Init(script)
+			}
+		}
+		if traceScript := buildProfileAssistTraceScript(origin); traceScript != "" {
+			chromium.Init(traceScript)
+		}
 	}
 
 	injectedCookieNames := []string{}
-	if !disableInjection {
+	if !disableInjection && !profileAssistMinimalMode {
 		var err error
 		injectedCookieNames, err = injectChromeCookiesIntoWebView(chromium, cookies)
 		if err != nil {
 			appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] inject cookies failed %s | %v", siteURL, err))
 		}
-	} else {
+	} else if disableInjection && !profileAssistMinimalMode {
 		appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] injection disabled %s", siteURL))
 	}
 
 	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] open window %s | cookies=%d | storageFields=%d", siteURL, len(injectedCookieNames), len(storageFields)))
 	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] navigate start %s | %s", siteURL, initialNavigateURL))
 	chromium.Navigate(initialNavigateURL)
-	go func(target string) {
-		time.Sleep(6 * time.Second)
-		if atomic.LoadInt32(&navigationCount) == 0 {
-			appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] navigate stall %s | after=6s | target=%s | documentRequests=%d", siteURL, target, documentRequestCount))
-		}
-		time.Sleep(6 * time.Second)
-		if atomic.LoadInt32(&navigationCount) == 0 {
-			appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] navigate stall %s | after=12s | target=%s | documentRequests=%d", siteURL, target, documentRequestCount))
-		}
-	}(initialNavigateURL)
+	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] navigate issued %s", siteURL))
+
+	_, _, _ = procShowWindow.Call(hwnd, profileAssistSWShow)
+	_, _, _ = procUpdateWindow.Call(hwnd)
+	_, _, _ = procSetFocus.Call(hwnd)
+	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] window shown %s", siteURL))
+	if traceEvents {
+		go func(target string) {
+			time.Sleep(6 * time.Second)
+			if atomic.LoadInt32(&navigationCount) == 0 {
+				appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] navigate stall %s | after=6s | target=%s | documentRequests=%d", siteURL, target, documentRequestCount))
+				scheduleProfileAssistNavigateRetry(hwnd, target)
+				appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] navigate retry scheduled %s | target=%s", siteURL, target))
+			}
+			time.Sleep(6 * time.Second)
+			if atomic.LoadInt32(&navigationCount) == 0 {
+				appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] navigate stall %s | after=12s | target=%s | documentRequests=%d", siteURL, target, documentRequestCount))
+			}
+		}(initialNavigateURL)
+	}
 
 	result := &desktopProfileAssistWindowResult{
 		SiteName:            siteName,
@@ -786,6 +845,7 @@ func buildProfileAssistLoadingDocument(siteName string, targetURL string) string
 }
 
 func runProfileAssistMessageLoop(hwnd uintptr, chromium *edge.Chromium) {
+	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] message loop start | hwnd=0x%X", hwnd))
 	var msg profileAssistMsg
 	for {
 		ret, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&msg)), hwnd, 0, 0)
@@ -795,6 +855,7 @@ func runProfileAssistMessageLoop(hwnd uintptr, chromium *edge.Chromium) {
 		_, _, _ = procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
 		_, _, _ = procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
 	}
+	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] message loop end | hwnd=0x%X", hwnd))
 	if chromium != nil {
 		chromium.ShuttingDown()
 	}
@@ -824,7 +885,7 @@ func ensureProfileAssistWindowClass() error {
 			icon, _, _ = procLoadImageW.Call(uintptr(hinstance), 32512, icow, icoh, 0)
 		}
 		if profileAssistBackgroundBrush == 0 {
-			brush, _, _ := procCreateSolidBrush.Call(0x00120C08)
+			brush, _, _ := procCreateSolidBrush.Call(0x00FFFFFF)
 			profileAssistBackgroundBrush = windows.Handle(brush)
 		}
 
@@ -853,15 +914,35 @@ func profileAssistWindowProc(hwnd uintptr, msg uint32, wparam uintptr, lparam ui
 		}
 	case profileAssistWMPaint:
 		if chromium := getProfileAssistChromium(hwnd); chromium == nil {
-			renderProfileAssistPlaceholder(hwnd)
-			return 0
+			break
 		}
 	case profileAssistWMClose:
+		appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] wm_close | hwnd=0x%X", hwnd))
 		_ = destroyProfileAssistWindow(hwnd)
 		return 0
+	case profileAssistWMRetryNavigate:
+		state := getProfileAssistWindowState(hwnd)
+		if state != nil && state.chromium != nil {
+			profileAssistWindowStateMu.Lock()
+			target := strings.TrimSpace(state.retryURL)
+			state.retryURL = ""
+			profileAssistWindowStateMu.Unlock()
+			if target != "" {
+				if controller := state.chromium.GetController(); controller != nil {
+					_ = controller.PutIsVisible(true)
+				}
+				state.chromium.Navigate(target)
+				appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] retry navigate | hwnd=0x%X target=%s", hwnd, target))
+			}
+		}
+		return 0
 	case profileAssistWMDestroy:
+		appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] wm_destroy | hwnd=0x%X", hwnd))
 		if chromium := getProfileAssistChromium(hwnd); chromium != nil {
 			chromium.ShuttingDown()
+		}
+		if state := getProfileAssistWindowState(hwnd); state != nil {
+			unregisterProfileAssistHostWindow(state.host, hwnd)
 		}
 		return 0
 	}
@@ -880,6 +961,76 @@ func unregisterProfileAssistWindowState(hwnd uintptr) {
 	profileAssistWindowStateMu.Lock()
 	defer profileAssistWindowStateMu.Unlock()
 	delete(profileAssistWindowStates, hwnd)
+}
+
+func registerProfileAssistHostWindow(host string, hwnd uintptr) {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" || hwnd == 0 {
+		return
+	}
+	profileAssistWindowHostMu.Lock()
+	defer profileAssistWindowHostMu.Unlock()
+	hostMap := profileAssistWindowHosts[host]
+	if hostMap == nil {
+		hostMap = map[uintptr]struct{}{}
+		profileAssistWindowHosts[host] = hostMap
+	}
+	hostMap[hwnd] = struct{}{}
+}
+
+func unregisterProfileAssistHostWindow(host string, hwnd uintptr) {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" || hwnd == 0 {
+		return
+	}
+	profileAssistWindowHostMu.Lock()
+	defer profileAssistWindowHostMu.Unlock()
+	hostMap := profileAssistWindowHosts[host]
+	if hostMap == nil {
+		return
+	}
+	delete(hostMap, hwnd)
+	if len(hostMap) == 0 {
+		delete(profileAssistWindowHosts, host)
+	}
+}
+
+func scheduleProfileAssistNavigateRetry(hwnd uintptr, target string) {
+	if hwnd == 0 {
+		return
+	}
+	state := getProfileAssistWindowState(hwnd)
+	if state == nil {
+		return
+	}
+	profileAssistWindowStateMu.Lock()
+	state.retryURL = strings.TrimSpace(target)
+	profileAssistWindowStateMu.Unlock()
+	_, _, _ = procPostMessageW.Call(hwnd, profileAssistWMRetryNavigate, 0, 0)
+}
+
+func focusProfileAssistWindowByHost(host string) (bool, bool) {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" {
+		return false, false
+	}
+	profileAssistWindowHostMu.Lock()
+	var hwnd uintptr
+	if hostMap := profileAssistWindowHosts[host]; len(hostMap) > 0 {
+		for existing := range hostMap {
+			hwnd = existing
+			break
+		}
+	}
+	profileAssistWindowHostMu.Unlock()
+	if hwnd == 0 {
+		return false, false
+	}
+	_, _, _ = procShowWindow.Call(hwnd, profileAssistSWShow)
+	_, _, _ = procUpdateWindow.Call(hwnd)
+	_, _, _ = procSetFocus.Call(hwnd)
+	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] focus existing window | host=%s hwnd=0x%X", host, hwnd))
+	return true, true
 }
 
 func getProfileAssistChromium(hwnd uintptr) *edge.Chromium {
@@ -942,6 +1093,59 @@ func destroyProfileAssistWindow(hwnd uintptr) error {
 		return err
 	}
 	return nil
+}
+
+func closeProfileAssistWindowsByHosts(hosts []string) int {
+	if len(hosts) == 0 {
+		return 0
+	}
+	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] close request | hosts=%v", hosts))
+	uniqueHosts := map[string]struct{}{}
+	for _, raw := range hosts {
+		text := strings.TrimSpace(raw)
+		if text == "" {
+			continue
+		}
+		host := ""
+		if strings.HasPrefix(strings.ToLower(text), "http://") || strings.HasPrefix(strings.ToLower(text), "https://") {
+			if parsed, err := url.Parse(text); err == nil {
+				host = parsed.Hostname()
+			}
+		} else if strings.Contains(text, "/") {
+			if parsed, err := url.Parse("https://" + text); err == nil {
+				host = parsed.Hostname()
+			}
+		} else {
+			host = text
+		}
+		host = strings.ToLower(strings.TrimSpace(host))
+		if host == "" {
+			continue
+		}
+		uniqueHosts[host] = struct{}{}
+	}
+	if len(uniqueHosts) == 0 {
+		return 0
+	}
+
+	hwnds := make([]uintptr, 0, len(uniqueHosts))
+	profileAssistWindowHostMu.Lock()
+	for host := range uniqueHosts {
+		for hwnd := range profileAssistWindowHosts[host] {
+			hwnds = append(hwnds, hwnd)
+		}
+	}
+	profileAssistWindowHostMu.Unlock()
+
+	closed := 0
+	for _, hwnd := range hwnds {
+		ret, _, _ := procPostMessageW.Call(hwnd, profileAssistWMClose, 0, 0)
+		if ret != 0 {
+			closed++
+		}
+	}
+	appendLine(profileAssistLogPath(), fmt.Sprintf("[ASSIST] close issued | count=%d", closed))
+	return closed
 }
 
 func injectChromeCookiesIntoWebView(chromium *edge.Chromium, cookies []desktopProfileAssistCookie) ([]string, error) {
@@ -1388,9 +1592,12 @@ func buildProfileAssistSessionDataPath(host string) string {
 	}
 
 	hostRoot := filepath.Join(resolveRuntimeRootDir(), "webview2-assist", hostSegment)
-	sessionPath := filepath.Join(hostRoot, fmt.Sprintf("session-%d", time.Now().UnixMilli()))
-	cleanupOldProfileAssistSessions(hostRoot, 4)
-	return sessionPath
+	_ = os.MkdirAll(hostRoot, 0o755)
+	if profileAssistMinimalMode {
+		cleanupOldProfileAssistSessions(hostRoot, 3)
+		return filepath.Join(hostRoot, fmt.Sprintf("session-%d", time.Now().UnixMilli()))
+	}
+	return filepath.Join(hostRoot, "profile-default")
 }
 
 func cleanupOldProfileAssistSessions(hostRoot string, keep int) {
