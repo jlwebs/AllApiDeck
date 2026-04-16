@@ -34,6 +34,8 @@ export function HideToTrayPanel():Promise<void>;
 
 export function ImportExtensionAccounts():Promise<main.ExtensionImportResult>;
 
+export function ImportExtensionAccountsFromDir(arg1:string):Promise<main.ExtensionImportResult>;
+
 export function InitPanelWindow(arg1:number,arg2:number):Promise<void>;
 
 export function ListDesktopLogFiles():Promise<main.DesktopLogSnapshot>;
@@ -44,9 +46,13 @@ export function OpenDesktopProfileAssist(arg1:Array<main.desktopProfileAssistOpe
 
 export function OpenKeyEditor(arg1:string):Promise<void>;
 
+export function PackagePortableData(arg1:string):Promise<main.PortableDataPackageResult>;
+
 export function PerformHttpRequest(arg1:string,arg2:string,arg3:string,arg4:string,arg5:number):Promise<string>;
 
 export function PerformHttpRequestRaw(arg1:string):Promise<string>;
+
+export function PickExtensionImportDirectory():Promise<string>;
 
 export function ReadDesktopLogFile(arg1:string):Promise<main.DesktopLogContent>;
 
@@ -67,3 +73,5 @@ export function SetPanelInteractionLocked(arg1:boolean):Promise<void>;
 export function ShowMainWindow():Promise<void>;
 
 export function ToggleSidebarMode():Promise<void>;
+
+export function UnpackPortableData():Promise<main.PortableDataUnpackResult>;

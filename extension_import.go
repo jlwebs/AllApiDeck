@@ -27,22 +27,44 @@ type ExtensionImportResult struct {
 }
 
 func (a *App) ImportExtensionAccounts() (*ExtensionImportResult, error) {
-	candidates := discoverExtensionStorageCandidates(defaultExtensionID)
+	logPath := resetExtensionImportLog()
+	appendExtensionImportLogf(logPath, "[AUTO_IMPORT] os=%s extensionID=%s", runtime.GOOS, defaultExtensionID)
+	candidates, reportLines := discoverExtensionStorageCandidatesWithReport(defaultExtensionID)
+	for _, line := range reportLines {
+		appendExtensionImportLogf(logPath, "%s", line)
+	}
 	var lastErr error
 
 	for _, candidate := range candidates {
+		appendExtensionImportLogf(logPath, "[TRY] %s", candidate)
 		result, err := importExtensionAccountsFromDir(candidate)
 		if err == nil {
+			appendExtensionImportLogf(logPath, "[SUCCESS] source=%s storageKey=%s accounts=%d", result.SourcePath, result.StorageKey, result.AccountCount)
 			return result, nil
 		}
+		appendExtensionImportLogf(logPath, "[TRY_FAIL] %s :: %v", candidate, err)
 		lastErr = err
 	}
 
 	if lastErr != nil {
-		return nil, fmt.Errorf("failed to import browser extension accounts automatically: %w", lastErr)
+		appendExtensionImportLogf(logPath, "[FINAL_FAIL] automatic import failed: %v", lastErr)
+		return nil, fmt.Errorf("failed to import browser extension accounts automatically: %w (details: %s)", lastErr, logPath)
 	}
 
-	return nil, fmt.Errorf("browser extension storage directory not found automatically")
+	appendExtensionImportLogf(logPath, "[FINAL_FAIL] browser extension storage directory not found automatically")
+	return nil, fmt.Errorf("browser extension storage directory not found automatically (details: %s)", logPath)
+}
+
+func (a *App) ImportExtensionAccountsFromDir(inputDir string) (*ExtensionImportResult, error) {
+	logPath := resetExtensionImportLog()
+	appendExtensionImportLogf(logPath, "[MANUAL_IMPORT] os=%s extensionID=%s inputDir=%s", runtime.GOOS, defaultExtensionID, strings.TrimSpace(inputDir))
+	result, err := importExtensionAccountsFromDir(inputDir)
+	if err != nil {
+		appendExtensionImportLogf(logPath, "[MANUAL_IMPORT_FAIL] %v", err)
+		return nil, fmt.Errorf("failed to import browser extension accounts from selected directory: %w (details: %s)", err, logPath)
+	}
+	appendExtensionImportLogf(logPath, "[MANUAL_IMPORT_SUCCESS] source=%s storageKey=%s accounts=%d", result.SourcePath, result.StorageKey, result.AccountCount)
+	return result, nil
 }
 
 func importExtensionAccountsFromDir(inputDir string) (*ExtensionImportResult, error) {
@@ -130,32 +152,79 @@ func resolveExtensionStorageDir(inputDir string, extensionID string) (string, er
 		return candidate, nil
 	}
 
+	if strings.EqualFold(filepath.Base(dir), "Local Extension Settings") {
+		if candidate := filepath.Join(dir, extensionID); isDirectory(candidate) {
+			return candidate, nil
+		}
+	}
+
 	if candidate := filepath.Join(dir, "Local Extension Settings", extensionID); isDirectory(candidate) {
 		return candidate, nil
+	}
+
+	if nestedCandidates, _ := discoverExtensionStorageCandidatesWithReportFromRoot(dir, extensionID); len(nestedCandidates) > 0 {
+		return nestedCandidates[0], nil
 	}
 
 	return "", fmt.Errorf("unable to locate extension directory under %s", dir)
 }
 
 func discoverExtensionStorageCandidates(extensionID string) []string {
-	var candidates []string
+	candidates, _ := discoverExtensionStorageCandidatesWithReport(extensionID)
+	return candidates
+}
 
-	for _, root := range browserUserDataRoots() {
-		entries, err := os.ReadDir(root)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			candidate := filepath.Join(root, entry.Name(), "Local Extension Settings", extensionID)
-			if isDirectory(candidate) {
-				candidates = append(candidates, candidate)
-			}
-		}
+func discoverExtensionStorageCandidatesWithReport(extensionID string) ([]string, []string) {
+	var candidates []string
+	var lines []string
+	roots := browserUserDataRoots()
+	if len(roots) == 0 {
+		lines = append(lines, "[ROOTS] no browser user-data roots discovered from current environment")
 	}
 
+	for _, root := range roots {
+		lines = append(lines, fmt.Sprintf("[ROOT] %s", root))
+		rootCandidates, rootLines := discoverExtensionStorageCandidatesWithReportFromRoot(root, extensionID)
+		candidates = append(candidates, rootCandidates...)
+		lines = append(lines, rootLines...)
+	}
+
+	candidates = sortAndCompactExtensionCandidates(candidates)
+	lines = append(lines, fmt.Sprintf("[SUMMARY] candidates=%d", len(candidates)))
+	return candidates, lines
+}
+
+func discoverExtensionStorageCandidatesWithReportFromRoot(root string, extensionID string) ([]string, []string) {
+	var candidates []string
+	var lines []string
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		lines = append(lines, fmt.Sprintf("[ROOT_ERR] %s :: %v", root, err))
+		return nil, lines
+	}
+	if len(entries) == 0 {
+		lines = append(lines, fmt.Sprintf("[ROOT_EMPTY] %s", root))
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		profileDir := filepath.Join(root, entry.Name())
+		candidate := filepath.Join(profileDir, "Local Extension Settings", extensionID)
+		if isDirectory(candidate) {
+			lines = append(lines, fmt.Sprintf("[FOUND] %s", candidate))
+			candidates = append(candidates, candidate)
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("[MISS] %s", candidate))
+	}
+
+	return sortAndCompactExtensionCandidates(candidates), lines
+}
+
+func sortAndCompactExtensionCandidates(candidates []string) []string {
 	slices.SortStableFunc(candidates, func(a, b string) int {
 		statA, errA := os.Stat(a)
 		statB, errB := os.Stat(b)
@@ -172,6 +241,21 @@ func discoverExtensionStorageCandidates(extensionID string) []string {
 	})
 
 	return slices.Compact(candidates)
+}
+
+func resolveExtensionImportLogPath() string {
+	return filepath.Join(resolveRuntimeLogDir(), "extension-import.log")
+}
+
+func resetExtensionImportLog() string {
+	path := resolveExtensionImportLogPath()
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	_ = os.WriteFile(path, []byte{}, 0o644)
+	return path
+}
+
+func appendExtensionImportLogf(path string, format string, args ...any) {
+	appendLine(path, fmt.Sprintf(format, args...))
 }
 
 func browserUserDataRoots() []string {

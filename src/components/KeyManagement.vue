@@ -314,44 +314,24 @@
         :destroyOnClose="true"
       >
         <a-tabs>
-          <a-tab-pane key="1" tab="本地缓存">
-            <a-form @submit.prevent>
-              <a-row :gutter="16" type="flex" align="middle">
-                <a-col :span="16">
-                  <a-form-item label="API URL">
-                    <a-input v-model:value="settingsApiUrl" placeholder="请输入 API URL">
-                      <template #prefix><UserOutlined /></template>
-                    </a-input>
-                  </a-form-item>
-                  <a-form-item label="API Key">
-                    <a-input-password v-model:value="settingsApiKey" placeholder="请输入 API Key">
-                      <template #prefix><LockOutlined /></template>
-                    </a-input-password>
-                  </a-form-item>
-                </a-col>
-                <a-col :span="8">
-                  <a-button type="primary" @click="saveToLocal" block style="height: 104px;">
-                    保存到缓存
-                  </a-button>
-                </a-col>
-              </a-row>
-            </a-form>
-            <a-list :data-source="localCacheList" bordered style="margin-top: 15px; max-height: 300px; overflow-y: auto;">
-              <template #renderItem="{ item }">
-                <a-list-item>
-                  <div style="max-width: 70%;">
-                    <div style="font-weight: bold;">{{ item.name }}</div>
-                    <div style="font-size: 12px; color: #999; overflow: hidden; text-overflow: ellipsis;">{{ item.url }}</div>
-                  </div>
-                  <template #actions>
-                    <a @click="loadLocalRecord(item.id)">填充</a>
-                    <a-popconfirm title="确定删除此缓存？" @confirm="deleteLocalRecord(item.id)">
-                      <a style="color: #ff4d4f;">删除</a>
-                    </a-popconfirm>
-                  </template>
-                </a-list-item>
-              </template>
-            </a-list>
+          <a-tab-pane key="1" tab="本地绿色化">
+            <div class="portable-settings-card">
+              <div class="portable-settings-copy">
+                <div class="portable-settings-title">本地绿色化</div>
+                <div class="portable-settings-desc">封包是将本应用数据绿色化到程序目录 `backup`，解包是从 `backup` 解包恢复本程序所有数据。</div>
+                <div class="portable-settings-hint">当前会处理运行时目录数据与前端 localStorage 快照。为保证当前窗口状态一致，解包完成后会自动刷新页面。</div>
+                <div v-if="portableSettingsMeta" class="portable-settings-meta">{{ portableSettingsMeta }}</div>
+                <div v-if="!isWailsRuntime" class="portable-settings-warning">该功能仅在桌面端 EXE / Wails 环境可用。</div>
+              </div>
+              <div class="portable-settings-actions">
+                <a-button type="primary" size="large" :loading="portablePacking" :disabled="!isWailsRuntime || portableUnpacking" @click="packagePortableData">
+                  封包
+                </a-button>
+                <a-button size="large" :loading="portableUnpacking" :disabled="!isWailsRuntime || portablePacking" @click="unpackPortableData">
+                  解包
+                </a-button>
+              </div>
+            </div>
           </a-tab-pane>
         </a-tabs>
       </a-modal>
@@ -362,14 +342,14 @@
 
 <script setup>
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { ClockCircleOutlined, LockOutlined, ReloadOutlined, UserOutlined } from '@ant-design/icons-vue';
+import { ClockCircleOutlined, ReloadOutlined } from '@ant-design/icons-vue';
 import { ConfigProvider, message, Modal, theme } from 'ant-design-vue';
 import { useRoute } from 'vue-router';
 import AppHeader from './AppHeader.vue';
 import DesktopConfigDiffModal from './DesktopConfigDiffModal.vue';
 import { fetchModelList } from '../utils/api.js';
 import { maskApiKey } from '../utils/normal.js';
-import { apiFetch } from '../utils/runtimeApi.js';
+import { apiFetch, isProbablyWailsRuntime } from '../utils/runtimeApi.js';
 import { toggleTheme } from '../utils/theme.js';
 import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManagedAppConfigFiles } from '../utils/desktopConfigBridge.js';
 import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS } from '../utils/desktopConfigTransform.js';
@@ -399,6 +379,7 @@ const DESKTOP_APP_ICONS = {
   openclaw: openclawAppIcon,
 };
 const route = useRoute();
+const isWailsRuntime = isProbablyWailsRuntime();
 
 function createManualRecordDraft(record = null) {
   const modelsList = normalizeModels(record?.modelsList || record?.modelsText);
@@ -443,6 +424,9 @@ const showAppSettingsModal = ref(false);
 const settingsApiUrl = ref('');
 const settingsApiKey = ref('');
 const localCacheList = ref([]);
+const portablePacking = ref(false);
+const portableUnpacking = ref(false);
+const portableSettingsMeta = ref('');
 const isCompactMode = computed(() => route.query?.compact === '1');
 const PERSIST_DEBOUNCE_MS = 240;
 let persistRecordsTimer = null;
@@ -525,6 +509,82 @@ const loadLocalCache = () => {
     } catch (e) {
       localCacheList.value = [];
     }
+  }
+};
+
+const getPortableErrorMessage = (error, fallback) => {
+  if (!error) return fallback;
+  if (typeof error === 'string') return error.trim() || fallback;
+  const direct = String(error?.message || error?.error || '').trim();
+  if (direct) return direct;
+  try {
+    const serialized = JSON.stringify(error);
+    if (serialized && serialized !== '{}') return serialized;
+  } catch {
+    // noop
+  }
+  return String(error).trim() || fallback;
+};
+
+const snapshotPortableLocalStorage = () => {
+  const snapshot = {};
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (!key) continue;
+    snapshot[key] = localStorage.getItem(key);
+  }
+  return snapshot;
+};
+
+const applyPortableLocalStorageSnapshot = (snapshot) => {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    throw new Error('invalid_localstorage_snapshot');
+  }
+  localStorage.clear();
+  Object.entries(snapshot).forEach(([key, value]) => {
+    localStorage.setItem(key, value == null ? '' : String(value));
+  });
+};
+
+const packagePortableData = async () => {
+  const packer = window?.go?.main?.App?.PackagePortableData;
+  if (typeof packer !== 'function') {
+    message.error('当前环境不支持本地绿色化封包');
+    return;
+  }
+  portablePacking.value = true;
+  try {
+    const snapshotJson = JSON.stringify(snapshotPortableLocalStorage());
+    const result = await packer(snapshotJson);
+    portableSettingsMeta.value = `封包完成：${result?.backupDir || 'backup'}，localStorage ${Number(result?.localStorageKeyCount || 0)} 项`;
+    message.success('已完成本地绿色化封包');
+  } catch (error) {
+    message.error(`封包失败：${getPortableErrorMessage(error, '未知错误，请查看 logs/portable-data.log')}`);
+  } finally {
+    portablePacking.value = false;
+  }
+};
+
+const unpackPortableData = async () => {
+  const unpacker = window?.go?.main?.App?.UnpackPortableData;
+  if (typeof unpacker !== 'function') {
+    message.error('当前环境不支持本地绿色化解包');
+    return;
+  }
+  portableUnpacking.value = true;
+  try {
+    const result = await unpacker();
+    const parsedSnapshot = JSON.parse(String(result?.localStorageJson || '{}'));
+    applyPortableLocalStorageSnapshot(parsedSnapshot);
+    portableSettingsMeta.value = `解包完成：${result?.backupDir || 'backup'}，已恢复 ${Number(result?.localStorageKeyCount || 0)} 项本地数据`;
+    message.success('已从 backup 解包恢复本程序数据，页面即将刷新');
+    setTimeout(() => {
+      window.location.reload();
+    }, 600);
+  } catch (error) {
+    message.error(`解包失败：${getPortableErrorMessage(error, '未知错误，请查看 logs/portable-data.log')}`);
+  } finally {
+    portableUnpacking.value = false;
   }
 };
 
@@ -2163,6 +2223,12 @@ function persistMeta() {
 .desktop-app-opencode .desktop-app-logo{background:linear-gradient(135deg,#eef2ff,#dbeafe)}
 .desktop-app-openclaw .desktop-app-logo{background:linear-gradient(135deg,#fff1f2,#ffe4e6)}
 .config-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}
+.portable-settings-card{display:grid;gap:18px;padding:18px;border-radius:18px;border:1px solid rgba(116,144,104,.16);background:rgba(248,251,246,.96)}
+.portable-settings-copy{display:grid;gap:8px}
+.portable-settings-title{font-size:18px;font-weight:700;color:#20301b}
+.portable-settings-desc,.portable-settings-hint,.portable-settings-meta,.portable-settings-warning{line-height:1.7;color:#5f6f59}
+.portable-settings-warning{color:#b25f00}
+.portable-settings-actions{display:flex;gap:12px}
 .key-management :deep(.ant-card){border-radius:24px;border:1px solid rgba(90,117,79,.12);background:rgba(255,255,255,.7);box-shadow:0 14px 36px rgba(87,107,73,.1),inset 0 1px 0 rgba(255,255,255,.72);backdrop-filter:blur(6px);contain:layout paint}
 .key-management :deep(.ant-card-head){min-height:56px;border-bottom-color:rgba(90,117,79,.1)}
 .key-management :deep(.ant-card-head-title){font:700 18px/1.1 Georgia,'Times New Roman',serif;color:#2d432f}
@@ -2183,6 +2249,10 @@ function persistMeta() {
 :deep(body.dark-mode) .key-management :deep(.ant-table-thead > tr > th){background:rgba(255,255,255,.08);color:#edf5e6}
 :deep(body.dark-mode) .key-management :deep(.ant-table-tbody > tr > td){background:rgba(255,255,255,.03)}
 :deep(body.dark-mode) .key-management .desktop-app-panel,:deep(body.dark-mode) .key-management .desktop-form-panel{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(160,189,144,.06))}
+:deep(body.dark-mode) .portable-settings-card{border-color:rgba(154,191,142,.18);background:rgba(24,32,25,.92)}
+:deep(body.dark-mode) .portable-settings-title{color:#ecf8e7}
+:deep(body.dark-mode) .portable-settings-desc,:deep(body.dark-mode) .portable-settings-hint,:deep(body.dark-mode) .portable-settings-meta{color:#b8cbb1}
+:deep(body.dark-mode) .portable-settings-warning{color:#ffcb8a}
 .key-management-compact :deep(.ant-card-head){padding-inline:12px;min-height:52px}
 .key-management-compact :deep(.ant-card-head-title){font-size:15px}
 .key-management-compact :deep(.ant-card-body){padding:12px}

@@ -125,6 +125,20 @@ func (a *App) GetLaunchRecordKey() string {
 	return a.recordKey
 }
 
+func (a *App) PickExtensionImportDirectory() (string, error) {
+	defaultDir := ""
+	if roots := browserUserDataRoots(); len(roots) > 0 {
+		defaultDir = roots[0]
+	} else if home, err := os.UserHomeDir(); err == nil {
+		defaultDir = home
+	}
+
+	return wruntime.OpenDirectoryDialog(a.ctx, wruntime.OpenDialogOptions{
+		Title:            "选择浏览器档案或扩展存储目录",
+		DefaultDirectory: defaultDir,
+	})
+}
+
 func (a *App) isPanelMode() bool {
 	return a.mode == launchModePanel
 }

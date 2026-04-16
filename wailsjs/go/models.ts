@@ -389,6 +389,46 @@ export namespace main {
 		}
 	}
 	
+	export class PortableDataPackageResult {
+	    backupDir: string;
+	    runtimeSourceDir: string;
+	    runtimeBackupDir: string;
+	    localStorageBackupPath: string;
+	    localStorageKeyCount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PortableDataPackageResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.backupDir = source["backupDir"];
+	        this.runtimeSourceDir = source["runtimeSourceDir"];
+	        this.runtimeBackupDir = source["runtimeBackupDir"];
+	        this.localStorageBackupPath = source["localStorageBackupPath"];
+	        this.localStorageKeyCount = source["localStorageKeyCount"];
+	    }
+	}
+	export class PortableDataUnpackResult {
+	    backupDir: string;
+	    runtimeBackupDir: string;
+	    localStorageBackupPath: string;
+	    localStorageJson: string;
+	    localStorageKeyCount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PortableDataUnpackResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.backupDir = source["backupDir"];
+	        this.runtimeBackupDir = source["runtimeBackupDir"];
+	        this.localStorageBackupPath = source["localStorageBackupPath"];
+	        this.localStorageJson = source["localStorageJson"];
+	        this.localStorageKeyCount = source["localStorageKeyCount"];
+	    }
+	}
 	export class desktopProfileAssistOpenRequest {
 	    siteName: string;
 	    siteUrl: string;

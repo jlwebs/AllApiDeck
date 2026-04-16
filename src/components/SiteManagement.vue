@@ -410,6 +410,7 @@ const buildManualTokenNode = (record, displayOrder, token, tokenIndex, siteModel
   return {
     title: `${displayOrder}. [${record.siteName}] ${tokenName} (${maskValue(tokenKey)})`,
     key: `token|${record.siteCacheKey}|${tokenKey}`,
+    siteCacheKey: record.siteCacheKey,
     disableCheckbox: true,
     selectable: false,
     isManualToken: true,
@@ -457,6 +458,7 @@ const buildFallbackTree = (record, displayOrder) => {
       const statusLabel = Number(token?.status ?? 1) === 1 ? '可用' : '异常';
       return {
         key: `token|${record.siteCacheKey}|${tokenKey}|${tokenIndex}`,
+        siteCacheKey: record.siteCacheKey,
         title: `${tokenName} · ${maskValue(tokenKey)} · ${sourceLabel} · ${statusLabel}`,
         disableCheckbox: true,
         selectable: false,

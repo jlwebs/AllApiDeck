@@ -66,6 +66,10 @@ export function ImportExtensionAccounts() {
   return window['go']['main']['App']['ImportExtensionAccounts']();
 }
 
+export function ImportExtensionAccountsFromDir(arg1) {
+  return window['go']['main']['App']['ImportExtensionAccountsFromDir'](arg1);
+}
+
 export function InitPanelWindow(arg1, arg2) {
   return window['go']['main']['App']['InitPanelWindow'](arg1, arg2);
 }
@@ -86,12 +90,20 @@ export function OpenKeyEditor(arg1) {
   return window['go']['main']['App']['OpenKeyEditor'](arg1);
 }
 
+export function PackagePortableData(arg1) {
+  return window['go']['main']['App']['PackagePortableData'](arg1);
+}
+
 export function PerformHttpRequest(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['PerformHttpRequest'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function PerformHttpRequestRaw(arg1) {
   return window['go']['main']['App']['PerformHttpRequestRaw'](arg1);
+}
+
+export function PickExtensionImportDirectory() {
+  return window['go']['main']['App']['PickExtensionImportDirectory']();
 }
 
 export function ReadDesktopLogFile(arg1) {
@@ -132,4 +144,8 @@ export function ShowMainWindow() {
 
 export function ToggleSidebarMode() {
   return window['go']['main']['App']['ToggleSidebarMode']();
+}
+
+export function UnpackPortableData() {
+  return window['go']['main']['App']['UnpackPortableData']();
 }

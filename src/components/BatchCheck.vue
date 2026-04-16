@@ -667,44 +667,24 @@
               :destroyOnClose="true"
             >
               <a-tabs>
-                <a-tab-pane key="1" tab="本地缓存">
-                  <a-form @submit.prevent>
-                    <a-row :gutter="16" type="flex" align="middle">
-                      <a-col :span="16">
-                        <a-form-item label="API URL">
-                          <a-input v-model:value="settingsApiUrl" placeholder="请输入 API URL">
-                            <template #prefix><UserOutlined /></template>
-                          </a-input>
-                        </a-form-item>
-                        <a-form-item label="API Key">
-                          <a-input-password v-model:value="settingsApiKey" placeholder="请输入 API Key">
-                            <template #prefix><LockOutlined /></template>
-                          </a-input-password>
-                        </a-form-item>
-                      </a-col>
-                      <a-col :span="8">
-                        <a-button type="primary" @click="saveToLocal" block style="height: 104px;">
-                          保存到缓存
-                        </a-button>
-                      </a-col>
-                    </a-row>
-                  </a-form>
-                  <a-list :data-source="localCacheList" bordered style="margin-top: 15px; max-height: 300px; overflow-y: auto;">
-                    <template #renderItem="{ item }">
-                      <a-list-item>
-                        <div style="max-width: 70%;">
-                          <div style="font-weight: bold;">{{ item.name }}</div>
-                          <div style="font-size: 12px; color: #999; overflow: hidden; text-overflow: ellipsis;">{{ item.url }}</div>
-                        </div>
-                        <template #actions>
-                          <a @click="loadLocalRecord(item.id)">填充</a>
-                          <a-popconfirm title="确定删除此缓存？" @confirm="deleteLocalRecord(item.id)">
-                            <a style="color: #ff4d4f;">删除</a>
-                          </a-popconfirm>
-                        </template>
-                      </a-list-item>
-                    </template>
-                  </a-list>
+                <a-tab-pane key="1" tab="本地绿色化">
+                  <div class="portable-settings-card">
+                    <div class="portable-settings-copy">
+                      <div class="portable-settings-title">本地绿色化</div>
+                      <div class="portable-settings-desc">封包是将本应用数据绿色化到程序目录 `backup`，解包是从 `backup` 解包恢复本程序所有数据。</div>
+                      <div class="portable-settings-hint">当前会处理运行时目录数据与前端 localStorage 快照。为保证当前窗口状态一致，解包完成后会自动刷新页面。</div>
+                      <div v-if="portableSettingsMeta" class="portable-settings-meta">{{ portableSettingsMeta }}</div>
+                      <div v-if="!isWailsRuntime" class="portable-settings-warning">该功能仅在桌面端 EXE / Wails 环境可用。</div>
+                    </div>
+                    <div class="portable-settings-actions">
+                      <a-button type="primary" size="large" :loading="portablePacking" :disabled="!isWailsRuntime || portableUnpacking" @click="packagePortableData">
+                        封包
+                      </a-button>
+                      <a-button size="large" :loading="portableUnpacking" :disabled="!isWailsRuntime || portablePacking" @click="unpackPortableData">
+                        解包
+                      </a-button>
+                    </div>
+                  </div>
                 </a-tab-pane>
                 <a-tab-pane key="2" tab="常规设置">
                   <div style="padding: 10px;">
@@ -797,7 +777,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import { ConfigProvider, message, theme, Modal } from 'ant-design-vue';
@@ -859,6 +839,9 @@ const showAppSettingsModal = ref(false);
 const settingsApiUrl = ref('');
 const settingsApiKey = ref('');
 const localCacheList = ref([]);
+const portablePacking = ref(false);
+const portableUnpacking = ref(false);
+const portableSettingsMeta = ref('');
 const desktopTokenSourceMode = ref('profile_file');
 const activeExtractionMode = ref('');
 const desktopLogsLoading = ref(false);
@@ -1032,6 +1015,82 @@ const loadLocalCache = () => {
     } catch (e) {
       localCacheList.value = [];
     }
+  }
+};
+
+const snapshotPortableLocalStorage = () => {
+  const snapshot = {};
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (!key) continue;
+    snapshot[key] = localStorage.getItem(key);
+  }
+  return snapshot;
+};
+
+const applyPortableLocalStorageSnapshot = (snapshot) => {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    throw new Error('invalid_localstorage_snapshot');
+  }
+  localStorage.clear();
+  Object.entries(snapshot).forEach(([key, value]) => {
+    localStorage.setItem(key, value == null ? '' : String(value));
+  });
+};
+
+const getPortableErrorMessage = (error, fallback) => {
+  if (!error) return fallback;
+  if (typeof error === 'string') return error.trim() || fallback;
+  const direct = String(error?.message || error?.error || '').trim();
+  if (direct) return direct;
+  try {
+    const serialized = JSON.stringify(error);
+    if (serialized && serialized !== '{}') return serialized;
+  } catch {
+    // noop
+  }
+  return String(error).trim() || fallback;
+};
+
+const packagePortableData = async () => {
+  const packer = window?.go?.main?.App?.PackagePortableData;
+  if (typeof packer !== 'function') {
+    message.error('当前环境不支持本地绿色化封包');
+    return;
+  }
+  portablePacking.value = true;
+  try {
+    const snapshotJson = JSON.stringify(snapshotPortableLocalStorage());
+    const result = await packer(snapshotJson);
+    portableSettingsMeta.value = `封包完成：${result?.backupDir || 'backup'}，localStorage ${Number(result?.localStorageKeyCount || 0)} 项`;
+    message.success('已完成本地绿色化封包');
+  } catch (error) {
+    message.error(`封包失败：${getPortableErrorMessage(error, '未知错误，请查看 logs/portable-data.log')}`);
+  } finally {
+    portablePacking.value = false;
+  }
+};
+
+const unpackPortableData = async () => {
+  const unpacker = window?.go?.main?.App?.UnpackPortableData;
+  if (typeof unpacker !== 'function') {
+    message.error('当前环境不支持本地绿色化解包');
+    return;
+  }
+  portableUnpacking.value = true;
+  try {
+    const result = await unpacker();
+    const parsedSnapshot = JSON.parse(String(result?.localStorageJson || '{}'));
+    applyPortableLocalStorageSnapshot(parsedSnapshot);
+    portableSettingsMeta.value = `解包完成：${result?.backupDir || 'backup'}，已恢复 ${Number(result?.localStorageKeyCount || 0)} 项本地数据`;
+    message.success('已从 backup 解包恢复本程序数据，页面即将刷新');
+    setTimeout(() => {
+      window.location.reload();
+    }, 600);
+  } catch (error) {
+    message.error(`解包失败：${getPortableErrorMessage(error, '未知错误，请查看 logs/portable-data.log')}`);
+  } finally {
+    portableUnpacking.value = false;
   }
 };
 
@@ -3990,6 +4049,101 @@ const markImportExtensionBusy = () => {
   }, 20000);
 };
 
+const getExtensionImportHintLines = () => ([
+  '自动扫描失败后，你可以手动选择任一层级目录继续：',
+  '1. 浏览器 User Data 根目录',
+  '2. 某个 Profile 目录，例如 Default / Profile 1',
+  '3. Local Extension Settings 目录',
+  `4. 直接选扩展目录 ${defaultExtensionImportId}`,
+  '',
+  '常见位置示例：',
+  'Windows: %LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default',
+  'macOS: ~/Library/Application Support/Google/Chrome/Default',
+  'Linux: ~/.config/google-chrome/Default',
+]).join('\n');
+
+const defaultExtensionImportId = 'lapnciffpekdengooeolaienkeoilfeo';
+
+const buildExtensionImportFallbackContent = (errorText) => h('div', {
+  style: 'display:flex;flex-direction:column;gap:10px;line-height:1.7;',
+}, [
+  h('div', {
+    style: 'color:#4f5f49;font-weight:600;',
+  }, `自动导入失败：${errorText || '未知错误'}`),
+  h('div', {
+    style: 'white-space:pre-wrap;color:#5f6f59;font-size:13px;',
+  }, [
+    '程序已经把搜索路径与失败原因写入运行日志：\n',
+    'runtime/logs/extension-import.log\n\n',
+    getExtensionImportHintLines(),
+  ].join('')),
+  h('div', {
+    style: 'color:#7a8675;font-size:12px;',
+  }, '点击“选择目录重试”后，可直接选择 User Data、某个 Profile、Local Extension Settings，或扩展 ID 目录。'),
+]);
+
+const importAccountsFromExtensionResult = async (result, importSource = 'extension_import') => {
+  setImportExtensionStatus('桌面端已返回扩展数据，正在解析账号', 'processing');
+  await waitForUiPaint();
+  const accounts = result?.payload?.accounts?.accounts;
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    setImportExtensionStatus('扩展存储中未找到可用账号数据', 'warning');
+    message.warning('扩展存储中未找到可用账号数据');
+    return false;
+  }
+  setImportExtensionStatus(`已读取 ${accounts.length} 个账号，正在构建检测任务`, 'success');
+  await waitForUiPaint();
+  message.success(`已从扩展导入 ${accounts.length} 个账号`);
+  await processAccountsV2(accounts, {
+    importSource,
+    fallbackOnProfileFailure: true,
+  });
+  await router.push('/sites');
+  return true;
+};
+
+const offerManualExtensionImportFallback = async (error) => {
+  const picker = window?.go?.main?.App?.PickExtensionImportDirectory;
+  const importer = window?.go?.main?.App?.ImportExtensionAccountsFromDir;
+  if (typeof picker !== 'function' || typeof importer !== 'function') {
+    return false;
+  }
+
+  const shouldRetry = await new Promise(resolve => {
+    Modal.confirm({
+      title: '扩展自动导入失败',
+      width: 720,
+      okText: '选择目录重试',
+      cancelText: '取消',
+      content: buildExtensionImportFallbackContent(error?.message || '扩展导入失败'),
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false),
+    });
+  });
+
+  if (!shouldRetry) {
+    return false;
+  }
+
+  let selectedDir = '';
+  try {
+    selectedDir = await picker();
+  } catch (pickError) {
+    message.error(`目录选择失败：${pickError?.message || '未知错误'}`);
+    return false;
+  }
+
+  if (!selectedDir) {
+    message.info('已取消目录选择');
+    return false;
+  }
+
+  setImportExtensionStatus(`已选择目录：${selectedDir}，正在重试解析`, 'processing');
+  await waitForUiPaint();
+  const result = await importer(selectedDir);
+  return await importAccountsFromExtensionResult(result, 'extension_import_manual_dir');
+};
+
 const importFromExtension = async () => {
   if (isImportingExtension.value) return;
 
@@ -4009,26 +4163,14 @@ const importFromExtension = async () => {
         setTimeout(() => reject(new Error('扩展导入超时，请重试')), 15000);
       }),
     ]);
-    setImportExtensionStatus('桌面端已返回扩展数据，正在解析账号', 'processing');
-    await waitForUiPaint();
-    const accounts = result?.payload?.accounts?.accounts;
-    if (!Array.isArray(accounts) || accounts.length === 0) {
-      setImportExtensionStatus('扩展存储中未找到可用账号数据', 'warning');
-      message.warning('扩展存储中未找到可用账号数据');
-      return;
-    }
-    setImportExtensionStatus(`已读取 ${accounts.length} 个账号，正在构建检测任务`, 'success');
-    await waitForUiPaint();
-    message.success(`已从扩展导入 ${accounts.length} 个账号`);
-    await processAccountsV2(accounts, {
-      importSource: 'extension_import',
-      fallbackOnProfileFailure: true,
-    });
-    await router.push('/sites');
+    await importAccountsFromExtensionResult(result, 'extension_import');
   } catch (err) {
     stopFetchKeysProgressPolling();
     setImportExtensionStatus(err?.message || '扩展导入失败', 'error');
-    message.error(err?.message || '扩展导入失败');
+    const handled = await offerManualExtensionImportFallback(err);
+    if (!handled) {
+      message.error(err?.message || '扩展导入失败');
+    }
   } finally {
     resetImportExtensionState({ preserveStatus: true });
   }
@@ -4950,6 +5092,7 @@ const processAccountsV2 = async (accounts, options = {}) => {
         tokenChildren.push(withPendingMeta(siteName, {
           title: `${siteDisplayTitle} ${tokenName} (${tokenKey.slice(0, 15)}...)`,
           key: tokenNodeKey,
+          siteCacheKey,
           isModelDiscovering: false,
           isManualToken: String(token?.source || '').trim() === 'manual',
           providerTitleText: siteDisplayTitle,
@@ -7342,6 +7485,43 @@ const copyOrganizedResults = () => {
   line-height: 1.65;
 }
 
+.portable-settings-card {
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(116, 144, 104, 0.16);
+  background: rgba(248, 251, 246, 0.96);
+}
+
+.portable-settings-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.portable-settings-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #20301b;
+}
+
+.portable-settings-desc,
+.portable-settings-hint,
+.portable-settings-meta,
+.portable-settings-warning {
+  line-height: 1.7;
+  color: #5f6f59;
+}
+
+.portable-settings-warning {
+  color: #b25f00;
+}
+
+.portable-settings-actions {
+  display: flex;
+  gap: 12px;
+}
+
 :deep(body.dark-mode) .key-sync-strategy-summary {
   color: #d5e6cf;
 }
@@ -7361,6 +7541,25 @@ const copyOrganizedResults = () => {
 
 :deep(body.dark-mode) .key-sync-strategy-desc {
   color: #b8cbb1;
+}
+
+:deep(body.dark-mode) .portable-settings-card {
+  border-color: rgba(154, 191, 142, 0.18);
+  background: rgba(24, 32, 25, 0.92);
+}
+
+:deep(body.dark-mode) .portable-settings-title {
+  color: #ecf8e7;
+}
+
+:deep(body.dark-mode) .portable-settings-desc,
+:deep(body.dark-mode) .portable-settings-hint,
+:deep(body.dark-mode) .portable-settings-meta {
+  color: #b8cbb1;
+}
+
+:deep(body.dark-mode) .portable-settings-warning {
+  color: #ffcb8a;
 }
 
 @media (max-width: 620px) {
@@ -7416,6 +7615,10 @@ const copyOrganizedResults = () => {
   .result-side-controls {
     width: 100%;
     min-width: 0;
+  }
+
+  .portable-settings-actions {
+    flex-direction: column;
   }
 }
 </style>
