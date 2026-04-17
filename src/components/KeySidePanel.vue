@@ -41,10 +41,16 @@
         >
           <div class="panel-record-top">
             <div class="panel-record-sitebox">
-              <div class="panel-record-avatar">
-                <span class="panel-record-emoji">{{ getSiteEmoji(record.siteName) }}</span>
-                <span class="panel-record-order">No.{{ index + 1 }}</span>
-              </div>
+              <a-tooltip
+                placement="top"
+                :title="getAdvancedProxyTooltip(record) || null"
+                :mouse-enter-delay="0.08"
+              >
+                <div class="panel-record-avatar" :class="getAdvancedProxyAvatarClass(record)">
+                  <span class="panel-record-emoji">{{ getSiteEmoji(record.siteName) }}</span>
+                  <span class="panel-record-order">No.{{ index + 1 }}</span>
+                </div>
+              </a-tooltip>
               <div class="panel-record-copy">
                 <span class="panel-record-site">{{ getSiteShortName(record.siteName) }}</span>
                 <span class="panel-record-model" :title="getModelSummary(record)">{{ getModelSummary(record) }}</span>
@@ -58,7 +64,19 @@
 
           <div class="panel-record-metrics">
             <div class="panel-record-metrics-top">
-              <span class="panel-record-quick panel-record-quick-inline">{{ getQuickStatusSummary(record) }}</span>
+              <div class="panel-record-quick-inline panel-record-quick-group">
+                <span class="panel-record-quick">{{ getQuickStatusSummary(record) }}</span>
+                <a-tooltip v-if="hasPerformanceMetrics(record)">
+                  <template #title>
+                    <div class="performance-tooltip-list">
+                      <div v-for="line in getPerformanceTooltipLines(record)" :key="line">{{ line }}</div>
+                    </div>
+                  </template>
+                  <span class="panel-performance-badge" aria-label="性能指标">
+                    <ThunderboltOutlined />
+                  </span>
+                </a-tooltip>
+              </div>
               <button
                 v-if="canRefreshBalance(record, contextMap)"
                 type="button"
@@ -181,6 +199,11 @@ import {
   refreshRecordBalance,
   runRecordQuickTest,
 } from '../utils/keyPanelStore.js';
+import {
+  ADVANCED_PROXY_SYNC_EVENT,
+  getAdvancedProxyTakeoverMap,
+} from '../utils/advancedProxyBridge.js';
+import { buildPerformanceTooltipLines, hasPerformanceMetrics } from '../utils/performanceMetrics.js';
 
 const SITE_EMOJI_LIST = [
   '🦊', '🦉', '🦋', '🦭', '🦜', '🪿', '🐬', '🦄', '🐿️', '🪼',
@@ -193,9 +216,19 @@ const COMPAT_SITE_EMOJI_LIST = [
 ];
 
 const QUICK_TOOLTIP_MAX_CHARS = 15;
+const SIDEBAR_QUICK_TEST_TIMEOUT_MS = 25000;
+const SIDEBAR_QUICK_TEST_TIMEOUT_SECONDS = Math.round(SIDEBAR_QUICK_TEST_TIMEOUT_MS / 1000);
+const ADVANCED_PROXY_APP_META = {
+  claude: { label: 'Claude', className: 'panel-record-avatar-app-claude' },
+  codex: { label: 'Codex', className: 'panel-record-avatar-app-codex' },
+  opencode: { label: 'OpenCode', className: 'panel-record-avatar-app-opencode' },
+  openclaw: { label: 'OpenClaw', className: 'panel-record-avatar-app-openclaw' },
+};
+const ADVANCED_PROXY_APP_ORDER = ['claude', 'codex', 'opencode', 'openclaw'];
 
 const records = ref([]);
 const contextMap = ref(new Map());
+const advancedProxyTakeoverMap = ref(getAdvancedProxyTakeoverMap());
 const activePopoverRowKey = ref('');
 const activeModelDropdownRowKey = ref('');
 const panelBodyRef = ref(null);
@@ -219,7 +252,41 @@ function reloadRecords() {
   const loaded = loadPanelRecords();
   contextMap.value = loaded.contextMap || loadBatchHistoryContextMap();
   records.value = loaded.records;
+  reloadAdvancedProxyTakeoverState();
   void nextTick(syncScrollIndicator);
+}
+
+function reloadAdvancedProxyTakeoverState(event = null) {
+  const takeoverMap = event?.detail?.takeoverMap;
+  advancedProxyTakeoverMap.value = takeoverMap && typeof takeoverMap === 'object'
+    ? takeoverMap
+    : getAdvancedProxyTakeoverMap();
+}
+
+function getAdvancedProxyAppsForRecord(record) {
+  const rowKey = String(record?.rowKey || '').trim();
+  if (!rowKey) return [];
+  const byRowKey = advancedProxyTakeoverMap.value?.byRowKey || {};
+  const matched = Array.isArray(byRowKey[rowKey]) ? byRowKey[rowKey] : [];
+  return ADVANCED_PROXY_APP_ORDER.filter(appId => matched.includes(appId));
+}
+
+function getPrimaryAdvancedProxyApp(record) {
+  return getAdvancedProxyAppsForRecord(record)[0] || '';
+}
+
+function getAdvancedProxyAvatarClass(record) {
+  const appId = getPrimaryAdvancedProxyApp(record);
+  if (!appId) return '';
+  const className = ADVANCED_PROXY_APP_META[appId]?.className;
+  return ['panel-record-avatar-takeover', className].filter(Boolean);
+}
+
+function getAdvancedProxyTooltip(record) {
+  const appIds = getAdvancedProxyAppsForRecord(record);
+  if (appIds.length === 0) return '';
+  const labels = appIds.map(appId => ADVANCED_PROXY_APP_META[appId]?.label || appId);
+  return `已进入代理接管：${labels.join(' / ')}`;
 }
 
 function getSiteShortName(siteName) {
@@ -259,7 +326,7 @@ function getModelSummary(record) {
 }
 
 function getQuickStatusSummary(record) {
-  if (record.quickTestLoading) return '正在测活';
+  if (record.quickTestLoading) return `正在测活 · ${SIDEBAR_QUICK_TEST_TIMEOUT_SECONDS}s 超时`;
   if (record.quickTestLabel) {
     const responseTime = record.quickTestResponseTime ? `${record.quickTestResponseTime}s` : '';
     return [record.quickTestLabel, responseTime].filter(Boolean).join(' · ');
@@ -268,7 +335,7 @@ function getQuickStatusSummary(record) {
 }
 
 function buildQuickTestHint(record) {
-  if (record.quickTestLoading) return '快速测活中';
+  if (record.quickTestLoading) return `快速测活中 · 最长 ${SIDEBAR_QUICK_TEST_TIMEOUT_SECONDS}s`;
   if (record.quickTestLabel) {
     return [record.quickTestLabel, record.quickTestModel].filter(Boolean).join(' ');
   }
@@ -280,6 +347,10 @@ function getTruncatedQuickTestHint(record) {
   if (!text) return '';
   if (text.length <= QUICK_TOOLTIP_MAX_CHARS) return text;
   return `${text.slice(0, QUICK_TOOLTIP_MAX_CHARS)}...`;
+}
+
+function getPerformanceTooltipLines(record) {
+  return buildPerformanceTooltipLines(record);
 }
 
 function resolvePopoverContainer(triggerNode) {
@@ -403,20 +474,23 @@ async function handleQuickTest(record) {
   if (record.quickTestLoading) return;
 
   record.quickTestLoading = true;
+  let timeoutId = null;
   try {
-    const nextRecord = await runRecordQuickTest(record, contextMap.value);
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = window.setTimeout(() => {
+        const timeoutError = new Error(`快速测活超时（${SIDEBAR_QUICK_TEST_TIMEOUT_SECONDS}s）`);
+        timeoutError.detail = `快速测活超时（${SIDEBAR_QUICK_TEST_TIMEOUT_SECONDS}s）\n请检查接口稳定性、模型可用性，或稍后重试。`;
+        reject(timeoutError);
+      }, SIDEBAR_QUICK_TEST_TIMEOUT_MS);
+    });
+
+    const nextRecord = await Promise.race([
+      runRecordQuickTest(record, contextMap.value),
+      timeoutPromise,
+    ]);
+
     updateRecord(nextRecord);
   } catch (error) {
-    updateRecord({
-      ...record,
-      quickTestStatus: 'error',
-      quickTestLabel: '失败',
-      quickTestRemark: error?.message || '快速测活失败',
-      quickTestAt: Date.now(),
-      quickTestResponseTime: '',
-      quickTestResponseContent: '',
-      quickTestLoading: false,
-    });
     const detail = String(error?.detail || error?.message || '快速测活失败').trim();
     updateRecord({
       ...record,
@@ -425,12 +499,17 @@ async function handleQuickTest(record) {
       quickTestRemark: detail,
       quickTestAt: Date.now(),
       quickTestResponseTime: '',
+      quickTestTtftMs: '',
+      quickTestTps: '',
       quickTestResponseContent: detail,
       quickTestLoading: false,
     });
     message.error(error?.message || '快速测活失败');
     showQuickTestErrorDialog(detail);
   } finally {
+    if (timeoutId != null) {
+      clearTimeout(timeoutId);
+    }
     record.quickTestLoading = false;
   }
 }
@@ -491,6 +570,7 @@ onMounted(async () => {
   window.addEventListener('resize', syncScrollIndicator);
   window.addEventListener(KEY_MANAGEMENT_SYNC_EVENT, reloadRecords);
   window.addEventListener('storage', reloadRecords);
+  window.addEventListener(ADVANCED_PROXY_SYNC_EVENT, reloadAdvancedProxyTakeoverState);
 });
 
 watch(visibleRecords, async () => {
@@ -506,6 +586,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', syncScrollIndicator);
   window.removeEventListener(KEY_MANAGEMENT_SYNC_EVENT, reloadRecords);
   window.removeEventListener('storage', reloadRecords);
+  window.removeEventListener(ADVANCED_PROXY_SYNC_EVENT, reloadAdvancedProxyTakeoverState);
 });
 </script>
 
@@ -898,9 +979,84 @@ onBeforeUnmount(() => {
   width: 30px;
   height: 30px;
   flex: 0 0 auto;
+  border-radius: 11px;
+}
+
+.panel-record-avatar::before,
+.panel-record-avatar::after {
+  content: "";
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+
+.panel-record-avatar-takeover {
+  --panel-takeover-color: rgba(255, 255, 255, 0.95);
+  --panel-takeover-glow: rgba(255, 255, 255, 0.28);
+}
+
+.panel-record-avatar-takeover::before {
+  inset: -5px;
+  z-index: 0;
+  padding: 2px;
+  border-radius: 15px;
+  opacity: 1;
+  background:
+    conic-gradient(
+      from 0deg,
+      transparent 0deg 24deg,
+      var(--panel-takeover-color) 42deg 92deg,
+      transparent 118deg 162deg,
+      var(--panel-takeover-color) 198deg 244deg,
+      transparent 270deg 324deg,
+      var(--panel-takeover-color) 338deg 360deg
+    );
+  box-shadow:
+    0 0 8px var(--panel-takeover-glow),
+    0 0 14px var(--panel-takeover-glow);
+  animation: panel-avatar-orbit 2.3s linear infinite;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+.panel-record-avatar-takeover::after {
+  inset: -2px;
+  z-index: 0;
+  opacity: 1;
+  border-radius: 13px;
+  border: 1px solid color-mix(in srgb, var(--panel-takeover-color) 72%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--panel-takeover-color) 22%, transparent),
+    0 0 12px var(--panel-takeover-glow);
+}
+
+.panel-record-avatar-app-claude {
+  --panel-takeover-color: rgba(255, 255, 255, 0.96);
+  --panel-takeover-glow: rgba(255, 255, 255, 0.34);
+}
+
+.panel-record-avatar-app-codex {
+  --panel-takeover-color: rgba(255, 214, 102, 0.98);
+  --panel-takeover-glow: rgba(255, 191, 68, 0.4);
+}
+
+.panel-record-avatar-app-opencode {
+  --panel-takeover-color: rgba(100, 236, 255, 0.98);
+  --panel-takeover-glow: rgba(70, 210, 224, 0.42);
+}
+
+.panel-record-avatar-app-openclaw {
+  --panel-takeover-color: rgba(196, 128, 255, 0.98);
+  --panel-takeover-glow: rgba(164, 94, 235, 0.4);
 }
 
 .panel-record-emoji {
+  position: relative;
+  z-index: 1;
   width: 30px;
   height: 30px;
   flex: 0 0 auto;
@@ -917,6 +1073,7 @@ onBeforeUnmount(() => {
   position: absolute;
   right: -8px;
   top: -6px;
+  z-index: 2;
   padding: 1px 4px;
   border-radius: 999px;
   background: linear-gradient(180deg, rgba(61, 110, 88, 0.98), rgba(24, 44, 35, 0.98));
@@ -991,6 +1148,13 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
+.panel-record-quick-group {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .panel-record-balance {
   display: flex;
   align-items: center;
@@ -1060,6 +1224,28 @@ onBeforeUnmount(() => {
 
 .panel-record-quick-inline {
   flex: 1;
+}
+
+.performance-tooltip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.panel-performance-badge {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(217, 119, 6, 0.22);
+  background: rgba(255, 247, 237, 0.92);
+  color: #d97706;
+  font-size: 10px;
+  line-height: 1;
+  cursor: help;
 }
 
 .panel-record-extra {
@@ -1226,6 +1412,11 @@ onBeforeUnmount(() => {
 
 @keyframes panel-spin {
   from { transform: rotate(0); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes panel-avatar-orbit {
+  from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
 

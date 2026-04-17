@@ -489,6 +489,21 @@
                       </a-tag>
                     </a-tooltip>
                   </template>
+                  <template v-else-if="column.dataIndex === 'responseTime'">
+                    <div class="result-performance-cell">
+                      <span>{{ record.responseTime && record.responseTime !== '-' ? `${record.responseTime}s` : '-' }}</span>
+                      <a-tooltip v-if="hasPerformanceMetrics(record)">
+                        <template #title>
+                          <div class="performance-tooltip-list">
+                            <div v-for="line in getPerformanceTooltipLines(record)" :key="line">{{ line }}</div>
+                          </div>
+                        </template>
+                        <span class="performance-badge performance-badge-inline" aria-label="性能指标">
+                          <ThunderboltOutlined />
+                        </span>
+                      </a-tooltip>
+                    </div>
+                  </template>
                   <template v-else-if="column.dataIndex === 'remark'">
                     <a-tooltip :title="record.remark">
                       <span :style="{ color: record.status === 'error' ? '#ff4d4f' : 'inherit', fontWeight: record.status === 'error' ? 'bold' : 'normal' }">
@@ -698,7 +713,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick, h
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import { ConfigProvider, message, theme, Modal } from 'ant-design-vue';
-import { HomeOutlined, ReloadOutlined, MenuUnfoldOutlined, MenuFoldOutlined, InboxOutlined, PlayCircleOutlined, SearchOutlined, CopyOutlined, FilterOutlined, HistoryOutlined, ShareAltOutlined, DownOutlined, RightOutlined, UserOutlined, LockOutlined, MessageOutlined, CopyFilled, SmileOutlined, RedoOutlined, CloudSyncOutlined, StopOutlined, CheckCircleOutlined, DeleteOutlined } from '@ant-design/icons-vue';
+import { HomeOutlined, ReloadOutlined, MenuUnfoldOutlined, MenuFoldOutlined, InboxOutlined, PlayCircleOutlined, SearchOutlined, CopyOutlined, FilterOutlined, HistoryOutlined, ShareAltOutlined, DownOutlined, RightOutlined, UserOutlined, LockOutlined, MessageOutlined, CopyFilled, SmileOutlined, RedoOutlined, CloudSyncOutlined, StopOutlined, CheckCircleOutlined, DeleteOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import AppHeader from './AppHeader.vue';
 import AdvancedProxyModal from './AdvancedProxyModal.vue';
 import BridgeImportWizardModal from './BridgeImportWizardModal.vue';
@@ -718,6 +733,7 @@ import {
   normalizeModels as normalizeKeyPanelModels,
   persistPanelRecords,
 } from '../utils/keyPanelStore.js';
+import { buildPerformanceTooltipLines, derivePerformanceMetricsFromResponse, hasPerformanceMetrics } from '../utils/performanceMetrics.js';
 import {
   appendCustomKeysToSiteCache,
   buildSiteCacheKey,
@@ -2199,7 +2215,7 @@ const resultColumns = [
   { title: '请求Payload', dataIndex: 'payload', width: 150 },
   { title: '模型名称', dataIndex: 'modelName', width: 150 },
   { title: '状态', dataIndex: 'status', width: 100 },
-  { title: '响应(s)', dataIndex: 'responseTime', width: 80 },
+  { title: '响应(s)', dataIndex: 'responseTime', width: 112 },
   { title: '备注信息', dataIndex: 'remark', ellipsis: true },
 ];
 
@@ -2290,6 +2306,8 @@ const getStatusTooltip = (record) => {
   }
   return truncateText(raw, 20000);
 };
+
+const getPerformanceTooltipLines = (record) => buildPerformanceTooltipLines(record);
 
 const formatBalance = (amount) => {
   if (amount == null) return '0.000';
@@ -4613,6 +4631,8 @@ const syncBridgeSitesToKeyPanel = (sites) => {
         quickTestRemark: existing?.quickTestRemark || '',
         quickTestAt: existing?.quickTestAt || null,
         quickTestResponseTime: existing?.quickTestResponseTime || '',
+        quickTestTtftMs: existing?.quickTestTtftMs || '',
+        quickTestTps: existing?.quickTestTps || '',
         quickTestResponseContent: existing?.quickTestResponseContent || '',
         balanceLabel: existing?.balanceLabel || '',
         balanceUpdatedAt: existing?.balanceUpdatedAt || null,
@@ -6420,6 +6440,8 @@ function mergeDetectedKeyManagementRecords(existingRecords, incomingRecords) {
       quickTestRemark: existing?.quickTestRemark || '',
       quickTestAt: existing?.quickTestAt || null,
       quickTestResponseTime: existing?.quickTestResponseTime || '',
+      quickTestTtftMs: existing?.quickTestTtftMs || '',
+      quickTestTps: existing?.quickTestTps || '',
       quickTestResponseContent: existing?.quickTestResponseContent || '',
       balanceLabel: record?.balanceLabel || existing?.balanceLabel || '',
       balanceUpdatedAt: record?.balanceUpdatedAt || existing?.balanceUpdatedAt || null,
@@ -6538,6 +6560,8 @@ async function syncDetectedKeysToLocalStorage(options = {}) {
         quickTestRemark: '',
         quickTestAt: null,
         quickTestResponseTime: '',
+        quickTestTtftMs: '',
+        quickTestTps: '',
         balanceLabel: record.balanceLabel || '',
         balanceUpdatedAt: record.balanceUpdatedAt || null,
       };
@@ -6731,6 +6755,7 @@ const runSingleTest = async (task, customPayload = null) => {
       const hasContent = msgObj && (msgObj.content || msgObj.reasoning_content || msgObj.thinking);
       const isReasoning = msgObj && (msgObj.reasoning_content || msgObj.thinking);
       const isStreamAssembled = data.isStreamAssembled;
+      const performance = derivePerformanceMetricsFromResponse(data, responseTime);
 
       let suffixHtml = '';
       let suffixPlain = '';
@@ -6744,6 +6769,8 @@ const runSingleTest = async (task, customPayload = null) => {
       
       task.modelSuffix = suffixPlain;
       task.displaySuffixHtml = suffixHtml;
+      task.ttftMs = performance.ttftMs;
+      task.tps = performance.tps;
       
       // 保存原始响应
       task.fullResponse = JSON.stringify(data, null, 2);
@@ -6797,10 +6824,14 @@ const runSingleTest = async (task, customPayload = null) => {
       task.status = 'error';
       task.statusText = toStatusTextByError(errText);
       task.remark = truncateText(errText, 200);
+      task.ttftMs = '';
+      task.tps = '';
     }
   } catch (err) {
     task.status = 'error';
     task.statusText = toStatusTextByError(err?.message || '');
+    task.ttftMs = '';
+    task.tps = '';
     if (err.name === 'AbortError') {
       task.remark = `前端等待超时 (${Math.round(clientTimeoutMs / 1000)}s)`;
       task.fullResponse = JSON.stringify({
@@ -7399,8 +7430,11 @@ const copyOrganizedResults = () => {
 
 .hero-left-stack {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 6px;
-  align-content: start;
+  align-content: stretch;
+  min-height: 0;
+  height: 100%;
 }
 
 .hero-primary-pair {
@@ -7437,6 +7471,10 @@ const copyOrganizedResults = () => {
 .hero-action-card-secondary {
   background:
     linear-gradient(145deg, rgba(255, 253, 248, 0.92), rgba(246, 249, 238, 0.86));
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 100%;
 }
 
 .hero-action-card-bridge {
@@ -8009,6 +8047,38 @@ const copyOrganizedResults = () => {
 
 .tree-provider-node-wrapper:hover .site-tree-actions {
   opacity: 1;
+}
+
+.result-performance-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.performance-tooltip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.performance-badge {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(217, 119, 6, 0.24);
+  background: rgba(255, 247, 237, 0.92);
+  color: #d97706;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.performance-badge-inline {
+  flex: 0 0 auto;
+  cursor: help;
 }
 
 .site-tree-action-btn {

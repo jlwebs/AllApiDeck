@@ -18,6 +18,7 @@ const (
 	advancedProxyCodexBasePath  = "/advanced-proxy/codex/v1"
 	advancedProxyOpenCodePath   = "/advanced-proxy/opencode/v1"
 	advancedProxyOpenClawPath   = "/advanced-proxy/openclaw/v1"
+	advancedProxyGlobalScope    = "global"
 )
 
 var advancedProxyConfigMu sync.Mutex
@@ -46,6 +47,19 @@ type ClaudeProxyCompatConfig struct {
 type AdvancedProxyAppConfig struct {
 	Enabled  bool   `json:"enabled"`
 	BasePath string `json:"basePath"`
+}
+
+type AdvancedProxyQueueConfig struct {
+	InheritGlobal bool                    `json:"inheritGlobal"`
+	Providers     []AdvancedProxyProvider `json:"providers"`
+}
+
+type AdvancedProxyQueuesConfig struct {
+	Global   AdvancedProxyQueueConfig `json:"global"`
+	Claude   AdvancedProxyQueueConfig `json:"claude"`
+	Codex    AdvancedProxyQueueConfig `json:"codex"`
+	OpenCode AdvancedProxyQueueConfig `json:"opencode"`
+	OpenClaw AdvancedProxyQueueConfig `json:"openclaw"`
 }
 
 type AppFailoverConfig struct {
@@ -77,17 +91,18 @@ type OptimizerConfig struct {
 }
 
 type AdvancedProxyConfig struct {
-	Enabled    bool                    `json:"enabled"`
-	ListenHost string                  `json:"listenHost"`
-	ListenPort int                     `json:"listenPort"`
-	Claude     ClaudeProxyCompatConfig `json:"claude"`
-	Codex      AdvancedProxyAppConfig  `json:"codex"`
-	OpenCode   AdvancedProxyAppConfig  `json:"opencode"`
-	OpenClaw   AdvancedProxyAppConfig  `json:"openclaw"`
-	Failover   AppFailoverConfig       `json:"failover"`
-	Rectifier  RectifierConfig         `json:"rectifier"`
-	Optimizer  OptimizerConfig         `json:"optimizer"`
-	UpdatedAt  string                  `json:"updatedAt"`
+	Enabled    bool                      `json:"enabled"`
+	ListenHost string                    `json:"listenHost"`
+	ListenPort int                       `json:"listenPort"`
+	Queues     AdvancedProxyQueuesConfig `json:"queues"`
+	Claude     ClaudeProxyCompatConfig   `json:"claude"`
+	Codex      AdvancedProxyAppConfig    `json:"codex"`
+	OpenCode   AdvancedProxyAppConfig    `json:"opencode"`
+	OpenClaw   AdvancedProxyAppConfig    `json:"openclaw"`
+	Failover   AppFailoverConfig         `json:"failover"`
+	Rectifier  RectifierConfig           `json:"rectifier"`
+	Optimizer  OptimizerConfig           `json:"optimizer"`
+	UpdatedAt  string                    `json:"updatedAt"`
 }
 
 type FailoverQueueItem struct {
@@ -105,11 +120,29 @@ type CircuitBreakerStats struct {
 	FailedRequests       int    `json:"failedRequests"`
 }
 
+func defaultAdvancedProxyQueueConfig(inheritGlobal bool) AdvancedProxyQueueConfig {
+	return AdvancedProxyQueueConfig{
+		InheritGlobal: inheritGlobal,
+		Providers:     []AdvancedProxyProvider{},
+	}
+}
+
+func defaultAdvancedProxyQueuesConfig() AdvancedProxyQueuesConfig {
+	return AdvancedProxyQueuesConfig{
+		Global:   defaultAdvancedProxyQueueConfig(false),
+		Claude:   defaultAdvancedProxyQueueConfig(true),
+		Codex:    defaultAdvancedProxyQueueConfig(true),
+		OpenCode: defaultAdvancedProxyQueueConfig(true),
+		OpenClaw: defaultAdvancedProxyQueueConfig(true),
+	}
+}
+
 func defaultAdvancedProxyConfig() AdvancedProxyConfig {
 	return AdvancedProxyConfig{
 		Enabled:    false,
 		ListenHost: bridgeServerHost,
 		ListenPort: bridgeServerPort,
+		Queues:     defaultAdvancedProxyQueuesConfig(),
 		Claude: ClaudeProxyCompatConfig{
 			Enabled:      false,
 			BasePath:     advancedProxyClaudeBasePath,
@@ -198,6 +231,11 @@ func saveAdvancedProxyConfig(config AdvancedProxyConfig) (AdvancedProxyConfig, e
 
 func sanitizeAdvancedProxyConfig(config AdvancedProxyConfig) AdvancedProxyConfig {
 	defaults := defaultAdvancedProxyConfig()
+	legacyGlobalProviders := append([]AdvancedProxyProvider(nil), config.Claude.Providers...)
+
+	if advancedProxyQueuesLikelyMissing(config.Queues) {
+		config.Queues = defaults.Queues
+	}
 
 	if strings.TrimSpace(config.ListenHost) == "" {
 		config.ListenHost = defaults.ListenHost
@@ -206,12 +244,18 @@ func sanitizeAdvancedProxyConfig(config AdvancedProxyConfig) AdvancedProxyConfig
 		config.ListenPort = defaults.ListenPort
 	}
 
+	config.Queues.Global = sanitizeAdvancedProxyQueueConfig(config.Queues.Global, defaults.Queues.Global, legacyGlobalProviders)
+	config.Queues.Claude = sanitizeAdvancedProxyQueueConfig(config.Queues.Claude, defaults.Queues.Claude, nil)
+	config.Queues.Codex = sanitizeAdvancedProxyQueueConfig(config.Queues.Codex, defaults.Queues.Codex, nil)
+	config.Queues.OpenCode = sanitizeAdvancedProxyQueueConfig(config.Queues.OpenCode, defaults.Queues.OpenCode, nil)
+	config.Queues.OpenClaw = sanitizeAdvancedProxyQueueConfig(config.Queues.OpenClaw, defaults.Queues.OpenClaw, nil)
+
 	if strings.TrimSpace(config.Claude.BasePath) == "" {
 		config.Claude.BasePath = defaults.Claude.BasePath
 	}
 	config.Claude.BasePath = ensureLeadingSlash(strings.TrimSpace(config.Claude.BasePath))
 	config.Claude.DefaultModel = strings.TrimSpace(config.Claude.DefaultModel)
-	config.Claude.Providers = sanitizeAdvancedProxyProviders(config.Claude.Providers)
+	config.Claude.Providers = append([]AdvancedProxyProvider(nil), config.Queues.Global.Providers...)
 	config.Codex = sanitizeAdvancedProxyAppConfig(config.Codex, defaults.Codex)
 	config.OpenCode = sanitizeAdvancedProxyAppConfig(config.OpenCode, defaults.OpenCode)
 	config.OpenClaw = sanitizeAdvancedProxyAppConfig(config.OpenClaw, defaults.OpenClaw)
@@ -234,6 +278,34 @@ func sanitizeAdvancedProxyConfig(config AdvancedProxyConfig) AdvancedProxyConfig
 		config.Optimizer.CacheTTL = defaults.Optimizer.CacheTTL
 	}
 	config.Enabled = advancedProxyAnyAppEnabled(config)
+	return config
+}
+
+func advancedProxyQueuesLikelyMissing(queues AdvancedProxyQueuesConfig) bool {
+	return !queues.Global.InheritGlobal &&
+		!queues.Claude.InheritGlobal &&
+		!queues.Codex.InheritGlobal &&
+		!queues.OpenCode.InheritGlobal &&
+		!queues.OpenClaw.InheritGlobal &&
+		len(queues.Global.Providers) == 0 &&
+		len(queues.Claude.Providers) == 0 &&
+		len(queues.Codex.Providers) == 0 &&
+		len(queues.OpenCode.Providers) == 0 &&
+		len(queues.OpenClaw.Providers) == 0
+}
+
+func sanitizeAdvancedProxyQueueConfig(config AdvancedProxyQueueConfig, defaults AdvancedProxyQueueConfig, fallbackProviders []AdvancedProxyProvider) AdvancedProxyQueueConfig {
+	providers := config.Providers
+	if len(providers) == 0 && len(fallbackProviders) > 0 {
+		providers = fallbackProviders
+	}
+	config.InheritGlobal = config.InheritGlobal
+	if defaults.InheritGlobal {
+		config.InheritGlobal = config.InheritGlobal
+	} else {
+		config.InheritGlobal = false
+	}
+	config.Providers = sanitizeAdvancedProxyProviders(providers)
 	return config
 }
 
@@ -325,9 +397,27 @@ func normalizeClaudeAPIKeyField(value string) string {
 	return "ANTHROPIC_AUTH_TOKEN"
 }
 
+func normalizeAdvancedProxyQueueScope(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "claude", "codex", "opencode", "openclaw":
+		return strings.ToLower(strings.TrimSpace(scope))
+	default:
+		return advancedProxyGlobalScope
+	}
+}
+
 func isAdvancedProxySupportedAppType(appType string) bool {
 	switch strings.ToLower(strings.TrimSpace(appType)) {
 	case "claude", "codex", "opencode", "openclaw":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAdvancedProxySupportedQueueScope(scope string) bool {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "global", "claude", "codex", "opencode", "openclaw":
 		return true
 	default:
 		return false
@@ -368,6 +458,48 @@ func advancedProxyAppBasePath(config AdvancedProxyConfig, appType string) string
 	}
 }
 
+func advancedProxyQueueConfigForScope(config *AdvancedProxyConfig, scope string) *AdvancedProxyQueueConfig {
+	switch normalizeAdvancedProxyQueueScope(scope) {
+	case "claude":
+		return &config.Queues.Claude
+	case "codex":
+		return &config.Queues.Codex
+	case "opencode":
+		return &config.Queues.OpenCode
+	case "openclaw":
+		return &config.Queues.OpenClaw
+	default:
+		return &config.Queues.Global
+	}
+}
+
+func resolveAdvancedProxyQueueProviders(config AdvancedProxyConfig, scope string, effective bool) []AdvancedProxyProvider {
+	queue := advancedProxyQueueConfigForScope(&config, scope)
+	providers := queue.Providers
+	if effective && normalizeAdvancedProxyQueueScope(scope) != advancedProxyGlobalScope && queue.InheritGlobal {
+		providers = config.Queues.Global.Providers
+	}
+	return append([]AdvancedProxyProvider(nil), providers...)
+}
+
+func resolveAdvancedProxyEffectiveProviders(config AdvancedProxyConfig, appType string) []AdvancedProxyProvider {
+	providers := resolveAdvancedProxyQueueProviders(config, appType, true)
+	filtered := make([]AdvancedProxyProvider, 0, len(providers))
+	for _, provider := range providers {
+		if !provider.Enabled {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(appType), "claude") {
+			filtered = append(filtered, provider)
+			continue
+		}
+		if normalizeClaudeAPIFormat(provider.APIFormat) != "anthropic" {
+			filtered = append(filtered, provider)
+		}
+	}
+	return filtered
+}
+
 func (a *App) GetAdvancedProxyConfig() (*AdvancedProxyConfig, error) {
 	config, err := loadAdvancedProxyConfig()
 	if err != nil {
@@ -393,11 +525,12 @@ func (a *App) GetFailoverQueue(appType string) ([]FailoverQueueItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !isAdvancedProxySupportedAppType(appType) {
+	if !isAdvancedProxySupportedQueueScope(appType) {
 		return []FailoverQueueItem{}, nil
 	}
-	items := make([]FailoverQueueItem, 0, len(config.Claude.Providers))
-	for index, provider := range config.Claude.Providers {
+	providers := resolveAdvancedProxyQueueProviders(config, appType, true)
+	items := make([]FailoverQueueItem, 0, len(providers))
+	for index, provider := range providers {
 		items = append(items, FailoverQueueItem{
 			ProviderID:   provider.ID,
 			ProviderName: provider.Name,
@@ -413,12 +546,14 @@ func (a *App) SetFailoverQueue(appType string, items []FailoverQueueItem) ([]Fai
 	if err != nil {
 		return nil, err
 	}
-	if !isAdvancedProxySupportedAppType(appType) {
+	if !isAdvancedProxySupportedQueueScope(appType) {
 		return []FailoverQueueItem{}, nil
 	}
 
-	providersByID := make(map[string]AdvancedProxyProvider, len(config.Claude.Providers))
-	for _, provider := range config.Claude.Providers {
+	scope := normalizeAdvancedProxyQueueScope(appType)
+	baseProviders := resolveAdvancedProxyQueueProviders(config, scope, true)
+	providersByID := make(map[string]AdvancedProxyProvider, len(baseProviders))
+	for _, provider := range baseProviders {
 		providersByID[provider.ID] = provider
 	}
 	sort.SliceStable(items, func(i, j int) bool {
@@ -428,7 +563,7 @@ func (a *App) SetFailoverQueue(appType string, items []FailoverQueueItem) ([]Fai
 		return items[i].ProviderID < items[j].ProviderID
 	})
 
-	reordered := make([]AdvancedProxyProvider, 0, len(config.Claude.Providers))
+	reordered := make([]AdvancedProxyProvider, 0, len(baseProviders))
 	seen := map[string]struct{}{}
 	for _, item := range items {
 		provider, exists := providersByID[item.ProviderID]
@@ -439,20 +574,28 @@ func (a *App) SetFailoverQueue(appType string, items []FailoverQueueItem) ([]Fai
 		reordered = append(reordered, provider)
 		seen[item.ProviderID] = struct{}{}
 	}
-	for _, provider := range config.Claude.Providers {
+	for _, provider := range baseProviders {
 		if _, exists := seen[provider.ID]; exists {
 			continue
 		}
 		reordered = append(reordered, provider)
 	}
 
-	config.Claude.Providers = sanitizeAdvancedProxyProviders(reordered)
+	queue := advancedProxyQueueConfigForScope(&config, scope)
+	queue.Providers = sanitizeAdvancedProxyProviders(reordered)
+	if scope != advancedProxyGlobalScope {
+		queue.InheritGlobal = false
+	} else {
+		queue.InheritGlobal = false
+	}
+
 	saved, err := saveAdvancedProxyConfig(config)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]FailoverQueueItem, 0, len(saved.Claude.Providers))
-	for index, provider := range saved.Claude.Providers {
+	resultProviders := resolveAdvancedProxyQueueProviders(saved, scope, true)
+	result := make([]FailoverQueueItem, 0, len(resultProviders))
+	for index, provider := range resultProviders {
 		result = append(result, FailoverQueueItem{
 			ProviderID:   provider.ID,
 			ProviderName: provider.Name,

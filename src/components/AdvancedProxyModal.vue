@@ -51,14 +51,14 @@
             <small>{{ enabledAppLabels || '当前未启用' }}</small>
           </article>
           <article class="advanced-proxy-summary-card">
-            <span>Provider 队列</span>
+            <span>当前队列 Provider</span>
             <strong>{{ providerCount }}</strong>
-            <small>启用 {{ enabledProviderCount }} 条</small>
+            <small>{{ selectedQueueLabel }}队列启用 {{ enabledProviderCount }} 条</small>
           </article>
           <article class="advanced-proxy-summary-card">
-            <span>OpenAI 兼容上游</span>
+            <span>当前队列 OpenAI 兼容</span>
             <strong>{{ openAIProviderCount }}</strong>
-            <small>Codex / OpenCode / OpenClaw 共用</small>
+            <small>{{ selectedQueueScope === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE ? '未覆盖应用默认继承全局' : `${selectedQueueAppLabel} 当前有效兼容数` }}</small>
           </article>
           <article class="advanced-proxy-summary-card">
             <span>熔断打开数</span>
@@ -71,10 +71,36 @@
           <section class="advanced-proxy-section">
             <div class="advanced-proxy-section-head">
               <div>
-                <h4>上游 Provider 队列</h4>
-                <p>点击卡片即可加入 / 移出队列，队列优先级按点击顺序自动更新。详细的 Key 和端点地址放在 tooltip 中。</p>
+                <h4>{{ queuePanelTitle }}</h4>
+                <p>{{ queuePanelDescription }}</p>
               </div>
-              <a-button @click="reloadContext">刷新记录</a-button>
+              <div class="advanced-proxy-queue-toolbar">
+                <a-select
+                  class="advanced-proxy-queue-select"
+                  :value="selectedQueueScope"
+                  :options="queueScopeOptions"
+                  @change="handleQueueScopeChange"
+                />
+                <a-button
+                  v-if="selectedQueueScope !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE"
+                  :disabled="selectedQueueInheritGlobal"
+                  @click="handleFollowGlobalQueue"
+                >
+                  跟随全局
+                </a-button>
+                <a-button @click="reloadContext">刷新记录</a-button>
+              </div>
+            </div>
+
+            <div v-if="selectedQueueScope !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE" class="advanced-proxy-queue-mode">
+              <a-tag :color="selectedQueueInheritGlobal ? 'gold' : 'green'">
+                {{ selectedQueueInheritGlobal ? '当前继承全局' : '当前使用独立队列' }}
+              </a-tag>
+              <span>
+                {{ selectedQueueInheritGlobal
+                  ? '点任意卡片后会先复制全局队列，再切换为当前应用的独立队列。'
+                  : '当前应用会优先使用自己的 Provider 队列，不再继承全局。' }}
+              </span>
             </div>
 
             <div class="advanced-proxy-provider-pool">
@@ -110,7 +136,7 @@
               </div>
 
               <div v-if="providerCandidateCards.length && !providerCount" class="advanced-proxy-empty advanced-proxy-empty-compact">
-                点击卡片加入队列，队列优先级按点击顺序自动更新。
+                {{ queuePanelEmptyText }}
               </div>
             </div>
 
@@ -124,7 +150,7 @@
               <div class="advanced-proxy-section-head">
                 <div>
                   <h4>故障转移</h4>
-                  <p>所有接管应用共享同一条上游队列，并按当前顺序执行重试与熔断。</p>
+                  <p>代理入口会按所属应用挑选自己的有效队列；未单独覆盖的应用会继续继承全局队列。</p>
                 </div>
               </div>
 
@@ -229,7 +255,7 @@
               </div>
               <ul class="advanced-proxy-notes">
                 <li><code>claude</code> 入口会把 Anthropic Messages 请求转换到上游 Provider 定义的格式。</li>
-                <li><code>codex</code> / <code>opencode</code> / <code>openclaw</code> 入口会直接代理 OpenAI 兼容请求，并使用同一份上游追踪配置。</li>
+                <li><code>codex</code> / <code>opencode</code> / <code>openclaw</code> 入口会直接代理 OpenAI 兼容请求，并按各自的有效队列执行重试与熔断。</li>
                 <li>接管打开后，本地应用配置会写入本地代理地址；真实反代目标只保存在这里的 Provider 列表中。</li>
                 <li>如果要接管 Codex，请至少准备一条可用的 OpenAI 兼容上游，最好支持 <code>/v1/responses</code>。</li>
               </ul>
@@ -256,10 +282,12 @@ import { buildDesktopConfigPreview, createDesktopConfigDraft } from '../utils/de
 import { loadPanelRecords } from '../utils/keyPanelStore.js';
 import {
   ADVANCED_PROXY_APPS,
-  countAdvancedProxyEnabledProviders,
-  countAdvancedProxyOpenAIProviders,
+  ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
+  ADVANCED_PROXY_QUEUE_SCOPES,
   getAdvancedProxyAppBaseUrl,
   getAdvancedProxyConfig,
+  getAdvancedProxyEffectiveProviders,
+  getAdvancedProxyQueueProviders,
   getCircuitBreakerStats,
   normalizeAdvancedProxyConfig,
   resetCircuitBreaker,
@@ -289,6 +317,7 @@ const emit = defineEmits(['update:open']);
 const loading = ref(false);
 const saving = ref(false);
 const previewOpen = ref(false);
+const selectedQueueScope = ref(ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
 const availableRecords = ref([]);
 const breakerStatsMap = ref({});
 const loadedConfigSnapshot = ref(normalizeAdvancedProxyConfig({}));
@@ -299,10 +328,11 @@ const pendingSuccessMessage = ref('高级代理配置已更新');
 const configPreview = ref(EMPTY_PREVIEW);
 const lastEnabledAppIds = ref([]);
 const draft = reactive(normalizeAdvancedProxyConfig({}));
+const queueScopeOptions = ADVANCED_PROXY_QUEUE_SCOPES.map(item => ({
+  value: item.id,
+  label: item.label,
+}));
 
-const providerCount = computed(() => draft.claude.providers.length);
-const enabledProviderCount = computed(() => countAdvancedProxyEnabledProviders(draft));
-const openAIProviderCount = computed(() => countAdvancedProxyOpenAIProviders(draft));
 const enabledAppIds = computed(() => getEnabledAppIds(draft));
 const enabledAppCount = computed(() => enabledAppIds.value.length);
 const enabledAppLabels = computed(() =>
@@ -312,10 +342,59 @@ const enabledAppLabels = computed(() =>
     .join(' / ')
 );
 const proxyMasterEnabled = computed(() => enabledAppIds.value.length > 0);
-const openCircuitCount = computed(() => draft.claude.providers.filter(provider => getBreakerStateLabel(provider.id) === 'open').length);
+const selectedQueueLabel = computed(() =>
+  ADVANCED_PROXY_QUEUE_SCOPES.find(item => item.id === selectedQueueScope.value)?.label || '全局'
+);
+const selectedQueueAppLabel = computed(() =>
+  ADVANCED_PROXY_APPS.find(app => app.id === selectedQueueScope.value)?.label || '全局'
+);
+const selectedQueueInheritGlobal = computed(() =>
+  selectedQueueScope.value !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE
+  && draft?.queues?.[selectedQueueScope.value]?.inheritGlobal === true
+);
+const displayedQueueProviders = computed(() =>
+  getAdvancedProxyQueueProviders(draft, selectedQueueScope.value, {
+    effective: selectedQueueScope.value !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
+  })
+);
+const providerCount = computed(() => displayedQueueProviders.value.length);
+const enabledProviderCount = computed(() => displayedQueueProviders.value.filter(provider => provider?.enabled !== false).length);
+const openAIProviderCount = computed(() =>
+  displayedQueueProviders.value.filter(
+    provider => provider?.enabled !== false && String(provider?.apiFormat || '').trim().toLowerCase() !== 'anthropic',
+  ).length
+);
+const breakerAppIdsForSummary = computed(() => {
+  if (selectedQueueScope.value === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
+    return enabledAppIds.value;
+  }
+  return [selectedQueueScope.value];
+});
+const openCircuitCount = computed(() =>
+  displayedQueueProviders.value.filter(provider =>
+    breakerAppIdsForSummary.value.some(appId => getBreakerStateLabel(provider.id, appId) === 'open')
+  ).length
+);
+const queuePanelTitle = computed(() => `[${selectedQueueLabel.value}]上游 Provider 队列`);
+const queuePanelDescription = computed(() => {
+  if (selectedQueueScope.value === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
+    return '点击卡片即可维护默认全局队列。未单独覆盖的应用，都会继承这条全局队列。';
+  }
+  if (selectedQueueInheritGlobal.value) {
+    return `${selectedQueueAppLabel.value} 当前继承全局队列。点击卡片后会自动复制出独立队列，并按点击顺序维护优先级。`;
+  }
+  return `${selectedQueueAppLabel.value} 当前使用独立队列，优先级按点击顺序自动更新。详细的 Key 和端点地址放在 tooltip 中。`;
+});
+const queuePanelEmptyText = computed(() =>
+  selectedQueueScope.value === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE
+    ? '点击卡片加入全局默认队列，队列优先级按点击顺序自动更新。'
+    : (selectedQueueInheritGlobal.value
+      ? '当前应用正在继承全局队列。点任意卡片后会自动分叉出独立队列。'
+      : '当前独立队列为空，点击卡片即可加入 Provider。')
+);
 const providerSelectionMap = computed(() => {
   const map = new Map();
-  (draft.claude.providers || []).forEach((provider, index) => {
+  displayedQueueProviders.value.forEach((provider, index) => {
     const id = String(provider?.id || provider?.rowKey || '').trim();
     if (!id) return;
     map.set(id, {
@@ -406,12 +485,37 @@ function overwriteDraft(nextConfig) {
   Object.assign(draft, normalized);
 }
 
+function ensureQueueSection(config, scope) {
+  if (!config.queues || typeof config.queues !== 'object') {
+    config.queues = {};
+  }
+  if (!config.queues[scope] || typeof config.queues[scope] !== 'object') {
+    config.queues[scope] = {
+      inheritGlobal: scope !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
+      providers: [],
+    };
+  }
+  if (!Array.isArray(config.queues[scope].providers)) {
+    config.queues[scope].providers = [];
+  }
+  if (scope === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
+    config.queues[scope].inheritGlobal = false;
+  } else if (typeof config.queues[scope].inheritGlobal !== 'boolean') {
+    config.queues[scope].inheritGlobal = true;
+  }
+  return config.queues[scope];
+}
+
 function createPendingConfig(source = draft) {
   const plainDraft = toPlainValue(source);
-  plainDraft.claude.providers = (plainDraft.claude?.providers || []).map((provider, index) => ({
-    ...provider,
-    sortIndex: index + 1,
-  }));
+  ADVANCED_PROXY_QUEUE_SCOPES.forEach(item => {
+    const queue = ensureQueueSection(plainDraft, item.id);
+    queue.providers = (queue.providers || []).map((provider, index) => ({
+      ...provider,
+      sortIndex: index + 1,
+    }));
+  });
+  plainDraft.claude.providers = [...(plainDraft.queues?.global?.providers || [])];
   return normalizeAdvancedProxyConfig(plainDraft);
 }
 
@@ -459,6 +563,29 @@ function getEnabledAppIds(source = draft) {
     .map(app => app.id);
 }
 
+function getDisplayedQueueProviders(source, scope = selectedQueueScope.value) {
+  return getAdvancedProxyQueueProviders(source, scope, {
+    effective: scope !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
+  });
+}
+
+function isQueueFollowingGlobal(source, scope = selectedQueueScope.value) {
+  return scope !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE
+    && source?.queues?.[scope]?.inheritGlobal === true;
+}
+
+function replaceQueueProviders(config, scope, providers) {
+  const queue = ensureQueueSection(config, scope);
+  queue.providers = providers.map((provider, index) => ({
+    ...provider,
+    enabled: provider?.enabled !== false,
+    sortIndex: index + 1,
+  }));
+  if (scope !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
+    queue.inheritGlobal = false;
+  }
+}
+
 function hasConfigChanges(nextConfig) {
   const beforeText = JSON.stringify(normalizeForSave(loadedConfigSnapshot.value));
   const afterText = JSON.stringify(normalizeForSave(nextConfig));
@@ -468,8 +595,7 @@ function hasConfigChanges(nextConfig) {
 async function syncSavedConfig(savedConfig) {
   loadedConfigSnapshot.value = normalizeAdvancedProxyConfig(savedConfig);
   overwriteDraft(loadedConfigSnapshot.value);
-  breakerStatsMap.value = {};
-  await Promise.all((draft.claude.providers || []).map(provider => reloadProviderStats(provider.id)));
+  await reloadBreakerStatsForScope(selectedQueueScope.value, draft);
 }
 
 async function saveConfigImmediately(nextConfig, successMessage = '高级代理配置已更新') {
@@ -520,12 +646,8 @@ async function handleConfigMutation(mutator, successMessage) {
 }
 
 function getCompatibleProviderForApp(config, appId, enabledOnly = true) {
-  const providers = Array.isArray(config?.claude?.providers) ? config.claude.providers : [];
-  const filtered = enabledOnly ? providers.filter(provider => provider?.enabled !== false) : providers;
-  if (appId === 'claude') {
-    return filtered[0] || null;
-  }
-  return filtered.find(provider => provider?.apiFormat === 'openai_chat' || provider?.apiFormat === 'openai_responses') || null;
+  const providers = getAdvancedProxyEffectiveProviders(config, appId, { enabledOnly });
+  return providers[0] || null;
 }
 
 function getPreferredModelForApp(config, appId, provider = null) {
@@ -537,9 +659,12 @@ function getPreferredModelForApp(config, appId, provider = null) {
   if (defaultModel) {
     return defaultModel;
   }
-  const providers = Array.isArray(config?.claude?.providers) ? config.claude.providers : [];
-  const compatibleProvider = getCompatibleProviderForApp(config, appId, false);
-  return String(compatibleProvider?.model || providers.find(item => String(item?.model || '').trim())?.model || '').trim();
+  const effectiveProviders = getAdvancedProxyEffectiveProviders(config, appId, { enabledOnly: false });
+  if (effectiveProviders.some(item => String(item?.model || '').trim())) {
+    return String(effectiveProviders.find(item => String(item?.model || '').trim())?.model || '').trim();
+  }
+  const globalProviders = getAdvancedProxyQueueProviders(config, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, { effective: false });
+  return String(globalProviders.find(item => String(item?.model || '').trim())?.model || '').trim();
 }
 
 function createTakeoverDesktopDraft(appId, enabled, config) {
@@ -658,6 +783,25 @@ function handleFailoverFieldMutation(field, value) {
   }, '故障转移配置已更新');
 }
 
+function handleQueueScopeChange(scope) {
+  selectedQueueScope.value = ADVANCED_PROXY_QUEUE_SCOPES.some(item => item.id === scope)
+    ? scope
+    : ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
+}
+
+function handleFollowGlobalQueue() {
+  if (selectedQueueScope.value === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) return;
+  if (selectedQueueInheritGlobal.value) {
+    message.info('当前已经在跟随全局队列');
+    return;
+  }
+  handleConfigMutation(next => {
+    const queue = ensureQueueSection(next, selectedQueueScope.value);
+    queue.inheritGlobal = true;
+    queue.providers = [];
+  }, `${selectedQueueAppLabel.value} 已改为跟随全局队列`);
+}
+
 async function reloadContext() {
   const { records } = loadPanelRecords();
   availableRecords.value = records;
@@ -696,12 +840,25 @@ watch(
   { immediate: true }
 );
 
+watch(
+  selectedQueueScope,
+  async scope => {
+    if (props.open) {
+      await reloadBreakerStatsForScope(scope, draft);
+    }
+  }
+);
+
 function toggleProviderQueue(item) {
   const providerId = String(item?.id || '').trim();
   if (!providerId) return;
 
   handleConfigMutation(next => {
-    const list = [...(next.claude?.providers || [])];
+    const scope = selectedQueueScope.value;
+    const list = getDisplayedQueueProviders(next, scope).map(provider => ({ ...provider }));
+    if (scope !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE && isQueueFollowingGlobal(next, scope)) {
+      ensureQueueSection(next, scope).inheritGlobal = false;
+    }
     const existingIndex = list.findIndex(provider => String(provider?.id || provider?.rowKey || '').trim() === providerId);
 
     if (existingIndex >= 0) {
@@ -710,49 +867,69 @@ function toggleProviderQueue(item) {
       list.push(buildProviderFromRecord(item.sourceRecord, list.length + 1));
     }
 
-    next.claude.providers = list.map((provider, index) => ({
-      ...provider,
-      enabled: true,
-      sortIndex: index + 1,
-    }));
-  }, item?.selected ? 'Provider 已移出队列' : 'Provider 已加入队列');
+    replaceQueueProviders(next, scope, list);
+  }, item?.selected ? `${selectedQueueLabel.value} 队列已移出 Provider` : `${selectedQueueLabel.value} 队列已加入 Provider`);
 }
 
-function getBreakerStats(providerId) {
-  return breakerStatsMap.value[providerId] || {};
+function getBreakerStatsKey(appId, providerId) {
+  return `${String(appId || '').trim().toLowerCase()}:${String(providerId || '').trim()}`;
 }
 
-function getBreakerStateLabel(providerId) {
-  const state = String(getBreakerStats(providerId)?.state || 'closed').trim();
+function getBreakerStats(providerId, appId = 'claude') {
+  return breakerStatsMap.value[getBreakerStatsKey(appId, providerId)] || {};
+}
+
+function getBreakerStateLabel(providerId, appId = 'claude') {
+  const state = String(getBreakerStats(providerId, appId)?.state || 'closed').trim();
   if (state === 'half_open') return 'half_open';
   if (state === 'open') return 'open';
   return 'closed';
 }
 
-function breakerStateColor(providerId) {
-  const state = getBreakerStateLabel(providerId);
+function breakerStateColor(providerId, appId = 'claude') {
+  const state = getBreakerStateLabel(providerId, appId);
   if (state === 'open') return 'red';
   if (state === 'half_open') return 'orange';
   return 'green';
 }
 
-async function reloadProviderStats(providerId) {
-  if (!providerId) return;
+async function reloadProviderStats(providerId, appId = 'claude') {
+  if (!providerId || !appId) return;
   try {
-    const stats = await getCircuitBreakerStats('claude', providerId);
+    const stats = await getCircuitBreakerStats(appId, providerId);
     breakerStatsMap.value = {
       ...breakerStatsMap.value,
-      [providerId]: stats || {},
+      [getBreakerStatsKey(appId, providerId)]: stats || {},
     };
   } catch (error) {
     console.warn('[AdvancedProxy] reload breaker stats failed:', error);
   }
 }
 
-async function resetProviderBreaker(providerId) {
+async function reloadBreakerStatsForScope(scope = selectedQueueScope.value, source = draft) {
+  const providers = getDisplayedQueueProviders(source, scope);
+  const appIds = scope === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE ? getEnabledAppIds(source) : [scope];
+  const nextStatsMap = {};
+
+  await Promise.all(
+    providers.flatMap(provider =>
+      appIds.map(async appId => {
+        if (!provider?.id || !appId) return;
+        try {
+          const stats = await getCircuitBreakerStats(appId, provider.id);
+          nextStatsMap[getBreakerStatsKey(appId, provider.id)] = stats || {};
+        } catch {}
+      })
+    )
+  );
+
+  breakerStatsMap.value = nextStatsMap;
+}
+
+async function resetProviderBreaker(providerId, appId = selectedQueueScope.value === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE ? 'claude' : selectedQueueScope.value) {
   try {
-    await resetCircuitBreaker('claude', providerId);
-    await reloadProviderStats(providerId);
+    await resetCircuitBreaker(appId, providerId);
+    await reloadProviderStats(providerId, appId);
     message.success('已重置该 Provider 的熔断状态');
   } catch (error) {
     message.error(error?.message || '重置熔断失败');
@@ -937,6 +1114,32 @@ function handleCancel() {
 .advanced-proxy-section-head > div {
   min-width: 0;
   flex: 1;
+}
+
+.advanced-proxy-queue-toolbar,
+.advanced-proxy-queue-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.advanced-proxy-queue-toolbar {
+  justify-content: flex-end;
+}
+
+.advanced-proxy-queue-select {
+  min-width: 132px;
+}
+
+.advanced-proxy-queue-mode {
+  padding: 8px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(90, 117, 79, 0.13);
+  background: rgba(252, 253, 250, 0.84);
+  color: #66725f;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .advanced-proxy-provider-pool {

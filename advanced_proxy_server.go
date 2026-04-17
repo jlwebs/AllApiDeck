@@ -585,7 +585,7 @@ func (a *App) handleAdvancedProxyPing(writer http.ResponseWriter, request *http.
 		"enabled":       config.Enabled,
 		"listenHost":    config.ListenHost,
 		"listenPort":    config.ListenPort,
-		"providerCount": len(config.Claude.Providers),
+		"providerCount": len(config.Queues.Global.Providers),
 		"apps": map[string]any{
 			"claude": map[string]any{
 				"enabled":  config.Claude.Enabled,
@@ -632,7 +632,8 @@ func (a *App) handleAdvancedProxyClaude(writer http.ResponseWriter, request *htt
 		writeAnthropicProxyError(writer, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !config.Enabled || !config.Claude.Enabled || len(config.Claude.Providers) == 0 {
+	providers := resolveAdvancedProxyEffectiveProviders(config, "claude")
+	if !config.Enabled || !config.Claude.Enabled || len(providers) == 0 {
 		writeAnthropicProxyError(writer, http.StatusServiceUnavailable, "advanced Claude proxy is disabled or has no providers")
 		return
 	}
@@ -645,16 +646,6 @@ func (a *App) handleAdvancedProxyClaude(writer http.ResponseWriter, request *htt
 
 	stream := truthy(requestBody["stream"])
 	failoverActive := config.Failover.Enabled && config.Failover.AutoFailoverEnabled
-	providers := make([]AdvancedProxyProvider, 0, len(config.Claude.Providers))
-	for _, provider := range config.Claude.Providers {
-		if provider.Enabled {
-			providers = append(providers, provider)
-		}
-	}
-	if len(providers) == 0 {
-		writeAnthropicProxyError(writer, http.StatusServiceUnavailable, "no enabled providers in advanced proxy queue")
-		return
-	}
 
 	maxAttempts := 1
 	if failoverActive {
@@ -747,7 +738,8 @@ func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWrit
 		writeOpenAIProxyError(writer, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !config.Enabled || !advancedProxyAppEnabled(config, appType) || len(config.Claude.Providers) == 0 {
+	providers := resolveAdvancedProxyEffectiveProviders(config, appType)
+	if !config.Enabled || !advancedProxyAppEnabled(config, appType) || len(providers) == 0 {
 		writeOpenAIProxyError(writer, http.StatusServiceUnavailable, "advanced proxy is disabled or has no providers")
 		return
 	}
@@ -765,16 +757,6 @@ func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWrit
 	stream := truthy(requestBody["stream"])
 
 	failoverActive := config.Failover.Enabled && config.Failover.AutoFailoverEnabled
-	providers := make([]AdvancedProxyProvider, 0, len(config.Claude.Providers))
-	for _, provider := range config.Claude.Providers {
-		if provider.Enabled && normalizeClaudeAPIFormat(provider.APIFormat) != "anthropic" {
-			providers = append(providers, provider)
-		}
-	}
-	if len(providers) == 0 {
-		writeOpenAIProxyError(writer, http.StatusServiceUnavailable, "no enabled OpenAI-compatible providers in advanced proxy queue")
-		return
-	}
 
 	maxAttempts := 1
 	if failoverActive {

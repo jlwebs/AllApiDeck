@@ -2,6 +2,7 @@ import { fetchModelList } from './api.js';
 import { apiFetch } from './runtimeApi.js';
 import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from './balance.js';
 import { buildQuickTestMessages } from './quickTestPrompts.js';
+import { derivePerformanceMetricsFromResponse } from './performanceMetrics.js';
 
 export const STORAGE_KEY = 'api_check_key_management_records_v1';
 export const MANUAL_STORAGE_KEY = 'api_check_key_management_manual_records_v1';
@@ -289,6 +290,8 @@ export function loadPanelRecords() {
           quickTestRemark: record.quickTestRemark || '',
           quickTestAt: record.quickTestAt || null,
           quickTestResponseTime: record.quickTestResponseTime || '',
+          quickTestTtftMs: record.quickTestTtftMs || '',
+          quickTestTps: record.quickTestTps || '',
           quickTestResponseContent: record.quickTestResponseContent || '',
           balanceLabel: record.balanceLabel || historyBalance?.balanceLabel || '',
           balanceUpdatedAt: record.balanceUpdatedAt || historyBalance?.balanceUpdatedAt || null,
@@ -373,6 +376,8 @@ export function buildManualRecordFromDraft(draft, existingRecord = null) {
     quickTestRemark: existingRecord?.quickTestRemark || '',
     quickTestAt: existingRecord?.quickTestAt || null,
     quickTestResponseTime: existingRecord?.quickTestResponseTime || '',
+    quickTestTtftMs: existingRecord?.quickTestTtftMs || '',
+    quickTestTps: existingRecord?.quickTestTps || '',
     quickTestResponseContent: existingRecord?.quickTestResponseContent || '',
     balanceLabel: existingRecord?.balanceLabel || '',
     balanceUpdatedAt: existingRecord?.balanceUpdatedAt || null,
@@ -555,6 +560,7 @@ export async function runRecordQuickTest(record, contextMap) {
   const hasContent = Boolean(messageObj?.content || messageObj?.reasoning_content || messageObj?.thinking);
   const responseContent = extractQuickTestResponseContent(messageObj);
   const responseTime = ((Date.now() - startedAt) / 1000).toFixed(2);
+  const performance = derivePerformanceMetricsFromResponse(data, responseTime);
 
   let status = 'warning';
   let label = '结构异常';
@@ -578,6 +584,8 @@ export async function runRecordQuickTest(record, contextMap) {
     quickTestRemark: remark,
     quickTestAt: Date.now(),
     quickTestResponseTime: responseTime,
+    quickTestTtftMs: performance.ttftMs,
+    quickTestTps: performance.tps,
     quickTestResponseContent: responseContent,
   };
 }

@@ -1,6 +1,9 @@
 import { isProbablyWailsRuntime } from './runtimeApi.js';
 
 const STORAGE_KEY = 'batch_api_check_advanced_proxy_config_v1';
+const TAKEOVER_MAP_STORAGE_KEY = 'batch_api_check_advanced_proxy_takeover_map_v1';
+export const ADVANCED_PROXY_SYNC_EVENT = 'batch-api-check:advanced-proxy-sync';
+export const ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE = 'global';
 
 export const ADVANCED_PROXY_APPS = [
   { id: 'claude', label: 'Claude', defaultBasePath: '/advanced-proxy/claude', mode: 'anthropic' },
@@ -9,8 +12,13 @@ export const ADVANCED_PROXY_APPS = [
   { id: 'openclaw', label: 'OpenClaw', defaultBasePath: '/advanced-proxy/openclaw/v1', mode: 'openai' },
 ];
 
+export const ADVANCED_PROXY_QUEUE_SCOPES = [
+  { id: ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, label: '全局' },
+  ...ADVANCED_PROXY_APPS.map(app => ({ id: app.id, label: app.label })),
+];
+
 const DEFAULT_BASE_PATHS = Object.fromEntries(
-  ADVANCED_PROXY_APPS.map(app => [app.id, app.defaultBasePath])
+  ADVANCED_PROXY_APPS.map(app => [app.id, app.defaultBasePath]),
 );
 
 function getAppBridge() {
@@ -24,11 +32,35 @@ function getDefaultAppSection(appId) {
   };
 }
 
+function getDefaultQueueSection(inheritGlobal = false) {
+  return {
+    inheritGlobal: inheritGlobal === true,
+    providers: [],
+  };
+}
+
+function normalizeQueueScope(scope) {
+  const normalized = String(scope || ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE).trim().toLowerCase();
+  if (normalized === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
+    return ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
+  }
+  return ADVANCED_PROXY_APPS.some(app => app.id === normalized)
+    ? normalized
+    : ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
+}
+
 export function createDefaultAdvancedProxyConfig() {
   return {
     enabled: false,
     listenHost: '127.0.0.1',
     listenPort: 8888,
+    queues: {
+      global: getDefaultQueueSection(false),
+      claude: getDefaultQueueSection(true),
+      codex: getDefaultQueueSection(true),
+      opencode: getDefaultQueueSection(true),
+      openclaw: getDefaultQueueSection(true),
+    },
     claude: {
       ...getDefaultAppSection('claude'),
       defaultModel: '',
@@ -113,11 +145,38 @@ function normalizeAppSection(appId, input, defaults) {
   return next;
 }
 
-export function normalizeAdvancedProxyConfig(input) {
-  const defaults = createDefaultAdvancedProxyConfig();
+function normalizeQueueSection(input, defaults, fallbackProviders = null) {
   const next = {
     ...defaults,
     ...(input || {}),
+  };
+  const incomingProviders = Array.isArray(next.providers) ? next.providers : [];
+  const providers = incomingProviders.length
+    ? incomingProviders
+    : (Array.isArray(fallbackProviders) ? fallbackProviders : []);
+  next.inheritGlobal = next.inheritGlobal === true;
+  next.providers = sanitizeProviders(providers);
+  return next;
+}
+
+function getQueueSection(snapshot, scope) {
+  const normalizedScope = normalizeQueueScope(scope);
+  const defaults = createDefaultAdvancedProxyConfig();
+  return snapshot?.queues?.[normalizedScope]
+    || defaults.queues[normalizedScope]
+    || defaults.queues.global;
+}
+
+export function normalizeAdvancedProxyConfig(input) {
+  const defaults = createDefaultAdvancedProxyConfig();
+  const legacyGlobalProviders = Array.isArray(input?.claude?.providers) ? input.claude.providers : [];
+  const next = {
+    ...defaults,
+    ...(input || {}),
+    queues: {
+      ...defaults.queues,
+      ...(input?.queues || {}),
+    },
     claude: {
       ...defaults.claude,
       ...(input?.claude || {}),
@@ -151,9 +210,18 @@ export function normalizeAdvancedProxyConfig(input) {
   next.listenHost = String(next.listenHost || defaults.listenHost).trim() || defaults.listenHost;
   next.listenPort = Number(next.listenPort || defaults.listenPort) || defaults.listenPort;
 
+  next.queues.global = normalizeQueueSection(
+    next.queues.global,
+    defaults.queues.global,
+    legacyGlobalProviders,
+  );
+  ADVANCED_PROXY_APPS.forEach(app => {
+    next.queues[app.id] = normalizeQueueSection(next.queues[app.id], defaults.queues[app.id]);
+  });
+
   next.claude = normalizeAppSection('claude', next.claude, defaults.claude);
   next.claude.defaultModel = String(next.claude.defaultModel || '').trim();
-  next.claude.providers = sanitizeProviders(next.claude.providers);
+  next.claude.providers = [...next.queues.global.providers];
 
   next.codex = normalizeAppSection('codex', next.codex, defaults.codex);
   next.opencode = normalizeAppSection('opencode', next.opencode, defaults.opencode);
@@ -179,9 +247,24 @@ export function normalizeAdvancedProxyConfig(input) {
 }
 
 function saveLocalSnapshot(config) {
+  const normalizedConfig = normalizeAdvancedProxyConfig(config);
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizeAdvancedProxyConfig(config)));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizedConfig));
   } catch {}
+  try {
+    localStorage.setItem(TAKEOVER_MAP_STORAGE_KEY, JSON.stringify(buildAdvancedProxyTakeoverMap(normalizedConfig)));
+  } catch {}
+}
+
+function emitAdvancedProxySync(config) {
+  if (typeof window === 'undefined') return;
+  const snapshot = normalizeAdvancedProxyConfig(config);
+  window.dispatchEvent(new CustomEvent(ADVANCED_PROXY_SYNC_EVENT, {
+    detail: {
+      config: snapshot,
+      takeoverMap: getAdvancedProxyTakeoverMap(snapshot),
+    },
+  }));
 }
 
 export function getAdvancedProxyLocalSnapshot() {
@@ -210,6 +293,7 @@ export async function getAdvancedProxyConfig() {
   }
   const config = normalizeAdvancedProxyConfig(await app.GetAdvancedProxyConfig());
   saveLocalSnapshot(config);
+  emitAdvancedProxySync(config);
   return config;
 }
 
@@ -218,10 +302,12 @@ export async function setAdvancedProxyConfig(config) {
   const app = getAppBridge();
   if (!app?.SetAdvancedProxyConfig) {
     saveLocalSnapshot(nextConfig);
+    emitAdvancedProxySync(nextConfig);
     return nextConfig;
   }
   const saved = normalizeAdvancedProxyConfig(await app.SetAdvancedProxyConfig(nextConfig));
   saveLocalSnapshot(saved);
+  emitAdvancedProxySync(saved);
   return saved;
 }
 
@@ -255,6 +341,38 @@ export async function resetCircuitBreaker(appType, providerId) {
   return app.ResetCircuitBreaker(String(appType || 'claude'), String(providerId || '').trim());
 }
 
+export function getAdvancedProxyQueueProviders(config = null, scope = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, options = {}) {
+  const snapshot = normalizeAdvancedProxyConfig(config || getAdvancedProxyLocalSnapshot());
+  const normalizedScope = normalizeQueueScope(scope);
+  const { effective = false, enabledOnly = false } = options || {};
+
+  let providers = getQueueSection(snapshot, normalizedScope).providers || [];
+  if (
+    effective &&
+    normalizedScope !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE &&
+    getQueueSection(snapshot, normalizedScope).inheritGlobal
+  ) {
+    providers = getQueueSection(snapshot, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE).providers || [];
+  }
+
+  const cloned = [...providers];
+  return enabledOnly ? cloned.filter(provider => provider?.enabled !== false) : cloned;
+}
+
+export function getAdvancedProxyEffectiveProviders(config = null, appId = 'claude', options = {}) {
+  const normalizedAppId = normalizeQueueScope(appId);
+  const enabledProviders = getAdvancedProxyQueueProviders(config, normalizedAppId, {
+    effective: true,
+    enabledOnly: options?.enabledOnly !== false,
+  });
+
+  if (normalizedAppId === 'claude') {
+    return enabledProviders;
+  }
+
+  return enabledProviders.filter(provider => normalizeApiFormat(provider?.apiFormat) !== 'anthropic');
+}
+
 export function getAdvancedProxyAppBaseUrl(appId, config = null) {
   const normalizedAppId = String(appId || 'claude').trim().toLowerCase();
   const snapshot = normalizeAdvancedProxyConfig(config || getAdvancedProxyLocalSnapshot());
@@ -268,15 +386,58 @@ export function getAdvancedProxyClaudeBaseUrl(config = null) {
   return getAdvancedProxyAppBaseUrl('claude', config);
 }
 
-export function countAdvancedProxyEnabledProviders(config = null) {
-  const snapshot = normalizeAdvancedProxyConfig(config || getAdvancedProxyLocalSnapshot());
-  return (snapshot?.claude?.providers || []).filter(provider => provider.enabled !== false).length;
+function buildAdvancedProxyTakeoverMap(snapshot) {
+  const byApp = {};
+  const byRowKey = {};
+
+  ADVANCED_PROXY_APPS.forEach(app => {
+    const isEnabled = snapshot?.enabled === true && snapshot?.[app.id]?.enabled === true;
+    const rowKeys = isEnabled
+      ? getAdvancedProxyEffectiveProviders(snapshot, app.id, { enabledOnly: true })
+        .map(provider => String(provider?.rowKey || provider?.id || '').trim())
+        .filter(Boolean)
+      : [];
+
+    byApp[app.id] = [...rowKeys];
+    rowKeys.forEach(rowKey => {
+      if (!byRowKey[rowKey]) {
+        byRowKey[rowKey] = [];
+      }
+      byRowKey[rowKey].push(app.id);
+    });
+  });
+
+  return { byApp, byRowKey };
 }
 
-export function countAdvancedProxyOpenAIProviders(config = null) {
-  const snapshot = normalizeAdvancedProxyConfig(config || getAdvancedProxyLocalSnapshot());
-  return (snapshot?.claude?.providers || []).filter(
-    provider => provider.enabled !== false && normalizeApiFormat(provider.apiFormat) !== 'anthropic'
+export function getAdvancedProxyTakeoverMap(config = null) {
+  if (config) {
+    return buildAdvancedProxyTakeoverMap(normalizeAdvancedProxyConfig(config));
+  }
+
+  try {
+    const raw = localStorage.getItem(TAKEOVER_MAP_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return {
+          byApp: parsed.byApp && typeof parsed.byApp === 'object' ? parsed.byApp : {},
+          byRowKey: parsed.byRowKey && typeof parsed.byRowKey === 'object' ? parsed.byRowKey : {},
+        };
+      }
+    }
+  } catch {}
+
+  return buildAdvancedProxyTakeoverMap(getAdvancedProxyLocalSnapshot());
+}
+
+export function countAdvancedProxyEnabledProviders(config = null, scope = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, options = {}) {
+  return getAdvancedProxyQueueProviders(config, scope, options).filter(provider => provider?.enabled !== false).length;
+}
+
+export function countAdvancedProxyOpenAIProviders(config = null, scope = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, options = {}) {
+  return getAdvancedProxyQueueProviders(config, scope, options).filter(
+    provider => provider?.enabled !== false && normalizeApiFormat(provider?.apiFormat) !== 'anthropic',
   ).length;
 }
 
@@ -287,11 +448,7 @@ export function isAdvancedProxyAppReady(appId, config = null) {
     return false;
   }
 
-  if (normalizedAppId === 'claude') {
-    return countAdvancedProxyEnabledProviders(snapshot) > 0;
-  }
-
-  return countAdvancedProxyOpenAIProviders(snapshot) > 0;
+  return getAdvancedProxyEffectiveProviders(snapshot, normalizedAppId, { enabledOnly: true }).length > 0;
 }
 
 export function isAdvancedProxyClaudeReady(config = null) {

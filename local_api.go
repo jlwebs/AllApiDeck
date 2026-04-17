@@ -483,6 +483,16 @@ type checkExecutionResult struct {
 	body      map[string]any
 }
 
+type sseCompletionParseResult struct {
+	ReturnedModel    string
+	Content          string
+	ReasoningContent string
+	Usage            any
+	ChunkCount       int
+	TTFTMs           int64
+	HasTTFT          bool
+}
+
 var checkEndpointStripPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`/v\d+/chat/completions$`),
 	regexp.MustCompile(`/chat/completions$`),
@@ -660,12 +670,13 @@ func executeCheckKey(payload normalizedCheckKeyPayload) (int, map[string]any) {
 	}
 	defer resp.Body.Close()
 
-	rawBody, _ := io.ReadAll(resp.Body)
-	duration := time.Since(start).Round(10 * time.Millisecond)
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		rawBody, _ := io.ReadAll(resp.Body)
+		duration := time.Since(start).Round(10 * time.Millisecond)
 		errMessage := fmt.Sprintf("HTTP %d", resp.StatusCode)
-		if contentType := strings.ToLower(resp.Header.Get("Content-Type")); strings.Contains(contentType, "json") {
+		if strings.Contains(contentType, "json") {
 			var payload map[string]any
 			if err := json.Unmarshal(rawBody, &payload); err == nil {
 				errMessage = firstNonEmpty(
@@ -681,8 +692,9 @@ func executeCheckKey(payload normalizedCheckKeyPayload) (int, map[string]any) {
 		return resp.StatusCode, map[string]any{"error": map[string]any{"message": errMessage}}
 	}
 
-	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 	if strings.Contains(contentType, "json") {
+		rawBody, _ := io.ReadAll(resp.Body)
+		duration := time.Since(start).Round(10 * time.Millisecond)
 		var responsePayload map[string]any
 		if err := json.Unmarshal(rawBody, &responsePayload); err != nil {
 			return http.StatusBadGateway, map[string]any{"error": map[string]any{"message": "Invalid JSON"}}
@@ -699,30 +711,39 @@ func executeCheckKey(payload normalizedCheckKeyPayload) (int, map[string]any) {
 		return http.StatusBadRequest, map[string]any{"error": map[string]any{"message": firstNonEmpty(getNestedString(responsePayload, "error", "message"), strings.TrimSpace(toStringValue(responsePayload["message"])), "Unknown error")}}
 	}
 
-	returnedModel, content, reasoningContent, usage, chunkCount := parseSSECompletion(rawBody)
-	if chunkCount > 0 {
-		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] ok(sse) %s | %s | chunks=%d | %s", payload.URL, payload.Model, chunkCount, duration))
+	parseResult := parseSSECompletionStream(resp.Body, start)
+	duration := time.Since(start).Round(10 * time.Millisecond)
+	if parseResult.ChunkCount > 0 {
+		ttftLog := "ttft=-"
+		if parseResult.HasTTFT {
+			ttftLog = fmt.Sprintf("ttft=%dms", parseResult.TTFTMs)
+		}
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] ok(sse) %s | %s | chunks=%d | %s | %s", payload.URL, payload.Model, parseResult.ChunkCount, duration, ttftLog))
 		messagePayload := map[string]any{
 			"role":    "assistant",
 			"content": nil,
 		}
-		if content != "" {
-			messagePayload["content"] = content
+		if parseResult.Content != "" {
+			messagePayload["content"] = parseResult.Content
 		}
-		if reasoningContent != "" {
-			messagePayload["reasoning_content"] = reasoningContent
+		if parseResult.ReasoningContent != "" {
+			messagePayload["reasoning_content"] = parseResult.ReasoningContent
 		}
-		return http.StatusOK, map[string]any{
-			"model": firstNonEmpty(returnedModel, payload.Model),
+		body := map[string]any{
+			"model": firstNonEmpty(parseResult.ReturnedModel, payload.Model),
 			"choices": []map[string]any{
 				{
 					"message": messagePayload,
 				},
 			},
-			"usage":             usage,
+			"usage":             parseResult.Usage,
 			"isStreamAssembled": true,
 			"message":           "success",
 		}
+		if parseResult.HasTTFT {
+			body["ttftMs"] = parseResult.TTFTMs
+		}
+		return http.StatusOK, body
 	}
 
 	appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] fail %s | %s | no valid SSE chunks | %s", payload.URL, payload.Model, duration))
@@ -808,12 +829,13 @@ func executeCheckKeyAttempt(payload normalizedCheckKeyPayload, targetURL string)
 	}
 	defer resp.Body.Close()
 
-	rawBody, _ := io.ReadAll(resp.Body)
-	duration := time.Since(start).Round(10 * time.Millisecond)
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		rawBody, _ := io.ReadAll(resp.Body)
+		duration := time.Since(start).Round(10 * time.Millisecond)
 		errMessage := fmt.Sprintf("HTTP %d", resp.StatusCode)
-		if contentType := strings.ToLower(resp.Header.Get("Content-Type")); strings.Contains(contentType, "json") {
+		if strings.Contains(contentType, "json") {
 			var errorPayload map[string]any
 			if err := json.Unmarshal(rawBody, &errorPayload); err == nil {
 				errMessage = firstNonEmpty(
@@ -841,8 +863,9 @@ func executeCheckKeyAttempt(payload normalizedCheckKeyPayload, targetURL string)
 		}
 	}
 
-	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 	if strings.Contains(contentType, "json") {
+		rawBody, _ := io.ReadAll(resp.Body)
+		duration := time.Since(start).Round(10 * time.Millisecond)
 		var responsePayload map[string]any
 		if err := json.Unmarshal(rawBody, &responsePayload); err != nil {
 			appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] error %s | %s | invalid JSON", payload.Model, targetURL))
@@ -896,34 +919,43 @@ func executeCheckKeyAttempt(payload normalizedCheckKeyPayload, targetURL string)
 		}
 	}
 
-	returnedModel, content, reasoningContent, usage, chunkCount := parseSSECompletion(rawBody)
-	if chunkCount > 0 {
-		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] ok(sse) %s | %s | chunks=%d | %s", payload.Model, targetURL, chunkCount, duration))
+	parseResult := parseSSECompletionStream(resp.Body, start)
+	duration := time.Since(start).Round(10 * time.Millisecond)
+	if parseResult.ChunkCount > 0 {
+		ttftLog := "ttft=-"
+		if parseResult.HasTTFT {
+			ttftLog = fmt.Sprintf("ttft=%dms", parseResult.TTFTMs)
+		}
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] ok(sse) %s | %s | chunks=%d | %s | %s", payload.Model, targetURL, parseResult.ChunkCount, duration, ttftLog))
 		messagePayload := map[string]any{
 			"role":    "assistant",
 			"content": nil,
 		}
-		if content != "" {
-			messagePayload["content"] = content
+		if parseResult.Content != "" {
+			messagePayload["content"] = parseResult.Content
 		}
-		if reasoningContent != "" {
-			messagePayload["reasoning_content"] = reasoningContent
+		if parseResult.ReasoningContent != "" {
+			messagePayload["reasoning_content"] = parseResult.ReasoningContent
+		}
+		body := map[string]any{
+			"model": firstNonEmpty(parseResult.ReturnedModel, payload.Model),
+			"choices": []map[string]any{
+				{
+					"message": messagePayload,
+				},
+			},
+			"usage":             parseResult.Usage,
+			"isStreamAssembled": true,
+			"message":           "success",
+		}
+		if parseResult.HasTTFT {
+			body["ttftMs"] = parseResult.TTFTMs
 		}
 		return checkExecutionResult{
 			ok:       true,
 			endpoint: targetURL,
 			status:   http.StatusOK,
-			body: map[string]any{
-				"model": firstNonEmpty(returnedModel, payload.Model),
-				"choices": []map[string]any{
-					{
-						"message": messagePayload,
-					},
-				},
-				"usage":             usage,
-				"isStreamAssembled": true,
-				"message":           "success",
-			},
+			body:     body,
 		}
 	}
 
@@ -1228,15 +1260,13 @@ func localFetchKeysProgressSnapshot() fetchKeysProgressSnapshot {
 	}
 }
 
-func parseSSECompletion(raw []byte) (string, string, string, any, int) {
-	scanner := bufio.NewScanner(bytes.NewReader(raw))
+func parseSSECompletionStream(reader io.Reader, startedAt time.Time) sseCompletionParseResult {
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 
-	returnedModel := ""
-	content := ""
-	reasoningContent := ""
-	var usage any
-	chunkCount := 0
+	result := sseCompletionParseResult{
+		TTFTMs: -1,
+	}
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -1252,12 +1282,12 @@ func parseSSECompletion(raw []byte) (string, string, string, any, int) {
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue
 		}
-		chunkCount++
-		if returnedModel == "" {
-			returnedModel = strings.TrimSpace(toStringValue(chunk["model"]))
+		result.ChunkCount++
+		if result.ReturnedModel == "" {
+			result.ReturnedModel = strings.TrimSpace(toStringValue(chunk["model"]))
 		}
 		if chunk["usage"] != nil {
-			usage = chunk["usage"]
+			result.Usage = chunk["usage"]
 		}
 
 		choices, _ := chunk["choices"].([]any)
@@ -1272,11 +1302,21 @@ func parseSSECompletion(raw []byte) (string, string, string, any, int) {
 		if delta == nil {
 			continue
 		}
-		content += toStringValue(delta["content"])
-		reasoningContent += toStringValue(delta["reasoning_content"]) + toStringValue(delta["thinking"])
+		contentPiece := toStringValue(delta["content"])
+		reasoningPiece := toStringValue(delta["reasoning_content"]) + toStringValue(delta["thinking"])
+		if !result.HasTTFT && strings.TrimSpace(contentPiece+reasoningPiece) != "" {
+			elapsedMs := time.Since(startedAt).Milliseconds()
+			if elapsedMs < 0 {
+				elapsedMs = 0
+			}
+			result.TTFTMs = elapsedMs
+			result.HasTTFT = true
+		}
+		result.Content += contentPiece
+		result.ReasoningContent += reasoningPiece
 	}
 
-	return returnedModel, content, reasoningContent, usage, chunkCount
+	return result
 }
 
 func extractHTMLTitle(body string) string {

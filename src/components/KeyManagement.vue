@@ -194,10 +194,22 @@
                 <div class="quick-test-cell export-quick-test-row">
                   <a-button type="primary" size="small" class="quick-test-button" :loading="record.quickTestLoading" @click="runQuickTest(record)">快速测</a-button>
                   <div class="quick-test-status-row">
-                    <a-tooltip :title="getQuickTestTooltip(record)">
-                      <a-tag v-if="record.quickTestStatus" :color="getQuickTestColor(record.quickTestStatus)" class="quick-test-tag">{{ record.quickTestLabel || record.quickTestStatus }}</a-tag>
-                      <span v-else class="subtle-text">未测速</span>
-                    </a-tooltip>
+                    <div class="quick-test-status-inline">
+                      <a-tooltip :title="getQuickTestTooltip(record)">
+                        <a-tag v-if="record.quickTestStatus" :color="getQuickTestColor(record.quickTestStatus)" class="quick-test-tag">{{ record.quickTestLabel || record.quickTestStatus }}</a-tag>
+                        <span v-else class="subtle-text">未测速</span>
+                      </a-tooltip>
+                      <a-tooltip v-if="hasPerformanceMetrics(record)">
+                        <template #title>
+                          <div class="performance-tooltip-list">
+                            <div v-for="line in getPerformanceTooltipLines(record)" :key="line">{{ line }}</div>
+                          </div>
+                        </template>
+                        <span class="performance-badge performance-badge-inline" aria-label="性能指标">
+                          <ThunderboltOutlined />
+                        </span>
+                      </a-tooltip>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -349,7 +361,7 @@
 
 <script setup>
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { ClockCircleOutlined, MenuFoldOutlined, ReloadOutlined } from '@ant-design/icons-vue';
+import { ClockCircleOutlined, MenuFoldOutlined, ReloadOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import { ConfigProvider, message, Modal, theme } from 'ant-design-vue';
 import { useRoute } from 'vue-router';
 import AppHeader from './AppHeader.vue';
@@ -365,6 +377,7 @@ import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils
 import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
 import { exitSidebarMode, isManualSidebarBridgeAvailable, isSidebarBridgeAvailable, openManualSidebarPanel } from '../utils/windowMode.js';
 import { loadDesktopTokenSourceMode, loadTreeExpandedSetting } from '../utils/systemSettings.js';
+import { buildPerformanceTooltipLines, derivePerformanceMetricsFromResponse, hasPerformanceMetrics } from '../utils/performanceMetrics.js';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
 import geminiAppIcon from '../assets/app-icons/gemini.svg';
@@ -773,6 +786,8 @@ function mergeStoredRecords(incomingRows) {
       quickTestRemark: previous?.quickTestRemark || '',
       quickTestAt: previous?.quickTestAt || null,
       quickTestResponseTime: previous?.quickTestResponseTime || '',
+      quickTestTtftMs: previous?.quickTestTtftMs || '',
+      quickTestTps: previous?.quickTestTps || '',
       quickTestResponseContent: previous?.quickTestResponseContent || '',
       quickTestLoading: false,
     }));
@@ -792,6 +807,8 @@ async function runQuickTest(record) {
     record.quickTestRemark = testResult.remark;
     record.quickTestAt = Date.now();
     record.quickTestResponseTime = testResult.responseTime;
+    record.quickTestTtftMs = testResult.ttftMs || '';
+    record.quickTestTps = testResult.tps || '';
     record.quickTestResponseContent = testResult.responseContent || '';
     persistRecords();
     const messageMethod = testResult.status === 'success' ? 'success' : testResult.status === 'warning' ? 'warning' : 'error';
@@ -803,6 +820,8 @@ async function runQuickTest(record) {
     record.quickTestRemark = error.message || '快速测试失败';
     record.quickTestAt = Date.now();
     record.quickTestResponseTime = '';
+    record.quickTestTtftMs = '';
+    record.quickTestTps = '';
     record.quickTestResponseContent = '';
     const detail = String(error?.detail || error?.message || '快速测试失败').trim();
     record.quickTestRemark = detail;
@@ -874,6 +893,7 @@ async function executeQuickTest({ apiKey, siteUrl, model }) {
   const hasContent = Boolean(messageObj?.content || messageObj?.reasoning_content || messageObj?.thinking);
   const responseContent = extractQuickTestResponseContent(messageObj);
   const responseTime = ((Date.now() - startedAt) / 1000).toFixed(2);
+  const performance = derivePerformanceMetricsFromResponse(data, responseTime);
   if (returnedModel.toLowerCase().includes(model.toLowerCase()) || returnedModel === 'unknown') {
     if (hasContent) {
       return {
@@ -881,6 +901,8 @@ async function executeQuickTest({ apiKey, siteUrl, model }) {
         label: returnedModel === 'unknown' ? '可用待确认' : '可用',
         remark: returnedModel === 'unknown' ? '接口有正常响应，但未返回模型标识' : '接口返回了有效对话内容',
         responseTime,
+        ttftMs: performance.ttftMs,
+        tps: performance.tps,
         responseContent,
       };
     }
@@ -958,6 +980,8 @@ async function importFromClipboardPackage() {
         quickTestRemark: rawRecord.quickTestRemark || '',
         quickTestAt: rawRecord.quickTestAt || null,
         quickTestResponseTime: rawRecord.quickTestResponseTime || '',
+        quickTestTtftMs: rawRecord.quickTestTtftMs || '',
+        quickTestTps: rawRecord.quickTestTps || '',
         quickTestResponseContent: rawRecord.quickTestResponseContent || '',
         quickTestLoading: false,
       });
@@ -1329,11 +1353,15 @@ function getQuickTestTooltip(record) {
   return [
     `结果：${record.quickTestLabel || record.quickTestStatus}`,
     record.quickTestModel ? `模型：${record.quickTestModel}` : '',
-    record.quickTestResponseTime ? `耗时：${record.quickTestResponseTime}s` : '',
+    ...getPerformanceTooltipLines(record),
     record.quickTestRemark ? `说明：${record.quickTestRemark}` : '',
     record.quickTestResponseContent ? `内容：${record.quickTestResponseContent}` : '',
     record.quickTestAt ? `时间：${formatDateTime(record.quickTestAt)}` : '',
   ].filter(Boolean).join('\n');
+}
+
+function getPerformanceTooltipLines(record) {
+  return buildPerformanceTooltipLines(record);
 }
 
 function canRefreshBalance(record) {
@@ -1557,6 +1585,8 @@ function createRecordFromDraft(draft, existingRecord = null) {
     quickTestRemark: existingRecord?.quickTestRemark || '',
     quickTestAt: existingRecord?.quickTestAt || null,
     quickTestResponseTime: existingRecord?.quickTestResponseTime || '',
+    quickTestTtftMs: existingRecord?.quickTestTtftMs || '',
+    quickTestTps: existingRecord?.quickTestTps || '',
     quickTestResponseContent: existingRecord?.quickTestResponseContent || '',
     quickTestLoading: false,
   };
@@ -1750,6 +1780,8 @@ function loadStoredRecords() {
       quickTestRemark: record.quickTestRemark || '',
       quickTestAt: record.quickTestAt || null,
       quickTestResponseTime: record.quickTestResponseTime || '',
+      quickTestTtftMs: record.quickTestTtftMs || '',
+      quickTestTps: record.quickTestTps || '',
       quickTestResponseContent: record.quickTestResponseContent || '',
       balanceLabel: record.balanceLabel || '',
       balanceUpdatedAt: record.balanceUpdatedAt || null,
@@ -1777,6 +1809,8 @@ function loadStoredRecords() {
       quickTestRemark: record.quickTestRemark || '',
       quickTestAt: record.quickTestAt || null,
       quickTestResponseTime: record.quickTestResponseTime || '',
+      quickTestTtftMs: record.quickTestTtftMs || '',
+      quickTestTps: record.quickTestTps || '',
       quickTestResponseContent: record.quickTestResponseContent || '',
       balanceLabel: record.balanceLabel || '',
       balanceUpdatedAt: record.balanceUpdatedAt || null,
@@ -2250,7 +2284,11 @@ function persistMeta() {
 .quick-test-cell{gap:6px;min-width:0;align-items:flex-start;padding-left:0}
 .export-quick-test-row{width:100%;flex-direction:row;align-items:center;gap:8px;flex-wrap:nowrap}
 .quick-test-status-row{width:100%;min-width:0}
+.quick-test-status-inline{display:inline-flex;align-items:center;gap:6px;min-width:0}
 .quick-test-button{align-self:flex-start;padding-inline:18px;border-radius:12px;flex:0 0 auto}
+.performance-tooltip-list{display:flex;flex-direction:column;gap:2px}
+.performance-badge{width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;border:1px solid rgba(217,119,6,.24);background:rgba(255,247,237,.92);color:#d97706;font-size:11px;line-height:1;box-shadow:0 4px 10px rgba(245,158,11,.14)}
+.performance-badge-inline{flex:0 0 auto;cursor:help}
 .compact-key-table :deep(table){table-layout:fixed}
 .compact-key-table :deep(.ant-table-thead > tr > th){padding:12px 12px}
 .compact-key-table :deep(.ant-table-tbody > tr > td){padding:10px 12px 0;vertical-align:top}
