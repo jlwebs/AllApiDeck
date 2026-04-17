@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -22,6 +23,76 @@ type rawProviderAttemptResult struct {
 	Body       []byte
 	Headers    http.Header
 	StreamBody io.ReadCloser
+	ProviderID string
+	Provider   string
+	TargetURL  string
+	RouteKind  string
+}
+
+func resolveAdvancedProxyLogPath() string {
+	return filepath.Join(resolveRuntimeLogDir(), "advanced-proxy.log")
+}
+
+func appendAdvancedProxyLogf(format string, args ...any) {
+	message := fmt.Sprintf(format, args...)
+	appendLine(resolveAdvancedProxyLogPath(), message)
+	debugLogf("[ADV_PROXY] %s", message)
+}
+
+func previewAdvancedProxyText(raw string, limit int) string {
+	normalized := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(raw, "\r", " "), "\n", " "))
+	if normalized == "" {
+		return ""
+	}
+	runes := []rune(normalized)
+	if limit <= 0 || len(runes) <= limit {
+		return normalized
+	}
+	return string(runes[:limit]) + "..."
+}
+
+func advancedProxyProviderLabel(provider AdvancedProxyProvider) string {
+	return firstNonEmpty(
+		strings.TrimSpace(provider.Name),
+		strings.TrimSpace(provider.ID),
+		strings.TrimSpace(provider.BaseURL),
+		"unknown-provider",
+	)
+}
+
+func summarizeAdvancedProxyBody(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	return previewAdvancedProxyText(normalizeAnthropicErrorMessage(raw), 220)
+}
+
+func describeOutboundProxyMode() string {
+	config, err := loadOutboundProxyConfig()
+	if err != nil {
+		return "unknown"
+	}
+	switch strings.ToLower(strings.TrimSpace(config.Mode)) {
+	case outboundProxyModeDirect:
+		return "direct"
+	case outboundProxyModeCustom:
+		return "custom"
+	default:
+		return "system"
+	}
+}
+
+func formatAdvancedProxyFailure(appType string, routeKind string, provider AdvancedProxyProvider, targetURL string, detail string) string {
+	message := firstNonEmpty(strings.TrimSpace(detail), "advanced proxy request failed")
+	parts := []string{
+		fmt.Sprintf("app=%s", strings.TrimSpace(appType)),
+		fmt.Sprintf("route=%s", strings.TrimSpace(routeKind)),
+		fmt.Sprintf("provider=%s", advancedProxyProviderLabel(provider)),
+	}
+	if strings.TrimSpace(targetURL) != "" {
+		parts = append(parts, fmt.Sprintf("endpoint=%s", strings.TrimSpace(targetURL)))
+	}
+	return strings.Join(parts, " | ") + " | " + message
 }
 
 func openAIMessageContentToText(value any) string {
@@ -363,11 +434,16 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 	}
 }
 
-func forwardOpenAIRequestViaProvider(provider AdvancedProxyProvider, routeKind string, rawBody []byte, stream bool, config AdvancedProxyConfig) rawProviderAttemptResult {
+func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvider, routeKind string, rawBody []byte, stream bool, config AdvancedProxyConfig) rawProviderAttemptResult {
+	providerLabel := advancedProxyProviderLabel(provider)
 	if normalizeClaudeAPIFormat(provider.APIFormat) == "anthropic" {
 		return rawProviderAttemptResult{
 			StatusCode: http.StatusBadGateway,
-			Message:    "provider does not support OpenAI-compatible proxy routes",
+			Message:    formatAdvancedProxyFailure(appType, routeKind, provider, provider.BaseURL, "provider does not support OpenAI-compatible proxy routes"),
+			ProviderID: strings.TrimSpace(provider.ID),
+			Provider:   providerLabel,
+			TargetURL:  strings.TrimSpace(provider.BaseURL),
+			RouteKind:  routeKind,
 		}
 	}
 
@@ -385,37 +461,88 @@ func forwardOpenAIRequestViaProvider(provider AdvancedProxyProvider, routeKind s
 	default:
 		return rawProviderAttemptResult{
 			StatusCode: http.StatusNotFound,
-			Message:    "unsupported OpenAI proxy route",
+			Message:    formatAdvancedProxyFailure(appType, routeKind, provider, provider.BaseURL, "unsupported OpenAI proxy route"),
+			ProviderID: strings.TrimSpace(provider.ID),
+			Provider:   providerLabel,
+			TargetURL:  strings.TrimSpace(provider.BaseURL),
+			RouteKind:  routeKind,
 		}
 	}
 	if len(targets) == 0 {
-		return rawProviderAttemptResult{StatusCode: http.StatusBadGateway, Message: "provider endpoint is empty"}
+		return rawProviderAttemptResult{
+			StatusCode: http.StatusBadGateway,
+			Message:    formatAdvancedProxyFailure(appType, routeKind, provider, provider.BaseURL, "provider endpoint is empty"),
+			ProviderID: strings.TrimSpace(provider.ID),
+			Provider:   providerLabel,
+			TargetURL:  strings.TrimSpace(provider.BaseURL),
+			RouteKind:  routeKind,
+		}
 	}
 
 	lastStatus := http.StatusBadGateway
-	lastMessage := "no compatible upstream endpoint found"
+	lastMessage := formatAdvancedProxyFailure(appType, routeKind, provider, "", "no compatible upstream endpoint found")
 	for _, targetURL := range targets {
+		appendAdvancedProxyLogf(
+			"[OPENAI_PROXY_TRY] app=%s route=%s provider=%s endpoint=%s stream=%t timeout=%ds outbound=%s",
+			appType,
+			routeKind,
+			providerLabel,
+			targetURL,
+			stream,
+			timeoutSeconds,
+			describeOutboundProxyMode(),
+		)
 		statusCode, headers, body, streamBody, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildOpenAIProviderHeaders(provider), rawBody, timeoutSeconds, stream)
 		if err != nil {
-			return rawProviderAttemptResult{StatusCode: http.StatusBadGateway, Message: err.Error()}
+			message := formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, fmt.Sprintf("upstream request failed (%s, outbound=%s)", err.Error(), describeOutboundProxyMode()))
+			appendAdvancedProxyLogf("[OPENAI_PROXY_ERROR] status=%d app=%s route=%s provider=%s endpoint=%s detail=%s", http.StatusBadGateway, appType, routeKind, providerLabel, targetURL, previewAdvancedProxyText(message, 260))
+			return rawProviderAttemptResult{
+				StatusCode: http.StatusBadGateway,
+				Message:    message,
+				ProviderID: strings.TrimSpace(provider.ID),
+				Provider:   providerLabel,
+				TargetURL:  targetURL,
+				RouteKind:  routeKind,
+			}
 		}
 		if statusCode < 200 || statusCode >= 300 {
 			lastStatus = statusCode
-			lastMessage = firstNonEmpty(normalizeAnthropicErrorMessage(body), fmt.Sprintf("HTTP %d", statusCode))
+			lastMessage = formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, firstNonEmpty(summarizeAdvancedProxyBody(body), fmt.Sprintf("HTTP %d", statusCode)))
+			appendAdvancedProxyLogf("[OPENAI_PROXY_FAIL] status=%d app=%s route=%s provider=%s endpoint=%s detail=%s", statusCode, appType, routeKind, providerLabel, targetURL, previewAdvancedProxyText(lastMessage, 260))
 			if isRetryableCheckStatus(statusCode) {
 				continue
 			}
-			return rawProviderAttemptResult{StatusCode: statusCode, Message: lastMessage, Body: body, Headers: headers}
+			return rawProviderAttemptResult{
+				StatusCode: statusCode,
+				Message:    lastMessage,
+				Body:       body,
+				Headers:    headers,
+				ProviderID: strings.TrimSpace(provider.ID),
+				Provider:   providerLabel,
+				TargetURL:  targetURL,
+				RouteKind:  routeKind,
+			}
 		}
+		appendAdvancedProxyLogf("[OPENAI_PROXY_OK] status=%d app=%s route=%s provider=%s endpoint=%s stream=%t", statusCode, appType, routeKind, providerLabel, targetURL, stream)
 		return rawProviderAttemptResult{
 			StatusCode: statusCode,
 			Body:       body,
 			Headers:    headers,
 			StreamBody: streamBody,
+			ProviderID: strings.TrimSpace(provider.ID),
+			Provider:   providerLabel,
+			TargetURL:  targetURL,
+			RouteKind:  routeKind,
 		}
 	}
 
-	return rawProviderAttemptResult{StatusCode: lastStatus, Message: lastMessage}
+	return rawProviderAttemptResult{
+		StatusCode: lastStatus,
+		Message:    lastMessage,
+		ProviderID: strings.TrimSpace(provider.ID),
+		Provider:   providerLabel,
+		RouteKind:  routeKind,
+	}
 }
 
 func writeAnthropicSSE(writer http.ResponseWriter, response map[string]any) {
@@ -529,13 +656,17 @@ func writeAnthropicProxyError(writer http.ResponseWriter, status int, message st
 }
 
 func writeOpenAIProxyError(writer http.ResponseWriter, status int, message string) {
+	resolvedMessage := firstNonEmpty(strings.TrimSpace(message), "advanced proxy request failed")
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(map[string]any{
+		"message": resolvedMessage,
+		"detail":  resolvedMessage,
 		"error": map[string]any{
 			"type":    "invalid_request_error",
-			"message": firstNonEmpty(strings.TrimSpace(message), "advanced proxy request failed"),
+			"code":    "advanced_proxy_error",
+			"message": resolvedMessage,
 		},
 	})
 }
@@ -774,7 +905,7 @@ func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWrit
 			continue
 		}
 		attempted++
-		result := forwardOpenAIRequestViaProvider(provider, routeKind, rawBody, stream, config)
+		result := forwardOpenAIRequestViaProvider(appType, provider, routeKind, rawBody, stream, config)
 		if result.StatusCode >= 200 && result.StatusCode < 300 && (result.StreamBody != nil || result.Body != nil) {
 			if failoverActive {
 				advancedProxyRuntime.Record(appType, provider.ID, config.Failover, true)
@@ -797,5 +928,6 @@ func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWrit
 		}
 	}
 
+	appendAdvancedProxyLogf("[OPENAI_PROXY_FINAL_FAIL] status=%d app=%s route=%s detail=%s", lastStatus, appType, routeKind, previewAdvancedProxyText(lastMessage, 260))
 	writeOpenAIProxyError(writer, lastStatus, lastMessage)
 }

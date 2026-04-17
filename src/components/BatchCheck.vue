@@ -2181,9 +2181,14 @@ const organizedTreeData = computed(() => {
     const pendingHint = isBrowserPending
       ? `后台检测中（第 ${Math.max(browserSessionPolling.round, 1)}/${Math.max(browserSessionPolling.totalRounds, 1)} 轮）`
       : '';
+    const groupSiteName = String(group?.siteName || '未命名站点').trim() || '未命名站点';
+    const groupApiKey = String(group?.apiKey || '').trim();
+    const groupApiKeyPreview = groupApiKey
+      ? `${groupApiKey.slice(0, 15)}...`
+      : '(缺少Key)';
 
     bucket.push({
-      title: `[${group.siteName}] ${group.apiKey.slice(0, 15)}...${quotaStr}`,
+      title: `[${groupSiteName}] ${groupApiKeyPreview}${quotaStr}`,
       key: group.key,
       class: titleClass,
       isBrowserPending,
@@ -2573,7 +2578,7 @@ onMounted(() => {
     });
     if (cachedSites.length > 0) {
       void maximiseMainWindow();
-      void processAccountsV2(cachedSites, {
+      void processAccountsV2([], {
         importSource: 'site_cache_restore',
         prefetchedSites: cachedSites,
       }).then(async () => {
@@ -4652,21 +4657,33 @@ const finalizeBridgeImportSession = async () => {
 
   bridgeImportImporting.value = true;
   try {
+    const processedSites = [];
     if (prepared.accounts.length > 0) {
-      await processAccountsV2(prepared.accounts, {
+      const extractedAccountSites = await processAccountsV2(prepared.accounts, {
         importSource: 'browser_tag_bridge',
         forceExtractionMode: 'browser_direct',
       });
+      if (Array.isArray(extractedAccountSites) && extractedAccountSites.length > 0) {
+        processedSites.push(...extractedAccountSites);
+      }
     }
     if (prepared.prefetchedSites.length > 0) {
-      await processAccountsV2([], {
+      const extractedPrefetchedSites = await processAccountsV2([], {
         prefetchedSites: prepared.prefetchedSites,
         importSource: 'browser_tag_bridge_prefetched',
       });
+      if (Array.isArray(extractedPrefetchedSites) && extractedPrefetchedSites.length > 0) {
+        processedSites.push(...extractedPrefetchedSites);
+      }
     }
+    const processedSiteCacheKeys = new Set(
+      processedSites
+        .map(site => String(site?._siteCacheKey || site?.siteCacheKey || buildSiteCacheKey(site)).trim())
+        .filter(Boolean)
+    );
     const bridgeSiteSignatures = [...prepared.accounts, ...prepared.prefetchedSites]
       .map(site => ({
-        siteCacheKey: String(buildSiteCacheKey(site) || '').trim(),
+        siteCacheKey: String(site?._siteCacheKey || site?.siteCacheKey || buildSiteCacheKey(site) || '').trim(),
         siteUrl: normalizeSiteUrl(site?.site_url || site?.siteUrl),
         userId: String(
           site?.resolved_user_id ||
@@ -4678,9 +4695,12 @@ const finalizeBridgeImportSession = async () => {
       }))
       .filter(signature => signature.siteCacheKey || signature.siteUrl);
     const bridgeSiteCacheKeys = new Set(
-      bridgeSiteSignatures
+      [
+        ...Array.from(processedSiteCacheKeys),
+        ...bridgeSiteSignatures
         .map(signature => signature.siteCacheKey)
         .filter(Boolean)
+      ]
     );
     const importedSiteRecords = loadAllSiteCacheRecords().filter(record => {
         const recordSiteCacheKey = String(record?.siteCacheKey || '').trim();
@@ -4696,11 +4716,12 @@ const finalizeBridgeImportSession = async () => {
         );
       });
     const syncedKeyCount = syncBridgeSitesToKeyPanel(importedSiteRecords);
-    const importedSiteCacheKeys = Array.from(new Set(
-      importedSiteRecords
+    const importedSiteCacheKeys = Array.from(new Set([
+      ...Array.from(processedSiteCacheKeys),
+      ...importedSiteRecords
         .map(record => String(record?.siteCacheKey || '').trim())
         .filter(Boolean)
-    ));
+    ]));
     bridgeImportSessionOpening.value = false;
     bridgeImportModalOpen.value = false;
     stopBridgeImportPolling();
@@ -4717,6 +4738,7 @@ const finalizeBridgeImportSession = async () => {
       importedCount: importableCount,
       prefetchedSiteCount: prepared.prefetchedSites.length,
       accountCount: prepared.accounts.length,
+      processedSiteCount: processedSites.length,
       syncedKeyCount,
       importedSiteCacheKeyCount: importedSiteCacheKeys.length,
       skippedCount: prepared.skipped.length,
@@ -5159,7 +5181,7 @@ const processAccountsV2 = async (accounts, options = {}) => {
 
   if (accountsToFetch.length === 0) {
     message.warning(prefetchedSites ? '站点缓存中没有可恢复的站点' : '备份文件中未找到可用账号配置');
-    return;
+    return [];
   }
 
   totalAccountsCount.value = accountsToFetch.length;
@@ -5763,6 +5785,10 @@ const processAccountsV2 = async (accounts, options = {}) => {
   if (prefetchedSites) {
     extractedSites = [...prefetchedSites].map(site => ({
       ...site,
+      id: String(site?.id || site?._siteCacheKey || site?.siteCacheKey || buildSiteCacheKey(site)).trim(),
+      site_name: String(site?.site_name || site?.siteName || '').trim(),
+      site_url: normalizeSiteUrl(site?.site_url || site?.siteUrl || ''),
+      api_key: normalizeSiteUrl(site?.api_key || site?.apiBaseUrl || site?.site_url || site?.siteUrl || ''),
       _siteCacheKey: String(site?._siteCacheKey || site?.siteCacheKey || buildSiteCacheKey(site)).trim(),
       _localDisabled: site?._localDisabled === true,
       _localNote: String(site?._localNote || '').trim(),
@@ -5778,7 +5804,7 @@ const processAccountsV2 = async (accounts, options = {}) => {
     isLoadingModels.value = false;
     await requestDiscoveryRefresh('site-cache-restore');
     activeExtractionMode.value = '';
-    return;
+    return extractedSites;
   }
 
   try {
@@ -6236,9 +6262,11 @@ const processAccountsV2 = async (accounts, options = {}) => {
     isLoadingModels.value = false;
     isDiscoveringModels.value = false;
     step.value = 1;
+    return [];
   } finally {
     activeExtractionMode.value = '';
   }
+  return extractedSites;
 };
 
 // --- Tree Actions ---
@@ -6324,6 +6352,15 @@ const startBatchCheck = async () => {
     }
   });
 
+  if (tasksQueue.length === 0) {
+    step.value = 2;
+    testing.value = false;
+    const detail = `selected=${selectedModelKeys.length}, validAccounts=${validAccounts.value.length}`;
+    console.warn(`[BatchCheck] 未能根据当前勾选构建检测任务: ${detail}`);
+    logClientDiagnostic('batch.start.error', `failed to build tasks from selected model keys: ${detail}`);
+    message.error('当前勾选项未能构建出有效检测任务，请重新导入或刷新站点缓存后再试');
+    return;
+  }
 
   totalTasks.value = tasksQueue.length;
   completedTasks.value = 0;
