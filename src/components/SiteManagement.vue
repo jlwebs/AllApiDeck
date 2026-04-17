@@ -20,7 +20,6 @@
               :is-dark-mode="isDarkMode"
               @experimental="handleExperimental"
               @settings="handleSettings"
-              @toggle-theme="handleToggleTheme"
             />
 
             <section class="batch-hero batch-hero-compact">
@@ -262,7 +261,6 @@ import {
 import AppHeader from './AppHeader.vue';
 import AdvancedProxyModal from './AdvancedProxyModal.vue';
 import SystemSettingsModal from './SystemSettingsModal.vue';
-import { toggleTheme } from '../utils/theme.js';
 import { loadDesktopTokenSourceMode, loadTreeExpandedSetting } from '../utils/systemSettings.js';
 import { refreshCachedSiteTokens } from '../utils/siteTokenRefresh.js';
 import {
@@ -1048,10 +1046,6 @@ const handleTreeExpand = keys => {
 
 const handleTreeCheck = keys => {
   checkedKeys.value = Array.isArray(keys) ? [...keys] : [];
-};
-
-const handleToggleTheme = () => {
-  isDarkMode.value = toggleTheme();
 };
 
 const handleSettings = () => {

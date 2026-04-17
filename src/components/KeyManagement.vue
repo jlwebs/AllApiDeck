@@ -1,7 +1,7 @@
 <template>
   <ConfigProvider :theme="configProviderTheme">
     <div class="key-management" :class="{ 'key-management-compact': isCompactMode }">
-      <AppHeader v-if="!isCompactMode" current-page="keys" :is-dark-mode="isDarkMode" @toggle-theme="handleToggleTheme" @experimental="showExperimentalFeatures = true" @settings="openSettingsModal" />
+      <AppHeader v-if="!isCompactMode" current-page="keys" :is-dark-mode="isDarkMode" @experimental="showExperimentalFeatures = true" @settings="openSettingsModal" />
 
       <template v-if="!isCompactMode">
 
@@ -17,6 +17,18 @@
           </div>
           <div v-if="!loading && failedSites.length === 0" class="sync-summary-slot">
             <a-alert type="info" show-icon class="sync-alert sync-alert-inline" :message="syncSummary" />
+          </div>
+          <div class="sync-panel-trigger-slot">
+            <a-tooltip title="打开 Mini Bar 侧栏">
+              <button
+                type="button"
+                class="sync-panel-trigger-button"
+                :disabled="openingManualSidebar || !manualSidebarBridgeReady"
+                @click="openManualMiniBar"
+              >
+                <MenuFoldOutlined />
+              </button>
+            </a-tooltip>
           </div>
         </div>
 
@@ -272,7 +284,11 @@
                 <div class="config-grid">
                   <a-form-item label="Provider 名称"><a-input v-model:value="desktopConfigDraft.providerName" placeholder="例如 My Provider" /></a-form-item>
                   <a-form-item label="Provider Key">
-                    <a-input :value="desktopConfigDraft.forceCustomProviderKey ? 'custom' : '保持当前 provider key'" readonly />
+                    <a-input
+                      v-model:value="desktopConfigDraft.providerKey"
+                      :readonly="desktopConfigDraft.forceCustomProviderKey !== false"
+                      :placeholder="desktopConfigDraft.forceCustomProviderKey !== false ? 'custom' : '请输入 provider key'"
+                    />
                     <a-checkbox :checked="desktopConfigDraft.forceCustomProviderKey !== false" class="desktop-provider-checkbox" @change="handleDesktopProviderKeyModeChange">
                       custom:统一化保证历史会话可见
                     </a-checkbox>
@@ -333,7 +349,7 @@
 
 <script setup>
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { ClockCircleOutlined, ReloadOutlined } from '@ant-design/icons-vue';
+import { ClockCircleOutlined, MenuFoldOutlined, ReloadOutlined } from '@ant-design/icons-vue';
 import { ConfigProvider, message, Modal, theme } from 'ant-design-vue';
 import { useRoute } from 'vue-router';
 import AppHeader from './AppHeader.vue';
@@ -343,12 +359,11 @@ import SystemSettingsModal from './SystemSettingsModal.vue';
 import { fetchModelList } from '../utils/api.js';
 import { maskApiKey } from '../utils/normal.js';
 import { apiFetch, isProbablyWailsRuntime } from '../utils/runtimeApi.js';
-import { toggleTheme } from '../utils/theme.js';
 import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManagedAppConfigFiles } from '../utils/desktopConfigBridge.js';
-import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS } from '../utils/desktopConfigTransform.js';
+import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS, inferProviderKeyFromSnapshot } from '../utils/desktopConfigTransform.js';
 import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils/balance.js';
 import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
-import { exitSidebarMode, isSidebarBridgeAvailable } from '../utils/windowMode.js';
+import { exitSidebarMode, isManualSidebarBridgeAvailable, isSidebarBridgeAvailable, openManualSidebarPanel } from '../utils/windowMode.js';
 import { loadDesktopTokenSourceMode, loadTreeExpandedSetting } from '../utils/systemSettings.js';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
@@ -406,6 +421,7 @@ const desktopConfigLoading = ref(false);
 const desktopConfigTargetRecord = ref(null);
 const desktopConfigPreview = ref({ appGroups: [], writes: [], errors: [] });
 const desktopConfigDraft = reactive(createDesktopConfigDraft({}));
+const desktopProviderKeyManualValue = ref('');
 const manualRecordModalOpen = ref(false);
 const manualRecordSaving = ref(false);
 const manualRecordEditing = ref(false);
@@ -423,7 +439,9 @@ const localCacheList = ref([]);
 const portablePacking = ref(false);
 const portableUnpacking = ref(false);
 const portableSettingsMeta = ref('');
+const openingManualSidebar = ref(false);
 const isCompactMode = computed(() => route.query?.compact === '1');
+const manualSidebarBridgeReady = computed(() => isManualSidebarBridgeAvailable());
 const PERSIST_DEBOUNCE_MS = 240;
 let persistRecordsTimer = null;
 let lastPersistedRecordsSnapshot = '';
@@ -481,12 +499,6 @@ onBeforeUnmount(() => {
     window.removeEventListener('storage', handleManagedRecordStorageEvent);
   }
 });
-
-function handleToggleTheme() {
-  toggleTheme(isDarkMode);
-  document.body.classList.toggle('dark-mode', isDarkMode.value);
-  document.body.classList.toggle('light-mode', !isDarkMode.value);
-}
 
 const openSettingsModal = () => {
   showAppSettingsModal.value = true;
@@ -639,6 +651,19 @@ async function exitCompactSidebar() {
   } catch (error) {
     console.error(error);
     message.error(`展开主界面失败：${error.message || '未知错误'}`);
+  }
+}
+
+async function openManualMiniBar() {
+  if (!manualSidebarBridgeReady.value || openingManualSidebar.value) return;
+  openingManualSidebar.value = true;
+  try {
+    await openManualSidebarPanel();
+  } catch (error) {
+    console.error(error);
+    message.error(`打开 Mini Bar 失败：${error?.message || '未知错误'}`);
+  } finally {
+    openingManualSidebar.value = false;
   }
 }
 
@@ -1193,6 +1218,7 @@ function openDesktopConfigWizard(record) {
   desktopConfigPreview.value = { appGroups: [], writes: [], errors: [] };
   overwriteDesktopConfigDraft(createDesktopConfigDraft(record));
   desktopConfigModalOpen.value = true;
+  void syncDesktopProviderKeyFromSnapshot();
 }
 
 async function generateDesktopConfigPreview() {
@@ -1240,6 +1266,7 @@ async function applyDesktopConfigPreview() {
 function overwriteDesktopConfigDraft(nextDraft) {
   Object.keys(desktopConfigDraft).forEach(key => delete desktopConfigDraft[key]);
   Object.assign(desktopConfigDraft, nextDraft);
+  desktopProviderKeyManualValue.value = String(nextDraft?.providerKey || '').trim();
 }
 
 function isDesktopAppSelected(appId) {
@@ -1253,12 +1280,41 @@ function toggleDesktopAppSelection(appId) {
   } else {
     desktopConfigDraft.selectedApps = [...current, appId];
   }
+  if (desktopConfigDraft.forceCustomProviderKey === false) {
+    void syncDesktopProviderKeyFromSnapshot();
+  }
 }
 
 function handleDesktopProviderKeyModeChange(event) {
   const checked = Boolean(event?.target?.checked);
+  if (!checked && desktopConfigDraft.forceCustomProviderKey === false) {
+    desktopProviderKeyManualValue.value = String(desktopConfigDraft.providerKey || '').trim();
+  }
   desktopConfigDraft.forceCustomProviderKey = checked;
-  desktopConfigDraft.providerKey = checked ? 'custom' : '';
+  const fallbackManualValue = String(desktopProviderKeyManualValue.value || '').trim();
+  desktopConfigDraft.providerKey = checked
+    ? 'custom'
+    : (fallbackManualValue && fallbackManualValue !== 'custom' ? fallbackManualValue : '');
+  if (!checked && !String(desktopConfigDraft.providerKey || '').trim()) {
+    void syncDesktopProviderKeyFromSnapshot();
+  }
+}
+
+async function syncDesktopProviderKeyFromSnapshot() {
+  if (!isDesktopConfigBridgeAvailable()) return;
+  try {
+    const selectedApps = Array.isArray(desktopConfigDraft.selectedApps) && desktopConfigDraft.selectedApps.length
+      ? desktopConfigDraft.selectedApps
+      : DESKTOP_CONFIG_APPS.map(app => app.id);
+    const snapshot = await readManagedAppConfigFiles(selectedApps);
+    const inferred = inferProviderKeyFromSnapshot(snapshot, desktopConfigDraft, selectedApps);
+    const detected = String(inferred?.providerKey || '').trim();
+    if (!detected) return;
+    desktopProviderKeyManualValue.value = detected;
+    if (desktopConfigDraft.forceCustomProviderKey === false) {
+      desktopConfigDraft.providerKey = detected;
+    }
+  } catch {}
 }
 
 function overwriteManualRecordDraft(nextDraft) {
@@ -2104,7 +2160,7 @@ function persistMeta() {
 </script>
 
 <style scoped>
-.key-management{width:100%;padding:8px 8px 0;display:flex;flex-direction:column;gap:16px;position:relative;overflow:hidden;border-radius:28px;background:radial-gradient(circle at 14% 16%,rgba(196,226,163,.18),transparent 22%),radial-gradient(circle at 84% 12%,rgba(255,214,126,.18),transparent 18%),linear-gradient(180deg,rgba(8,18,12,.12) 0%,rgba(8,18,12,.28) 45%,rgba(8,18,12,.5) 100%),url('/forest-batch-bg-v2.png') center center/cover no-repeat;box-shadow:0 26px 56px rgba(76,92,64,.16),inset 0 1px 0 rgba(255,255,255,.42)}
+.key-management{width:100%;padding:0 8px 0;display:flex;flex-direction:column;gap:16px;position:relative;overflow:hidden;border-radius:0 0 28px 28px;background:radial-gradient(circle at 14% 16%,rgba(196,226,163,.18),transparent 22%),radial-gradient(circle at 84% 12%,rgba(255,214,126,.18),transparent 18%),linear-gradient(180deg,rgba(8,18,12,.12) 0%,rgba(8,18,12,.28) 45%,rgba(8,18,12,.5) 100%),url('/forest-batch-bg-v2.png') center center/cover no-repeat;box-shadow:0 26px 56px rgba(76,92,64,.16),inset 0 1px 0 rgba(255,255,255,.42)}
 .key-management-compact{padding:12px;gap:12px;min-height:100vh;background:linear-gradient(180deg,#f8fafc,#eef2ff)}
 .key-management>*{position:relative;z-index:1}
 .compact-sidebar-summary{display:flex;flex-direction:column;gap:10px}
@@ -2113,7 +2169,7 @@ function persistMeta() {
 .sync-card,.inventory-card{width:100%}
 .sync-card :deep(.ant-card-body){padding:12px 24px}
 .sync-toolbar,.sync-meta,.quick-test-cell,.site-cell,.time-cell{display:flex;gap:12px;flex-wrap:wrap}
-.sync-toolbar{display:grid;grid-template-columns:max-content max-content minmax(240px,1fr);align-items:center;column-gap:14px;row-gap:6px}
+.sync-toolbar{display:grid;grid-template-columns:max-content max-content minmax(240px,1fr) auto;align-items:center;column-gap:14px;row-gap:6px}
 .sync-meta,.site-cell,.time-cell,.quick-test-cell{flex-direction:column;gap:3px}
 .sync-toolbar{margin-bottom:0}
 .sync-meta{display:grid;grid-template-columns:repeat(2,max-content);align-items:center;gap:4px 14px}
@@ -2121,6 +2177,11 @@ function persistMeta() {
 .sync-meta-time{font-variant-numeric:tabular-nums;letter-spacing:-.01em}
 .sync-meta-time-row{grid-column:1 / -1}
 .sync-summary-slot{min-width:0;display:flex;justify-content:flex-start}
+.sync-panel-trigger-slot{display:flex;align-items:center;justify-content:flex-end}
+.sync-panel-trigger-button{width:28px;height:28px;border-radius:999px;border:2px solid rgba(227,85,43,.92);background:transparent;color:#d9480f;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background-color .18s ease}
+.sync-panel-trigger-button .anticon{font-size:11px}
+.sync-panel-trigger-button:hover:not(:disabled){transform:translateY(-1px);background:rgba(255,255,255,.35);box-shadow:0 8px 18px rgba(217,72,15,.14)}
+.sync-panel-trigger-button:disabled{opacity:.45;cursor:default}
 .sync-title-wrap{display:flex;align-items:center;padding-right:14px;margin-right:2px;border-right:1px solid rgba(90,117,79,.18);min-height:28px}
 .sync-title-text{font:700 18px/1.1 Georgia,'Times New Roman',serif;color:#2d432f;white-space:nowrap}
 .site-heading{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0}
@@ -2237,6 +2298,8 @@ function persistMeta() {
 .key-management :deep(.ant-btn-default),.key-management :deep(.ant-btn-primary),.key-management :deep(.ant-select-selector),.key-management :deep(.ant-input),.key-management :deep(.ant-input-password),.key-management :deep(.ant-input-affix-wrapper){border-radius:12px}
 .key-management .sync-card :deep(.ant-card-head){display:none}
 .key-management .sync-card :deep(.ant-card-body){padding:12px 24px}
+:deep(body.dark-mode) .key-management .sync-panel-trigger-button{border-color:rgba(255,148,77,.9);color:#ffb36b;background:rgba(255,255,255,.03)}
+:deep(body.dark-mode) .key-management .sync-panel-trigger-button:hover:not(:disabled){background:rgba(255,179,107,.1);box-shadow:0 10px 22px rgba(0,0,0,.2)}
 :deep(body.dark-mode) .key-management{background:radial-gradient(circle at 14% 16%,rgba(102,164,110,.18),transparent 22%),radial-gradient(circle at 84% 12%,rgba(255,194,96,.14),transparent 18%),linear-gradient(180deg,rgba(5,12,8,.42) 0%,rgba(5,12,8,.62) 45%,rgba(4,8,6,.82) 100%),url('/forest-batch-bg-v2.png') center center/cover no-repeat;box-shadow:0 28px 60px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.04)}
 :deep(body.dark-mode) .key-management :deep(.ant-card){background:rgba(255,255,255,.06);border-color:rgba(160,189,144,.14);box-shadow:0 18px 42px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.04)}
 :deep(body.dark-mode) .key-management :deep(.ant-card-head-title),:deep(body.dark-mode) .key-management .desktop-panel-title,:deep(body.dark-mode) .key-management .desktop-app-name,:deep(body.dark-mode) .key-management .site-title-text{color:#edf5e6}
@@ -2265,5 +2328,5 @@ function persistMeta() {
 .key-management-compact .record-model-select :deep(.ant-select-selector){min-height:26px;padding-inline:8px !important}
 .key-management-compact .record-model-select :deep(.ant-select-selection-item),
 .key-management-compact .record-model-select :deep(.ant-select-selection-placeholder){font-size:11px;line-height:24px}
-@media (max-width:900px){.key-management{padding:8px 8px 0}.desktop-config-layout{grid-template-columns:1fr}.desktop-app-grid{grid-template-columns:repeat(4,minmax(0,1fr));overflow:auto}.config-grid{grid-template-columns:1fr}}
+@media (max-width:900px){.key-management{padding:0 8px 0}.desktop-config-layout{grid-template-columns:1fr}.desktop-app-grid{grid-template-columns:repeat(4,minmax(0,1fr));overflow:auto}.config-grid{grid-template-columns:1fr}}
 </style>

@@ -21,18 +21,22 @@ import (
 var assets embed.FS
 
 type launchMode string
+type panelStartMode string
 
 const (
 	launchModeMain          launchMode = "main"
 	launchModePanel         launchMode = "panel"
 	launchModeEditor        launchMode = "editor"
 	launchModeDesktopConfig launchMode = "desktop-config"
+	webviewGroupPIDEnvKey   string     = "BATCH_API_CHECK_WEBVIEW_GROUP_PID"
+	panelStartAuto          panelStartMode = "auto"
+	panelStartManual        panelStartMode = "manual"
 )
 
 func main() {
 	enableProcessDPIAwareness()
-	mode, recordKey := resolveLaunchContext(os.Args[1:])
-	app := NewApp(mode, recordKey)
+	mode, recordKey, panelStart := resolveLaunchContext(os.Args[1:])
+	app := NewApp(mode, recordKey, panelStart)
 
 	err := wails.Run(buildAppOptions(app, mode))
 
@@ -41,9 +45,10 @@ func main() {
 	}
 }
 
-func resolveLaunchContext(args []string) (launchMode, string) {
+func resolveLaunchContext(args []string) (launchMode, string, panelStartMode) {
 	mode := launchModeMain
 	recordKey := ""
+	panelStart := panelStartAuto
 	for index := 0; index < len(args); index += 1 {
 		arg := strings.TrimSpace(args[index])
 		if strings.EqualFold(arg, "--panel") {
@@ -58,12 +63,16 @@ func resolveLaunchContext(args []string) (launchMode, string) {
 			mode = launchModeDesktopConfig
 			continue
 		}
+		if strings.EqualFold(arg, "--panel-manual") {
+			panelStart = panelStartManual
+			continue
+		}
 		if strings.EqualFold(arg, "--row-key") && index+1 < len(args) {
 			recordKey = args[index+1]
 			index += 1
 		}
 	}
-	return mode, recordKey
+	return mode, recordKey, panelStart
 }
 
 func buildAppOptions(app *App, mode launchMode) *options.App {
@@ -93,11 +102,19 @@ func buildAppOptions(app *App, mode launchMode) *options.App {
 
 	if mode == launchModePanel {
 		appOptions.Title = "All API Deck Panel"
-		appOptions.Width = 520
-		appOptions.Height = 780
-		appOptions.MinWidth = 192
-		appOptions.MaxWidth = 680
-		appOptions.MinHeight = 560
+		if app.isManualPanelStart() {
+			appOptions.Width = manualPanelWideWidth
+			appOptions.Height = manualPanelHeight
+			appOptions.MinWidth = manualPanelWindowWidth
+			appOptions.MaxWidth = manualPanelMaxWidth
+			appOptions.MinHeight = manualPanelMinHeight
+		} else {
+			appOptions.Width = panelWideWindowWidth
+			appOptions.Height = panelWindowHeight
+			appOptions.MinWidth = panelWindowWidth
+			appOptions.MaxWidth = panelMaxWindowWidth
+			appOptions.MinHeight = 560
+		}
 		appOptions.DisableResize = true
 		appOptions.Frameless = true
 		appOptions.AlwaysOnTop = true
@@ -155,7 +172,7 @@ func clampWindowSize(value int, min int, max int) int {
 
 func buildWindowsOptions(mode launchMode) *windows.Options {
 	windowOptions := &windows.Options{
-		WebviewUserDataPath: resolveWebviewUserDataPath(),
+		WebviewUserDataPath: resolveWebviewUserDataPath(mode),
 		WindowClassName:     "AllApiDeckWindow",
 	}
 	if mode == launchModePanel {
@@ -185,7 +202,7 @@ func buildLinuxOptions(mode launchMode) *linux.Options {
 	}
 }
 
-func resolveWebviewUserDataPath() string {
+func resolveWebviewUserDataPath(appMode launchMode) string {
 	root := os.Getenv("LOCALAPPDATA")
 	if root == "" {
 		return ""
@@ -204,8 +221,11 @@ func resolveWebviewUserDataPath() string {
 
 	webviewRoot := filepath.Join(root, "BatchApiCheck", "runtime", "webview2", mode)
 	if mode == "dev" {
-		webviewRoot = filepath.Join(webviewRoot, strconv.Itoa(os.Getpid()))
-		_ = cleanupOldWebviewDevDirs(filepath.Dir(webviewRoot))
+		groupPID := resolveWebviewGroupPID(appMode)
+		webviewRoot = filepath.Join(webviewRoot, strconv.Itoa(groupPID))
+		if appMode == launchModeMain {
+			_ = cleanupOldWebviewDevDirs(filepath.Dir(webviewRoot))
+		}
 	}
 
 	if err := os.MkdirAll(webviewRoot, 0o755); err != nil {
@@ -213,6 +233,25 @@ func resolveWebviewUserDataPath() string {
 	}
 	cleanupStaleWebviewLocks(webviewRoot)
 	return webviewRoot
+}
+
+func resolveWebviewGroupPID(appMode launchMode) int {
+	if raw := strings.TrimSpace(os.Getenv(webviewGroupPIDEnvKey)); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
+			return value
+		}
+	}
+
+	if appMode != launchModeMain {
+		if parentPID := os.Getppid(); parentPID > 0 {
+			return parentPID
+		}
+	}
+
+	if pid := os.Getpid(); pid > 0 {
+		return pid
+	}
+	return 1
 }
 
 func cleanupStaleWebviewLocks(webviewRoot string) {

@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         All API Deck Local Bridge Import
 // @namespace    http://tampermonkey.net/
-// @version      0.2.5
+// @version      0.2.6
 // @description  当前标签页桥接导入：显式确认后提取站点登录态候选、账号信息与站内 key 列表，并发送到本地 All API Deck 进程。
 // @author       All API Deck
 // @match        http://127.0.0.1/*
+// @match        http://*/*
 // @match        https://*/*
 // @grant        GM_xmlhttpRequest
 // @connect      127.0.0.1
@@ -15,7 +16,7 @@
   'use strict';
 
   const receiverBase = 'http://127.0.0.1:8888';
-  const bridgeVersion = '0.2.4';
+  const bridgeVersion = '0.2.6';
   const executionId = `bridge-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
   const phaseLogs = [];
   const nativeFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
@@ -304,8 +305,34 @@
   function isLikelyUserIdCandidate(value) {
     const text = safeString(value);
     if (!text) return false;
+    if (isLikelyTimestampLikeValue(text)) return false;
     if (/^\d{1,18}$/.test(text)) return true;
     if (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(text)) return true;
+    return false;
+  }
+
+  function isLikelyTimestampLikeValue(value) {
+    const text = safeString(value);
+    if (!/^\d{10,18}$/.test(text)) return false;
+    const numeric = Number(text);
+    if (!Number.isFinite(numeric) || numeric <= 0) return false;
+    const secondMin = 946684800;
+    const secondMax = 4102444800;
+    const milliMin = secondMin * 1000;
+    const milliMax = secondMax * 1000;
+    return (
+      (numeric >= secondMin && numeric <= secondMax) ||
+      (numeric >= milliMin && numeric <= milliMax)
+    );
+  }
+
+  function isStrongUserIdField(keyName, pathName) {
+    const key = safeString(keyName).toLowerCase();
+    const path = safeString(pathName).toLowerCase();
+    if (USER_ID_HINT_RE.test(key)) return true;
+    if (/(^|[._-])(auth[_-]?user|user|account)([._-])id$/.test(path)) return true;
+    if (/(^|[._-])user([._-])uid$/.test(path)) return true;
+    if (/(^|[._-])member([._-])id$/.test(path)) return true;
     return false;
   }
 
@@ -385,12 +412,18 @@
 
   function scoreUserIdCandidate(entry) {
     const keyName = safeString(entry?.keyName);
+    const pathName = safeString(entry?.path);
     const value = safeString(entry?.value);
+    const keyPathText = `${keyName} ${pathName}`.toLowerCase();
     let score = 0;
     if (USER_ID_HINT_RE.test(keyName)) score += 80;
+    if (isStrongUserIdField(keyName, pathName)) score += 80;
     if (/^\d+$/.test(value)) score += 15;
     if (String(entry?.source || '').includes('observed-')) score += 160;
-    if (String(entry?.path || '').includes('account')) score += 8;
+    if (pathName.includes('account')) score += 8;
+    if (/(\.|^)(auth[_-]?user|user|account)\.id$/.test(pathName.toLowerCase())) score += 36;
+    if (/(expires|expire|timestamp|time|date|quota|balance|concurrency|limit|count)/i.test(keyPathText)) score -= 220;
+    if (isLikelyTimestampLikeValue(value)) score -= 320;
     return score;
   }
 
@@ -398,6 +431,7 @@
     const text = safeString(value);
     if (!text) return;
     const keyName = safeString(meta?.keyName || meta?.path || '');
+    const pathName = safeString(meta?.path);
     if (isLikelyTokenCandidate(text)) {
       bucket.tokenCandidates.push({
         source: safeString(meta?.source),
@@ -408,12 +442,12 @@
         preview: maskSecret(text),
       });
     }
-    if (isLikelyUserIdCandidate(text) && USER_ID_HINT_RE.test(keyName)) {
+    if (isLikelyUserIdCandidate(text) && isStrongUserIdField(keyName, pathName)) {
       bucket.userIdCandidates.push({
         source: safeString(meta?.source),
         storage: safeString(meta?.storage),
         keyName,
-        path: safeString(meta?.path),
+        path: pathName,
         value: text,
       });
     }

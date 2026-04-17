@@ -30,6 +30,7 @@ type App struct {
 	sidecarMu  sync.Mutex
 	mode       launchMode
 	recordKey  string
+	panelStart panelStartMode
 
 	bridgeServer        *http.Server
 	bridgeListener      net.Listener
@@ -47,17 +48,23 @@ type App struct {
 	panelAutoStop    chan struct{}
 	panelAutoStopMux sync.Mutex
 
+	panelSignalStop    chan struct{}
+	panelSignalStopMux sync.Mutex
+
 	mainWindowGraceUntil atomic.Int64
 	mainWindowSeenNormal atomic.Bool
 }
 
-func NewApp(mode launchMode, recordKey string) *App {
-	return &App{mode: mode, recordKey: recordKey}
+func NewApp(mode launchMode, recordKey string, panelStart panelStartMode) *App {
+	return &App{mode: mode, recordKey: recordKey, panelStart: panelStart}
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	debugLogf("startup begin")
+	if a.isPanelMode() {
+		a.startPanelSignalWatcher()
+	}
 	if a.isMainMode() {
 		a.mainWindowSeenNormal.Store(false)
 		a.mainWindowGraceUntil.Store(time.Now().Add(4 * time.Second).UnixMilli())
@@ -94,6 +101,7 @@ func (a *App) shutdown(ctx context.Context) {
 	debugLogf("shutdown begin")
 	a.stopWindowMonitor()
 	a.stopPanelAutoController()
+	a.stopPanelSignalWatcher()
 	a.closeTray()
 	a.stopPanelProcess()
 	a.stopSidecar()
@@ -167,6 +175,10 @@ func (a *App) isDesktopConfigMode() bool {
 
 func (a *App) isMainMode() bool {
 	return a.mode == launchModeMain
+}
+
+func (a *App) isManualPanelStart() bool {
+	return a.mode == launchModePanel && a.panelStart == panelStartManual
 }
 
 func (a *App) shouldAutoStartBridgeServer() bool {

@@ -122,6 +122,10 @@ export function OpenKeyEditor(arg1) {
   return window['go']['main']['App']['OpenKeyEditor'](arg1);
 }
 
+export function OpenManualSidebarPanel() {
+  return window['go']['main']['App']['OpenManualSidebarPanel']();
+}
+
 export function PackagePortableData(arg1) {
   return window['go']['main']['App']['PackagePortableData'](arg1);
 }

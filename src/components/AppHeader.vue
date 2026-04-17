@@ -14,7 +14,14 @@
         :class="{ 'spring-pill-active': currentPage === 'batch' }"
         @click="navigate('/')"
       >
-        <AppstoreAddOutlined />
+        <span class="spring-pill-icon-svg spring-pill-icon-chrome" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="3.5" />
+            <path d="M12 2.75a9.25 9.25 0 0 1 8.01 4.63H11.2" />
+            <path d="M4.18 7.38A9.25 9.25 0 0 0 12 21.25l4.41-7.64" />
+            <path d="M20.01 6.95A9.25 9.25 0 0 1 12 21.25L7.59 13.6" />
+          </svg>
+        </span>
         <span>批量检测</span>
       </button>
 
@@ -72,53 +79,6 @@
         </button>
       </a-tooltip>
 
-      <button
-        type="button"
-        class="spring-pill spring-pill-ghost spring-pill-icon-only"
-        :title="isDarkMode ? '切换到浅色模式' : '切换到深色模式'"
-        :aria-label="isDarkMode ? '切换到浅色模式' : '切换到深色模式'"
-        @click="$emit('toggle-theme')"
-      >
-        <span class="spring-theme-icon">
-          <svg
-            v-if="!isDarkMode"
-            xmlns="http://www.w3.org/2000/svg"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="transparent"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <circle cx="12" cy="12" r="4"></circle>
-            <path d="M12 2v2"></path>
-            <path d="M12 20v2"></path>
-            <path d="m4.93 4.93 1.41 1.41"></path>
-            <path d="m17.66 17.66 1.41 1.41"></path>
-            <path d="M2 12h2"></path>
-            <path d="M20 12h2"></path>
-            <path d="m6.34 17.66-1.41 1.41"></path>
-            <path d="m19.07 4.93-1.41 1.41"></path>
-          </svg>
-          <svg
-            v-else
-            xmlns="http://www.w3.org/2000/svg"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="transparent"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
-          </svg>
-        </span>
-      </button>
-
       <button type="button" class="spring-pill spring-pill-ghost" @click="openGitHub">
         <GithubOutlined />
         <span>GitHub</span>
@@ -132,14 +92,13 @@ import { useRouter } from 'vue-router';
 import appLogo from '../assets/logo.png';
 import {
   ApiOutlined,
-  AppstoreAddOutlined,
   DatabaseOutlined,
   GithubOutlined,
   KeyOutlined,
   SettingOutlined,
 } from '@ant-design/icons-vue';
 
-defineEmits(['experimental', 'settings', 'toggle-theme']);
+defineEmits(['experimental', 'settings']);
 
 defineProps({
   currentPage: {
@@ -162,7 +121,7 @@ defineProps({
 
 const router = useRouter();
 const advancedProxyLabel = '高级代理';
-const advancedProxyTooltip = '开启兼容 OpenAI vendor 给 Claude、故障转移、错误修正的高级代理功能';
+const advancedProxyTooltip = '开启兼容 OpenAI vendor、Claude、故障转移、错误修正的高级代理功能';
 
 const navigate = path => {
   if (router.currentRoute.value.path !== path) {
@@ -312,13 +271,22 @@ const openGitHub = () => {
   font-size: 14px;
 }
 
-.spring-theme-icon {
-  flex: 0 0 auto;
+.spring-pill-icon-svg {
+  width: 14px;
+  height: 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
-  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.spring-pill-icon-svg svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .spring-pill:hover {

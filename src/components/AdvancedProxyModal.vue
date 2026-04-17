@@ -1,39 +1,46 @@
 <template>
-  <a-modal :open="open" title="高级代理功能" :width="1260" :footer="null" @cancel="handleCancel">
+  <a-modal :open="open" title="高级代理功能" :width="modalWidth" :footer="null" @cancel="handleCancel">
     <a-spin :spinning="loading || saving">
       <div class="advanced-proxy-shell">
         <section class="advanced-proxy-hero">
           <div class="advanced-proxy-hero-copy">
             <a-tag color="green">本地代理接管</a-tag>
             <h3>兼容 OpenAI vendor，并为 Claude / Codex / OpenCode / OpenClaw 提供统一接管入口</h3>
-            <p>这里没有“保存配置”按钮。点任何开关、字段或 Provider 操作时，都会先生成 diff 预览；确认后立即写入，而且弹窗不会自动关闭。</p>
+            <p>涉及本地应用配置文件的变更会先弹出 diff 预览；仅修改高级代理自身配置时，会直接写入并立即生效。</p>
           </div>
 
-          <div class="advanced-proxy-app-grid">
-            <article
-              v-for="app in appCards"
-              :key="app.id"
-              class="advanced-proxy-app-card"
-              :class="{ 'advanced-proxy-app-card-active': app.enabled }"
-            >
-              <div class="advanced-proxy-app-head">
-                <div class="advanced-proxy-app-copy">
-                  <strong>{{ app.label }}</strong>
-                  <small>{{ app.modeLabel }}</small>
+          <div class="advanced-proxy-master-row">
+            <div class="advanced-proxy-master-copy">
+              <strong>代理总开关</strong>
+              <small>{{ proxyMasterEnabled ? (enabledAppLabels || '已启用') : '关闭后不会接管任何本地应用' }}</small>
+            </div>
+            <a-switch
+              :checked="proxyMasterEnabled"
+              checked-children="开启"
+              un-checked-children="关闭"
+              @change="handleProxyMasterToggle"
+            />
+          </div>
+
+          <div class="advanced-proxy-app-strip">
+            <a-tooltip v-for="app in appCards" :key="app.id" placement="top">
+              <template #title>
+                <div class="advanced-proxy-app-tooltip">
+                  <div>{{ app.label }} · {{ app.modeLabel }}</div>
+                  <div v-if="app.tooltipDetail">{{ app.tooltipDetail }}</div>
                 </div>
-                <a-switch
-                  :checked="app.enabled"
-                  checked-children="开启"
-                  un-checked-children="关闭"
-                  @change="value => handleAppToggleMutation(app.id, value)"
-                />
-              </div>
-              <code>{{ app.baseUrl }}</code>
-              <div class="advanced-proxy-app-meta">
-                <span>{{ app.readyText }}</span>
-                <a-button size="small" @click="copyText(app.baseUrl, `${app.label} 代理地址已复制`)">复制</a-button>
-              </div>
-            </article>
+              </template>
+              <button
+                type="button"
+                class="advanced-proxy-app-token"
+                :class="{ 'advanced-proxy-app-token-active': app.enabled }"
+                @click="handleAppTakeoverToggle(app.id, !app.enabled)"
+              >
+                <span class="advanced-proxy-app-icon-shell" :class="`advanced-proxy-app-icon-shell-${app.id}`">
+                  <img :src="app.icon" :alt="app.label" class="advanced-proxy-app-icon-image" />
+                </span>
+              </button>
+            </a-tooltip>
           </div>
         </section>
 
@@ -60,129 +67,55 @@
           </article>
         </section>
 
-        <a-alert type="info" show-icon>
-          <template #message>本地配置写入全程可见</template>
-          <template #description>
-            当前保存目标：<code>{{ configFilePath }}</code>。任何修改都会先弹出 diff 窗口，确认后立刻生效。
-          </template>
-        </a-alert>
-
         <div class="advanced-proxy-layout">
           <section class="advanced-proxy-section">
             <div class="advanced-proxy-section-head">
               <div>
                 <h4>上游 Provider 队列</h4>
-                <p>这里记录真实上游地址和密钥，便于回溯。Claude 兼容转换与其他 OpenAI 兼容应用接管都复用这组 Provider。</p>
+                <p>点击卡片即可加入 / 移出队列，队列优先级按点击顺序自动更新。详细的 Key 和端点地址放在 tooltip 中。</p>
               </div>
-            </div>
-
-            <div class="advanced-proxy-adder">
-              <a-select
-                v-model:value="pendingRecordKey"
-                show-search
-                :options="recordOptions"
-                placeholder="从密钥管理中选择一条记录加入队列"
-                option-filter-prop="label"
-              />
-              <a-button type="primary" @click="appendProviderFromSelection">加入队列</a-button>
               <a-button @click="reloadContext">刷新记录</a-button>
             </div>
 
-            <div v-if="!providerCount" class="advanced-proxy-empty">
-              还没有可用 Provider。先从密钥管理中加入至少一条记录，再启用任意应用的本地接管。
+            <div class="advanced-proxy-provider-pool">
+              <div class="advanced-proxy-provider-panel-grid">
+                <a-tooltip v-for="item in providerCandidateCards" :key="item.id" placement="topLeft">
+                  <template #title>
+                    <div class="advanced-proxy-provider-tooltip">
+                      <strong>{{ item.siteName }}</strong>
+                      <span>{{ item.modelLabel }}</span>
+                      <span v-if="item.skLabel">{{ item.skLabel }}</span>
+                      <code>{{ item.endpoint || '-' }}</code>
+                      <code>{{ item.apiKey || '-' }}</code>
+                    </div>
+                  </template>
+
+                  <button
+                    type="button"
+                    class="advanced-proxy-provider-panel"
+                    :class="{ 'advanced-proxy-provider-panel-active': item.selected }"
+                    @click="toggleProviderQueue(item)"
+                  >
+                    <div class="advanced-proxy-provider-panel-top">
+                      <strong class="advanced-proxy-provider-panel-title">{{ item.siteName }}</strong>
+                      <span v-if="item.queueOrder" class="advanced-proxy-provider-order">P{{ item.queueOrder }}</span>
+                    </div>
+                    <div class="advanced-proxy-provider-panel-model">{{ item.modelLabel }}</div>
+                    <div class="advanced-proxy-provider-panel-meta">
+                      <span v-if="item.skLabel" class="advanced-proxy-provider-chip">{{ item.skLabel }}</span>
+                      <span v-if="item.orphaned" class="advanced-proxy-provider-chip advanced-proxy-provider-chip-muted">已不在密钥管理中</span>
+                    </div>
+                  </button>
+                </a-tooltip>
+              </div>
+
+              <div v-if="providerCandidateCards.length && !providerCount" class="advanced-proxy-empty advanced-proxy-empty-compact">
+                点击卡片加入队列，队列优先级按点击顺序自动更新。
+              </div>
             </div>
 
-            <div v-else class="advanced-proxy-provider-list">
-              <article
-                v-for="(provider, index) in draft.claude.providers"
-                :key="provider.id"
-                class="advanced-proxy-provider-card"
-              >
-                <div class="advanced-proxy-provider-head">
-                  <div class="advanced-proxy-provider-title">
-                    <span class="advanced-proxy-provider-order">P{{ index + 1 }}</span>
-                    <div>
-                      <div class="advanced-proxy-provider-name">{{ provider.name || `Provider ${index + 1}` }}</div>
-                      <div class="advanced-proxy-provider-meta">{{ provider.baseUrl || '-' }}</div>
-                    </div>
-                  </div>
-
-                  <div class="advanced-proxy-provider-actions">
-                    <a-switch
-                      :checked="provider.enabled"
-                      checked-children="启用"
-                      un-checked-children="停用"
-                      @change="value => handleProviderFieldMutation(index, 'enabled', value, 'Provider 状态已更新')"
-                    />
-                    <a-button size="small" :disabled="index === 0" @click="moveProvider(index, -1)">上移</a-button>
-                    <a-button size="small" :disabled="index === draft.claude.providers.length - 1" @click="moveProvider(index, 1)">下移</a-button>
-                    <a-button size="small" @click="reloadProviderStats(provider.id)">刷新熔断</a-button>
-                    <a-button size="small" danger @click="resetProviderBreaker(provider.id)">重置熔断</a-button>
-                    <a-button size="small" danger @click="removeProvider(index)">移除</a-button>
-                  </div>
-                </div>
-
-                <div class="advanced-proxy-provider-tags">
-                  <a-tag :color="provider.enabled ? 'green' : 'default'">{{ provider.enabled ? '队列启用' : '队列停用' }}</a-tag>
-                  <a-tag :color="breakerStateColor(provider.id)">熔断 {{ getBreakerStateLabel(provider.id) }}</a-tag>
-                  <a-tag color="blue">{{ provider.apiFormat }}</a-tag>
-                  <a-tag>{{ provider.apiKeyField }}</a-tag>
-                </div>
-
-                <div class="advanced-proxy-provider-grid">
-                  <a-form-item label="名称">
-                    <a-input
-                      :value="provider.name"
-                      @change="event => handleProviderFieldMutation(index, 'name', event?.target?.value ?? '', 'Provider 名称已更新')"
-                    />
-                  </a-form-item>
-                  <a-form-item label="Base URL">
-                    <a-input
-                      :value="provider.baseUrl"
-                      @change="event => handleProviderFieldMutation(index, 'baseUrl', event?.target?.value ?? '', 'Provider 地址已更新')"
-                    />
-                  </a-form-item>
-                  <a-form-item label="API Key">
-                    <a-input-password
-                      :value="provider.apiKey"
-                      @change="event => handleProviderFieldMutation(index, 'apiKey', event?.target?.value ?? '', 'Provider API Key 已更新')"
-                    />
-                  </a-form-item>
-                  <a-form-item label="上游模型">
-                    <a-input
-                      :value="provider.model"
-                      placeholder="留空则沿用请求里的模型"
-                      @change="event => handleProviderFieldMutation(index, 'model', event?.target?.value ?? '', 'Provider 模型已更新')"
-                    />
-                  </a-form-item>
-                  <a-form-item label="API 格式">
-                    <a-select
-                      :value="provider.apiFormat"
-                      @change="value => handleProviderFieldMutation(index, 'apiFormat', value, 'Provider API 格式已更新')"
-                    >
-                      <a-select-option value="anthropic">anthropic</a-select-option>
-                      <a-select-option value="openai_chat">openai_chat</a-select-option>
-                      <a-select-option value="openai_responses">openai_responses</a-select-option>
-                    </a-select>
-                  </a-form-item>
-                  <a-form-item label="Claude Key 字段">
-                    <a-select
-                      :value="provider.apiKeyField"
-                      @change="value => handleProviderFieldMutation(index, 'apiKeyField', value, 'Provider Key 字段已更新')"
-                    >
-                      <a-select-option value="ANTHROPIC_AUTH_TOKEN">ANTHROPIC_AUTH_TOKEN</a-select-option>
-                      <a-select-option value="ANTHROPIC_API_KEY">ANTHROPIC_API_KEY</a-select-option>
-                    </a-select>
-                  </a-form-item>
-                </div>
-
-                <div class="advanced-proxy-provider-stats">
-                  <span>连续失败 {{ getBreakerStats(provider.id).consecutiveFailures || 0 }}</span>
-                  <span>连续成功 {{ getBreakerStats(provider.id).consecutiveSuccesses || 0 }}</span>
-                  <span>总请求 {{ getBreakerStats(provider.id).totalRequests || 0 }}</span>
-                  <span>失败请求 {{ getBreakerStats(provider.id).failedRequests || 0 }}</span>
-                </div>
-              </article>
+            <div v-if="!providerCandidateCards.length" class="advanced-proxy-empty">
+              还没有可用 Provider。先从密钥管理中加入至少一条记录，再在这里点击卡片组成队列。
             </div>
           </section>
 
@@ -212,46 +145,51 @@
                 </div>
               </div>
 
-              <div class="advanced-proxy-dense-grid">
-                <div class="advanced-proxy-compact-field">
-                  <label class="advanced-proxy-compact-label">最大重试次数</label>
-                  <a-input-number :value="draft.failover.maxRetries" :min="0" :max="10" style="width:100%" @change="value => handleFailoverFieldMutation('maxRetries', value)" />
+              <div class="advanced-proxy-dense-rows">
+                <div class="advanced-proxy-triple-row">
+                  <div class="advanced-proxy-compact-field">
+                    <label class="advanced-proxy-compact-label">最大重试次数</label>
+                    <a-input-number class="advanced-proxy-short-number" :value="draft.failover.maxRetries" :min="0" :max="10" @change="value => handleFailoverFieldMutation('maxRetries', value)" />
+                  </div>
+                  <div class="advanced-proxy-compact-field">
+                    <label class="advanced-proxy-compact-label">流式首字节超时</label>
+                    <a-input-number class="advanced-proxy-short-number" :value="draft.failover.streamingFirstByteTimeout" :min="5" :max="300" @change="value => handleFailoverFieldMutation('streamingFirstByteTimeout', value)" />
+                  </div>
+                  <div class="advanced-proxy-compact-field">
+                    <label class="advanced-proxy-compact-label">流式空闲超时</label>
+                    <a-input-number class="advanced-proxy-short-number" :value="draft.failover.streamingIdleTimeout" :min="5" :max="600" @change="value => handleFailoverFieldMutation('streamingIdleTimeout', value)" />
+                  </div>
                 </div>
-                <div class="advanced-proxy-compact-field">
-                  <label class="advanced-proxy-compact-label">流式首字节超时</label>
-                  <a-input-number :value="draft.failover.streamingFirstByteTimeout" :min="5" :max="300" style="width:100%" @change="value => handleFailoverFieldMutation('streamingFirstByteTimeout', value)" />
+                <div class="advanced-proxy-triple-row">
+                  <div class="advanced-proxy-compact-field">
+                    <label class="advanced-proxy-compact-label">非流式超时</label>
+                    <a-input-number class="advanced-proxy-short-number" :value="draft.failover.nonStreamingTimeout" :min="5" :max="600" @change="value => handleFailoverFieldMutation('nonStreamingTimeout', value)" />
+                  </div>
+                  <div class="advanced-proxy-compact-field">
+                    <label class="advanced-proxy-compact-label">熔断失败阈值</label>
+                    <a-input-number class="advanced-proxy-short-number" :value="draft.failover.circuitFailureThreshold" :min="1" :max="20" @change="value => handleFailoverFieldMutation('circuitFailureThreshold', value)" />
+                  </div>
+                  <div class="advanced-proxy-compact-field">
+                    <label class="advanced-proxy-compact-label">恢复成功阈值</label>
+                    <a-input-number class="advanced-proxy-short-number" :value="draft.failover.circuitSuccessThreshold" :min="1" :max="20" @change="value => handleFailoverFieldMutation('circuitSuccessThreshold', value)" />
+                  </div>
                 </div>
-                <div class="advanced-proxy-compact-field">
-                  <label class="advanced-proxy-compact-label">流式空闲超时</label>
-                  <a-input-number :value="draft.failover.streamingIdleTimeout" :min="5" :max="600" style="width:100%" @change="value => handleFailoverFieldMutation('streamingIdleTimeout', value)" />
-                </div>
-                <div class="advanced-proxy-compact-field">
-                  <label class="advanced-proxy-compact-label">非流式超时</label>
-                  <a-input-number :value="draft.failover.nonStreamingTimeout" :min="5" :max="600" style="width:100%" @change="value => handleFailoverFieldMutation('nonStreamingTimeout', value)" />
-                </div>
-                <div class="advanced-proxy-compact-field">
-                  <label class="advanced-proxy-compact-label">熔断失败阈值</label>
-                  <a-input-number :value="draft.failover.circuitFailureThreshold" :min="1" :max="20" style="width:100%" @change="value => handleFailoverFieldMutation('circuitFailureThreshold', value)" />
-                </div>
-                <div class="advanced-proxy-compact-field">
-                  <label class="advanced-proxy-compact-label">恢复成功阈值</label>
-                  <a-input-number :value="draft.failover.circuitSuccessThreshold" :min="1" :max="20" style="width:100%" @change="value => handleFailoverFieldMutation('circuitSuccessThreshold', value)" />
-                </div>
-                <div class="advanced-proxy-compact-field">
-                  <label class="advanced-proxy-compact-label">熔断恢复等待</label>
-                  <a-input-number :value="draft.failover.circuitTimeoutSeconds" :min="5" :max="600" style="width:100%" @change="value => handleFailoverFieldMutation('circuitTimeoutSeconds', value)" />
-                </div>
-                <div class="advanced-proxy-compact-field">
-                  <label class="advanced-proxy-compact-label">错误率阈值</label>
-                  <a-input-number :value="draft.failover.circuitErrorRateThreshold" :min="0.1" :max="1" :step="0.05" style="width:100%" @change="value => handleFailoverFieldMutation('circuitErrorRateThreshold', value)" />
-                </div>
-                <div class="advanced-proxy-compact-field">
-                  <label class="advanced-proxy-compact-label">最小请求数</label>
-                  <a-input-number :value="draft.failover.circuitMinRequests" :min="1" :max="100" style="width:100%" @change="value => handleFailoverFieldMutation('circuitMinRequests', value)" />
+                <div class="advanced-proxy-triple-row">
+                  <div class="advanced-proxy-compact-field">
+                    <label class="advanced-proxy-compact-label">熔断恢复等待</label>
+                    <a-input-number class="advanced-proxy-short-number" :value="draft.failover.circuitTimeoutSeconds" :min="5" :max="600" @change="value => handleFailoverFieldMutation('circuitTimeoutSeconds', value)" />
+                  </div>
+                  <div class="advanced-proxy-compact-field">
+                    <label class="advanced-proxy-compact-label">错误率阈值</label>
+                    <a-input-number class="advanced-proxy-short-number" :value="draft.failover.circuitErrorRateThreshold" :min="0.1" :max="1" :step="0.05" @change="value => handleFailoverFieldMutation('circuitErrorRateThreshold', value)" />
+                  </div>
+                  <div class="advanced-proxy-compact-field">
+                    <label class="advanced-proxy-compact-label">最小请求数</label>
+                    <a-input-number class="advanced-proxy-short-number" :value="draft.failover.circuitMinRequests" :min="1" :max="100" @change="value => handleFailoverFieldMutation('circuitMinRequests', value)" />
+                  </div>
                 </div>
               </div>
             </section>
-
             <section class="advanced-proxy-section">
               <div class="advanced-proxy-section-head">
                 <div>
@@ -308,7 +246,13 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue';
 import { message } from 'ant-design-vue';
+import claudeAppIcon from '../assets/app-icons/claude.svg';
+import codexAppIcon from '../assets/app-icons/codex.svg';
+import opencodeAppIcon from '../assets/app-icons/opencode.svg';
+import openclawAppIcon from '../assets/app-icons/openclaw-fallback.svg';
 import DesktopConfigDiffModal from './DesktopConfigDiffModal.vue';
+import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManagedAppConfigFiles } from '../utils/desktopConfigBridge.js';
+import { buildDesktopConfigPreview, createDesktopConfigDraft } from '../utils/desktopConfigTransform.js';
 import { loadPanelRecords } from '../utils/keyPanelStore.js';
 import {
   ADVANCED_PROXY_APPS,
@@ -316,15 +260,22 @@ import {
   countAdvancedProxyOpenAIProviders,
   getAdvancedProxyAppBaseUrl,
   getAdvancedProxyConfig,
-  getAdvancedProxyConfigFilePath,
   getCircuitBreakerStats,
   normalizeAdvancedProxyConfig,
   resetCircuitBreaker,
   setAdvancedProxyConfig,
 } from '../utils/advancedProxyBridge.js';
-import { buildSingleFileWritePreview } from '../utils/localConfigPreview.js';
 
 const EMPTY_PREVIEW = { appGroups: [], writes: [], errors: [] };
+const modalWidth = 'min(1180px, calc(100vw - 24px))';
+const PROXY_MANAGED_TOKEN = 'PROXY_MANAGED';
+const ADVANCED_PROXY_PROVIDER_NAME = 'AllApiDeck Advanced Proxy';
+const ADVANCED_PROXY_APP_ICONS = {
+  claude: claudeAppIcon,
+  codex: codexAppIcon,
+  opencode: opencodeAppIcon,
+  openclaw: openclawAppIcon,
+};
 
 const props = defineProps({
   open: {
@@ -338,42 +289,103 @@ const emit = defineEmits(['update:open']);
 const loading = ref(false);
 const saving = ref(false);
 const previewOpen = ref(false);
-const pendingRecordKey = ref('');
 const availableRecords = ref([]);
 const breakerStatsMap = ref({});
-const configFilePath = ref('localStorage:batch_api_check_advanced_proxy_config_v1');
 const loadedConfigSnapshot = ref(normalizeAdvancedProxyConfig({}));
 const pendingSaveConfig = ref(null);
+const pendingManagedWrites = ref([]);
+const pendingWriteOrder = ref('config-first');
 const pendingSuccessMessage = ref('高级代理配置已更新');
 const configPreview = ref(EMPTY_PREVIEW);
+const lastEnabledAppIds = ref([]);
 const draft = reactive(normalizeAdvancedProxyConfig({}));
 
 const providerCount = computed(() => draft.claude.providers.length);
 const enabledProviderCount = computed(() => countAdvancedProxyEnabledProviders(draft));
 const openAIProviderCount = computed(() => countAdvancedProxyOpenAIProviders(draft));
-const enabledAppCount = computed(() => ADVANCED_PROXY_APPS.filter(app => draft?.[app.id]?.enabled === true).length);
-const enabledAppLabels = computed(() => ADVANCED_PROXY_APPS.filter(app => draft?.[app.id]?.enabled === true).map(app => app.label).join(' / '));
-const openCircuitCount = computed(() => draft.claude.providers.filter(provider => getBreakerStateLabel(provider.id) === 'open').length);
-const recordOptions = computed(() =>
-  availableRecords.value.map(record => ({
-    value: record.rowKey,
-    label: `${record.siteName || '未命名'} | ${record.siteUrl || '-'} | ${record.selectedModel || record.quickTestModel || '未选模型'}`,
-  }))
+const enabledAppIds = computed(() => getEnabledAppIds(draft));
+const enabledAppCount = computed(() => enabledAppIds.value.length);
+const enabledAppLabels = computed(() =>
+  ADVANCED_PROXY_APPS
+    .filter(app => enabledAppIds.value.includes(app.id))
+    .map(app => app.label)
+    .join(' / ')
 );
+const proxyMasterEnabled = computed(() => enabledAppIds.value.length > 0);
+const openCircuitCount = computed(() => draft.claude.providers.filter(provider => getBreakerStateLabel(provider.id) === 'open').length);
+const providerSelectionMap = computed(() => {
+  const map = new Map();
+  (draft.claude.providers || []).forEach((provider, index) => {
+    const id = String(provider?.id || provider?.rowKey || '').trim();
+    if (!id) return;
+    map.set(id, {
+      order: index + 1,
+      provider,
+    });
+  });
+  return map;
+});
+
+const providerCandidateCards = computed(() => {
+  const duplicateMeta = buildProviderDuplicateMeta(availableRecords.value);
+  const cards = availableRecords.value.map(record => {
+    const id = String(record?.rowKey || '').trim();
+    const selectedMeta = providerSelectionMap.value.get(id) || null;
+    const duplicate = duplicateMeta.get(id) || { index: 0, count: 0 };
+    return {
+      id,
+      siteName: String(record?.siteName || record?.siteUrl || 'Provider').trim() || 'Provider',
+      modelLabel: String(record?.selectedModel || record?.quickTestModel || selectedMeta?.provider?.model || '未设置模型').trim() || '未设置模型',
+      endpoint: String(record?.siteUrl || selectedMeta?.provider?.baseUrl || '').trim(),
+      apiKey: String(record?.apiKey || selectedMeta?.provider?.apiKey || '').trim(),
+      skLabel: duplicate.count > 1 ? `SK ${duplicate.index}` : '',
+      selected: Boolean(selectedMeta),
+      queueOrder: selectedMeta?.order || 0,
+      orphaned: false,
+      sortTime: Number(record?.updatedAt || 0),
+      sourceRecord: record,
+    };
+  });
+
+  providerSelectionMap.value.forEach((meta, id) => {
+    if (cards.some(item => item.id === id)) return;
+    cards.push({
+      id,
+      siteName: String(meta?.provider?.name || meta?.provider?.baseUrl || 'Provider').trim() || 'Provider',
+      modelLabel: String(meta?.provider?.model || '未设置模型').trim() || '未设置模型',
+      endpoint: String(meta?.provider?.baseUrl || '').trim(),
+      apiKey: String(meta?.provider?.apiKey || '').trim(),
+      skLabel: '',
+      selected: true,
+      queueOrder: meta?.order || 0,
+      orphaned: true,
+      sortTime: 0,
+      sourceRecord: null,
+    });
+  });
+
+  return cards.sort((left, right) => {
+    if (left.selected && right.selected) {
+      return left.queueOrder - right.queueOrder;
+    }
+    if (left.selected) return -1;
+    if (right.selected) return 1;
+    return Number(right.sortTime || 0) - Number(left.sortTime || 0)
+      || String(left.siteName || '').localeCompare(String(right.siteName || ''));
+  });
+});
 
 const appCards = computed(() =>
   ADVANCED_PROXY_APPS.map(app => {
     const enabled = draft?.[app.id]?.enabled === true;
-    const baseUrl = getAdvancedProxyAppBaseUrl(app.id, draft);
-    const readyText = app.mode === 'anthropic'
-      ? (enabledProviderCount.value > 0 ? '已接入 Claude 兼容链路' : '缺少可用 Provider')
-      : (openAIProviderCount.value > 0 ? '已接入 OpenAI 兼容链路' : '缺少 OpenAI 兼容上游');
     return {
       ...app,
       enabled,
-      baseUrl,
+      icon: ADVANCED_PROXY_APP_ICONS[app.id],
       modeLabel: app.mode === 'anthropic' ? 'Anthropic Messages 入口' : 'OpenAI Compatible 入口',
-      readyText,
+      tooltipDetail: app.id === 'claude'
+        ? '已支持：Claude 客户端 -> 8888 -> OpenAI 上游。Claude 请求会自动转成 OpenAI 上游请求，并把返回结果转回 Claude 格式。'
+        : '',
     };
   })
 );
@@ -382,7 +394,7 @@ function toPlainValue(value) {
   return JSON.parse(JSON.stringify(value ?? {}));
 }
 
-function normalizeForPreview(config) {
+function normalizeForSave(config) {
   const next = normalizeAdvancedProxyConfig(toPlainValue(config));
   delete next.updatedAt;
   return next;
@@ -403,49 +415,240 @@ function createPendingConfig(source = draft) {
   return normalizeAdvancedProxyConfig(plainDraft);
 }
 
-function openPreviewForConfig(nextConfig, successMessage = '高级代理配置已更新') {
-  const beforeText = JSON.stringify(normalizeForPreview(loadedConfigSnapshot.value), null, 2);
-  const afterText = JSON.stringify(normalizeForPreview(nextConfig), null, 2);
-  if (beforeText === afterText) {
+function buildProviderDuplicateMeta(records) {
+  const buckets = new Map();
+  (Array.isArray(records) ? records : []).forEach(record => {
+    const key = `${String(record?.siteUrl || '').trim().toLowerCase()}|${String(record?.siteName || '').trim().toLowerCase()}`;
+    if (!buckets.has(key)) {
+      buckets.set(key, []);
+    }
+    buckets.get(key).push(record);
+  });
+
+  const meta = new Map();
+  buckets.forEach(group => {
+    group.forEach((record, index) => {
+      meta.set(String(record?.rowKey || '').trim(), {
+        index: index + 1,
+        count: group.length,
+      });
+    });
+  });
+  return meta;
+}
+
+function buildProviderFromRecord(record, sortIndex) {
+  return {
+    id: record.rowKey,
+    rowKey: record.rowKey,
+    name: record.siteName || record.siteUrl || 'Provider',
+    baseUrl: record.siteUrl,
+    apiKey: record.apiKey,
+    model: record.selectedModel || record.quickTestModel || '',
+    apiFormat: 'openai_chat',
+    apiKeyField: 'ANTHROPIC_AUTH_TOKEN',
+    enabled: true,
+    sortIndex,
+    sourceType: record.sourceType || 'auto',
+  };
+}
+
+function getEnabledAppIds(source = draft) {
+  return ADVANCED_PROXY_APPS
+    .filter(app => source?.[app.id]?.enabled === true)
+    .map(app => app.id);
+}
+
+function hasConfigChanges(nextConfig) {
+  const beforeText = JSON.stringify(normalizeForSave(loadedConfigSnapshot.value));
+  const afterText = JSON.stringify(normalizeForSave(nextConfig));
+  return beforeText !== afterText;
+}
+
+async function syncSavedConfig(savedConfig) {
+  loadedConfigSnapshot.value = normalizeAdvancedProxyConfig(savedConfig);
+  overwriteDraft(loadedConfigSnapshot.value);
+  breakerStatsMap.value = {};
+  await Promise.all((draft.claude.providers || []).map(provider => reloadProviderStats(provider.id)));
+}
+
+async function saveConfigImmediately(nextConfig, successMessage = '高级代理配置已更新') {
+  if (!hasConfigChanges(nextConfig)) {
+    message.info('当前没有需要写入的配置变更');
+    return false;
+  }
+
+  saving.value = true;
+  try {
+    const saved = await setAdvancedProxyConfig(createPendingConfig(nextConfig));
+    await syncSavedConfig(saved);
+    message.success(successMessage);
+    return true;
+  } catch (error) {
+    message.error(error?.message || '写入高级代理配置失败');
+    return false;
+  } finally {
+    saving.value = false;
+  }
+}
+
+function openPreviewForManagedWrites(nextConfig, desktopPreview, successMessage = '高级代理配置已更新', options = {}) {
+  if (!hasConfigChanges(nextConfig)) {
     message.info('当前没有需要写入的配置变更');
     return;
   }
+
+  const managedWrites = Array.isArray(desktopPreview?.writes) ? desktopPreview.writes : [];
+  if (!managedWrites.length) {
+    saveConfigImmediately(nextConfig, successMessage);
+    return;
+  }
+
   pendingSaveConfig.value = createPendingConfig(nextConfig);
+  pendingManagedWrites.value = managedWrites;
+  pendingWriteOrder.value = options.writeOrder === 'managed-first' ? 'managed-first' : 'config-first';
   pendingSuccessMessage.value = successMessage;
-  configPreview.value = buildSingleFileWritePreview({
-    appId: 'advanced-proxy',
-    appName: '高级代理',
-    fileId: 'config',
-    label: 'config.json',
-    path: configFilePath.value,
-    before: beforeText,
-    after: afterText,
-  });
+  configPreview.value = desktopPreview || EMPTY_PREVIEW;
   previewOpen.value = true;
 }
 
-function handleConfigMutation(mutator, successMessage) {
+async function handleConfigMutation(mutator, successMessage) {
   if (saving.value) return;
   const nextConfig = createPendingConfig();
   mutator(nextConfig);
-  openPreviewForConfig(nextConfig, successMessage);
+  await saveConfigImmediately(nextConfig, successMessage);
 }
 
-function handleAppToggleMutation(appId, value) {
+function getCompatibleProviderForApp(config, appId, enabledOnly = true) {
+  const providers = Array.isArray(config?.claude?.providers) ? config.claude.providers : [];
+  const filtered = enabledOnly ? providers.filter(provider => provider?.enabled !== false) : providers;
+  if (appId === 'claude') {
+    return filtered[0] || null;
+  }
+  return filtered.find(provider => provider?.apiFormat === 'openai_chat' || provider?.apiFormat === 'openai_responses') || null;
+}
+
+function getPreferredModelForApp(config, appId, provider = null) {
+  const directModel = String(provider?.model || '').trim();
+  if (directModel) {
+    return directModel;
+  }
+  const defaultModel = String(config?.claude?.defaultModel || '').trim();
+  if (defaultModel) {
+    return defaultModel;
+  }
+  const providers = Array.isArray(config?.claude?.providers) ? config.claude.providers : [];
+  const compatibleProvider = getCompatibleProviderForApp(config, appId, false);
+  return String(compatibleProvider?.model || providers.find(item => String(item?.model || '').trim())?.model || '').trim();
+}
+
+function createTakeoverDesktopDraft(appId, enabled, config) {
+  const sourceProvider = getCompatibleProviderForApp(config, appId, true);
+  const model = getPreferredModelForApp(config, appId, sourceProvider);
+  if (!model) {
+    throw new Error('请先给 Provider 补一个模型，再启用该应用接管');
+  }
+
+  if (!enabled && !sourceProvider) {
+    throw new Error(appId === 'claude'
+      ? '当前没有可回退的 Claude 上游 Provider'
+      : '当前没有可回退的 OpenAI 兼容上游 Provider');
+  }
+
+  const endpoint = enabled ? getAdvancedProxyAppBaseUrl(appId, config) : String(sourceProvider?.baseUrl || '').trim();
+  const apiKey = enabled ? PROXY_MANAGED_TOKEN : String(sourceProvider?.apiKey || '').trim();
+  const providerName = enabled ? ADVANCED_PROXY_PROVIDER_NAME : String(sourceProvider?.name || 'Custom Provider').trim();
+
+  if (!endpoint) {
+    throw new Error('缺少可写入的目标地址');
+  }
+  if (!apiKey) {
+    throw new Error('缺少可写入的 API Key');
+  }
+
+  const nextDraft = createDesktopConfigDraft({
+    siteName: providerName,
+    siteUrl: endpoint,
+    apiKey,
+    selectedModel: model,
+    quickTestModel: model,
+  });
+
+  nextDraft.selectedApps = [appId];
+  nextDraft.providerName = providerName;
+  nextDraft.providerKey = 'custom';
+  nextDraft.forceCustomProviderKey = true;
+  nextDraft.endpoint = endpoint;
+  nextDraft.apiKey = apiKey;
+  nextDraft.model = model;
+  nextDraft.claudeBaseUrl = appId === 'claude' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
+  nextDraft.claudeApiKeyField = enabled ? 'ANTHROPIC_AUTH_TOKEN' : String(sourceProvider?.apiKeyField || 'ANTHROPIC_AUTH_TOKEN').trim();
+  nextDraft.codexBaseUrl = appId === 'codex' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
+  nextDraft.opencodeBaseUrl = appId === 'opencode' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
+  nextDraft.openclawBaseUrl = appId === 'openclaw' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
+  nextDraft.claudeUseAdvancedProxy = false;
+  nextDraft.codexUseAdvancedProxy = false;
+  nextDraft.opencodeUseAdvancedProxy = false;
+  nextDraft.openclawUseAdvancedProxy = false;
+  return nextDraft;
+}
+
+async function handleAppTakeoverToggle(appId, value) {
+  if (saving.value || loading.value) return;
+  if (!isDesktopConfigBridgeAvailable()) {
+    message.warning('高级代理接管仅支持桌面版 EXE 运行环境');
+    return;
+  }
+
   const app = ADVANCED_PROXY_APPS.find(item => item.id === appId);
-  handleConfigMutation(next => {
-    if (!next[appId]) {
-      next[appId] = {};
+  const nextConfig = createPendingConfig();
+  if (!nextConfig[appId]) {
+    nextConfig[appId] = {};
+  }
+  nextConfig[appId].enabled = value;
+
+  try {
+    const desktopDraft = createTakeoverDesktopDraft(appId, value, nextConfig);
+    const snapshot = await readManagedAppConfigFiles([appId]);
+    const desktopPreview = buildDesktopConfigPreview(desktopDraft, snapshot);
+    if (!desktopPreview.appGroups.length && desktopPreview.errors.length) {
+      throw new Error(desktopPreview.errors.join('\n'));
     }
-    next[appId].enabled = value;
-  }, `${app?.label || appId} 接管开关已更新`);
+
+    openPreviewForManagedWrites(nextConfig, desktopPreview, `${app?.label || appId} 接管配置已更新`, {
+      writeOrder: value ? 'config-first' : 'managed-first',
+    });
+  } catch (error) {
+    message.error(error?.message || `${app?.label || appId} 接管预览生成失败`);
+  }
 }
 
-function handleProviderFieldMutation(index, field, value, successMessage) {
+function handleProxyMasterToggle(value) {
+  if (value) {
+    handleConfigMutation(next => {
+      const restoreIds = lastEnabledAppIds.value.length ? [...lastEnabledAppIds.value] : ['claude'];
+      ADVANCED_PROXY_APPS.forEach(app => {
+        if (!next[app.id]) {
+          next[app.id] = {};
+        }
+        next[app.id].enabled = restoreIds.includes(app.id);
+      });
+    }, '代理总开关已更新');
+    return;
+  }
+
+  const currentEnabledIds = getEnabledAppIds(draft);
+  if (currentEnabledIds.length) {
+    lastEnabledAppIds.value = [...currentEnabledIds];
+  }
   handleConfigMutation(next => {
-    const provider = next.claude?.providers?.[index];
-    if (provider) provider[field] = value;
-  }, successMessage);
+    ADVANCED_PROXY_APPS.forEach(app => {
+      if (!next[app.id]) {
+        next[app.id] = {};
+      }
+      next[app.id].enabled = false;
+    });
+  }, '代理总开关已更新');
 }
 
 function handleFailoverFieldMutation(field, value) {
@@ -465,11 +668,7 @@ async function loadData() {
   try {
     await reloadContext();
     const config = await getAdvancedProxyConfig();
-    loadedConfigSnapshot.value = normalizeAdvancedProxyConfig(config);
-    overwriteDraft(loadedConfigSnapshot.value);
-    configFilePath.value = await getAdvancedProxyConfigFilePath();
-    breakerStatsMap.value = {};
-    await Promise.all((draft.claude.providers || []).map(provider => reloadProviderStats(provider.id)));
+    await syncSavedConfig(config);
   } catch (error) {
     message.error(error?.message || '加载高级代理配置失败');
   } finally {
@@ -487,50 +686,36 @@ watch(
   { immediate: true }
 );
 
-function appendProviderFromSelection() {
-  const selected = availableRecords.value.find(record => record.rowKey === pendingRecordKey.value);
-  if (!selected) {
-    message.warning('请选择要加入队列的记录');
-    return;
-  }
-  if (draft.claude.providers.some(item => item.id === selected.rowKey)) {
-    message.info('这条记录已经在队列里了');
-    return;
-  }
+watch(
+  enabledAppIds,
+  ids => {
+    if (ids.length) {
+      lastEnabledAppIds.value = [...ids];
+    }
+  },
+  { immediate: true }
+);
+
+function toggleProviderQueue(item) {
+  const providerId = String(item?.id || '').trim();
+  if (!providerId) return;
 
   handleConfigMutation(next => {
-    next.claude.providers.push({
-      id: selected.rowKey,
-      rowKey: selected.rowKey,
-      name: selected.siteName || selected.siteUrl || 'Provider',
-      baseUrl: selected.siteUrl,
-      apiKey: selected.apiKey,
-      model: selected.selectedModel || selected.quickTestModel || '',
-      apiFormat: 'openai_chat',
-      apiKeyField: 'ANTHROPIC_AUTH_TOKEN',
+    const list = [...(next.claude?.providers || [])];
+    const existingIndex = list.findIndex(provider => String(provider?.id || provider?.rowKey || '').trim() === providerId);
+
+    if (existingIndex >= 0) {
+      list.splice(existingIndex, 1);
+    } else if (item?.sourceRecord) {
+      list.push(buildProviderFromRecord(item.sourceRecord, list.length + 1));
+    }
+
+    next.claude.providers = list.map((provider, index) => ({
+      ...provider,
       enabled: true,
-      sortIndex: (next.claude.providers?.length || 0) + 1,
-      sourceType: selected.sourceType || 'auto',
-    });
-  }, 'Provider 已加入队列');
-  pendingRecordKey.value = '';
-}
-
-function removeProvider(index) {
-  handleConfigMutation(next => {
-    next.claude.providers.splice(index, 1);
-  }, 'Provider 已移除');
-}
-
-function moveProvider(index, delta) {
-  const targetIndex = index + delta;
-  if (targetIndex < 0 || targetIndex >= draft.claude.providers.length) return;
-  handleConfigMutation(next => {
-    const list = [...(next.claude.providers || [])];
-    const [current] = list.splice(index, 1);
-    list.splice(targetIndex, 0, current);
-    next.claude.providers = list;
-  }, 'Provider 顺序已更新');
+      sortIndex: index + 1,
+    }));
+  }, item?.selected ? 'Provider 已移出队列' : 'Provider 已加入队列');
 }
 
 function getBreakerStats(providerId) {
@@ -574,29 +759,30 @@ async function resetProviderBreaker(providerId) {
   }
 }
 
-async function copyText(text, successMessage) {
-  try {
-    await navigator.clipboard.writeText(String(text || ''));
-    message.success(successMessage);
-  } catch (error) {
-    message.error(error?.message || '复制失败，请手动复制');
-  }
-}
-
 async function applyPreview() {
   if (!pendingSaveConfig.value) {
     message.warning('没有待写入的配置变更');
     return;
   }
+
   saving.value = true;
   try {
+    if (pendingManagedWrites.value.length && pendingWriteOrder.value === 'managed-first') {
+      await applyManagedAppConfigFiles(pendingManagedWrites.value);
+    }
+
     const saved = await setAdvancedProxyConfig(pendingSaveConfig.value);
-    loadedConfigSnapshot.value = normalizeAdvancedProxyConfig(saved);
-    overwriteDraft(loadedConfigSnapshot.value);
-    await Promise.all((draft.claude.providers || []).map(provider => reloadProviderStats(provider.id)));
+
+    if (pendingManagedWrites.value.length && pendingWriteOrder.value !== 'managed-first') {
+      await applyManagedAppConfigFiles(pendingManagedWrites.value);
+    }
+
+    await syncSavedConfig(saved);
     previewOpen.value = false;
     configPreview.value = EMPTY_PREVIEW;
     pendingSaveConfig.value = null;
+    pendingManagedWrites.value = [];
+    pendingWriteOrder.value = 'config-first';
     message.success(pendingSuccessMessage.value || '高级代理配置已更新');
   } catch (error) {
     message.error(error?.message || '写入高级代理配置失败');
@@ -608,6 +794,8 @@ async function applyPreview() {
 function cancelPreview() {
   previewOpen.value = false;
   pendingSaveConfig.value = null;
+  pendingManagedWrites.value = [];
+  pendingWriteOrder.value = 'config-first';
   configPreview.value = EMPTY_PREVIEW;
 }
 
@@ -620,7 +808,7 @@ function handleCancel() {
 <style scoped>
 .advanced-proxy-shell {
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .advanced-proxy-hero,
@@ -628,14 +816,15 @@ function handleCancel() {
 .advanced-proxy-layout,
 .advanced-proxy-provider-grid,
 .advanced-proxy-inline-grid,
-.advanced-proxy-dense-grid {
+.advanced-proxy-dense-grid,
+.advanced-proxy-toggle-list {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .advanced-proxy-hero {
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.25fr);
-  padding: 16px 18px;
+  grid-template-columns: 1fr;
+  padding: 12px 14px;
   border-radius: 18px;
   border: 1px solid rgba(90, 117, 79, 0.14);
   background:
@@ -648,14 +837,14 @@ function handleCancel() {
 .advanced-proxy-provider-list,
 .advanced-proxy-section {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .advanced-proxy-hero-copy h3,
 .advanced-proxy-section-head h4 {
   margin: 0;
   color: #22311c;
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1.3;
 }
 
@@ -664,20 +853,52 @@ function handleCancel() {
 .advanced-proxy-provider-meta,
 .advanced-proxy-provider-stats,
 .advanced-proxy-notes,
-.advanced-proxy-app-copy small {
+.advanced-proxy-master-copy small {
   margin: 0;
   color: #6a7867;
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
-.advanced-proxy-app-grid,
-.advanced-proxy-summary-grid,
+.advanced-proxy-master-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(90, 117, 79, 0.13);
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.advanced-proxy-master-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.advanced-proxy-master-copy strong,
+.advanced-proxy-summary-card strong,
+.advanced-proxy-provider-name {
+  color: #22311c;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.advanced-proxy-app-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .advanced-proxy-provider-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.advanced-proxy-app-card,
+.advanced-proxy-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .advanced-proxy-summary-card,
 .advanced-proxy-section,
 .advanced-proxy-provider-card,
@@ -689,19 +910,7 @@ function handleCancel() {
   background: rgba(255, 255, 255, 0.84);
 }
 
-.advanced-proxy-app-card {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-}
-
-.advanced-proxy-app-card-active {
-  border-color: rgba(67, 113, 49, 0.24);
-  box-shadow: 0 10px 24px rgba(74, 104, 58, 0.08);
-}
-
-.advanced-proxy-app-head,
-.advanced-proxy-app-meta,
+.advanced-proxy-app-token,
 .advanced-proxy-provider-head,
 .advanced-proxy-provider-title,
 .advanced-proxy-provider-actions,
@@ -713,75 +922,245 @@ function handleCancel() {
   flex-wrap: wrap;
 }
 
-.advanced-proxy-app-head,
-.advanced-proxy-app-meta,
 .advanced-proxy-provider-head,
 .advanced-proxy-toggle-row {
   justify-content: space-between;
 }
 
-.advanced-proxy-app-copy,
+.advanced-proxy-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .advanced-proxy-section-head > div {
   min-width: 0;
+  flex: 1;
 }
 
-.advanced-proxy-app-copy strong,
-.advanced-proxy-summary-card strong,
-.advanced-proxy-provider-name {
-  color: #22311c;
-  font-size: 14px;
+.advanced-proxy-provider-pool {
+  display: grid;
+  gap: 8px;
+}
+
+.advanced-proxy-provider-panel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+}
+
+.advanced-proxy-provider-panel {
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  min-height: 90px;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  padding: 11px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(90, 117, 79, 0.15);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 246, 0.92));
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.advanced-proxy-provider-panel:hover {
+  border-color: rgba(88, 125, 66, 0.24);
+  box-shadow: 0 12px 24px rgba(74, 104, 58, 0.08);
+  transform: translateY(-1px);
+}
+
+.advanced-proxy-provider-panel-active {
+  border-color: rgba(75, 128, 50, 0.34);
+  box-shadow:
+    0 0 0 1px rgba(102, 168, 68, 0.12),
+    0 0 0 4px rgba(147, 210, 109, 0.12),
+    0 14px 28px rgba(74, 104, 58, 0.12);
+  background: linear-gradient(180deg, rgba(252, 255, 249, 0.98), rgba(242, 248, 236, 0.96));
+}
+
+.advanced-proxy-provider-panel-top,
+.advanced-proxy-provider-panel-meta,
+.advanced-proxy-provider-tooltip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.advanced-proxy-provider-panel-top {
+  justify-content: space-between;
+}
+
+.advanced-proxy-provider-panel-title {
+  min-width: 0;
+  font-size: 13px;
   font-weight: 700;
+  line-height: 1.25;
+  color: #22311c;
 }
 
-.advanced-proxy-app-card code {
-  padding: 6px 8px;
-  border-radius: 10px;
-  background: rgba(79, 108, 62, 0.08);
-  color: #2f4a28;
+.advanced-proxy-provider-panel-model {
+  min-width: 0;
+  color: #5f6e5a;
   font-size: 11px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.advanced-proxy-provider-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(79, 108, 62, 0.08);
+  color: #355029;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.advanced-proxy-provider-chip-muted {
+  background: rgba(108, 122, 101, 0.08);
+  color: #66725f;
+}
+
+.advanced-proxy-provider-tooltip {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.advanced-proxy-app-tooltip {
+  display: grid;
+  gap: 4px;
+  max-width: 320px;
+  line-height: 1.45;
+}
+
+.advanced-proxy-provider-tooltip code {
+  max-width: 340px;
+  white-space: pre-wrap;
   word-break: break-all;
+}
+
+.advanced-proxy-empty-compact {
+  padding: 11px 12px;
+}
+
+.advanced-proxy-app-token {
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  min-height: 58px;
+  justify-content: center;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(90, 117, 79, 0.13);
+  background: rgba(255, 255, 255, 0.88);
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease, background 0.18s ease;
+}
+
+.advanced-proxy-app-token:hover {
+  border-color: rgba(72, 113, 54, 0.28);
+  box-shadow: 0 10px 22px rgba(74, 104, 58, 0.08);
+  transform: translateY(-1px);
+}
+
+.advanced-proxy-app-token-active {
+  border-color: rgba(67, 113, 49, 0.28);
+  background: linear-gradient(135deg, rgba(250, 252, 247, 0.98), rgba(236, 246, 228, 0.96));
+  box-shadow: 0 12px 24px rgba(74, 104, 58, 0.1);
+}
+
+.advanced-proxy-app-token-active .advanced-proxy-app-icon-shell {
+  box-shadow: inset 0 0 0 1px rgba(57, 94, 41, 0.1);
+}
+
+.advanced-proxy-app-icon-shell {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  box-shadow: inset 0 0 0 1px rgba(90, 117, 79, 0.08);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(242, 247, 236, 0.92));
+}
+
+.advanced-proxy-app-icon-shell-claude {
+  background: linear-gradient(135deg, #fff7ed, #ffedd5);
+}
+
+.advanced-proxy-app-icon-shell-codex {
+  background: linear-gradient(135deg, #ffffff, #f3f4f6);
+}
+
+.advanced-proxy-app-icon-shell-opencode {
+  background: linear-gradient(135deg, #eef2ff, #dbeafe);
+}
+
+.advanced-proxy-app-icon-shell-openclaw {
+  background: linear-gradient(135deg, #fff1f2, #ffe4e6);
+}
+
+.advanced-proxy-app-icon-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
 }
 
 .advanced-proxy-summary-card,
 .advanced-proxy-provider-card,
 .advanced-proxy-section {
   display: grid;
-  gap: 8px;
-  padding: 12px 14px;
+  gap: 6px;
+  padding: 9px 10px;
+}
+
+.advanced-proxy-summary-card {
+  align-content: start;
+  min-height: 84px;
+}
+
+.advanced-proxy-summary-card span,
+.advanced-proxy-summary-card small {
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .advanced-proxy-layout {
-  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.95fr);
+  grid-template-columns: minmax(0, 1.42fr) minmax(420px, 1.08fr);
   align-items: start;
-}
-
-.advanced-proxy-adder {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 10px;
 }
 
 .advanced-proxy-empty {
-  padding: 16px 14px;
+  padding: 14px 12px;
   border-radius: 14px;
   border: 1px dashed rgba(90, 117, 79, 0.28);
   color: #6a7965;
   background: rgba(247, 250, 244, 0.9);
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .advanced-proxy-provider-order {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 32px;
-  height: 26px;
+  min-width: 30px;
+  height: 24px;
   padding: 0 8px;
   border-radius: 999px;
   background: rgba(60, 103, 39, 0.12);
   color: #2c4a1f;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
 }
 
@@ -798,67 +1177,174 @@ function handleCancel() {
 }
 
 .advanced-proxy-provider-grid :deep(.ant-form-item) {
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .advanced-proxy-provider-stats {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
+  font-size: 11px;
 }
 
 .advanced-proxy-inline-grid,
-.advanced-proxy-dense-grid {
+.advanced-proxy-toggle-list {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.advanced-proxy-dense-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.advanced-proxy-dense-rows {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.advanced-proxy-triple-row {
+  display: contents;
+}
+
+.advanced-proxy-triple-row > .advanced-proxy-compact-field {
+  width: auto;
+  min-width: 0;
+  justify-self: stretch;
 }
 
 .advanced-proxy-inline-control,
 .advanced-proxy-compact-field,
 .advanced-proxy-toggle-row {
-  padding: 10px 12px;
+  padding: 8px 10px;
+}
+
+.advanced-proxy-inline-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.advanced-proxy-toggle-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.advanced-proxy-toggle-row span,
+.advanced-proxy-inline-label {
+  flex: 1;
+  min-width: 0;
 }
 
 .advanced-proxy-inline-label,
 .advanced-proxy-compact-label {
   color: #22311c;
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 700;
-  line-height: 1.4;
+  line-height: 1.3;
 }
 
 .advanced-proxy-compact-field {
   display: grid;
-  gap: 6px;
+  gap: 4px;
+  padding: 10px 10px;
 }
 
 .advanced-proxy-compact-field :deep(.ant-input-number) {
-  border-radius: 10px;
+  border-radius: 9px;
+}
+
+.advanced-proxy-short-number {
+  width: 100%;
+  min-width: 0;
 }
 
 .advanced-proxy-notes {
-  padding-left: 18px;
+  padding-left: 16px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.advanced-proxy-section :deep(.ant-input),
+.advanced-proxy-section :deep(.ant-input-password),
+.advanced-proxy-section :deep(.ant-input-affix-wrapper),
+.advanced-proxy-section :deep(.ant-select-selector),
+.advanced-proxy-section :deep(.ant-input-number),
+.advanced-proxy-section :deep(.ant-btn) {
+  min-height: 28px;
+  font-size: 11px;
+}
+
+.advanced-proxy-section :deep(.ant-form-item-label > label) {
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.advanced-proxy-section :deep(.ant-select-single:not(.ant-select-customize-input) .ant-select-selector) {
+  height: 28px;
+}
+
+.advanced-proxy-section :deep(.ant-select-single .ant-select-selector .ant-select-selection-item),
+.advanced-proxy-section :deep(.ant-select-single .ant-select-selector .ant-select-selection-placeholder) {
+  line-height: 26px;
+}
+
+.advanced-proxy-section :deep(.ant-input-number-input) {
+  height: 26px;
 }
 
 @media (max-width: 1180px) {
-  .advanced-proxy-hero,
-  .advanced-proxy-layout,
-  .advanced-proxy-summary-grid {
+  .advanced-proxy-layout {
     grid-template-columns: 1fr;
+  }
+
+  .advanced-proxy-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 860px) {
-  .advanced-proxy-app-grid,
+@media (max-width: 760px) {
+  .advanced-proxy-toggle-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .advanced-proxy-dense-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .advanced-proxy-summary-grid,
   .advanced-proxy-provider-grid,
   .advanced-proxy-inline-grid,
   .advanced-proxy-dense-grid,
-  .advanced-proxy-adder {
+  .advanced-proxy-toggle-list {
     grid-template-columns: 1fr;
+  }
+
+  .advanced-proxy-dense-rows {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .advanced-proxy-provider-actions {
     justify-content: flex-start;
+  }
+}
+
+@media (max-width: 560px) {
+  .advanced-proxy-provider-panel-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .advanced-proxy-app-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .advanced-proxy-provider-panel-grid,
+  .advanced-proxy-dense-rows {
+    grid-template-columns: 1fr;
   }
 }
 </style>

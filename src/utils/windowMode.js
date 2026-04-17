@@ -37,3 +37,15 @@ export async function getSidebarMode() {
   }
   return false;
 }
+
+export function isManualSidebarBridgeAvailable() {
+  return typeof getAppBridge()?.OpenManualSidebarPanel === 'function';
+}
+
+export async function openManualSidebarPanel() {
+  const app = getAppBridge();
+  if (typeof app?.OpenManualSidebarPanel === 'function') {
+    return app.OpenManualSidebarPanel();
+  }
+  return false;
+}

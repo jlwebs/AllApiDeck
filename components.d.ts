@@ -39,6 +39,7 @@ declare module 'vue' {
     APopconfirm: typeof import('ant-design-vue/es')['Popconfirm']
     APopover: typeof import('ant-design-vue/es')['Popover']
     AppHeader: typeof import('./src/components/AppHeader.vue')['default']
+    AppstoreOutlined: typeof import('@ant-design/icons-vue')['AppstoreOutlined']
     AProgress: typeof import('ant-design-vue/es')['Progress']
     ARadio: typeof import('ant-design-vue/es')['Radio']
     ARadioButton: typeof import('ant-design-vue/es')['RadioButton']
@@ -63,11 +64,13 @@ declare module 'vue' {
     Check: typeof import('./src/components/Check.vue')['default']
     DesktopConfigDiffModal: typeof import('./src/components/DesktopConfigDiffModal.vue')['default']
     Experimental: typeof import('./src/components/Experimental.vue')['default']
+    FileTextOutlined: typeof import('@ant-design/icons-vue')['FileTextOutlined']
     KeyManagement: typeof import('./src/components/KeyManagement.vue')['default']
     KeySidePanel: typeof import('./src/components/KeySidePanel.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SiteManagement: typeof import('./src/components/SiteManagement.vue')['default']
     SystemSettingsModal: typeof import('./src/components/SystemSettingsModal.vue')['default']
+    TagsOutlined: typeof import('@ant-design/icons-vue')['TagsOutlined']
   }
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,6 +22,11 @@ const (
 	panelWideWindowWidth   = 520
 	panelMaxWindowWidth    = 680
 	panelWindowHeight      = 780
+	manualPanelWindowWidth = 136
+	manualPanelWideWidth   = 300
+	manualPanelMaxWidth    = 420
+	manualPanelHeight      = 430
+	manualPanelMinHeight   = 260
 	panelTriggerWidth      = 22
 	panelExpandedEdgeGap   = 0
 	panelDockThreshold     = 28
@@ -31,6 +37,8 @@ const (
 	panelAutoTickInterval  = 60 * time.Millisecond
 	windowMonitorInterval  = 450 * time.Millisecond
 	panelRestoreSignal     = "panel-restore.signal"
+	panelManualShowSignal  = "panel-manual-show.signal"
+	panelManualReadySignal = "panel-manual-ready.signal"
 )
 
 type panelDockEdge string
@@ -122,6 +130,59 @@ func (a *App) stopPanelAutoController() {
 	}
 	close(a.panelAutoStop)
 	a.panelAutoStop = nil
+}
+
+func (a *App) startPanelSignalWatcher() {
+	if !a.isPanelMode() {
+		return
+	}
+	a.panelSignalStopMux.Lock()
+	defer a.panelSignalStopMux.Unlock()
+	if a.panelSignalStop != nil {
+		return
+	}
+	stopCh := make(chan struct{})
+	a.panelSignalStop = stopCh
+	go a.runPanelSignalWatcher(stopCh)
+}
+
+func (a *App) stopPanelSignalWatcher() {
+	a.panelSignalStopMux.Lock()
+	defer a.panelSignalStopMux.Unlock()
+	if a.panelSignalStop == nil {
+		return
+	}
+	close(a.panelSignalStop)
+	a.panelSignalStop = nil
+}
+
+func (a *App) runPanelSignalWatcher(stopCh <-chan struct{}) {
+	ticker := time.NewTicker(150 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stopCh:
+			return
+		case <-ticker.C:
+			if !a.isPanelMode() || a.ctx == nil || a.isQuitRequested() {
+				continue
+			}
+			if !consumePanelManualShowSignal() {
+				continue
+			}
+			debugLogf("panel manual show signal consumed")
+			if err := a.applyManualPanelWindowState(0, 0); err != nil {
+				debugLogf("panel manual show failed: %v", err)
+				continue
+			}
+			if err := writePanelManualReadySignal(); err != nil {
+				debugLogf("panel manual ready ack write failed: %v", err)
+				continue
+			}
+			debugLogf("panel manual ready ack written")
+		}
+	}
 }
 
 func (a *App) runWindowMonitor(stopCh <-chan struct{}) {
@@ -301,7 +362,7 @@ func (a *App) HideToTrayPanel() error {
 	}
 
 	a.captureNormalWindowBounds()
-	if err := a.startPanelProcess(); err != nil {
+	if err := a.startPanelProcessWithMode(panelStartAuto); err != nil {
 		return err
 	}
 
@@ -368,6 +429,47 @@ func (a *App) RequestMainWindowRestore() error {
 
 func (a *App) EnterSidebarMode() error {
 	return a.HideToTrayPanel()
+}
+
+func (a *App) OpenManualSidebarPanel() error {
+	if a.ctx == nil || a.isPanelMode() {
+		return nil
+	}
+
+	a.captureNormalWindowBounds()
+	debugLogf("manual panel open requested")
+	clearPanelManualReadySignal()
+
+	if a.panelProcessRunning() {
+		debugLogf("manual panel open: existing panel process detected, requesting visible state")
+		if err := writePanelManualShowSignal(); err != nil {
+			debugLogf("manual panel open: write show signal failed: %v", err)
+		} else if waitForPanelManualReadySignal(2200 * time.Millisecond) {
+			debugLogf("manual panel open: existing panel acknowledged visible state")
+			wruntime.WindowHide(a.ctx)
+			wruntime.Hide(a.ctx)
+			return nil
+		} else {
+			debugLogf("manual panel open: existing panel did not acknowledge visible state in time")
+		}
+
+		debugLogf("manual panel open: restarting panel process after missed ack")
+		a.stopPanelProcess()
+		clearPanelManualReadySignal()
+	}
+
+	if err := a.startPanelProcessWithMode(panelStartManual); err != nil {
+		debugLogf("manual panel open: start manual panel failed: %v", err)
+		return err
+	}
+	if !waitForPanelManualReadySignal(3500 * time.Millisecond) {
+		debugLogf("manual panel open: new manual panel did not become ready before timeout")
+		return fmt.Errorf("manual panel ready timeout")
+	}
+	debugLogf("manual panel open: new manual panel acknowledged ready; hiding main window")
+	wruntime.WindowHide(a.ctx)
+	wruntime.Hide(a.ctx)
+	return nil
 }
 
 func (a *App) ExitSidebarMode() error {
@@ -580,6 +682,19 @@ func (a *App) InitPanelWindow(screenWidth int, screenHeight int) error {
 	if !a.isPanelMode() || a.ctx == nil {
 		return nil
 	}
+	if a.isManualPanelStart() {
+		debugLogf("panel init: manual panel start detected")
+		if err := a.applyManualPanelWindowState(screenWidth, screenHeight); err != nil {
+			debugLogf("panel init: manual panel apply state failed: %v", err)
+			return err
+		}
+		if err := writePanelManualReadySignal(); err != nil {
+			debugLogf("panel init: manual panel ready ack write failed: %v", err)
+		} else {
+			debugLogf("panel init: manual panel ready ack written")
+		}
+		return nil
+	}
 	workArea := resolvePanelWorkArea(screenWidth, screenHeight)
 	appWindowState.mu.Lock()
 	appWindowState.panel.screenWidth = maxInt(workArea.Width(), screenWidth)
@@ -767,6 +882,67 @@ func (a *App) applyPanelWindowState(screenWidth int, screenHeight int, collapsed
 	return nil
 }
 
+func (a *App) applyManualPanelWindowState(screenWidth int, screenHeight int) error {
+	if a.ctx == nil {
+		return nil
+	}
+
+	workArea := resolvePanelWorkArea(screenWidth, screenHeight)
+	width := manualPanelWideWidth
+	if width > manualPanelMaxWidth {
+		width = manualPanelMaxWidth
+	}
+
+	height := manualPanelHeight
+	if height > workArea.Height()-panelWindowMarginY*2 {
+		height = maxInt(manualPanelMinHeight, workArea.Height()-panelWindowMarginY*2)
+	}
+	if height <= 0 {
+		height = manualPanelHeight
+	}
+
+	x := int(workArea.Left) + maxInt((workArea.Width()-width)/2, 0)
+	y := int(workArea.Top) + maxInt((workArea.Height()-height)/2, 0)
+	dockEdge := panelDockFree
+	hasPreferredX := true
+
+	appWindowState.mu.Lock()
+	appWindowState.panel = panelWindowState{
+		screenWidth:   maxInt(workArea.Width(), screenWidth),
+		screenHeight:  maxInt(workArea.Height(), screenHeight),
+		collapsed:     false,
+		expandedWidth: width,
+		preferredX:    x,
+		hasPreferredX: hasPreferredX,
+		preferredY:    y,
+		hasPreferredY: true,
+		dockEdge:      dockEdge,
+	}
+	appWindowState.mu.Unlock()
+
+	debugLogf(
+		"manual panel apply state: workArea=(%d,%d)-(%d,%d) size=%dx%d pos=(%d,%d)",
+		workArea.Left,
+		workArea.Top,
+		workArea.Right,
+		workArea.Bottom,
+		width,
+		height,
+		x,
+		y,
+	)
+
+	wruntime.WindowSetAlwaysOnTop(a.ctx, true)
+	wruntime.WindowSetMinSize(a.ctx, manualPanelWindowWidth, manualPanelMinHeight)
+	wruntime.WindowSetMaxSize(a.ctx, manualPanelMaxWidth, maxInt(manualPanelHeight, height))
+	wruntime.WindowSetSize(a.ctx, width, height)
+	wruntime.WindowSetPosition(a.ctx, x, y)
+	wruntime.WindowShow(a.ctx)
+	wruntime.Show(a.ctx)
+	_ = hidePanelWindowFromTaskbar()
+	return nil
+}
+
 func (a *App) capturePanelPlacement() {
 	if !a.isPanelMode() || a.ctx == nil {
 		return
@@ -915,6 +1091,10 @@ func (a *App) initPanelWindow() {
 	if !a.isPanelMode() || a.ctx == nil {
 		return
 	}
+	if a.isManualPanelStart() {
+		_ = a.applyManualPanelWindowState(0, 0)
+		return
+	}
 	appWindowState.mu.Lock()
 	appWindowState.panel.preferredX = 0
 	appWindowState.panel.hasPreferredX = false
@@ -953,6 +1133,10 @@ func (a *App) initPanelWindow() {
 }
 
 func (a *App) startPanelProcess() error {
+	return a.startPanelProcessWithMode(panelStartAuto)
+}
+
+func (a *App) startPanelProcessWithMode(panelStart panelStartMode) error {
 	if a.isPanelMode() {
 		return nil
 	}
@@ -972,18 +1156,25 @@ func (a *App) startPanelProcess() error {
 		return fmt.Errorf("resolve executable failed: %w", err)
 	}
 
-	cmd := exec.Command(exePath, "--panel")
+	args := []string{"--panel"}
+	if panelStart == panelStartManual {
+		args = append(args, "--panel-manual")
+	}
+	debugLogf("start panel process requested: mode=%s args=%v", panelStart, args)
+
+	cmd := exec.Command(exePath, args...)
 	configureWindowedAppCmd(cmd)
 	cmd.Dir = filepath.Dir(exePath)
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%s", webviewGroupPIDEnvKey, strconv.Itoa(resolveWebviewGroupPID(a.mode))))
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start panel failed: %w", err)
 	}
-	debugLogf("panel child launched pid=%d", cmd.Process.Pid)
+	debugLogf("panel child launched pid=%d mode=%s", cmd.Process.Pid, panelStart)
 	a.panelCmd = cmd
 
 	go func(process *exec.Cmd) {
-		_ = process.Wait()
+		waitErr := process.Wait()
+		debugLogf("panel child exited pid=%d err=%v", process.Process.Pid, waitErr)
 		a.panelMu.Lock()
 		if a.panelCmd == process {
 			a.panelCmd = nil
@@ -1008,7 +1199,7 @@ func (a *App) OpenKeyEditor(rowKey string) error {
 	cmd := exec.Command(exePath, args...)
 	configureWindowedAppCmd(cmd)
 	cmd.Dir = filepath.Dir(exePath)
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%s", webviewGroupPIDEnvKey, strconv.Itoa(resolveWebviewGroupPID(a.mode))))
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start key editor failed: %w", err)
 	}
@@ -1035,7 +1226,7 @@ func (a *App) OpenDesktopConfigWindow(rowKey string) error {
 	cmd := exec.Command(exePath, args...)
 	configureWindowedAppCmd(cmd)
 	cmd.Dir = filepath.Dir(exePath)
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%s", webviewGroupPIDEnvKey, strconv.Itoa(resolveWebviewGroupPID(a.mode))))
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start desktop config failed: %w", err)
 	}
@@ -1069,6 +1260,14 @@ func panelSignalPath() string {
 	return filepath.Join(resolveRuntimeRootDir(), panelRestoreSignal)
 }
 
+func panelManualShowSignalPath() string {
+	return filepath.Join(resolveRuntimeRootDir(), panelManualShowSignal)
+}
+
+func panelManualReadySignalPath() string {
+	return filepath.Join(resolveRuntimeRootDir(), panelManualReadySignal)
+}
+
 func writePanelRestoreSignal() error {
 	path := panelSignalPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -1084,6 +1283,48 @@ func consumePanelRestoreSignal() bool {
 	}
 	_ = os.Remove(path)
 	return true
+}
+
+func writePanelManualShowSignal() error {
+	path := panelManualShowSignalPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(time.Now().Format(time.RFC3339Nano)), 0o644)
+}
+
+func consumePanelManualShowSignal() bool {
+	path := panelManualShowSignalPath()
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	_ = os.Remove(path)
+	return true
+}
+
+func writePanelManualReadySignal() error {
+	path := panelManualReadySignalPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(time.Now().Format(time.RFC3339Nano)), 0o644)
+}
+
+func clearPanelManualReadySignal() {
+	_ = os.Remove(panelManualReadySignalPath())
+}
+
+func waitForPanelManualReadySignal(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	path := panelManualReadySignalPath()
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			_ = os.Remove(path)
+			return true
+		}
+		time.Sleep(80 * time.Millisecond)
+	}
+	return false
 }
 
 func maxInt(left int, right int) int {

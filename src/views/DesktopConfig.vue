@@ -65,7 +65,11 @@
               </a-form-item>
 
               <a-form-item label="Provider Key">
-                <a-input :value="desktopConfigDraft.forceCustomProviderKey ? 'custom' : '保持当前 provider key'" readonly />
+                <a-input
+                  v-model:value="desktopConfigDraft.providerKey"
+                  :readonly="desktopConfigDraft.forceCustomProviderKey !== false"
+                  :placeholder="desktopConfigDraft.forceCustomProviderKey !== false ? 'custom' : '请输入 provider key'"
+                />
                 <a-checkbox
                   :checked="desktopConfigDraft.forceCustomProviderKey !== false"
                   class="desktop-provider-checkbox"
@@ -174,7 +178,7 @@ import { message } from 'ant-design-vue';
 import { GetLaunchRecordKey, RequestQuit } from '../../wailsjs/go/main/App.js';
 import DesktopConfigDiffModal from '../components/DesktopConfigDiffModal.vue';
 import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManagedAppConfigFiles } from '../utils/desktopConfigBridge.js';
-import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS } from '../utils/desktopConfigTransform.js';
+import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS, inferProviderKeyFromSnapshot } from '../utils/desktopConfigTransform.js';
 import { getRecordModelOptions, loadPanelRecords, loadRecordModelOptions, persistPanelRecords } from '../utils/keyPanelStore.js';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
@@ -196,6 +200,7 @@ const desktopConfigDiffOpen = ref(false);
 const desktopConfigPreview = ref({ appGroups: [], writes: [], errors: [] });
 const desktopConfigDraft = reactive(createDesktopConfigDraft({}));
 const modelLoading = ref(false);
+const desktopProviderKeyManualValue = ref('');
 
 const desktopConfigModelOptions = computed(() => {
   const record = targetRecord.value;
@@ -211,6 +216,7 @@ const desktopConfigModelOptions = computed(() => {
 function overwriteDesktopConfigDraft(nextDraft) {
   Object.keys(desktopConfigDraft).forEach(key => delete desktopConfigDraft[key]);
   Object.assign(desktopConfigDraft, nextDraft);
+  desktopProviderKeyManualValue.value = String(nextDraft?.providerKey || '').trim();
 }
 
 function replaceTargetRecord(nextRecord, persist = false) {
@@ -237,12 +243,41 @@ function toggleDesktopAppSelection(appId) {
   } else {
     desktopConfigDraft.selectedApps = [...current, appId];
   }
+  if (desktopConfigDraft.forceCustomProviderKey === false) {
+    void syncDesktopProviderKeyFromSnapshot();
+  }
 }
 
 function handleDesktopProviderKeyModeChange(event) {
   const checked = Boolean(event?.target?.checked);
+  if (!checked && desktopConfigDraft.forceCustomProviderKey === false) {
+    desktopProviderKeyManualValue.value = String(desktopConfigDraft.providerKey || '').trim();
+  }
   desktopConfigDraft.forceCustomProviderKey = checked;
-  desktopConfigDraft.providerKey = checked ? 'custom' : '';
+  const fallbackManualValue = String(desktopProviderKeyManualValue.value || '').trim();
+  desktopConfigDraft.providerKey = checked
+    ? 'custom'
+    : (fallbackManualValue && fallbackManualValue !== 'custom' ? fallbackManualValue : '');
+  if (!checked && !String(desktopConfigDraft.providerKey || '').trim()) {
+    void syncDesktopProviderKeyFromSnapshot();
+  }
+}
+
+async function syncDesktopProviderKeyFromSnapshot() {
+  if (!isDesktopConfigBridgeAvailable()) return;
+  try {
+    const selectedApps = Array.isArray(desktopConfigDraft.selectedApps) && desktopConfigDraft.selectedApps.length
+      ? desktopConfigDraft.selectedApps
+      : DESKTOP_CONFIG_APPS.map(app => app.id);
+    const snapshot = await readManagedAppConfigFiles(selectedApps);
+    const inferred = inferProviderKeyFromSnapshot(snapshot, desktopConfigDraft, selectedApps);
+    const detected = String(inferred?.providerKey || '').trim();
+    if (!detected) return;
+    desktopProviderKeyManualValue.value = detected;
+    if (desktopConfigDraft.forceCustomProviderKey === false) {
+      desktopConfigDraft.providerKey = detected;
+    }
+  } catch {}
 }
 
 function handleDesktopModelChange(value) {
@@ -349,6 +384,7 @@ async function bootstrap() {
 
   replaceTargetRecord(matched, false);
   overwriteDesktopConfigDraft(createDesktopConfigDraft(matched));
+  void syncDesktopProviderKeyFromSnapshot();
 }
 
 onMounted(() => {

@@ -18,7 +18,6 @@
             <AppHeader
               current-page="batch"
               :is-dark-mode="isDarkMode"
-              @toggle-theme="handleToggleTheme"
               @experimental="showExperimentalFeatures = true"
               @settings="openSettingsModal"
             />
@@ -71,34 +70,36 @@
               <div v-show="step === 1" class="step-container step-container-hero">
                 <div class="hero-stage-grid">
                   <div class="hero-left-stack">
-                    <div class="hero-action-card hero-action-card-bridge hero-action-card-large hero-action-card-recommend">
-                      <span class="hero-card-watermark">RECOMMEND</span>
-                      <div class="hero-action-copy">
-                        <h3>当前浏览器标签直接导入</h3>
-                        <p>基于浏览器油猴-拓展桥-直接导入标签的中转站。【兼容性最高】</p>
-                      </div>
-                      <a-button type="dashed" class="hero-secondary-button hero-bridge-button" @click="handleDirectTabImport">
-                        <InboxOutlined /> 当前标签导入
-                      </a-button>
-                    </div>
-
-                    <div class="hero-action-card hero-action-card-primary hero-action-card-compact">
-                      <div class="hero-action-copy">
-                        <h3>从浏览器扩展导入</h3>
-                        <p>直接从本机扩展插件“ALL API HUB”文件数据完成一键导入。</p>
-                      </div>
-                      <div class="hero-primary-inline">
-                        <a-button
-                          v-if="isWailsRuntime"
-                          type="primary"
-                          size="large"
-                          @click="importFromExtension"
-                          :disabled="isImportingExtension"
-                          class="hero-primary-button"
-                        >
-                          <InboxOutlined /> {{ isImportingExtension ? '正在读取扩展数据...' : '从浏览器扩展导入' }}
+                    <div class="hero-primary-pair">
+                      <div class="hero-action-card hero-action-card-bridge hero-action-card-large hero-action-card-recommend">
+                        <span class="hero-card-watermark">RECOMMEND</span>
+                        <div class="hero-action-copy">
+                          <h3>当前浏览器标签直接导入</h3>
+                          <p class="hero-copy-half-gap">基于浏览器拓展桥直接导入你正在浏览的中转站。 【兼容性最高】</p>
+                        </div>
+                        <a-button type="dashed" class="hero-secondary-button hero-bridge-button" @click="handleDirectTabImport">
+                          <TagsOutlined /> 当前标签导入
                         </a-button>
-                        <p v-if="!isWailsRuntime" class="hero-action-note">当前环境非桌面模式，可改用右侧 JSON 导入。</p>
+                      </div>
+
+                      <div class="hero-action-card hero-action-card-primary hero-action-card-compact">
+                        <div class="hero-action-copy">
+                          <h3>从浏览器扩展导入</h3>
+                          <p class="hero-copy-half-gap">直接从本机扩展插件“ALL API HUB”文件数据完成一键导入。</p>
+                        </div>
+                        <div class="hero-primary-inline">
+                          <a-button
+                            v-if="isWailsRuntime"
+                            type="primary"
+                            size="large"
+                            @click="importFromExtension"
+                            :disabled="isImportingExtension"
+                            class="hero-primary-button"
+                          >
+                            <AppstoreOutlined /> {{ isImportingExtension ? '正在读取扩展数据...' : '从浏览器扩展导入' }}
+                          </a-button>
+                          <p v-if="!isWailsRuntime" class="hero-action-note">当前环境非桌面模式，可改用右侧 JSON 导入。</p>
+                        </div>
                       </div>
                     </div>
 
@@ -128,7 +129,7 @@
                       class="hero-upload-dragger"
                     >
                       <p class="ant-upload-drag-icon">
-                        <InboxOutlined />
+                        <FileTextOutlined />
                       </p>
                       <p class="ant-upload-text">点击或拖入 accounts-backup.json</p>
                       <p class="ant-upload-hint">解析后自动拉起模型列表读取</p>
@@ -706,12 +707,17 @@ import { fetchModelList } from '../utils/api.js';
 import { listDesktopLogFiles, readDesktopLogFile, isDesktopLogBridgeAvailable } from '../utils/desktopLogBridge.js';
 import { apiFetch, isProbablyWailsRuntime } from '../utils/runtimeApi.js';
 import { extractChromeProfileTokens, isChromeProfileAuthBridgeAvailable } from '../utils/profileAuthBridge.js';
-import { toggleTheme } from '../utils/theme.js';
 import { maximiseMainWindow } from '../utils/windowSizing.js';
 import { loadTreeExpandedSetting } from '../utils/systemSettings.js';
 import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils/balance.js';
 import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
 import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
+import {
+  buildRowKey as buildKeyPanelRowKey,
+  loadPanelRecords,
+  normalizeModels as normalizeKeyPanelModels,
+  persistPanelRecords,
+} from '../utils/keyPanelStore.js';
 import {
   appendCustomKeysToSiteCache,
   buildSiteCacheKey,
@@ -728,6 +734,7 @@ import {
   setSiteCacheDisabled,
   updateSiteCacheTreeNodes,
   updateSiteCacheNote,
+  writePendingBatchStart,
   writePendingSiteRestore,
 } from '../utils/siteCacheStore.js';
 
@@ -2630,12 +2637,6 @@ const loadHistory = async () => {
   }
 };
 
-const handleToggleTheme = () => {
-  toggleTheme(isDarkMode);
-  document.body.classList.toggle('dark-mode', isDarkMode.value);
-  document.body.classList.toggle('light-mode', !isDarkMode.value);
-};
-
 const resetStep1 = () => {
   stopFetchKeysProgressPolling();
   resetFetchKeysProgress();
@@ -4511,6 +4512,127 @@ const buildBridgeImportedPreparedPayload = (records) => {
   };
 };
 
+const collectSiteCacheModelsByToken = (nodes, bucket = new Map()) => {
+  (Array.isArray(nodes) ? nodes : []).forEach(node => {
+    const key = String(node?.key || '').trim();
+    if (key.startsWith('token|')) {
+      const parts = key.split('|');
+      const tokenKey = String(parts[2] || '').trim();
+      if (tokenKey) {
+        const models = (Array.isArray(node?.children) ? node.children : [])
+          .map(child => {
+            const childKey = String(child?.key || '').trim();
+            const childTitle = String(child?.title || '').trim();
+            if (childTitle) return childTitle;
+            if (!childKey.includes('|')) return '';
+            return String(childKey.split('|').slice(2).join('|') || '').trim();
+          })
+          .filter(Boolean);
+        if (models.length > 0) {
+          bucket.set(tokenKey, normalizeKeyPanelModels([
+            ...(bucket.get(tokenKey) || []),
+            ...models,
+          ]));
+        }
+      }
+    }
+    if (Array.isArray(node?.children) && node.children.length > 0) {
+      collectSiteCacheModelsByToken(node.children, bucket);
+    }
+  });
+  return bucket;
+};
+
+const syncBridgeSitesToKeyPanel = (sites) => {
+  const targetSites = Array.isArray(sites) ? sites : [];
+  if (targetSites.length === 0) return 0;
+
+  const { records: existingRecords } = loadPanelRecords();
+  const mergedRecords = new Map(
+    existingRecords.map(record => [
+      String(record?.rowKey || buildKeyPanelRowKey(record?.siteUrl, record?.apiKey)).trim(),
+      { ...record },
+    ])
+  );
+
+  const now = Date.now();
+  let importedCount = 0;
+
+  targetSites.forEach((site, siteIndex) => {
+    const siteUrl = normalizeSiteUrl(site?.siteUrl || site?.site_url);
+    if (!siteUrl) return;
+
+    const siteName = String(site?.siteName || site?.site_name || `桥接站点 ${siteIndex + 1}`).trim() || `桥接站点 ${siteIndex + 1}`;
+    const modelsByToken = collectSiteCacheModelsByToken(site?.cachedTreeNodes || site?._cachedTreeNodes);
+    const tokenMap = new Map();
+
+    [...(Array.isArray(site?.tokens) ? site.tokens : []), ...(Array.isArray(site?.customTokens) ? site.customTokens : [])]
+      .forEach((token, tokenIndex) => {
+        const apiKey = String(token?.key || token?.access_token || token?.token || '').trim();
+        if (!apiKey) return;
+        tokenMap.set(apiKey, {
+          ...token,
+          apiKey,
+          tokenName: String(token?.name || `Bridge Token ${tokenIndex + 1}`).trim() || `Bridge Token ${tokenIndex + 1}`,
+        });
+      });
+
+    tokenMap.forEach(token => {
+      const rowKey = buildKeyPanelRowKey(siteUrl, token.apiKey);
+      const existing = mergedRecords.get(rowKey) || null;
+      const modelsList = normalizeKeyPanelModels([
+        ...(Array.isArray(existing?.modelsList) ? existing.modelsList : []),
+        ...(Array.isArray(token?.models) ? token.models : []),
+        ...(modelsByToken.get(token.apiKey) || []),
+        token?.model || '',
+        existing?.selectedModel || '',
+      ]);
+      const statusValue = Number(token?.status ?? existing?.status ?? 1);
+      const nextRecord = {
+        ...existing,
+        rowKey,
+        sourceType: 'auto',
+        siteName,
+        tokenName: token.tokenName || existing?.tokenName || '',
+        siteUrl,
+        apiKey: token.apiKey,
+        modelsList,
+        modelsText: modelsList.join(', ') || existing?.modelsText || '未提供模型信息',
+        selectedModel: (
+          (existing?.selectedModel && modelsList.includes(String(existing.selectedModel).trim()) && String(existing.selectedModel).trim())
+          || (String(token?.selectedModel || '').trim() && modelsList.includes(String(token.selectedModel).trim()) && String(token.selectedModel).trim())
+          || modelsList[0]
+          || ''
+        ),
+        status: statusValue === 2 ? 2 : 1,
+        createdAt: existing?.createdAt || now,
+        updatedAt: now,
+        quickTestStatus: existing?.quickTestStatus || '',
+        quickTestLabel: existing?.quickTestLabel || '',
+        quickTestModel: existing?.quickTestModel || '',
+        quickTestRemark: existing?.quickTestRemark || '',
+        quickTestAt: existing?.quickTestAt || null,
+        quickTestResponseTime: existing?.quickTestResponseTime || '',
+        quickTestResponseContent: existing?.quickTestResponseContent || '',
+        balanceLabel: existing?.balanceLabel || '',
+        balanceUpdatedAt: existing?.balanceUpdatedAt || null,
+        balanceError: existing?.balanceError || '',
+        remainQuota: token?.remain_quota ?? existing?.remainQuota ?? null,
+        usedQuota: token?.used_quota ?? existing?.usedQuota ?? null,
+        unlimitedQuota: token?.unlimited_quota === true || existing?.unlimitedQuota === true,
+      };
+      mergedRecords.set(rowKey, nextRecord);
+      importedCount += 1;
+    });
+  });
+
+  if (importedCount > 0) {
+    persistPanelRecords(Array.from(mergedRecords.values()));
+  }
+
+  return importedCount;
+};
+
 const finalizeBridgeImportSession = async () => {
   const prepared = buildBridgeImportedPreparedPayload(bridgeImportRecords.value);
   const importableCount = prepared.prefetchedSites.length + prepared.accounts.length;
@@ -4533,6 +4655,43 @@ const finalizeBridgeImportSession = async () => {
         importSource: 'browser_tag_bridge_prefetched',
       });
     }
+    const bridgeSiteSignatures = [...prepared.accounts, ...prepared.prefetchedSites]
+      .map(site => ({
+        siteCacheKey: String(buildSiteCacheKey(site) || '').trim(),
+        siteUrl: normalizeSiteUrl(site?.site_url || site?.siteUrl),
+        userId: String(
+          site?.resolved_user_id ||
+          site?.resolvedUserId ||
+          site?.account_info?.id ||
+          site?.accountInfo?.id ||
+          ''
+        ).trim(),
+      }))
+      .filter(signature => signature.siteCacheKey || signature.siteUrl);
+    const bridgeSiteCacheKeys = new Set(
+      bridgeSiteSignatures
+        .map(signature => signature.siteCacheKey)
+        .filter(Boolean)
+    );
+    const importedSiteRecords = loadAllSiteCacheRecords().filter(record => {
+        const recordSiteCacheKey = String(record?.siteCacheKey || '').trim();
+        if (recordSiteCacheKey && bridgeSiteCacheKeys.has(recordSiteCacheKey)) {
+          return true;
+        }
+        const recordSiteUrl = normalizeSiteUrl(record?.siteUrl || record?.site_url);
+        const recordUserId = String(record?.resolvedUserId || record?.resolved_user_id || record?.accountInfo?.id || record?.account_info?.id || '').trim();
+        return bridgeSiteSignatures.some(signature =>
+          signature.siteUrl &&
+          signature.siteUrl === recordSiteUrl &&
+          (!signature.userId || !recordUserId || signature.userId === recordUserId)
+        );
+      });
+    const syncedKeyCount = syncBridgeSitesToKeyPanel(importedSiteRecords);
+    const importedSiteCacheKeys = Array.from(new Set(
+      importedSiteRecords
+        .map(record => String(record?.siteCacheKey || '').trim())
+        .filter(Boolean)
+    ));
     bridgeImportSessionOpening.value = false;
     bridgeImportModalOpen.value = false;
     stopBridgeImportPolling();
@@ -4549,11 +4708,18 @@ const finalizeBridgeImportSession = async () => {
       importedCount: importableCount,
       prefetchedSiteCount: prepared.prefetchedSites.length,
       accountCount: prepared.accounts.length,
+      syncedKeyCount,
+      importedSiteCacheKeyCount: importedSiteCacheKeys.length,
       skippedCount: prepared.skipped.length,
       serverUrl: bridgeImportServerUrl.value,
       logPath: bridgeImportLogPath.value,
     });
-    await router.push('/sites');
+    writePendingSiteRestore(importedSiteCacheKeys);
+    writePendingBatchStart({
+      autoStart: false,
+    });
+    await router.push('/');
+    message.info(`已切换到本次导入列表，共 ${importedSiteCacheKeys.length} 个站点`);
   } catch (error) {
     message.error(error?.message || '桥接记录导入失败');
   } finally {
@@ -6935,7 +7101,7 @@ const copyOrganizedResults = () => {
   position: relative;
   overflow: hidden;
   margin-bottom: 6px;
-  padding: 10px 12px 10px;
+  padding: 20px 16px;
   border-radius: 18px;
   border: 1px solid rgba(90, 117, 79, 0.1);
   background:
@@ -6948,7 +7114,7 @@ const copyOrganizedResults = () => {
 }
 
 .batch-hero-compact {
-  padding-bottom: 12px;
+  padding-bottom: 16px;
 }
 
 .batch-hero-head {
@@ -7221,20 +7387,27 @@ const copyOrganizedResults = () => {
 .step-container-hero {
   position: relative;
   z-index: 1;
-  margin-top: 4px;
+  margin-top: 15px;
 }
 
 .hero-stage-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.18fr) minmax(218px, 0.62fr);
+  grid-template-columns: minmax(0, 1.34fr) minmax(220px, 0.58fr);
   gap: 6px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .hero-left-stack {
   display: grid;
   gap: 6px;
   align-content: start;
+}
+
+.hero-primary-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1.92fr) minmax(220px, 1fr);
+  gap: 6px;
+  align-items: stretch;
 }
 
 .hero-action-card,
@@ -7284,14 +7457,26 @@ const copyOrganizedResults = () => {
   min-height: 48px;
 }
 
+.hero-primary-pair .hero-action-card-primary,
+.hero-primary-pair .hero-action-card-bridge {
+  min-height: 128px;
+}
+
+.hero-primary-pair .hero-action-card-primary {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
 .hero-action-card-recommend {
   padding-bottom: 10px;
 }
 
 .hero-card-watermark {
   position: absolute;
-  top: 10px;
+  top: 50%;
   right: 14px;
+  transform: translateY(-50%);
   font-size: 11px;
   line-height: 1;
   font-weight: 800;
@@ -7325,6 +7510,10 @@ const copyOrganizedResults = () => {
   line-height: 1.2;
 }
 
+.hero-copy-half-gap {
+  margin-top: 5px !important;
+}
+
 .hero-primary-inline {
   display: flex;
   flex-direction: column;
@@ -7339,6 +7528,12 @@ const copyOrganizedResults = () => {
   border: 0 !important;
   background: linear-gradient(135deg, #476847, #6f8f55) !important;
   box-shadow: 0 8px 16px rgba(87, 118, 76, 0.2) !important;
+}
+
+.hero-primary-pair .hero-primary-button {
+  min-width: 0;
+  width: 100%;
+  justify-content: center;
 }
 
 .hero-secondary-button {
@@ -7363,8 +7558,17 @@ const copyOrganizedResults = () => {
   padding: 9px 10px;
 }
 
+.hero-upload-card-right {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-self: start;
+  min-height: 198px;
+  height: auto;
+}
+
 .hero-upload-dragger {
   margin-top: 2px;
+  min-height: 0;
 }
 
 .hero-upload-dragger :deep(.ant-upload.ant-upload-drag) {
@@ -7373,6 +7577,67 @@ const copyOrganizedResults = () => {
   background: rgba(255, 255, 255, 0.78);
   min-height: 96px;
   padding: 10px 8px;
+}
+
+.hero-upload-card-right .hero-upload-dragger :deep(.ant-upload.ant-upload-drag) {
+  min-height: 128px;
+  height: auto;
+}
+
+@media (max-width: 1700px) {
+  .hero-upload-card-right {
+    align-self: stretch;
+    min-height: 0;
+    height: 100%;
+    padding: 9px 10px;
+  }
+
+  .hero-upload-card-right .hero-upload-copy {
+    margin-bottom: 4px;
+  }
+
+  .hero-upload-card-right .hero-upload-copy h3 {
+    font-size: 13px;
+    line-height: 1.12;
+  }
+
+  .hero-upload-card-right .hero-upload-copy p {
+    font-size: 10px;
+    line-height: 1.2;
+  }
+
+  .hero-upload-card-right .hero-upload-dragger {
+    display: flex;
+    min-height: 0;
+  }
+
+  .hero-upload-card-right .hero-upload-dragger :deep(.ant-upload.ant-upload-drag) {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 0;
+    height: 100%;
+    padding: 10px 8px;
+  }
+
+  .hero-upload-card-right .hero-upload-dragger :deep(.ant-upload-drag-icon) {
+    margin-bottom: 10px;
+  }
+
+  .hero-upload-card-right .hero-upload-dragger :deep(.ant-upload-drag-icon .anticon) {
+    font-size: 66px;
+  }
+
+  .hero-upload-card-right .hero-upload-dragger :deep(.ant-upload-text) {
+    font-size: 10px;
+    line-height: 1.2;
+  }
+
+  .hero-upload-card-right .hero-upload-dragger :deep(.ant-upload-hint) {
+    font-size: 9px;
+    line-height: 1.14;
+  }
 }
 
 .hero-upload-dragger :deep(.ant-upload.ant-upload-drag:hover) {
@@ -8027,6 +8292,10 @@ const copyOrganizedResults = () => {
   }
 
   .hero-stage-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hero-primary-pair {
     grid-template-columns: minmax(0, 1fr);
   }
 

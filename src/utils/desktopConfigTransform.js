@@ -94,6 +94,62 @@ export function buildDesktopConfigPreview(draft, snapshot) {
   };
 }
 
+export function detectProviderKeyFromSnapshotFile(appId, draft, fileContent) {
+  if (!fileContent || appId === 'claude') return '';
+
+  try {
+    if (appId === 'codex') {
+      return resolveProviderKeyForApp(appId, {
+        ...draft,
+        forceCustomProviderKey: false,
+      }, fileContent);
+    }
+
+    if (appId === 'opencode') {
+      return resolveProviderKeyForApp(appId, {
+        ...draft,
+        forceCustomProviderKey: false,
+      }, parseStrictJsonObject(fileContent, 'OpenCode opencode.json', {
+        $schema: 'https://opencode.ai/config.json',
+      }));
+    }
+
+    if (appId === 'openclaw') {
+      return resolveProviderKeyForApp(appId, {
+        ...draft,
+        forceCustomProviderKey: false,
+      }, parseStrictJsonObject(fileContent, 'OpenClaw config.json', structuredClone(OPENCLAW_DEFAULT_CONFIG)));
+    }
+  } catch {
+    return '';
+  }
+
+  return '';
+}
+
+export function inferProviderKeyFromSnapshot(snapshot, draft, selectedApps = []) {
+  const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
+  const preferredApps = Array.isArray(selectedApps) && selectedApps.length
+    ? selectedApps
+    : ['codex', 'opencode', 'openclaw'];
+  const uniqueKeys = [];
+
+  preferredApps.forEach(appId => {
+    if (!['codex', 'opencode', 'openclaw'].includes(appId)) return;
+    const fileId = appId === 'codex' ? 'config' : 'config';
+    const snapshotFile = findSnapshotFile(files, appId, fileId);
+    const providerKey = detectProviderKeyFromSnapshotFile(appId, draft, snapshotFile?.content || '');
+    if (providerKey && !uniqueKeys.includes(providerKey)) {
+      uniqueKeys.push(providerKey);
+    }
+  });
+
+  return {
+    providerKey: uniqueKeys[0] || '',
+    providerKeys: uniqueKeys,
+  };
+}
+
 function buildAppFilePreview(appId, appName, draft, snapshotFiles) {
   switch (appId) {
     case 'claude':
