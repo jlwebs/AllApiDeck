@@ -53,23 +53,24 @@
       <button
         v-if="showSettings"
         type="button"
-        class="spring-pill"
+        class="spring-pill spring-pill-icon-only"
+        title="设置"
+        aria-label="设置"
         @click="$emit('settings')"
       >
         <SettingOutlined />
-        <span>设置</span>
       </button>
 
-      <button
-        v-if="showExperimental"
-        type="button"
-        class="spring-pill spring-pill-icon-only"
-        title="实验功能"
-        aria-label="实验功能"
-        @click="$emit('experimental')"
-      >
-        <ExperimentOutlined />
-      </button>
+      <a-tooltip v-if="showExperimental" :title="advancedProxyTooltip">
+        <button
+          type="button"
+          class="spring-pill spring-pill-icon-only"
+          :aria-label="advancedProxyLabel"
+          @click="$emit('experimental')"
+        >
+          <ApiOutlined />
+        </button>
+      </a-tooltip>
 
       <button
         type="button"
@@ -130,9 +131,9 @@
 import { useRouter } from 'vue-router';
 import appLogo from '../assets/logo.png';
 import {
+  ApiOutlined,
   AppstoreAddOutlined,
   DatabaseOutlined,
-  ExperimentOutlined,
   GithubOutlined,
   KeyOutlined,
   SettingOutlined,
@@ -160,6 +161,8 @@ defineProps({
 });
 
 const router = useRouter();
+const advancedProxyLabel = '高级代理';
+const advancedProxyTooltip = '开启兼容 OpenAI vendor 给 Claude、故障转移、错误修正的高级代理功能';
 
 const navigate = path => {
   if (router.currentRoute.value.path !== path) {
@@ -305,7 +308,10 @@ const openGitHub = () => {
   gap: 0;
 }
 
-.spring-pill :deep(.anticon),
+.spring-pill :deep(.anticon) {
+  font-size: 14px;
+}
+
 .spring-theme-icon {
   flex: 0 0 auto;
   display: inline-flex;

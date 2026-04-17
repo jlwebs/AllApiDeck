@@ -1,9 +1,18 @@
+import {
+  getAdvancedProxyAppBaseUrl,
+  getAdvancedProxyLocalSnapshot,
+  isAdvancedProxyAppReady,
+} from './advancedProxyBridge.js';
+
 const OPENCLAW_DEFAULT_CONFIG = {
   models: {
     mode: 'merge',
     providers: {},
   },
 };
+
+const PROXY_MANAGED_TOKEN = 'PROXY_MANAGED';
+const ADVANCED_PROXY_PROVIDER_NAME = 'AllApiDeck Advanced Proxy';
 
 export const DESKTOP_CONFIG_APPS = [
   { id: 'claude', label: 'Claude' },
@@ -20,6 +29,7 @@ export function createDesktopConfigDraft(record) {
   const providerName = String(record?.siteName || 'Custom Provider').trim() || 'Custom Provider';
   const endpoint = String(record?.siteUrl || '').trim();
   const apiKey = String(record?.apiKey || '').trim();
+  const advancedProxySnapshot = getAdvancedProxyLocalSnapshot();
 
   return {
     selectedApps: [],
@@ -31,10 +41,14 @@ export function createDesktopConfigDraft(record) {
     model: defaultModel || 'gpt-4o-mini',
     claudeBaseUrl: endpoint,
     claudeApiKeyField: 'ANTHROPIC_AUTH_TOKEN',
+    claudeUseAdvancedProxy: isAdvancedProxyAppReady('claude', advancedProxySnapshot),
     codexBaseUrl: endpoint,
+    codexUseAdvancedProxy: isAdvancedProxyAppReady('codex', advancedProxySnapshot),
     opencodeBaseUrl: endpoint,
+    opencodeUseAdvancedProxy: isAdvancedProxyAppReady('opencode', advancedProxySnapshot),
     opencodeNpm: '@ai-sdk/openai-compatible',
     openclawBaseUrl: endpoint,
+    openclawUseAdvancedProxy: isAdvancedProxyAppReady('openclaw', advancedProxySnapshot),
     openclawApi: 'openai-completions',
   };
 }
@@ -94,13 +108,19 @@ function buildAppFilePreview(appId, appName, draft, snapshotFiles) {
     case 'openclaw':
       return [buildOpenClawPreview(appName, draft, findSnapshotFile(snapshotFiles, 'openclaw', 'config'))];
     default:
-      throw new Error(`不支持的应用: ${appId}`);
+      throw new Error(`Unsupported app: ${appId}`);
   }
 }
 
 function buildClaudePreview(appName, draft, file) {
-  const baseUrl = requireField(draft.claudeBaseUrl, `${appName} Base URL`);
-  const apiKey = requireField(draft.apiKey, `${appName} API Key`);
+  const advancedProxySnapshot = getAdvancedProxyLocalSnapshot();
+  const useAdvancedProxy = shouldUseAdvancedProxy('claude', appName, draft, advancedProxySnapshot);
+  const baseUrl = useAdvancedProxy
+    ? getAdvancedProxyAppBaseUrl('claude', advancedProxySnapshot)
+    : requireField(draft.claudeBaseUrl, `${appName} Base URL`);
+  const apiKey = useAdvancedProxy
+    ? PROXY_MANAGED_TOKEN
+    : requireField(draft.apiKey, `${appName} API Key`);
   const model = requireField(draft.model, `${appName} 模型`);
   const keyField = draft.claudeApiKeyField === 'ANTHROPIC_API_KEY'
     ? 'ANTHROPIC_API_KEY'
@@ -129,7 +149,11 @@ function buildClaudePreview(appName, draft, file) {
 }
 
 function buildCodexAuthPreview(appName, draft, file) {
-  const apiKey = requireField(draft.apiKey, `${appName} API Key`);
+  const advancedProxySnapshot = getAdvancedProxyLocalSnapshot();
+  const useAdvancedProxy = shouldUseAdvancedProxy('codex', appName, draft, advancedProxySnapshot);
+  const apiKey = useAdvancedProxy
+    ? PROXY_MANAGED_TOKEN
+    : requireField(draft.apiKey, `${appName} API Key`);
   const current = parseStrictJsonObject(file.content, 'Codex auth.json');
   const next = structuredClone(current);
   next.OPENAI_API_KEY = apiKey;
@@ -137,9 +161,15 @@ function buildCodexAuthPreview(appName, draft, file) {
 }
 
 function buildCodexConfigPreview(appName, draft, file) {
+  const advancedProxySnapshot = getAdvancedProxyLocalSnapshot();
+  const useAdvancedProxy = shouldUseAdvancedProxy('codex', appName, draft, advancedProxySnapshot);
   const providerKey = resolveProviderKeyForApp('codex', draft, file.content);
-  const providerName = requireField(draft.providerName, `${appName} Provider Name`);
-  const baseUrl = requireField(draft.codexBaseUrl, `${appName} Base URL`);
+  const providerName = useAdvancedProxy
+    ? ADVANCED_PROXY_PROVIDER_NAME
+    : requireField(draft.providerName, `${appName} Provider Name`);
+  const baseUrl = useAdvancedProxy
+    ? getAdvancedProxyAppBaseUrl('codex', advancedProxySnapshot)
+    : requireField(draft.codexBaseUrl, `${appName} Base URL`);
   const model = requireField(draft.model, `${appName} 模型`);
 
   const next = upsertCodexConfigToml(file.content, {
@@ -153,9 +183,17 @@ function buildCodexConfigPreview(appName, draft, file) {
 }
 
 function buildOpenCodePreview(appName, draft, file) {
-  const providerName = requireField(draft.providerName, `${appName} Provider Name`);
-  const baseUrl = requireField(draft.opencodeBaseUrl, `${appName} Base URL`);
-  const apiKey = requireField(draft.apiKey, `${appName} API Key`);
+  const advancedProxySnapshot = getAdvancedProxyLocalSnapshot();
+  const useAdvancedProxy = shouldUseAdvancedProxy('opencode', appName, draft, advancedProxySnapshot);
+  const providerName = useAdvancedProxy
+    ? ADVANCED_PROXY_PROVIDER_NAME
+    : requireField(draft.providerName, `${appName} Provider Name`);
+  const baseUrl = useAdvancedProxy
+    ? getAdvancedProxyAppBaseUrl('opencode', advancedProxySnapshot)
+    : requireField(draft.opencodeBaseUrl, `${appName} Base URL`);
+  const apiKey = useAdvancedProxy
+    ? PROXY_MANAGED_TOKEN
+    : requireField(draft.apiKey, `${appName} API Key`);
   const model = requireField(draft.model, `${appName} 模型`);
 
   const current = parseStrictJsonObject(file.content, 'OpenCode opencode.json', {
@@ -169,7 +207,7 @@ function buildOpenCodePreview(appName, draft, file) {
   }
 
   next.provider[providerKey] = {
-    npm: draft.opencodeNpm || '@ai-sdk/openai-compatible',
+    npm: useAdvancedProxy ? '@ai-sdk/openai-compatible' : (draft.opencodeNpm || '@ai-sdk/openai-compatible'),
     name: providerName,
     options: {
       baseURL: baseUrl,
@@ -186,9 +224,17 @@ function buildOpenCodePreview(appName, draft, file) {
 }
 
 function buildOpenClawPreview(appName, draft, file) {
-  const providerName = requireField(draft.providerName, `${appName} Provider Name`);
-  const baseUrl = requireField(draft.openclawBaseUrl, `${appName} Base URL`);
-  const apiKey = requireField(draft.apiKey, `${appName} API Key`);
+  const advancedProxySnapshot = getAdvancedProxyLocalSnapshot();
+  const useAdvancedProxy = shouldUseAdvancedProxy('openclaw', appName, draft, advancedProxySnapshot);
+  const providerName = useAdvancedProxy
+    ? ADVANCED_PROXY_PROVIDER_NAME
+    : requireField(draft.providerName, `${appName} Provider Name`);
+  const baseUrl = useAdvancedProxy
+    ? getAdvancedProxyAppBaseUrl('openclaw', advancedProxySnapshot)
+    : requireField(draft.openclawBaseUrl, `${appName} Base URL`);
+  const apiKey = useAdvancedProxy
+    ? PROXY_MANAGED_TOKEN
+    : requireField(draft.apiKey, `${appName} API Key`);
   const model = requireField(draft.model, `${appName} 模型`);
 
   const current = parseLooseJsonObject(file.content, 'OpenClaw openclaw.json', OPENCLAW_DEFAULT_CONFIG);
@@ -208,7 +254,7 @@ function buildOpenClawPreview(appName, draft, file) {
   next.models.providers[providerKey] = {
     baseUrl,
     apiKey,
-    api: draft.openclawApi || 'openai-completions',
+    api: useAdvancedProxy ? 'openai-completions' : (draft.openclawApi || 'openai-completions'),
     models: [
       {
         id: model,
@@ -236,6 +282,17 @@ function buildOpenClawPreview(appName, draft, file) {
   };
 
   return buildPreviewFile(file, JSON.stringify(next, null, 2));
+}
+
+function shouldUseAdvancedProxy(appId, appName, draft, advancedProxySnapshot) {
+  const flagKey = `${appId}UseAdvancedProxy`;
+  if (draft?.[flagKey] !== true) {
+    return false;
+  }
+  if (!isAdvancedProxyAppReady(appId, advancedProxySnapshot)) {
+    throw new Error(`${appName} 高级代理尚未就绪，请先在“高级代理功能”中启用对应接管并准备兼容上游`);
+  }
+  return true;
 }
 
 function buildPreviewFile(file, after) {
@@ -409,7 +466,7 @@ function convertSingleQuotedStrings(input) {
     }
 
     if (!closed) {
-      throw new Error('单引号字符串未闭合');
+      throw new Error('Single-quoted string is not closed');
     }
 
     const decoded = buffer
@@ -423,7 +480,6 @@ function convertSingleQuotedStrings(input) {
 
 function upsertCodexConfigToml(currentText, options) {
   let text = String(currentText || '').trim();
-
   if (!text) {
     text = '';
   }
@@ -585,7 +641,7 @@ function pickFallbackModel(modelsList, modelsText) {
     candidates.push(...modelsList);
   }
   if (typeof modelsText === 'string') {
-    candidates.push(...modelsText.split(/[\n,，]+/));
+    candidates.push(...modelsText.split(/[\n,，\s]+/));
   }
 
   return (

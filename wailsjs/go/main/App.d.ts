@@ -6,6 +6,8 @@ export function AppendClientLog(arg1:string,arg2:string):Promise<void>;
 
 export function ApplyManagedAppConfigFiles(arg1:main.ManagedAppConfigApplyRequest):Promise<main.ManagedAppConfigApplyResult>;
 
+export function CloseBridgeImportSession():Promise<main.BridgeImportSnapshot>;
+
 export function CloseDesktopProfileAssist(arg1:Array<string>):Promise<Record<string, any>>;
 
 export function CollapsePanel():Promise<void>;
@@ -18,11 +20,23 @@ export function ExpandPanel():Promise<void>;
 
 export function ExtractChromeProfileTokens(arg1:main.ChromeProfileTokenRequest):Promise<main.ChromeProfileTokenResponse>;
 
+export function GetAdvancedProxyConfig():Promise<main.AdvancedProxyConfig>;
+
+export function GetAdvancedProxyConfigFilePath():Promise<string>;
+
+export function GetBridgeImportSnapshot():Promise<main.BridgeImportSnapshot>;
+
 export function GetChromeProfileExtractProgress():Promise<main.fetchKeysProgressSnapshot>;
+
+export function GetCircuitBreakerStats(arg1:string,arg2:string):Promise<main.CircuitBreakerStats>;
+
+export function GetFailoverQueue(arg1:string):Promise<Array<main.FailoverQueueItem>>;
 
 export function GetLaunchMode():Promise<string>;
 
 export function GetLaunchRecordKey():Promise<string>;
+
+export function GetOutboundProxyConfig():Promise<main.OutboundProxyConfig>;
 
 export function GetPanelDockState():Promise<string>;
 
@@ -39,6 +53,8 @@ export function ImportExtensionAccountsFromDir(arg1:string):Promise<main.Extensi
 export function InitPanelWindow(arg1:number,arg2:number):Promise<void>;
 
 export function ListDesktopLogFiles():Promise<main.DesktopLogSnapshot>;
+
+export function OpenBridgeScriptInstallPage():Promise<void>;
 
 export function OpenDesktopConfigWindow(arg1:string):Promise<void>;
 
@@ -62,7 +78,17 @@ export function RequestMainWindowRestore():Promise<void>;
 
 export function RequestQuit():Promise<void>;
 
+export function ResetBridgeImportSession():Promise<main.BridgeImportSnapshot>;
+
+export function ResetCircuitBreaker(arg1:string,arg2:string):Promise<boolean>;
+
 export function ResetPanelExpandedWidth():Promise<void>;
+
+export function SetAdvancedProxyConfig(arg1:main.AdvancedProxyConfig):Promise<main.AdvancedProxyConfig>;
+
+export function SetFailoverQueue(arg1:string,arg2:Array<main.FailoverQueueItem>):Promise<Array<main.FailoverQueueItem>>;
+
+export function SetOutboundProxyConfig(arg1:main.OutboundProxyConfig):Promise<main.OutboundProxyConfig>;
 
 export function SetPanelCollapsed(arg1:number,arg2:number,arg3:boolean):Promise<void>;
 
@@ -71,6 +97,8 @@ export function SetPanelExpandedWidth(arg1:number):Promise<void>;
 export function SetPanelInteractionLocked(arg1:boolean):Promise<void>;
 
 export function ShowMainWindow():Promise<void>;
+
+export function StartBridgeImportSession():Promise<main.BridgeImportSnapshot>;
 
 export function ToggleSidebarMode():Promise<void>;
 

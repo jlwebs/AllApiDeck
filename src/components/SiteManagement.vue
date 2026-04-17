@@ -237,6 +237,13 @@
         </div>
       </div>
     </div>
+    <SystemSettingsModal
+      v-model:open="showAppSettingsModal"
+      v-model:tree-expanded="globalTreeExpanded"
+      v-model:desktop-token-source-mode="desktopTokenSourceMode"
+      :app-name="'All API Deck'"
+    />
+    <AdvancedProxyModal v-model:open="showExperimentalFeatures" />
   </ConfigProvider>
 </template>
 
@@ -253,7 +260,10 @@ import {
   DeleteOutlined,
 } from '@ant-design/icons-vue';
 import AppHeader from './AppHeader.vue';
+import AdvancedProxyModal from './AdvancedProxyModal.vue';
+import SystemSettingsModal from './SystemSettingsModal.vue';
 import { toggleTheme } from '../utils/theme.js';
+import { loadDesktopTokenSourceMode, loadTreeExpandedSetting } from '../utils/systemSettings.js';
 import { refreshCachedSiteTokens } from '../utils/siteTokenRefresh.js';
 import {
   SITE_CACHE_SYNC_EVENT,
@@ -273,6 +283,10 @@ import {
 const SITE_NOTE_MAX_LENGTH = 10;
 
 const router = useRouter();
+const showExperimentalFeatures = ref(false);
+const showAppSettingsModal = ref(false);
+const globalTreeExpanded = ref(loadTreeExpandedSetting(true));
+const desktopTokenSourceMode = ref(loadDesktopTokenSourceMode());
 const isDarkMode = ref(false);
 const keyword = ref('');
 const hideDisabled = ref(false);
@@ -1041,10 +1055,12 @@ const handleToggleTheme = () => {
 };
 
 const handleSettings = () => {
-  message.info('站点管理当前只负责缓存浏览与维护，其他全局设置仍在批量检测页。');
+  showAppSettingsModal.value = true;
 };
 
 const handleExperimental = () => {
+  showExperimentalFeatures.value = true;
+  return;
   message.info('站点管理当前直接复用缓存树浏览视图。');
 };
 

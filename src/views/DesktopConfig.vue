@@ -107,8 +107,18 @@
                 </a-select>
               </a-form-item>
 
+              <a-form-item label="Claude 高级代理">
+                <a-switch v-model:checked="desktopConfigDraft.claudeUseAdvancedProxy" />
+                <div class="desktop-field-hint">开启后会把 Claude Base URL 改写到本机高级代理地址，并由 All API Deck 负责兼容 OpenAI vendor、故障转移和错误修正。</div>
+              </a-form-item>
+
               <a-form-item label="Codex Base URL">
                 <a-input v-model:value="desktopConfigDraft.codexBaseUrl" />
+              </a-form-item>
+
+              <a-form-item label="Codex 高级代理">
+                <a-switch v-model:checked="desktopConfigDraft.codexUseAdvancedProxy" />
+                <div class="desktop-field-hint">开启后会把 Codex 的 `base_url` 改写到本地代理，并使用占位 Key。</div>
               </a-form-item>
 
               <a-form-item label="OpenCode Base URL">
@@ -122,6 +132,11 @@
                 </a-select>
               </a-form-item>
 
+              <a-form-item label="OpenCode 高级代理">
+                <a-switch v-model:checked="desktopConfigDraft.opencodeUseAdvancedProxy" />
+                <div class="desktop-field-hint">开启后会改写到本地 OpenAI 兼容代理入口，并固定使用 openai-compatible 适配器。</div>
+              </a-form-item>
+
               <a-form-item label="OpenClaw Base URL">
                 <a-input v-model:value="desktopConfigDraft.openclawBaseUrl" />
               </a-form-item>
@@ -131,6 +146,11 @@
                   <a-select-option value="openai-completions">openai-completions</a-select-option>
                   <a-select-option value="anthropic-messages">anthropic-messages</a-select-option>
                 </a-select>
+              </a-form-item>
+
+              <a-form-item label="OpenClaw 高级代理">
+                <a-switch v-model:checked="desktopConfigDraft.openclawUseAdvancedProxy" />
+                <div class="desktop-field-hint">开启后会改写到本地 OpenClaw 代理入口，并切到 openai-completions 协议。</div>
               </a-form-item>
             </div>
           </a-form>

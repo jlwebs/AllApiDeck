@@ -20,6 +20,7 @@ declare module 'vue' {
     ADivider: typeof import('ant-design-vue/es')['Divider']
     ADropdown: typeof import('ant-design-vue/es')['Dropdown']
     ADropdownButton: typeof import('ant-design-vue/es')['DropdownButton']
+    AdvancedProxyModal: typeof import('./src/components/AdvancedProxyModal.vue')['default']
     AEmpty: typeof import('ant-design-vue/es')['Empty']
     AFlex: typeof import('ant-design-vue/es')['Flex']
     AForm: typeof import('ant-design-vue/es')['Form']
@@ -58,6 +59,7 @@ declare module 'vue' {
     ATypographyText: typeof import('ant-design-vue/es')['TypographyText']
     AUploadDragger: typeof import('ant-design-vue/es')['UploadDragger']
     BatchCheck: typeof import('./src/components/BatchCheck.vue')['default']
+    BridgeImportWizardModal: typeof import('./src/components/BridgeImportWizardModal.vue')['default']
     Check: typeof import('./src/components/Check.vue')['default']
     DesktopConfigDiffModal: typeof import('./src/components/DesktopConfigDiffModal.vue')['default']
     Experimental: typeof import('./src/components/Experimental.vue')['default']
@@ -66,5 +68,6 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SiteManagement: typeof import('./src/components/SiteManagement.vue')['default']
+    SystemSettingsModal: typeof import('./src/components/SystemSettingsModal.vue')['default']
   }
 }

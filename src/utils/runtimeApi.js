@@ -29,6 +29,10 @@ export function isWailsHttpBridgeAvailable() {
 }
 
 export function getRuntimeApiBaseUrl() {
+  if (isProbablyWailsRuntime() && isWailsHttpBridgeAvailable()) {
+    return '';
+  }
+
   if (EXPLICIT_API_BASE_URL) {
     return EXPLICIT_API_BASE_URL;
   }

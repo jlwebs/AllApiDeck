@@ -291,10 +291,26 @@
                   </a-form-item>
                   <a-form-item label="Claude Base URL"><a-input v-model:value="desktopConfigDraft.claudeBaseUrl" /></a-form-item>
                   <a-form-item label="Claude Key 字段"><a-select v-model:value="desktopConfigDraft.claudeApiKeyField"><a-select-option value="ANTHROPIC_AUTH_TOKEN">ANTHROPIC_AUTH_TOKEN</a-select-option><a-select-option value="ANTHROPIC_API_KEY">ANTHROPIC_API_KEY</a-select-option></a-select></a-form-item>
+                  <a-form-item label="Claude 高级代理">
+                    <a-switch v-model:checked="desktopConfigDraft.claudeUseAdvancedProxy" />
+                    <div class="desktop-field-hint">开启后会把 Claude Base URL 改写到本机高级代理地址，并由 All API Deck 负责兼容 OpenAI vendor、故障转移和错误修正。</div>
+                  </a-form-item>
                   <a-form-item label="Codex Base URL"><a-input v-model:value="desktopConfigDraft.codexBaseUrl" /></a-form-item>
+                  <a-form-item label="Codex 高级代理">
+                    <a-switch v-model:checked="desktopConfigDraft.codexUseAdvancedProxy" />
+                    <div class="desktop-field-hint">开启后会把 Codex 的 `base_url` 改写到本地代理，并使用占位 Key。</div>
+                  </a-form-item>
                   <a-form-item label="OpenCode Base URL"><a-input v-model:value="desktopConfigDraft.opencodeBaseUrl" /></a-form-item>
                   <a-form-item label="OpenCode Adapter"><a-select v-model:value="desktopConfigDraft.opencodeNpm"><a-select-option value="@ai-sdk/openai-compatible">@ai-sdk/openai-compatible</a-select-option><a-select-option value="@openrouter/ai-sdk-provider">@openrouter/ai-sdk-provider</a-select-option></a-select></a-form-item>
+                  <a-form-item label="OpenCode 高级代理">
+                    <a-switch v-model:checked="desktopConfigDraft.opencodeUseAdvancedProxy" />
+                    <div class="desktop-field-hint">开启后会改写到本地 OpenAI 兼容代理入口，并固定使用 openai-compatible 适配器。</div>
+                  </a-form-item>
                   <a-form-item label="OpenClaw Base URL"><a-input v-model:value="desktopConfigDraft.openclawBaseUrl" /></a-form-item>
+                  <a-form-item label="OpenClaw 高级代理">
+                    <a-switch v-model:checked="desktopConfigDraft.openclawUseAdvancedProxy" />
+                    <div class="desktop-field-hint">开启后会改写到本地 OpenClaw 代理入口，并切到 openai-completions 协议。</div>
+                  </a-form-item>
                   <a-form-item label="OpenClaw API 协议"><a-select v-model:value="desktopConfigDraft.openclawApi"><a-select-option value="openai-completions">openai-completions</a-select-option><a-select-option value="anthropic-messages">anthropic-messages</a-select-option></a-select></a-form-item>
                 </div>
               </a-form>
@@ -304,38 +320,13 @@
       </a-modal>
 
       <DesktopConfigDiffModal :open="desktopConfigDiffOpen" :preview="desktopConfigPreview" @cancel="desktopConfigDiffOpen = false" @confirm="applyDesktopConfigPreview" />
-      <a-modal
+      <SystemSettingsModal
         v-model:open="showAppSettingsModal"
-        title="系统设置"
-        :footer="null"
-        :width="600"
-        @cancel="closeSettingsModal"
-        :centered="true"
-        :destroyOnClose="true"
-      >
-        <a-tabs>
-          <a-tab-pane key="1" tab="本地绿色化">
-            <div class="portable-settings-card">
-              <div class="portable-settings-copy">
-                <div class="portable-settings-title">本地绿色化</div>
-                <div class="portable-settings-desc">封包是将本应用数据绿色化到程序目录 `backup`，解包是从 `backup` 解包恢复本程序所有数据。</div>
-                <div class="portable-settings-hint">当前会处理运行时目录数据与前端 localStorage 快照。为保证当前窗口状态一致，解包完成后会自动刷新页面。</div>
-                <div v-if="portableSettingsMeta" class="portable-settings-meta">{{ portableSettingsMeta }}</div>
-                <div v-if="!isWailsRuntime" class="portable-settings-warning">该功能仅在桌面端 EXE / Wails 环境可用。</div>
-              </div>
-              <div class="portable-settings-actions">
-                <a-button type="primary" size="large" :loading="portablePacking" :disabled="!isWailsRuntime || portableUnpacking" @click="packagePortableData">
-                  封包
-                </a-button>
-                <a-button size="large" :loading="portableUnpacking" :disabled="!isWailsRuntime || portablePacking" @click="unpackPortableData">
-                  解包
-                </a-button>
-              </div>
-            </div>
-          </a-tab-pane>
-        </a-tabs>
-      </a-modal>
-      <a-modal v-model:open="showExperimentalFeatures" title="实验功能" :footer="null" @cancel="showExperimentalFeatures = false"><div class="experimental-modal"><p>实验功能仍在整理中，后续会继续补充。</p></div></a-modal>
+        v-model:tree-expanded="globalTreeExpanded"
+        v-model:desktop-token-source-mode="desktopTokenSourceMode"
+        :app-name="'All API Deck'"
+      />
+      <AdvancedProxyModal v-model:open="showExperimentalFeatures" />
     </div>
   </ConfigProvider>
 </template>
@@ -346,7 +337,9 @@ import { ClockCircleOutlined, ReloadOutlined } from '@ant-design/icons-vue';
 import { ConfigProvider, message, Modal, theme } from 'ant-design-vue';
 import { useRoute } from 'vue-router';
 import AppHeader from './AppHeader.vue';
+import AdvancedProxyModal from './AdvancedProxyModal.vue';
 import DesktopConfigDiffModal from './DesktopConfigDiffModal.vue';
+import SystemSettingsModal from './SystemSettingsModal.vue';
 import { fetchModelList } from '../utils/api.js';
 import { maskApiKey } from '../utils/normal.js';
 import { apiFetch, isProbablyWailsRuntime } from '../utils/runtimeApi.js';
@@ -356,6 +349,7 @@ import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APP
 import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils/balance.js';
 import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
 import { exitSidebarMode, isSidebarBridgeAvailable } from '../utils/windowMode.js';
+import { loadDesktopTokenSourceMode, loadTreeExpandedSetting } from '../utils/systemSettings.js';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
 import geminiAppIcon from '../assets/app-icons/gemini.svg';
@@ -421,6 +415,8 @@ const manualModelLoading = ref(false);
 const manualModelFetchKey = ref('');
 const hideInvalidKeys = ref(true);
 const showAppSettingsModal = ref(false);
+const globalTreeExpanded = ref(loadTreeExpandedSetting(true));
+const desktopTokenSourceMode = ref(loadDesktopTokenSourceMode());
 const settingsApiUrl = ref('');
 const settingsApiKey = ref('');
 const localCacheList = ref([]);
@@ -466,7 +462,7 @@ const displayedRows = computed(() => {
   return [...filteredRows].sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0) || String(a.siteName || '').localeCompare(String(b.siteName || '')));
 });
 const healthyKeyCount = computed(() => tableData.value.filter(record => record.status === 1).length);
-const syncSummary = computed(() => !syncMeta.value.lastBatchSyncAt ? '导入 accounts-backup JSON 后，会自动把获取到的 sk key 写入 localStorage。' : `最近一次批量同步写入 ${syncMeta.value.lastBatchSyncCount} 条记录，失败站点 ${syncMeta.value.lastBatchFailedCount} 个。`);
+const syncSummary = computed(() => !syncMeta.value.lastBatchSyncAt ? '导入并批量检测后，会自动把获取到的 sk key 更新到本页。' : `最近一次批量同步写入 ${syncMeta.value.lastBatchSyncCount} 条记录，失败站点 ${syncMeta.value.lastBatchFailedCount} 个。`);
 
 onMounted(() => {
   if (!document.body.classList.contains('dark-mode') && !document.body.classList.contains('light-mode')) document.body.classList.add('light-mode');
@@ -494,7 +490,6 @@ function handleToggleTheme() {
 
 const openSettingsModal = () => {
   showAppSettingsModal.value = true;
-  loadLocalCache();
 };
 
 const closeSettingsModal = () => {

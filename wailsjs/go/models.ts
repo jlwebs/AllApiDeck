@@ -1,5 +1,299 @@
 export namespace main {
 	
+	export class AdvancedProxyAppConfig {
+	    enabled: boolean;
+	    basePath: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AdvancedProxyAppConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.basePath = source["basePath"];
+	    }
+	}
+	export class OptimizerConfig {
+	    enabled: boolean;
+	    thinkingOptimizer: boolean;
+	    cacheInjection: boolean;
+	    cacheTtl: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OptimizerConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.thinkingOptimizer = source["thinkingOptimizer"];
+	        this.cacheInjection = source["cacheInjection"];
+	        this.cacheTtl = source["cacheTtl"];
+	    }
+	}
+	export class RectifierConfig {
+	    enabled: boolean;
+	    requestThinkingSignature: boolean;
+	    requestThinkingBudget: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RectifierConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.requestThinkingSignature = source["requestThinkingSignature"];
+	        this.requestThinkingBudget = source["requestThinkingBudget"];
+	    }
+	}
+	export class AppFailoverConfig {
+	    appType: string;
+	    enabled: boolean;
+	    autoFailoverEnabled: boolean;
+	    maxRetries: number;
+	    streamingFirstByteTimeout: number;
+	    streamingIdleTimeout: number;
+	    nonStreamingTimeout: number;
+	    circuitFailureThreshold: number;
+	    circuitSuccessThreshold: number;
+	    circuitTimeoutSeconds: number;
+	    circuitErrorRateThreshold: number;
+	    circuitMinRequests: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new AppFailoverConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.appType = source["appType"];
+	        this.enabled = source["enabled"];
+	        this.autoFailoverEnabled = source["autoFailoverEnabled"];
+	        this.maxRetries = source["maxRetries"];
+	        this.streamingFirstByteTimeout = source["streamingFirstByteTimeout"];
+	        this.streamingIdleTimeout = source["streamingIdleTimeout"];
+	        this.nonStreamingTimeout = source["nonStreamingTimeout"];
+	        this.circuitFailureThreshold = source["circuitFailureThreshold"];
+	        this.circuitSuccessThreshold = source["circuitSuccessThreshold"];
+	        this.circuitTimeoutSeconds = source["circuitTimeoutSeconds"];
+	        this.circuitErrorRateThreshold = source["circuitErrorRateThreshold"];
+	        this.circuitMinRequests = source["circuitMinRequests"];
+	    }
+	}
+	export class AdvancedProxyProvider {
+	    id: string;
+	    rowKey?: string;
+	    name: string;
+	    baseUrl: string;
+	    apiKey: string;
+	    model: string;
+	    apiFormat: string;
+	    apiKeyField: string;
+	    enabled: boolean;
+	    sortIndex: number;
+	    sourceType?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AdvancedProxyProvider(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.rowKey = source["rowKey"];
+	        this.name = source["name"];
+	        this.baseUrl = source["baseUrl"];
+	        this.apiKey = source["apiKey"];
+	        this.model = source["model"];
+	        this.apiFormat = source["apiFormat"];
+	        this.apiKeyField = source["apiKeyField"];
+	        this.enabled = source["enabled"];
+	        this.sortIndex = source["sortIndex"];
+	        this.sourceType = source["sourceType"];
+	    }
+	}
+	export class ClaudeProxyCompatConfig {
+	    enabled: boolean;
+	    basePath: string;
+	    defaultModel: string;
+	    providers: AdvancedProxyProvider[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ClaudeProxyCompatConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.basePath = source["basePath"];
+	        this.defaultModel = source["defaultModel"];
+	        this.providers = this.convertValues(source["providers"], AdvancedProxyProvider);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class AdvancedProxyConfig {
+	    enabled: boolean;
+	    listenHost: string;
+	    listenPort: number;
+	    claude: ClaudeProxyCompatConfig;
+	    codex: AdvancedProxyAppConfig;
+	    opencode: AdvancedProxyAppConfig;
+	    openclaw: AdvancedProxyAppConfig;
+	    failover: AppFailoverConfig;
+	    rectifier: RectifierConfig;
+	    optimizer: OptimizerConfig;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AdvancedProxyConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.listenHost = source["listenHost"];
+	        this.listenPort = source["listenPort"];
+	        this.claude = this.convertValues(source["claude"], ClaudeProxyCompatConfig);
+	        this.codex = this.convertValues(source["codex"], AdvancedProxyAppConfig);
+	        this.opencode = this.convertValues(source["opencode"], AdvancedProxyAppConfig);
+	        this.openclaw = this.convertValues(source["openclaw"], AdvancedProxyAppConfig);
+	        this.failover = this.convertValues(source["failover"], AppFailoverConfig);
+	        this.rectifier = this.convertValues(source["rectifier"], RectifierConfig);
+	        this.optimizer = this.convertValues(source["optimizer"], OptimizerConfig);
+	        this.updatedAt = source["updatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class BridgeImportRecord {
+	    id: string;
+	    receivedAt: string;
+	    remoteAddr: string;
+	    type: string;
+	    sourceUrl: string;
+	    sourceOrigin: string;
+	    title: string;
+	    userAgent: string;
+	    siteType: string;
+	    resolvedUser: string;
+	    tokenPreview: string;
+	    tokenCount: number;
+	    tokenEndpoint: string;
+	    ready: boolean;
+	    readyReason: string;
+	    payload: Record<string, any>;
+	
+	    static createFrom(source: any = {}) {
+	        return new BridgeImportRecord(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.receivedAt = source["receivedAt"];
+	        this.remoteAddr = source["remoteAddr"];
+	        this.type = source["type"];
+	        this.sourceUrl = source["sourceUrl"];
+	        this.sourceOrigin = source["sourceOrigin"];
+	        this.title = source["title"];
+	        this.userAgent = source["userAgent"];
+	        this.siteType = source["siteType"];
+	        this.resolvedUser = source["resolvedUser"];
+	        this.tokenPreview = source["tokenPreview"];
+	        this.tokenCount = source["tokenCount"];
+	        this.tokenEndpoint = source["tokenEndpoint"];
+	        this.ready = source["ready"];
+	        this.readyReason = source["readyReason"];
+	        this.payload = source["payload"];
+	    }
+	}
+	export class BridgeImportSnapshot {
+	    records: BridgeImportRecord[];
+	    totalCount: number;
+	    readyCount: number;
+	    lastReceivedAt: string;
+	    lastStoredAt: string;
+	    logPath: string;
+	    serverUrl: string;
+	    lastLogs: string[];
+	    sessionActive: boolean;
+	    clientReady: boolean;
+	    lastClientPing: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BridgeImportSnapshot(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.records = this.convertValues(source["records"], BridgeImportRecord);
+	        this.totalCount = source["totalCount"];
+	        this.readyCount = source["readyCount"];
+	        this.lastReceivedAt = source["lastReceivedAt"];
+	        this.lastStoredAt = source["lastStoredAt"];
+	        this.logPath = source["logPath"];
+	        this.serverUrl = source["serverUrl"];
+	        this.lastLogs = source["lastLogs"];
+	        this.sessionActive = source["sessionActive"];
+	        this.clientReady = source["clientReady"];
+	        this.lastClientPing = source["lastClientPing"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ChromeProfileAccountInfoInput {
 	    id: any;
 	    access_token: string;
@@ -146,6 +440,27 @@ export namespace main {
 		}
 	}
 	
+	export class CircuitBreakerStats {
+	    state: string;
+	    consecutiveFailures: number;
+	    consecutiveSuccesses: number;
+	    totalRequests: number;
+	    failedRequests: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CircuitBreakerStats(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.state = source["state"];
+	        this.consecutiveFailures = source["consecutiveFailures"];
+	        this.consecutiveSuccesses = source["consecutiveSuccesses"];
+	        this.totalRequests = source["totalRequests"];
+	        this.failedRequests = source["failedRequests"];
+	    }
+	}
+	
 	export class DesktopLogContent {
 	    path: string;
 	    name: string;
@@ -238,6 +553,24 @@ export namespace main {
 	        this.storageKey = source["storageKey"];
 	        this.accountCount = source["accountCount"];
 	        this.payload = source["payload"];
+	    }
+	}
+	export class FailoverQueueItem {
+	    providerId: string;
+	    providerName: string;
+	    sortIndex: number;
+	    enabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new FailoverQueueItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.providerId = source["providerId"];
+	        this.providerName = source["providerName"];
+	        this.sortIndex = source["sortIndex"];
+	        this.enabled = source["enabled"];
 	    }
 	}
 	export class ManagedAppConfigAppliedFile {
@@ -389,6 +722,23 @@ export namespace main {
 		}
 	}
 	
+	
+	export class OutboundProxyConfig {
+	    mode: string;
+	    customUrl: string;
+	    updatedAt?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OutboundProxyConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.customUrl = source["customUrl"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
 	export class PortableDataPackageResult {
 	    backupDir: string;
 	    runtimeSourceDir: string;
@@ -429,6 +779,7 @@ export namespace main {
 	        this.localStorageKeyCount = source["localStorageKeyCount"];
 	    }
 	}
+	
 	export class desktopProfileAssistOpenRequest {
 	    siteName: string;
 	    siteUrl: string;

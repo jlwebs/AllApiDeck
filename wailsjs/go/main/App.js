@@ -10,6 +10,10 @@ export function ApplyManagedAppConfigFiles(arg1) {
   return window['go']['main']['App']['ApplyManagedAppConfigFiles'](arg1);
 }
 
+export function CloseBridgeImportSession() {
+  return window['go']['main']['App']['CloseBridgeImportSession']();
+}
+
 export function CloseDesktopProfileAssist(arg1) {
   return window['go']['main']['App']['CloseDesktopProfileAssist'](arg1);
 }
@@ -34,8 +38,28 @@ export function ExtractChromeProfileTokens(arg1) {
   return window['go']['main']['App']['ExtractChromeProfileTokens'](arg1);
 }
 
+export function GetAdvancedProxyConfig() {
+  return window['go']['main']['App']['GetAdvancedProxyConfig']();
+}
+
+export function GetAdvancedProxyConfigFilePath() {
+  return window['go']['main']['App']['GetAdvancedProxyConfigFilePath']();
+}
+
+export function GetBridgeImportSnapshot() {
+  return window['go']['main']['App']['GetBridgeImportSnapshot']();
+}
+
 export function GetChromeProfileExtractProgress() {
   return window['go']['main']['App']['GetChromeProfileExtractProgress']();
+}
+
+export function GetCircuitBreakerStats(arg1, arg2) {
+  return window['go']['main']['App']['GetCircuitBreakerStats'](arg1, arg2);
+}
+
+export function GetFailoverQueue(arg1) {
+  return window['go']['main']['App']['GetFailoverQueue'](arg1);
 }
 
 export function GetLaunchMode() {
@@ -44,6 +68,10 @@ export function GetLaunchMode() {
 
 export function GetLaunchRecordKey() {
   return window['go']['main']['App']['GetLaunchRecordKey']();
+}
+
+export function GetOutboundProxyConfig() {
+  return window['go']['main']['App']['GetOutboundProxyConfig']();
 }
 
 export function GetPanelDockState() {
@@ -76,6 +104,10 @@ export function InitPanelWindow(arg1, arg2) {
 
 export function ListDesktopLogFiles() {
   return window['go']['main']['App']['ListDesktopLogFiles']();
+}
+
+export function OpenBridgeScriptInstallPage() {
+  return window['go']['main']['App']['OpenBridgeScriptInstallPage']();
 }
 
 export function OpenDesktopConfigWindow(arg1) {
@@ -122,8 +154,28 @@ export function RequestQuit() {
   return window['go']['main']['App']['RequestQuit']();
 }
 
+export function ResetBridgeImportSession() {
+  return window['go']['main']['App']['ResetBridgeImportSession']();
+}
+
+export function ResetCircuitBreaker(arg1, arg2) {
+  return window['go']['main']['App']['ResetCircuitBreaker'](arg1, arg2);
+}
+
 export function ResetPanelExpandedWidth() {
   return window['go']['main']['App']['ResetPanelExpandedWidth']();
+}
+
+export function SetAdvancedProxyConfig(arg1) {
+  return window['go']['main']['App']['SetAdvancedProxyConfig'](arg1);
+}
+
+export function SetFailoverQueue(arg1, arg2) {
+  return window['go']['main']['App']['SetFailoverQueue'](arg1, arg2);
+}
+
+export function SetOutboundProxyConfig(arg1) {
+  return window['go']['main']['App']['SetOutboundProxyConfig'](arg1);
 }
 
 export function SetPanelCollapsed(arg1, arg2, arg3) {
@@ -140,6 +192,10 @@ export function SetPanelInteractionLocked(arg1) {
 
 export function ShowMainWindow() {
   return window['go']['main']['App']['ShowMainWindow']();
+}
+
+export function StartBridgeImportSession() {
+  return window['go']['main']['App']['StartBridgeImportSession']();
 }
 
 export function ToggleSidebarMode() {

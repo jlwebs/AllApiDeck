@@ -31,6 +31,12 @@ type App struct {
 	mode       launchMode
 	recordKey  string
 
+	bridgeServer        *http.Server
+	bridgeListener      net.Listener
+	bridgeMu            sync.Mutex
+	bridgeSessionActive atomic.Bool
+	bridgeClientPingAt  atomic.Int64
+
 	tray                 trayController
 	windowMonitorStop    chan struct{}
 	windowMonitorStopMux sync.Mutex
@@ -57,6 +63,13 @@ func (a *App) startup(ctx context.Context) {
 		a.mainWindowGraceUntil.Store(time.Now().Add(4 * time.Second).UnixMilli())
 		a.terminateSiblingAppProcesses()
 		a.stopPanelProcess()
+		if a.shouldAutoStartBridgeServer() {
+			if err := a.ensureBridgeServer(); err != nil {
+				debugLogf("bridge server start failed: %v", err)
+			} else {
+				debugLogf("bridge server ready")
+			}
+		}
 		if err := a.initTray(); err != nil {
 			debugLogf("init tray failed: %v", err)
 		} else {
@@ -84,6 +97,7 @@ func (a *App) shutdown(ctx context.Context) {
 	a.closeTray()
 	a.stopPanelProcess()
 	a.stopSidecar()
+	a.stopBridgeServer()
 	debugLogf("shutdown complete")
 }
 
@@ -153,6 +167,15 @@ func (a *App) isDesktopConfigMode() bool {
 
 func (a *App) isMainMode() bool {
 	return a.mode == launchModeMain
+}
+
+func (a *App) shouldAutoStartBridgeServer() bool {
+	config, err := loadAdvancedProxyConfig()
+	if err != nil {
+		debugLogf("load advanced proxy config for bridge startup failed: %v", err)
+		return false
+	}
+	return advancedProxyAnyAppEnabled(config)
 }
 
 func (a *App) terminateSiblingAppProcesses() {

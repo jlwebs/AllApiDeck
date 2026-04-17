@@ -646,7 +646,10 @@ func executeCheckKey(payload normalizedCheckKeyPayload) (int, map[string]any) {
 		req.Header.Set(key, value)
 	}
 
-	client := &http.Client{Timeout: time.Duration(payload.TimeoutMs) * time.Millisecond}
+	client, err := newOutboundHTTPClient(time.Duration(payload.TimeoutMs) * time.Millisecond)
+	if err != nil {
+		return http.StatusInternalServerError, map[string]any{"error": map[string]any{"message": err.Error()}}
+	}
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
@@ -763,7 +766,22 @@ func executeCheckKeyAttempt(payload normalizedCheckKeyPayload, targetURL string)
 		req.Header.Set(key, value)
 	}
 
-	client := &http.Client{Timeout: time.Duration(payload.TimeoutMs) * time.Millisecond}
+	client, err := newOutboundHTTPClient(time.Duration(payload.TimeoutMs) * time.Millisecond)
+	if err != nil {
+		return checkExecutionResult{
+			ok:        false,
+			endpoint:  targetURL,
+			status:    http.StatusInternalServerError,
+			message:   err.Error(),
+			retryable: false,
+			attempt: &checkEndpointAttempt{
+				Endpoint:  targetURL,
+				Status:    http.StatusInternalServerError,
+				Message:   err.Error(),
+				Retryable: false,
+			},
+		}
+	}
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1065,7 +1083,10 @@ func performExternalHTTPRequest(method string, targetURL string, headers map[str
 		req.Header.Set(key, value)
 	}
 
-	client := &http.Client{Timeout: timeout}
+	client, err := newOutboundHTTPClient(timeout)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

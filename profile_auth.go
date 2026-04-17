@@ -597,7 +597,10 @@ func doProfileJSONRequest(method string, urlValue string, headers map[string]str
 	if timeout <= 0 {
 		timeout = profileMinRequestTimeout
 	}
-	client := &http.Client{Timeout: timeout}
+	client, err := newOutboundHTTPClient(timeout)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
