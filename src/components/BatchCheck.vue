@@ -464,7 +464,7 @@
                   <template #bodyCell="{ column, record }">
                   <template v-if="column.dataIndex === 'siteName'">
                     <a-tooltip :title="record.quota" placement="top">
-                      <a :href="record.siteUrl" target="_blank" @mouseenter="hoverQuota(record)">
+                      <a href="" @click.prevent="openUrlInSystemBrowser(record.siteUrl)" @mouseenter="hoverQuota(record)">
                         {{ record.siteName }}
                       </a>
                     </a-tooltip>
