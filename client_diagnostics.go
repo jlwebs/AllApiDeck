@@ -7,6 +7,10 @@ import (
 )
 
 func (a *App) AppendClientLog(scope string, message string) {
+	appendClientRuntimeLog(scope, message)
+}
+
+func appendClientRuntimeLog(scope string, message string) {
 	scope = strings.TrimSpace(scope)
 	if scope == "" {
 		scope = "client"

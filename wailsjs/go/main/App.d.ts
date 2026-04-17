@@ -24,6 +24,8 @@ export function GetAdvancedProxyConfig():Promise<main.AdvancedProxyConfig>;
 
 export function GetAdvancedProxyConfigFilePath():Promise<string>;
 
+export function GetAdvancedProxyRoutingSnapshot():Promise<main.AdvancedProxyRoutingSnapshot>;
+
 export function GetBridgeImportSnapshot():Promise<main.BridgeImportSnapshot>;
 
 export function GetChromeProfileExtractProgress():Promise<main.fetchKeysProgressSnapshot>;

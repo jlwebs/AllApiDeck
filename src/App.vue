@@ -9,6 +9,7 @@ import { onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import { GetLaunchMode } from '../wailsjs/go/main/App.js';
+import { installSidebarRoutingDiagnostics } from './utils/clientDiagnostics.js';
 
 export default {
   name: 'App',
@@ -28,6 +29,9 @@ export default {
           router.replace('/editor');
         } else if (mode === 'desktop-config' && router.currentRoute.value.path !== '/desktop-config') {
           router.replace('/desktop-config');
+        }
+        if (mode !== 'panel') {
+          installSidebarRoutingDiagnostics(mode || 'main');
         }
       } catch {}
     });

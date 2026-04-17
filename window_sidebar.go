@@ -33,7 +33,7 @@ const (
 	panelWindowMarginY     = 20
 	panelEdgeActivateGap   = 2
 	panelRightDockShiftPct = 0
-	panelHideGrace         = 180 * time.Millisecond
+	panelHideGrace         = 1500 * time.Millisecond
 	panelAutoTickInterval  = 60 * time.Millisecond
 	windowMonitorInterval  = 450 * time.Millisecond
 	panelRestoreSignal     = "panel-restore.signal"

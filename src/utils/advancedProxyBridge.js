@@ -2,6 +2,7 @@ import { isProbablyWailsRuntime } from './runtimeApi.js';
 
 const STORAGE_KEY = 'batch_api_check_advanced_proxy_config_v1';
 const TAKEOVER_MAP_STORAGE_KEY = 'batch_api_check_advanced_proxy_takeover_map_v1';
+const ROUTING_SNAPSHOT_STORAGE_KEY = 'batch_api_check_advanced_proxy_routing_snapshot_v1';
 export const ADVANCED_PROXY_SYNC_EVENT = 'batch-api-check:advanced-proxy-sync';
 export const ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE = 'global';
 
@@ -333,6 +334,32 @@ export async function getCircuitBreakerStats(appType, providerId) {
     };
   }
   return app.GetCircuitBreakerStats(String(appType || 'claude'), String(providerId || '').trim());
+}
+
+export async function getAdvancedProxyRoutingSnapshot() {
+  const app = getAppBridge();
+  if (!app?.GetAdvancedProxyRoutingSnapshot) {
+    return getAdvancedProxyRoutingLocalSnapshot();
+  }
+  const snapshot = await app.GetAdvancedProxyRoutingSnapshot();
+  const normalized = snapshot && typeof snapshot === 'object' && snapshot.apps && typeof snapshot.apps === 'object'
+    ? snapshot
+    : { apps: {} };
+  try {
+    localStorage.setItem(ROUTING_SNAPSHOT_STORAGE_KEY, JSON.stringify(normalized));
+  } catch {}
+  return normalized;
+}
+
+export function getAdvancedProxyRoutingLocalSnapshot() {
+  try {
+    const raw = localStorage.getItem(ROUTING_SNAPSHOT_STORAGE_KEY);
+    const parsed = JSON.parse(raw || '{}');
+    if (parsed && typeof parsed === 'object' && parsed.apps && typeof parsed.apps === 'object') {
+      return parsed;
+    }
+  } catch {}
+  return { apps: {} };
 }
 
 export async function resetCircuitBreaker(appType, providerId) {

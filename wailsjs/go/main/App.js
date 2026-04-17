@@ -46,6 +46,10 @@ export function GetAdvancedProxyConfigFilePath() {
   return window['go']['main']['App']['GetAdvancedProxyConfigFilePath']();
 }
 
+export function GetAdvancedProxyRoutingSnapshot() {
+  return window['go']['main']['App']['GetAdvancedProxyRoutingSnapshot']();
+}
+
 export function GetBridgeImportSnapshot() {
   return window['go']['main']['App']['GetBridgeImportSnapshot']();
 }

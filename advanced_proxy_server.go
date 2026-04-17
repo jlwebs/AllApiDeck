@@ -482,6 +482,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 	lastStatus := http.StatusBadGateway
 	lastMessage := formatAdvancedProxyFailure(appType, routeKind, provider, "", "no compatible upstream endpoint found")
 	for _, targetURL := range targets {
+		advancedProxyRuntime.MarkDispatch(appType, provider, routeKind, targetURL)
 		appendAdvancedProxyLogf(
 			"[OPENAI_PROXY_TRY] app=%s route=%s provider=%s endpoint=%s stream=%t timeout=%ds outbound=%s",
 			appType,
@@ -494,6 +495,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 		)
 		statusCode, headers, body, streamBody, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildOpenAIProviderHeaders(provider), rawBody, timeoutSeconds, stream)
 		if err != nil {
+			advancedProxyRuntime.MarkResult(appType, provider, routeKind, targetURL, false)
 			message := formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, fmt.Sprintf("upstream request failed (%s, outbound=%s)", err.Error(), describeOutboundProxyMode()))
 			appendAdvancedProxyLogf("[OPENAI_PROXY_ERROR] status=%d app=%s route=%s provider=%s endpoint=%s detail=%s", http.StatusBadGateway, appType, routeKind, providerLabel, targetURL, previewAdvancedProxyText(message, 260))
 			return rawProviderAttemptResult{
@@ -506,6 +508,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 			}
 		}
 		if statusCode < 200 || statusCode >= 300 {
+			advancedProxyRuntime.MarkResult(appType, provider, routeKind, targetURL, false)
 			lastStatus = statusCode
 			lastMessage = formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, firstNonEmpty(summarizeAdvancedProxyBody(body), fmt.Sprintf("HTTP %d", statusCode)))
 			appendAdvancedProxyLogf("[OPENAI_PROXY_FAIL] status=%d app=%s route=%s provider=%s endpoint=%s detail=%s", statusCode, appType, routeKind, providerLabel, targetURL, previewAdvancedProxyText(lastMessage, 260))
@@ -523,6 +526,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 				RouteKind:  routeKind,
 			}
 		}
+		advancedProxyRuntime.MarkResult(appType, provider, routeKind, targetURL, true)
 		appendAdvancedProxyLogf("[OPENAI_PROXY_OK] status=%d app=%s route=%s provider=%s endpoint=%s stream=%t", statusCode, appType, routeKind, providerLabel, targetURL, stream)
 		return rawProviderAttemptResult{
 			StatusCode: statusCode,

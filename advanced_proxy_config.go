@@ -120,6 +120,21 @@ type CircuitBreakerStats struct {
 	FailedRequests       int    `json:"failedRequests"`
 }
 
+type AdvancedProxyRoutingState struct {
+	AppType        string `json:"appType"`
+	ProviderID     string `json:"providerId"`
+	ProviderRowKey string `json:"providerRowKey"`
+	ProviderName   string `json:"providerName"`
+	RouteKind      string `json:"routeKind"`
+	Status         string `json:"status"`
+	TargetURL      string `json:"targetUrl"`
+	UpdatedAt      string `json:"updatedAt"`
+}
+
+type AdvancedProxyRoutingSnapshot struct {
+	Apps map[string]AdvancedProxyRoutingState `json:"apps"`
+}
+
 func defaultAdvancedProxyQueueConfig(inheritGlobal bool) AdvancedProxyQueueConfig {
 	return AdvancedProxyQueueConfig{
 		InheritGlobal: inheritGlobal,
@@ -614,4 +629,9 @@ func (a *App) GetCircuitBreakerStats(appType string, providerID string) (*Circui
 func (a *App) ResetCircuitBreaker(appType string, providerID string) (bool, error) {
 	advancedProxyRuntime.Reset(strings.TrimSpace(appType), strings.TrimSpace(providerID))
 	return true, nil
+}
+
+func (a *App) GetAdvancedProxyRoutingSnapshot() (*AdvancedProxyRoutingSnapshot, error) {
+	snapshot := advancedProxyRuntime.GetRoutingSnapshot()
+	return &snapshot, nil
 }

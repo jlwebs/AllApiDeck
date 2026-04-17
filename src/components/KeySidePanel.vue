@@ -37,15 +37,22 @@
           v-for="(record, index) in visibleRecords"
           :key="record.rowKey"
           class="panel-record"
-          :class="[`panel-record-${getQuickTestTone(record.quickTestStatus)}`]"
+          :class="[
+            `panel-record-${getQuickTestTone(record.quickTestStatus)}`,
+            getAdvancedProxyCardStateClass(record),
+          ]"
         >
           <div class="panel-record-top">
             <div class="panel-record-sitebox">
               <a-tooltip
                 placement="top"
-                :title="getAdvancedProxyTooltip(record) || null"
                 :mouse-enter-delay="0.08"
               >
+                <template #title>
+                  <div v-if="getAdvancedProxyTooltipLines(record).length" class="panel-routing-tooltip">
+                    <div v-for="line in getAdvancedProxyTooltipLines(record)" :key="line">{{ line }}</div>
+                  </div>
+                </template>
                 <div class="panel-record-avatar" :class="getAdvancedProxyAvatarClass(record)">
                   <span class="panel-record-emoji">{{ getSiteEmoji(record.siteName) }}</span>
                   <span class="panel-record-order">No.{{ index + 1 }}</span>
@@ -201,8 +208,11 @@ import {
 } from '../utils/keyPanelStore.js';
 import {
   ADVANCED_PROXY_SYNC_EVENT,
+  getAdvancedProxyRoutingLocalSnapshot,
+  getAdvancedProxyRoutingSnapshot,
   getAdvancedProxyTakeoverMap,
 } from '../utils/advancedProxyBridge.js';
+import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
 import { buildPerformanceTooltipLines, hasPerformanceMetrics } from '../utils/performanceMetrics.js';
 
 const SITE_EMOJI_LIST = [
@@ -218,6 +228,8 @@ const COMPAT_SITE_EMOJI_LIST = [
 const QUICK_TOOLTIP_MAX_CHARS = 15;
 const SIDEBAR_QUICK_TEST_TIMEOUT_MS = 25000;
 const SIDEBAR_QUICK_TEST_TIMEOUT_SECONDS = Math.round(SIDEBAR_QUICK_TEST_TIMEOUT_MS / 1000);
+const ADVANCED_PROXY_ACTIVE_ROUTE_WINDOW_MS = 4500;
+const ADVANCED_PROXY_RECENT_ROUTE_WINDOW_MS = 45000;
 const ADVANCED_PROXY_APP_META = {
   claude: { label: 'Claude', className: 'panel-record-avatar-app-claude' },
   codex: { label: 'Codex', className: 'panel-record-avatar-app-codex' },
@@ -229,6 +241,7 @@ const ADVANCED_PROXY_APP_ORDER = ['claude', 'codex', 'opencode', 'openclaw'];
 const records = ref([]);
 const contextMap = ref(new Map());
 const advancedProxyTakeoverMap = ref(getAdvancedProxyTakeoverMap());
+const advancedProxyRoutingSnapshot = ref({ apps: {} });
 const activePopoverRowKey = ref('');
 const activeModelDropdownRowKey = ref('');
 const panelBodyRef = ref(null);
@@ -238,6 +251,8 @@ const PANEL_PERSIST_DEBOUNCE_MS = 120;
 
 let panelBodyResizeObserver = null;
 let panelPersistTimer = null;
+let advancedProxyRoutingTimer = null;
+let lastSidebarRoutingLogAt = 0;
 
 const visibleRecords = computed(() => records.value.filter(record => Number(record?.status || 0) === 1));
 const panelScrollDotStyle = computed(() => {
@@ -263,6 +278,63 @@ function reloadAdvancedProxyTakeoverState(event = null) {
     : getAdvancedProxyTakeoverMap();
 }
 
+async function reloadAdvancedProxyRoutingState() {
+  try {
+    const snapshot = await getAdvancedProxyRoutingSnapshot();
+    advancedProxyRoutingSnapshot.value = snapshot && typeof snapshot === 'object'
+      ? snapshot
+      : getAdvancedProxyRoutingLocalSnapshot();
+    emitSidebarRoutingDiagnostics();
+  } catch {
+    advancedProxyRoutingSnapshot.value = getAdvancedProxyRoutingLocalSnapshot();
+    emitSidebarRoutingDiagnostics();
+  }
+}
+
+function emitSidebarRoutingDiagnostics() {
+  const snapshotApps = advancedProxyRoutingSnapshot.value?.apps || {};
+  const now = Date.now();
+  if (now - lastSidebarRoutingLogAt < 10000) return;
+  lastSidebarRoutingLogAt = now;
+
+  const appSummaries = Object.entries(snapshotApps).map(([appId, routeState]) => ({
+    appId,
+    providerId: String(routeState?.providerId || '').trim(),
+    providerRowKey: String(routeState?.providerRowKey || '').trim(),
+    providerName: String(routeState?.providerName || '').trim(),
+    targetUrl: String(routeState?.targetUrl || '').trim(),
+    status: String(routeState?.status || '').trim(),
+    updatedAt: String(routeState?.updatedAt || '').trim(),
+  }));
+
+  const recordSummaries = visibleRecords.value.map(record => {
+    const siteName = String(record?.siteName || '').trim();
+    const siteUrl = String(record?.siteUrl || '').trim();
+    const rowKey = String(record?.rowKey || '').trim();
+    const matches = Object.entries(snapshotApps).map(([appId, routeState]) => ({
+      appId,
+      match: doesRouteStateMatchRecord(record, routeState),
+      providerId: String(routeState?.providerId || '').trim(),
+      providerRowKey: String(routeState?.providerRowKey || '').trim(),
+      providerName: String(routeState?.providerName || '').trim(),
+      targetUrl: String(routeState?.targetUrl || '').trim(),
+    }));
+    return {
+      siteName,
+      siteUrl,
+      rowKey,
+      takeoverApps: getAdvancedProxyAppsForRecord(record),
+      matchedApps: matches.filter(item => item.match).map(item => item.appId),
+      matches,
+    };
+  });
+
+  logClientDiagnostic('sidebar.routing', JSON.stringify({
+    snapshotApps: appSummaries,
+    visibleRecords: recordSummaries,
+  }));
+}
+
 function getAdvancedProxyAppsForRecord(record) {
   const rowKey = String(record?.rowKey || '').trim();
   if (!rowKey) return [];
@@ -275,18 +347,135 @@ function getPrimaryAdvancedProxyApp(record) {
   return getAdvancedProxyAppsForRecord(record)[0] || '';
 }
 
-function getAdvancedProxyAvatarClass(record) {
-  const appId = getPrimaryAdvancedProxyApp(record);
-  if (!appId) return '';
-  const className = ADVANCED_PROXY_APP_META[appId]?.className;
-  return ['panel-record-avatar-takeover', className].filter(Boolean);
+function normalizeComparableSiteUrl(value) {
+  return String(value || '').trim().replace(/\/+$/, '').toLowerCase();
 }
 
-function getAdvancedProxyTooltip(record) {
-  const appIds = getAdvancedProxyAppsForRecord(record);
-  if (appIds.length === 0) return '';
+function normalizeComparableName(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function doesRouteStateMatchRecord(record, routeState) {
+  const rowKey = String(record?.rowKey || '').trim();
+  if (!rowKey || !routeState || typeof routeState !== 'object') return false;
+
+  const matchedProviderKey = String(routeState?.providerRowKey || routeState?.providerId || '').trim();
+  if (matchedProviderKey && matchedProviderKey === rowKey) {
+    return true;
+  }
+
+  const recordSiteUrl = normalizeComparableSiteUrl(record?.siteUrl);
+  const targetUrl = normalizeComparableSiteUrl(routeState?.targetUrl);
+  if (!recordSiteUrl || !targetUrl) {
+    const providerName = normalizeComparableName(routeState?.providerName);
+    const siteName = normalizeComparableName(record?.siteName);
+    return Boolean(providerName && siteName && providerName === siteName);
+  }
+  if (targetUrl === recordSiteUrl || targetUrl.startsWith(`${recordSiteUrl}/`)) {
+    return true;
+  }
+
+  const providerName = normalizeComparableName(routeState?.providerName);
+  const siteName = normalizeComparableName(record?.siteName);
+  if (providerName && siteName && providerName === siteName) {
+    return true;
+  }
+
+  return false;
+}
+
+function normalizeAdvancedProxyRouteState(record, appId) {
+  const snapshot = advancedProxyRoutingSnapshot.value?.apps || {};
+  const routeState = snapshot?.[appId];
+  if (!routeState || typeof routeState !== 'object') return null;
+  if (!doesRouteStateMatchRecord(record, routeState)) return null;
+
+  const updatedAt = String(routeState?.updatedAt || '').trim();
+  const updatedAtMs = updatedAt ? Date.parse(updatedAt) : NaN;
+  const ageMs = Number.isFinite(updatedAtMs) ? Math.max(0, Date.now() - updatedAtMs) : Number.POSITIVE_INFINITY;
+  const status = String(routeState?.status || '').trim().toLowerCase();
+  const isActive = ageMs <= ADVANCED_PROXY_ACTIVE_ROUTE_WINDOW_MS || ageMs <= ADVANCED_PROXY_RECENT_ROUTE_WINDOW_MS;
+  const isRecent = !isActive && ageMs <= ADVANCED_PROXY_RECENT_ROUTE_WINDOW_MS;
+  if (!isActive && !isRecent) return null;
+
+  return {
+    appId,
+    appLabel: ADVANCED_PROXY_APP_META[appId]?.label || appId,
+    status,
+    routeKind: String(routeState?.routeKind || '').trim(),
+    providerName: String(routeState?.providerName || '').trim(),
+    targetUrl: String(routeState?.targetUrl || '').trim(),
+    isActive,
+    isRecent,
+  };
+}
+
+function getAdvancedProxyRouteStatesForRecord(record) {
+  return ADVANCED_PROXY_APP_ORDER
+    .map(appId => normalizeAdvancedProxyRouteState(record, appId))
+    .filter(Boolean)
+    .sort((left, right) => {
+      if (left.isActive !== right.isActive) {
+        return left.isActive ? -1 : 1;
+      }
+      return ADVANCED_PROXY_APP_ORDER.indexOf(left.appId) - ADVANCED_PROXY_APP_ORDER.indexOf(right.appId);
+    });
+}
+
+function getPrimaryAdvancedProxyVisualApp(record) {
+  const currentState = getAdvancedProxyRouteStatesForRecord(record).find(item => item.isActive || item.isRecent);
+  if (currentState?.appId) return currentState.appId;
+  return getPrimaryAdvancedProxyApp(record);
+}
+
+function getAdvancedProxyAvatarClass(record) {
+  const appId = getPrimaryAdvancedProxyVisualApp(record);
+  if (!appId) return '';
+  const className = ADVANCED_PROXY_APP_META[appId]?.className;
+  const routeStates = getAdvancedProxyRouteStatesForRecord(record);
+  const hasActiveRoute = routeStates.some(item => item.isActive);
+  const hasRecentRoute = !hasActiveRoute && routeStates.some(item => item.isRecent);
+  return [
+    'panel-record-avatar-takeover',
+    className,
+    hasActiveRoute ? 'panel-record-avatar-routing-active' : '',
+    hasRecentRoute ? 'panel-record-avatar-routing-recent' : '',
+  ].filter(Boolean);
+}
+
+function getAdvancedProxyCardStateClass(record) {
+  const routeStates = getAdvancedProxyRouteStatesForRecord(record);
+  if (routeStates.some(item => item.isActive)) {
+    return 'panel-record-routing-active';
+  }
+  if (routeStates.some(item => item.isRecent)) {
+    return 'panel-record-routing-recent';
+  }
+  return '';
+}
+
+function getAdvancedProxyTooltipLines(record) {
+  const routeStates = getAdvancedProxyRouteStatesForRecord(record);
+  const routeAppIds = routeStates.map(item => item.appId);
+  const takeoverAppIds = getAdvancedProxyAppsForRecord(record);
+  const appIds = ADVANCED_PROXY_APP_ORDER.filter(appId => takeoverAppIds.includes(appId) || routeAppIds.includes(appId));
+  if (appIds.length === 0) return [];
   const labels = appIds.map(appId => ADVANCED_PROXY_APP_META[appId]?.label || appId);
-  return `已进入代理接管：${labels.join(' / ')}`;
+  const lines = [`高级代理接管：${labels.join(' / ')}`];
+  routeStates.forEach(item => {
+    const routeLabel = item.routeKind === 'responses_compact'
+      ? 'responses/compact'
+      : (item.routeKind === 'responses' ? 'responses' : (item.routeKind === 'chat' ? 'chat/completions' : item.routeKind || '代理路由'));
+    const statusLabel = item.status === 'failed'
+      ? '最近一次调度失败'
+      : (item.isActive ? '当前队列目标' : '最近一次命中');
+    const extra = item.providerName ? ` · ${item.providerName}` : '';
+    lines.push(`${item.appLabel}：${statusLabel} · ${routeLabel}${extra}`);
+  });
+  if (routeStates.length === 0) {
+    lines.push('没有正在调度中的 Provider，请在本地应用发起一次请求后观察切换。');
+  }
+  return lines;
 }
 
 function getSiteShortName(siteName) {
@@ -420,6 +609,24 @@ function updateRecord(nextRecord) {
   void nextTick(syncScrollIndicator);
 }
 
+function patchRecord(rowKey, patch) {
+  const targetIndex = records.value.findIndex(item => item.rowKey === rowKey);
+  if (targetIndex === -1) return null;
+  const currentRecord = records.value[targetIndex];
+  const nextPatch = typeof patch === 'function' ? patch(currentRecord) : patch;
+  if (!nextPatch || typeof nextPatch !== 'object') {
+    return currentRecord;
+  }
+  const nextRecord = {
+    ...currentRecord,
+    ...nextPatch,
+  };
+  records.value[targetIndex] = nextRecord;
+  schedulePanelPersist();
+  void nextTick(syncScrollIndicator);
+  return nextRecord;
+}
+
 function flushPanelPersist() {
   if (panelPersistTimer) {
     clearTimeout(panelPersistTimer);
@@ -448,14 +655,16 @@ async function handleModelSelectDropdown(record, open) {
   await syncPanelInteractionLock();
   if (!open || record.modelLoading) return;
 
-  record.modelLoading = true;
+  patchRecord(record.rowKey, { modelLoading: true });
   try {
     const nextRecord = await loadRecordModelOptions(record, contextMap.value);
-    updateRecord(hydrateRecordModelSelection(nextRecord, contextMap.value));
+    updateRecord({
+      ...hydrateRecordModelSelection(nextRecord, contextMap.value),
+      modelLoading: false,
+    });
   } catch (error) {
+    patchRecord(record.rowKey, { modelLoading: false });
     message.error(error?.message || '模型获取失败');
-  } finally {
-    record.modelLoading = false;
   }
 }
 
@@ -473,7 +682,7 @@ function changeRecordModel(record, value) {
 async function handleQuickTest(record) {
   if (record.quickTestLoading) return;
 
-  record.quickTestLoading = true;
+  patchRecord(record.rowKey, { quickTestLoading: true });
   let timeoutId = null;
   try {
     const timeoutPromise = new Promise((_, reject) => {
@@ -489,7 +698,10 @@ async function handleQuickTest(record) {
       timeoutPromise,
     ]);
 
-    updateRecord(nextRecord);
+    updateRecord({
+      ...nextRecord,
+      quickTestLoading: false,
+    });
   } catch (error) {
     const detail = String(error?.detail || error?.message || '快速测活失败').trim();
     updateRecord({
@@ -510,7 +722,6 @@ async function handleQuickTest(record) {
     if (timeoutId != null) {
       clearTimeout(timeoutId);
     }
-    record.quickTestLoading = false;
   }
 }
 
@@ -536,10 +747,13 @@ function showQuickTestErrorDialog(detailText) {
 async function handleRefreshBalance(record) {
   if (record.balanceLoading || !canRefreshBalance(record, contextMap.value)) return;
 
-  record.balanceLoading = true;
+  patchRecord(record.rowKey, { balanceLoading: true });
   try {
     const nextRecord = await refreshRecordBalance(record, contextMap.value);
-    updateRecord(nextRecord);
+    updateRecord({
+      ...nextRecord,
+      balanceLoading: false,
+    });
   } catch (error) {
     updateRecord({
       ...record,
@@ -547,13 +761,12 @@ async function handleRefreshBalance(record) {
       balanceLoading: false,
     });
     message.error(error?.message || '余额刷新失败');
-  } finally {
-    record.balanceLoading = false;
   }
 }
 
 onMounted(async () => {
   reloadRecords();
+  await reloadAdvancedProxyRoutingState();
   try {
     await InitPanelWindow(window?.screen?.availWidth || 1440, window?.screen?.availHeight || 900);
   } catch {}
@@ -570,7 +783,11 @@ onMounted(async () => {
   window.addEventListener('resize', syncScrollIndicator);
   window.addEventListener(KEY_MANAGEMENT_SYNC_EVENT, reloadRecords);
   window.addEventListener('storage', reloadRecords);
+  window.addEventListener('storage', reloadAdvancedProxyRoutingState);
   window.addEventListener(ADVANCED_PROXY_SYNC_EVENT, reloadAdvancedProxyTakeoverState);
+  advancedProxyRoutingTimer = window.setInterval(() => {
+    void reloadAdvancedProxyRoutingState();
+  }, 1200);
 });
 
 watch(visibleRecords, async () => {
@@ -583,9 +800,14 @@ onBeforeUnmount(() => {
   void setPanelInteractionLocked(false);
   panelBodyResizeObserver?.disconnect?.();
   panelBodyResizeObserver = null;
+  if (advancedProxyRoutingTimer) {
+    window.clearInterval(advancedProxyRoutingTimer);
+    advancedProxyRoutingTimer = null;
+  }
   window.removeEventListener('resize', syncScrollIndicator);
   window.removeEventListener(KEY_MANAGEMENT_SYNC_EVENT, reloadRecords);
   window.removeEventListener('storage', reloadRecords);
+  window.removeEventListener('storage', reloadAdvancedProxyRoutingState);
   window.removeEventListener(ADVANCED_PROXY_SYNC_EVENT, reloadAdvancedProxyTakeoverState);
 });
 </script>
@@ -952,6 +1174,32 @@ onBeforeUnmount(() => {
   background: linear-gradient(180deg, rgba(243, 251, 246, 0.96), rgba(228, 241, 233, 0.94));
 }
 
+.panel-record-routing-active {
+  border-color: rgba(255, 207, 92, 0.92);
+  box-shadow:
+    0 0 0 1px rgba(255, 222, 133, 0.5),
+    0 16px 34px rgba(21, 22, 28, 0.16),
+    0 0 22px rgba(255, 191, 68, 0.3),
+    0 0 44px rgba(255, 170, 0, 0.14);
+}
+
+.panel-record-routing-active::before {
+  background: rgba(255, 240, 201, 0.68);
+  opacity: 0.94;
+}
+
+.panel-record-routing-active::after {
+  background: rgba(255, 225, 150, 0.26);
+  opacity: 0.82;
+}
+
+.panel-record-routing-recent {
+  border-color: rgba(255, 214, 122, 0.64);
+  box-shadow:
+    0 12px 24px rgba(21, 22, 28, 0.12),
+    0 0 16px rgba(255, 196, 72, 0.16);
+}
+
 .panel-record-warning {
   background: linear-gradient(180deg, rgba(249, 244, 232, 0.98), rgba(238, 229, 207, 0.94));
 }
@@ -1032,6 +1280,66 @@ onBeforeUnmount(() => {
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--panel-takeover-color) 22%, transparent),
     0 0 12px var(--panel-takeover-glow);
+}
+
+.panel-record-avatar-routing-active::before {
+  inset: -9px;
+  opacity: 1;
+  background:
+    conic-gradient(
+      from 0deg,
+      transparent 0deg 20deg,
+      rgba(255, 215, 94, 0.98) 38deg 90deg,
+      transparent 116deg 158deg,
+      rgba(255, 189, 46, 0.98) 188deg 242deg,
+      transparent 268deg 318deg,
+      rgba(255, 170, 0, 0.94) 334deg 360deg
+    );
+  box-shadow:
+    0 0 14px rgba(255, 185, 42, 0.54),
+    0 0 26px rgba(255, 191, 68, 0.66),
+    0 0 42px rgba(255, 170, 0, 0.4);
+  animation:
+    panel-avatar-orbit 1.6s linear infinite,
+    panel-avatar-pulse 1.1s ease-in-out infinite alternate;
+}
+
+.panel-record-avatar-routing-active::after {
+  inset: -4px;
+  opacity: 1;
+  border-width: 2px;
+  border-color: rgba(255, 196, 72, 0.9);
+  box-shadow:
+    0 0 0 1px rgba(255, 212, 125, 0.34),
+    0 0 18px rgba(255, 196, 72, 0.5),
+    0 0 28px rgba(255, 170, 0, 0.26);
+}
+
+.panel-record-avatar-routing-active .panel-record-emoji {
+  box-shadow:
+    0 0 0 2px rgba(255, 207, 102, 0.34),
+    0 0 16px rgba(255, 185, 42, 0.34);
+}
+
+.panel-record-avatar-routing-active .panel-record-order {
+  box-shadow:
+    0 4px 12px rgba(13, 24, 20, 0.3),
+    0 0 18px rgba(255, 196, 72, 0.28),
+    inset 0 1px 0 rgba(223, 255, 239, 0.24);
+}
+
+.panel-record-avatar-routing-recent::before {
+  opacity: 1;
+  box-shadow:
+    0 0 10px rgba(255, 196, 72, 0.24),
+    0 0 18px rgba(255, 185, 42, 0.18);
+}
+
+.panel-record-avatar-routing-recent::after {
+  opacity: 1;
+  box-shadow:
+    0 0 0 1px rgba(255, 212, 125, 0.2),
+    0 0 14px rgba(255, 196, 72, 0.18);
 }
 
 .panel-record-avatar-app-claude {
@@ -1232,6 +1540,13 @@ onBeforeUnmount(() => {
   gap: 2px;
 }
 
+.panel-routing-tooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 240px;
+}
+
 .panel-performance-badge {
   width: 16px;
   height: 16px;
@@ -1418,6 +1733,17 @@ onBeforeUnmount(() => {
 @keyframes panel-avatar-orbit {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+@keyframes panel-avatar-pulse {
+  0% {
+    transform: scale(0.98);
+    filter: saturate(1);
+  }
+  100% {
+    transform: scale(1.04);
+    filter: saturate(1.16);
+  }
 }
 
 @keyframes panel-card-in {

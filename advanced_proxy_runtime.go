@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,20 +28,40 @@ type proxyCircuitBreaker struct {
 	lastOpenedAt         time.Time
 }
 
+type proxyRouteState struct {
+	AppType        string
+	ProviderID     string
+	ProviderRowKey string
+	ProviderName   string
+	RouteKind      string
+	Status         string
+	TargetURL      string
+	UpdatedAt      time.Time
+}
+
 type advancedProxyRuntimeState struct {
 	mu       sync.Mutex
 	breakers map[string]*proxyCircuitBreaker
+	routes   map[string]*proxyRouteState
+	logs     map[string]time.Time
 }
 
 var advancedProxyRuntime = &advancedProxyRuntimeState{
 	breakers: map[string]*proxyCircuitBreaker{},
+	routes:   map[string]*proxyRouteState{},
+	logs:     map[string]time.Time{},
+}
+
+func normalizeAdvancedProxyRuntimeAppType(appType string) string {
+	normalized := strings.TrimSpace(strings.ToLower(appType))
+	if normalized == "" {
+		return "claude"
+	}
+	return normalized
 }
 
 func breakerKey(appType string, providerID string) string {
-	appType = strings.TrimSpace(strings.ToLower(appType))
-	if appType == "" {
-		appType = "claude"
-	}
+	appType = normalizeAdvancedProxyRuntimeAppType(appType)
 	return appType + ":" + strings.TrimSpace(providerID)
 }
 
@@ -71,6 +93,214 @@ func (r *advancedProxyRuntimeState) GetStats(appType string, providerID string) 
 
 func (r *advancedProxyRuntimeState) Reset(appType string, providerID string) {
 	r.getBreaker(appType, providerID).reset()
+}
+
+func (r *advancedProxyRuntimeState) MarkDispatch(appType string, provider AdvancedProxyProvider, routeKind string, targetURL string) {
+	r.logRoutePass(appType, provider, routeKind, targetURL)
+	r.setRouteState(appType, provider, routeKind, targetURL, "dispatching")
+}
+
+func (r *advancedProxyRuntimeState) MarkResult(appType string, provider AdvancedProxyProvider, routeKind string, targetURL string, success bool) {
+	status := "failed"
+	if success {
+		status = "success"
+	}
+	r.setRouteState(appType, provider, routeKind, targetURL, status)
+}
+
+func (r *advancedProxyRuntimeState) setRouteState(appType string, provider AdvancedProxyProvider, routeKind string, targetURL string, status string) {
+	normalizedAppType := normalizeAdvancedProxyRuntimeAppType(appType)
+	r.mu.Lock()
+
+	if r.routes == nil {
+		r.routes = map[string]*proxyRouteState{}
+	}
+	previous := r.routes[normalizedAppType]
+	if status == "dispatching" {
+		previousProviderID := ""
+		previousProviderName := ""
+		if previous != nil {
+			previousProviderID = strings.TrimSpace(previous.ProviderID)
+			previousProviderName = strings.TrimSpace(previous.ProviderName)
+		}
+		currentProviderID := strings.TrimSpace(provider.ID)
+		if previousProviderID != currentProviderID {
+			appendClientRuntimeLog("advanced_proxy.switch", fmt.Sprintf(
+				"app=%s from=%s(%s) to=%s(%s) route=%s target=%s",
+				normalizedAppType,
+				firstNonEmpty(previousProviderName, "-"),
+				firstNonEmpty(previousProviderID, "-"),
+				firstNonEmpty(strings.TrimSpace(provider.Name), "-"),
+				firstNonEmpty(currentProviderID, "-"),
+				firstNonEmpty(strings.TrimSpace(routeKind), "-"),
+				firstNonEmpty(strings.TrimSpace(targetURL), "-"),
+			))
+		}
+	}
+	r.routes[normalizedAppType] = &proxyRouteState{
+		AppType:        normalizedAppType,
+		ProviderID:     strings.TrimSpace(provider.ID),
+		ProviderRowKey: strings.TrimSpace(provider.RowKey),
+		ProviderName:   strings.TrimSpace(provider.Name),
+		RouteKind:      strings.TrimSpace(routeKind),
+		Status:         strings.TrimSpace(status),
+		TargetURL:      strings.TrimSpace(targetURL),
+		UpdatedAt:      time.Now(),
+	}
+	snapshot := r.routingSnapshotLocked()
+	r.mu.Unlock()
+
+	r.persistRoutingSnapshot(snapshot)
+}
+
+func (r *advancedProxyRuntimeState) GetRoutingSnapshot() AdvancedProxyRoutingSnapshot {
+	snapshot := loadAdvancedProxyRoutingSnapshotFromDisk()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if snapshot.Apps == nil {
+		snapshot.Apps = map[string]AdvancedProxyRoutingState{}
+	}
+	for appType, route := range r.routes {
+		if route == nil {
+			continue
+		}
+		nextState := AdvancedProxyRoutingState{
+			AppType:        route.AppType,
+			ProviderID:     route.ProviderID,
+			ProviderRowKey: route.ProviderRowKey,
+			ProviderName:   route.ProviderName,
+			RouteKind:      route.RouteKind,
+			Status:         route.Status,
+			TargetURL:      route.TargetURL,
+			UpdatedAt:      route.UpdatedAt.Format(time.RFC3339Nano),
+		}
+		if shouldReplaceAdvancedProxyRoutingState(snapshot.Apps[appType], nextState) {
+			snapshot.Apps[appType] = nextState
+		}
+	}
+	return snapshot
+}
+
+func (r *advancedProxyRuntimeState) shouldWriteThrottledLog(key string, window time.Duration) bool {
+	if window <= 0 {
+		window = 3 * time.Minute
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.logs == nil {
+		r.logs = map[string]time.Time{}
+	}
+	lastAt, exists := r.logs[key]
+	now := time.Now()
+	if exists && now.Sub(lastAt) < window {
+		return false
+	}
+	r.logs[key] = now
+	return true
+}
+
+func (r *advancedProxyRuntimeState) logRoutePass(appType string, provider AdvancedProxyProvider, routeKind string, targetURL string) {
+	key := strings.Join([]string{
+		"route",
+		normalizeAdvancedProxyRuntimeAppType(appType),
+		strings.TrimSpace(provider.ID),
+		strings.TrimSpace(routeKind),
+	}, "|")
+	if !r.shouldWriteThrottledLog(key, 3*time.Minute) {
+		return
+	}
+	appendClientRuntimeLog("advanced_proxy.route", fmt.Sprintf(
+		"app=%s provider=%s(%s) route=%s target=%s",
+		normalizeAdvancedProxyRuntimeAppType(appType),
+		firstNonEmpty(strings.TrimSpace(provider.Name), "-"),
+		firstNonEmpty(strings.TrimSpace(provider.ID), "-"),
+		firstNonEmpty(strings.TrimSpace(routeKind), "-"),
+		firstNonEmpty(strings.TrimSpace(targetURL), "-"),
+	))
+}
+
+func (r *advancedProxyRuntimeState) routingSnapshotLocked() AdvancedProxyRoutingSnapshot {
+	apps := make(map[string]AdvancedProxyRoutingState, len(r.routes))
+	for appType, route := range r.routes {
+		if route == nil {
+			continue
+		}
+		apps[appType] = AdvancedProxyRoutingState{
+			AppType:        route.AppType,
+			ProviderID:     route.ProviderID,
+			ProviderRowKey: route.ProviderRowKey,
+			ProviderName:   route.ProviderName,
+			RouteKind:      route.RouteKind,
+			Status:         route.Status,
+			TargetURL:      route.TargetURL,
+			UpdatedAt:      route.UpdatedAt.Format(time.RFC3339Nano),
+		}
+	}
+	return AdvancedProxyRoutingSnapshot{Apps: apps}
+}
+
+func (r *advancedProxyRuntimeState) persistRoutingSnapshot(snapshot AdvancedProxyRoutingSnapshot) {
+	raw, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		appendClientRuntimeLog("advanced_proxy.routing_snapshot", fmt.Sprintf("marshal failed: %v", err))
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(resolveAdvancedProxyRoutingSnapshotPath()), 0o755); err != nil {
+		appendClientRuntimeLog("advanced_proxy.routing_snapshot", fmt.Sprintf("mkdir failed: %v", err))
+		return
+	}
+	if err := atomicWriteTextFile(resolveAdvancedProxyRoutingSnapshotPath(), string(raw)); err != nil {
+		appendClientRuntimeLog("advanced_proxy.routing_snapshot", fmt.Sprintf("persist failed: %v", err))
+	}
+}
+
+func resolveAdvancedProxyRoutingSnapshotPath() string {
+	return filepath.Join(resolveRuntimeRootDir(), "advanced-proxy", "routing-snapshot.json")
+}
+
+func loadAdvancedProxyRoutingSnapshotFromDisk() AdvancedProxyRoutingSnapshot {
+	path := resolveAdvancedProxyRoutingSnapshotPath()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return AdvancedProxyRoutingSnapshot{Apps: map[string]AdvancedProxyRoutingState{}}
+	}
+	var snapshot AdvancedProxyRoutingSnapshot
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		appendClientRuntimeLog("advanced_proxy.routing_snapshot", fmt.Sprintf("read failed: %v", err))
+		return AdvancedProxyRoutingSnapshot{Apps: map[string]AdvancedProxyRoutingState{}}
+	}
+	if snapshot.Apps == nil {
+		snapshot.Apps = map[string]AdvancedProxyRoutingState{}
+	}
+	return snapshot
+}
+
+func shouldReplaceAdvancedProxyRoutingState(current AdvancedProxyRoutingState, next AdvancedProxyRoutingState) bool {
+	currentTime := parseAdvancedProxyRoutingSnapshotTime(current.UpdatedAt)
+	nextTime := parseAdvancedProxyRoutingSnapshotTime(next.UpdatedAt)
+	if nextTime.IsZero() {
+		return currentTime.IsZero()
+	}
+	if currentTime.IsZero() {
+		return true
+	}
+	return nextTime.After(currentTime)
+}
+
+func parseAdvancedProxyRoutingSnapshotTime(value string) time.Time {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, text)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
 }
 
 func (b *proxyCircuitBreaker) allow(config AppFailoverConfig) bool {
