@@ -262,6 +262,12 @@ function buildOpenCodePreview(appName, draft, file) {
     next.provider = {};
   }
 
+  next.provider = removeMatchingOpenCodeProviders(next.provider, {
+    providerKey,
+    providerName,
+    baseUrl,
+  });
+
   next.provider[providerKey] = {
     npm: useAdvancedProxy ? '@ai-sdk/openai-compatible' : (draft.opencodeNpm || '@ai-sdk/openai-compatible'),
     name: providerName,
@@ -307,6 +313,12 @@ function buildOpenClawPreview(appName, draft, file) {
     next.models.mode = 'merge';
   }
 
+  const removedOpenClawProviderKeys = [];
+  next.models.providers = removeMatchingOpenClawProviders(next.models.providers, {
+    providerKey,
+    baseUrl,
+  }, removedOpenClawProviderKeys);
+
   next.models.providers[providerKey] = {
     baseUrl,
     apiKey,
@@ -327,6 +339,17 @@ function buildOpenClawPreview(appName, draft, file) {
   }
   if (!isPlainObject(next.agents.defaults.models)) {
     next.agents.defaults.models = {};
+  }
+
+  if (removedOpenClawProviderKeys.length > 0) {
+    Object.keys(next.agents.defaults.models).forEach(modelKey => {
+      const normalizedModelKey = String(modelKey || '').trim();
+      if (!normalizedModelKey.includes('/')) return;
+      const modelProviderKey = sanitizeProviderKey(normalizedModelKey.split('/')[0]);
+      if (removedOpenClawProviderKeys.includes(modelProviderKey) && modelProviderKey !== providerKey) {
+        delete next.agents.defaults.models[modelKey];
+      }
+    });
   }
 
   const fullModelName = `${providerKey}/${model}`;
@@ -553,18 +576,121 @@ function upsertCodexConfigToml(currentText, options) {
     'requires_openai_auth = true',
   ].join('\n');
 
-  const sectionPattern = new RegExp(
-    `(^|\\n)\\[model_providers\\.${escapeRegExp(options.providerKey)}\\]\\n[\\s\\S]*?(?=\\n\\[[^\\]]+\\]|$)`,
-    'm'
-  );
-
-  if (sectionPattern.test(text)) {
-    text = text.replace(sectionPattern, `\n${providerSection}\n`);
-  } else {
-    text = `${text.trim()}\n\n${providerSection}\n`;
-  }
+  text = removeMatchingCodexProviderSections(text, options);
+  text = `${text.trim()}\n\n${providerSection}\n`;
 
   return ensureTrailingNewline(text.replace(/\n{3,}/g, '\n\n').trim());
+}
+
+function removeMatchingCodexProviderSections(text, options) {
+  const source = String(text || '').replace(/\r\n/g, '\n');
+  const lines = source.split('\n');
+  const keptSections = [];
+  let currentHeader = '';
+  let currentLines = [];
+
+  const flush = () => {
+    if (!currentLines.length) return;
+    const sectionText = currentLines.join('\n').trim();
+    if (!sectionText) {
+      currentHeader = '';
+      currentLines = [];
+      return;
+    }
+    if (!shouldDropCodexProviderSection(currentHeader, sectionText, options)) {
+      keptSections.push(sectionText);
+    }
+    currentHeader = '';
+    currentLines = [];
+  };
+
+  lines.forEach(line => {
+    if (/^\[[^\]]+\]\s*$/.test(line.trim())) {
+      flush();
+      currentHeader = line.trim();
+      currentLines = [line];
+      return;
+    }
+
+    if (currentLines.length === 0) {
+      currentLines = [line];
+      return;
+    }
+    currentLines.push(line);
+  });
+
+  flush();
+  return keptSections.join('\n\n').trim();
+}
+
+function shouldDropCodexProviderSection(header, sectionText, options) {
+  const normalizedHeader = String(header || '').trim();
+  const providerHeader = `[model_providers.${options.providerKey}]`;
+  if (normalizedHeader === providerHeader) {
+    return true;
+  }
+  if (!normalizedHeader.startsWith('[model_providers.')) {
+    return false;
+  }
+
+  const nameMatch = sectionText.match(/^\s*name\s*=\s*["']([^"'\n]+)["']/m);
+  if (nameMatch?.[1] && String(nameMatch[1]).trim() === String(options.providerName || '').trim()) {
+    return true;
+  }
+
+  const baseUrlMatch = sectionText.match(/^\s*base_url\s*=\s*["']([^"'\n]+)["']/m);
+  if (baseUrlMatch?.[1] && normalizeComparableUrl(baseUrlMatch[1]) === normalizeComparableUrl(options.baseUrl)) {
+    return true;
+  }
+
+  return false;
+}
+
+function removeMatchingOpenCodeProviders(providers, options) {
+  const source = isPlainObject(providers) ? providers : {};
+  const next = {};
+  const normalizedProviderKey = sanitizeProviderKey(options.providerKey);
+  const normalizedProviderName = String(options.providerName || '').trim();
+  const normalizedBaseUrl = normalizeComparableUrl(options.baseUrl);
+
+  Object.entries(source).forEach(([key, value]) => {
+    const normalizedKey = sanitizeProviderKey(key);
+    const providerName = String(value?.name || '').trim();
+    const providerBaseUrl = normalizeComparableUrl(value?.options?.baseURL);
+    const shouldDrop =
+      normalizedKey === normalizedProviderKey ||
+      (normalizedProviderName && providerName === normalizedProviderName) ||
+      (normalizedBaseUrl && providerBaseUrl === normalizedBaseUrl);
+    if (!shouldDrop) {
+      next[key] = value;
+    }
+  });
+
+  return next;
+}
+
+function removeMatchingOpenClawProviders(providers, options, removedKeys = []) {
+  const source = isPlainObject(providers) ? providers : {};
+  const next = {};
+  const normalizedProviderKey = sanitizeProviderKey(options.providerKey);
+  const normalizedBaseUrl = normalizeComparableUrl(options.baseUrl);
+
+  Object.entries(source).forEach(([key, value]) => {
+    const normalizedKey = sanitizeProviderKey(key);
+    const providerBaseUrl = normalizeComparableUrl(value?.baseUrl);
+    const shouldDrop =
+      normalizedKey === normalizedProviderKey ||
+      (normalizedBaseUrl && providerBaseUrl === normalizedBaseUrl);
+    if (shouldDrop) {
+      if (!removedKeys.includes(normalizedKey)) {
+        removedKeys.push(normalizedKey);
+      }
+      return;
+    }
+    next[key] = value;
+  });
+
+  return next;
 }
 
 function upsertTomlRootField(text, field, valueLiteral) {

@@ -61,6 +61,7 @@ func NewApp(mode launchMode, recordKey string, panelStart panelStartMode) *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	clearDesktopLogHistory()
 	debugLogf("startup begin")
 	if a.isPanelMode() {
 		a.startPanelSignalWatcher()

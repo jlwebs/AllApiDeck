@@ -139,7 +139,7 @@ type desktopLogDir struct {
 }
 
 func resolveDesktopLogDirs() ([]desktopLogDir, error) {
-	dirs := make([]desktopLogDir, 0, 5)
+	dirs := make([]desktopLogDir, 0, 6)
 	seen := map[string]bool{}
 
 	addDir := func(path string, sourceKey string, sourceLabel string) {
@@ -174,6 +174,7 @@ func resolveDesktopLogDirs() ([]desktopLogDir, error) {
 		addDir(filepath.Join(exeDir, "..", "logs"), "exe_parent", "EXE 上级 logs")
 	}
 	addDir(resolveRuntimeLogDir(), "runtime", "运行时 logs")
+	addDir(resolveBridgeImportDir(), "bridge_import", "桥接导入记录")
 
 	return dirs, nil
 }
@@ -199,20 +200,57 @@ func isDesktopLogFile(name string) bool {
 	if lower == "" {
 		return false
 	}
-	return strings.HasSuffix(lower, ".log") || strings.HasSuffix(lower, ".txt")
+	if strings.HasSuffix(lower, ".log") || strings.HasSuffix(lower, ".txt") {
+		return true
+	}
+	switch lower {
+	case "history.jsonl", "last-import.json":
+		return true
+	default:
+		return false
+	}
 }
 
 func classifyDesktopLogGroup(name string) (string, string) {
 	lower := strings.ToLower(name)
 	switch {
-	case strings.Contains(lower, "fetch"), strings.Contains(lower, "check-keys"), strings.Contains(lower, "proxy"), strings.Contains(lower, "models"), strings.Contains(lower, "nih"):
+	case strings.Contains(lower, "bridge-import"), lower == "history.jsonl", lower == "last-import.json":
+		return "bridge", "桥接导入"
+	case strings.Contains(lower, "advanced-proxy"):
+		return "advanced_proxy", "高级代理"
+	case strings.Contains(lower, "portable"):
+		return "portable", "绿色化与迁移"
+	case strings.Contains(lower, "fetch"), strings.Contains(lower, "check-keys"), strings.Contains(lower, "bridge-http"), strings.Contains(lower, "extension-import"), strings.Contains(lower, "profile-assist"), strings.Contains(lower, "models"):
 		return "fetch", "抓取与检测"
-	case strings.Contains(lower, "wails"), strings.Contains(lower, "exe_backend"), strings.Contains(lower, "render"):
+	case strings.Contains(lower, "client-runtime"), strings.Contains(lower, "wails"), strings.Contains(lower, "exe_backend"), strings.Contains(lower, "render"):
 		return "runtime", "核心运行"
 	case strings.Contains(lower, "test"), strings.Contains(lower, "debug"):
 		return "debug", "调试与样本"
 	default:
 		return "other", "其他日志"
+	}
+}
+
+func clearDesktopLogHistory() {
+	dirs, err := resolveDesktopLogDirs()
+	if err != nil {
+		return
+	}
+
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir.path)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if !isDesktopLogFile(entry.Name()) {
+				continue
+			}
+			_ = os.Remove(filepath.Join(dir.path, entry.Name()))
+		}
 	}
 }
 
