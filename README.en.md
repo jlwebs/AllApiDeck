@@ -17,9 +17,9 @@ This project is built with `Wails + Vue 3`, mainly for the following workflows:
 
 ## Preview
 
-<img src="./build/bin/首图.png" alt="All API Deck Home" width="72%" />
-<img src="./build/bin/首图2.png" alt="All API Deck Site Management" width="72%" />
-<img src="./build/bin/侧栏.png" alt="Side Panel" width="24%" />
+<img src="./docs/images/all-api-deck-home.png" alt="All API Deck Home" width="72%" />
+<img src="./docs/images/all-api-deck-site-management.png" alt="All API Deck Site Management" width="72%" />
+<img src="./docs/images/all-api-deck-sidebar.png" alt="Side Panel" width="24%" />
 
 ## Positioning
 
