@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,9 @@ import (
 
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+//go:embed plugin-bridge-js/bridge.user.js
+var embeddedBridgeUserScript string
 
 const (
 	bridgeServerHost               = "127.0.0.1"
@@ -1325,23 +1329,17 @@ func (a *App) handleBridgeUserScript(writer http.ResponseWriter, request *http.R
 		return
 	}
 
-	scriptPath, err := resolveBridgeUserScriptPath()
-	if err != nil {
-		http.Error(writer, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	raw, err := os.ReadFile(scriptPath)
-	if err != nil {
-		appendBridgeImportLogf("[SCRIPT_FAIL] path=%s err=%v", scriptPath, err)
-		http.Error(writer, "bridge script not found", http.StatusNotFound)
+	raw := strings.TrimSpace(embeddedBridgeUserScript)
+	if raw == "" {
+		appendBridgeImportLogf("[SCRIPT_FAIL] source=embedded err=empty_embedded_script")
+		http.Error(writer, "embedded bridge script not found", http.StatusInternalServerError)
 		return
 	}
 
 	writer.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
-	appendBridgeImportLogf("[SCRIPT_OK] path=%s bytes=%d", scriptPath, len(raw))
-	_, _ = writer.Write(raw)
+	appendBridgeImportLogf("[SCRIPT_OK] source=embedded bytes=%d", len(raw))
+	_, _ = writer.Write([]byte(raw))
 }
 
 func writeBridgeJSON(writer http.ResponseWriter, status int, payload map[string]any) {
