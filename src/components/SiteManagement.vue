@@ -261,6 +261,7 @@ import {
 import AppHeader from './AppHeader.vue';
 import AdvancedProxyModal from './AdvancedProxyModal.vue';
 import SystemSettingsModal from './SystemSettingsModal.vue';
+import { openUrlInSystemBrowser } from '../utils/runtimeApi.js';
 import { loadDesktopTokenSourceMode, loadTreeExpandedSetting } from '../utils/systemSettings.js';
 import { refreshCachedSiteTokens } from '../utils/siteTokenRefresh.js';
 import {
@@ -1028,7 +1029,7 @@ const startBatchCheckFromSiteManagement = async () => {
 const openSiteUrl = url => {
   const target = String(url || '').trim();
   if (!target) return;
-  window.open(target, '_blank', 'noopener');
+  openUrlInSystemBrowser(target);
 };
 
 const selectAllSites = () => {

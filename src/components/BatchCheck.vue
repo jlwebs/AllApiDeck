@@ -720,7 +720,7 @@ import BridgeImportWizardModal from './BridgeImportWizardModal.vue';
 import SystemSettingsModal from './SystemSettingsModal.vue';
 import { fetchModelList } from '../utils/api.js';
 import { listDesktopLogFiles, readDesktopLogFile, isDesktopLogBridgeAvailable } from '../utils/desktopLogBridge.js';
-import { apiFetch, isProbablyWailsRuntime } from '../utils/runtimeApi.js';
+import { apiFetch, isProbablyWailsRuntime, openUrlInSystemBrowser } from '../utils/runtimeApi.js';
 import { extractChromeProfileTokens, isChromeProfileAuthBridgeAvailable } from '../utils/profileAuthBridge.js';
 import { maximiseMainWindow } from '../utils/windowSizing.js';
 import { loadTreeExpandedSetting } from '../utils/systemSettings.js';
@@ -3058,17 +3058,6 @@ const confirmWithModal = ({ title, content, okText = '确定', cancelText = '取
       onCancel: () => resolve(false),
     });
   });
-};
-
-const openUrlInSystemBrowser = (url) => {
-  if (!url) return;
-  if (isWailsRuntime && typeof window !== 'undefined' && typeof window.runtime?.BrowserOpenURL === 'function') {
-    try {
-      window.runtime.BrowserOpenURL(url);
-      return;
-    } catch {}
-  }
-  window.open(url, '_blank');
 };
 
 const openFailedSitesForManualLogin = async (sites) => {

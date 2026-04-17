@@ -225,6 +225,18 @@ export function runtimeFetch(input, init) {
   return bridgeFetch(getNativeFetch(), input, init);
 }
 
+export function openUrlInSystemBrowser(url, target = '_blank') {
+  const normalizedUrl = typeof url === 'string' ? url.trim() : '';
+  if (!normalizedUrl) return;
+  if (isProbablyWailsRuntime() && typeof window !== 'undefined' && typeof window.runtime?.BrowserOpenURL === 'function') {
+    try {
+      window.runtime.BrowserOpenURL(normalizedUrl);
+      return;
+    } catch {}
+  }
+  window.open(normalizedUrl, target, 'noopener');
+}
+
 export function installRuntimeFetchBridge() {
   if (typeof window === 'undefined') {
     return;
