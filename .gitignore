@@ -58,3 +58,4 @@ backup/
 # local nested repo / later cleanup
 all-api-hub/
 cc-switch/
+batch-api-check.exe

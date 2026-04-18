@@ -328,6 +328,7 @@ import {
   refreshRecordBalance,
   runRecordQuickTest,
 } from '../utils/keyPanelStore.js';
+import { hydrateLastResultsSnapshotCache, HISTORY_SNAPSHOT_SYNC_EVENT } from '../utils/historySnapshotStore.js';
 import {
   ADVANCED_PROXY_SYNC_EVENT,
   ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
@@ -1260,6 +1261,7 @@ async function handleRefreshBalance(record) {
 }
 
 onMounted(async () => {
+  await hydrateLastResultsSnapshotCache();
   reloadAdvancedProxyConfigState();
   reloadRecords();
   await reloadAdvancedProxyRoutingState();
@@ -1278,6 +1280,7 @@ onMounted(async () => {
 
   window.addEventListener('resize', syncScrollIndicator);
   window.addEventListener(KEY_MANAGEMENT_SYNC_EVENT, reloadRecords);
+  window.addEventListener(HISTORY_SNAPSHOT_SYNC_EVENT, reloadRecords);
   window.addEventListener('storage', reloadRecords);
   window.addEventListener('storage', reloadAdvancedProxyConfigState);
   window.addEventListener('storage', reloadAdvancedProxyRoutingState);
@@ -1311,6 +1314,7 @@ onBeforeUnmount(() => {
   }
   window.removeEventListener('resize', syncScrollIndicator);
   window.removeEventListener(KEY_MANAGEMENT_SYNC_EVENT, reloadRecords);
+  window.removeEventListener(HISTORY_SNAPSHOT_SYNC_EVENT, reloadRecords);
   window.removeEventListener('storage', reloadRecords);
   window.removeEventListener('storage', reloadAdvancedProxyConfigState);
   window.removeEventListener('storage', reloadAdvancedProxyRoutingState);

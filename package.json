@@ -12,6 +12,7 @@
     "build:desktop": "node scripts/run-wails.mjs build",
     "build:web": "node scripts/run-vite.mjs build",
     "preview": "node scripts/run-vite.mjs preview",
+    "test": "node scripts/run-node-tests.mjs",
     "start": "node server.js",
     "docker:install": "yarn install --production --frozen-lockfile && yarn build"
   },

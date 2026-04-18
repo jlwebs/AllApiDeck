@@ -180,6 +180,7 @@ import DesktopConfigDiffModal from '../components/DesktopConfigDiffModal.vue';
 import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManagedAppConfigFiles } from '../utils/desktopConfigBridge.js';
 import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS, inferProviderKeyFromSnapshot } from '../utils/desktopConfigTransform.js';
 import { getRecordModelOptions, loadPanelRecords, loadRecordModelOptions, persistPanelRecords } from '../utils/keyPanelStore.js';
+import { hydrateLastResultsSnapshotCache } from '../utils/historySnapshotStore.js';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
 import opencodeAppIcon from '../assets/app-icons/opencode.svg';
@@ -368,6 +369,7 @@ async function applyDesktopConfigPreview() {
 }
 
 async function bootstrap() {
+  await hydrateLastResultsSnapshotCache();
   const loaded = loadPanelRecords();
   contextMap.value = loaded.contextMap || new Map();
   records.value = loaded.records || [];

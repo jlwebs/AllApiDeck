@@ -6,9 +6,11 @@ import 'ant-design-vue/dist/reset.css';
 import i18n from './i18n';
 import { installClientDiagnostics, logClientDiagnostic } from './utils/clientDiagnostics.js';
 import { installRuntimeFetchBridge } from './utils/runtimeApi.js';
+import { hydrateLastResultsSnapshotCache } from './utils/historySnapshotStore.js';
 
 installClientDiagnostics();
 installRuntimeFetchBridge();
+void hydrateLastResultsSnapshotCache();
 logClientDiagnostic('bootstrap', 'fetch bridge install called');
 
 const app = createApp(App);

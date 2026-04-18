@@ -64,6 +64,7 @@ import {
   loadRecordModelOptions,
   persistPanelRecords,
 } from '../utils/keyPanelStore.js';
+import { hydrateLastResultsSnapshotCache } from '../utils/historySnapshotStore.js';
 
 const records = ref([]);
 const contextMap = ref(new Map());
@@ -83,6 +84,7 @@ async function closeWindow() {
 }
 
 async function bootstrap() {
+  await hydrateLastResultsSnapshotCache();
   const loaded = loadPanelRecords();
   contextMap.value = loaded.contextMap || loadBatchHistoryContextMap();
   records.value = loaded.records;

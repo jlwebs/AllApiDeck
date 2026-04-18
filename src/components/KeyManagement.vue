@@ -378,6 +378,12 @@ import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
 import { exitSidebarMode, isManualSidebarBridgeAvailable, isSidebarBridgeAvailable, openManualSidebarPanel } from '../utils/windowMode.js';
 import { loadDesktopTokenSourceMode, loadTreeExpandedSetting } from '../utils/systemSettings.js';
 import { buildPerformanceTooltipLines, derivePerformanceMetricsFromResponse, hasPerformanceMetrics } from '../utils/performanceMetrics.js';
+import {
+  hydrateLastResultsSnapshotCache,
+  HISTORY_SNAPSHOT_INDEX_KEY,
+  HISTORY_SNAPSHOT_SYNC_EVENT,
+  getCachedLastResultsSnapshotRaw,
+} from '../utils/historySnapshotStore.js';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
 import geminiAppIcon from '../assets/app-icons/gemini.svg';
@@ -389,7 +395,7 @@ import ccSwitchIcon from '../assets/action-icons/cc-switch.png';
 const STORAGE_KEY = 'api_check_key_management_records_v1';
 const MANUAL_STORAGE_KEY = 'api_check_key_management_manual_records_v1';
 const META_STORAGE_KEY = 'api_check_key_management_meta_v1';
-const LAST_RESULTS_STORAGE_KEY = 'api_check_last_results';
+const LAST_RESULTS_STORAGE_KEY = HISTORY_SNAPSHOT_INDEX_KEY;
 const KEY_MANAGEMENT_SYNC_EVENT = 'batch-api-check:key-management-sync';
 const DEFAULT_TEST_TIMEOUT_MS = 20000;
 const CC_SWITCH_TARGET_APPS = ['claude', 'codex', 'gemini', 'opencode', 'openclaw'];
@@ -453,8 +459,9 @@ const portablePacking = ref(false);
 const portableUnpacking = ref(false);
 const portableSettingsMeta = ref('');
 const openingManualSidebar = ref(false);
+const manualSidebarBridgeReady = ref(false);
+let manualSidebarBridgeProbeTimer = null;
 const isCompactMode = computed(() => route.query?.compact === '1');
-const manualSidebarBridgeReady = computed(() => isManualSidebarBridgeAvailable());
 const PERSIST_DEBOUNCE_MS = 240;
 let persistRecordsTimer = null;
 let lastPersistedRecordsSnapshot = '';
@@ -463,6 +470,15 @@ const recordRenderMetaCache = new Map();
 const configProviderTheme = computed(() => ({
   algorithm: isDarkMode.value ? theme.darkAlgorithm : theme.defaultAlgorithm,
 }));
+
+const refreshManualSidebarBridgeReady = () => {
+  manualSidebarBridgeReady.value = isManualSidebarBridgeAvailable();
+  if (manualSidebarBridgeReady.value && manualSidebarBridgeProbeTimer) {
+    clearInterval(manualSidebarBridgeProbeTimer);
+    manualSidebarBridgeProbeTimer = null;
+  }
+};
+
 const desktopConfigModelOptions = computed(() => {
   const record = desktopConfigTargetRecord.value;
   if (!record) return [];
@@ -496,19 +512,32 @@ const healthyKeyCount = computed(() => tableData.value.filter(record => record.s
 const syncSummary = computed(() => !syncMeta.value.lastBatchSyncAt ? '导入并批量检测后，会自动把获取到的 sk key 更新到本页。' : `最近一次批量同步写入 ${syncMeta.value.lastBatchSyncCount} 条记录，失败站点 ${syncMeta.value.lastBatchFailedCount} 个。`);
 
 onMounted(() => {
-  if (!document.body.classList.contains('dark-mode') && !document.body.classList.contains('light-mode')) document.body.classList.add('light-mode');
-  isDarkMode.value = document.body.classList.contains('dark-mode');
-  refreshManagedRecordsFromStorage();
-  if (typeof window !== 'undefined') {
-    window.addEventListener(KEY_MANAGEMENT_SYNC_EVENT, handleManagedRecordSyncEvent);
-    window.addEventListener('storage', handleManagedRecordStorageEvent);
-  }
+  void (async () => {
+    await hydrateLastResultsSnapshotCache();
+    if (!document.body.classList.contains('dark-mode') && !document.body.classList.contains('light-mode')) document.body.classList.add('light-mode');
+    isDarkMode.value = document.body.classList.contains('dark-mode');
+    refreshManualSidebarBridgeReady();
+    if (!manualSidebarBridgeReady.value && typeof window !== 'undefined') {
+      manualSidebarBridgeProbeTimer = window.setInterval(refreshManualSidebarBridgeReady, 250);
+    }
+    refreshManagedRecordsFromStorage();
+    if (typeof window !== 'undefined') {
+      window.addEventListener(KEY_MANAGEMENT_SYNC_EVENT, handleManagedRecordSyncEvent);
+      window.addEventListener(HISTORY_SNAPSHOT_SYNC_EVENT, handleManagedRecordSyncEvent);
+      window.addEventListener('storage', handleManagedRecordStorageEvent);
+    }
+  })();
 });
 
 onBeforeUnmount(() => {
   flushPersistRecords();
+  if (manualSidebarBridgeProbeTimer) {
+    clearInterval(manualSidebarBridgeProbeTimer);
+    manualSidebarBridgeProbeTimer = null;
+  }
   if (typeof window !== 'undefined') {
     window.removeEventListener(KEY_MANAGEMENT_SYNC_EVENT, handleManagedRecordSyncEvent);
+    window.removeEventListener(HISTORY_SNAPSHOT_SYNC_EVENT, handleManagedRecordSyncEvent);
     window.removeEventListener('storage', handleManagedRecordStorageEvent);
   }
 });
@@ -1842,7 +1871,7 @@ function loadStoredMeta() {
 
 function loadBatchHistoryBalanceMap() {
   try {
-    const raw = localStorage.getItem(LAST_RESULTS_STORAGE_KEY);
+    const raw = getCachedLastResultsSnapshotRaw();
     const parsed = JSON.parse(raw || '[]');
     if (!Array.isArray(parsed)) return new Map();
 
@@ -1871,7 +1900,7 @@ function loadBatchHistoryBalanceMap() {
 
 function loadBatchHistoryContextMap() {
   try {
-    const raw = localStorage.getItem(LAST_RESULTS_STORAGE_KEY);
+    const raw = getCachedLastResultsSnapshotRaw();
     const parsed = JSON.parse(raw || '[]');
     if (!Array.isArray(parsed)) return new Map();
 

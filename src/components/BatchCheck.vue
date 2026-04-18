@@ -756,6 +756,13 @@ import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils
 import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
 import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
 import {
+  hasCachedLastResultsSnapshot,
+  hydrateLastResultsSnapshotCache,
+  loadLastResultsSnapshot,
+  HISTORY_SNAPSHOT_SYNC_EVENT,
+  saveLastResultsSnapshot,
+} from '../utils/historySnapshotStore.js';
+import {
   buildRowKey as buildKeyPanelRowKey,
   loadPanelRecords,
   normalizeModels as normalizeKeyPanelModels,
@@ -1134,16 +1141,6 @@ const maskTokenPreview = (token) => {
   if (!text) return '';
   if (text.length <= 12) return text;
   return `${text.slice(0, 8)}...${text.slice(-4)}`;
-};
-
-const saveLastResultsSnapshot = (results = testResults.value) => {
-  try {
-    const snapshot = Array.isArray(results) ? results : [];
-    localStorage.setItem('api_check_last_results', JSON.stringify(snapshot));
-    hasHistory.value = snapshot.length > 0;
-  } catch (error) {
-    console.warn('[BatchCheck] save history snapshot failed:', error?.message || String(error));
-  }
 };
 
 const stringifyPreview = (value, maxLength = 280) => {
@@ -1757,6 +1754,9 @@ const completedTasks = ref(0);
 const resultModelFilter = ref('');
 const organizedGroupIndex = ref([]);
 const organizedModelUniverse = ref([]);
+const syncHistoryAvailability = () => {
+  hasHistory.value = hasCachedLastResultsSnapshot();
+};
 
 const ORGANIZED_REFRESH_INTERVAL_MS = 220;
 const organizedSourceResults = ref([]);
@@ -2709,15 +2709,16 @@ const resendPayload = async () => {
   await runSingleTest(editingRecord.value, custom);
   
   // Also update history immediately
-  saveLastResultsSnapshot();
+  await saveLastResultsSnapshot(testResults.value);
 };
 
-onMounted(() => {
+onMounted(async () => {
   logClientDiagnostic('batch.lifecycle', 'BatchCheck mounted');
   logClientDiagnostic(
     'batch.lifecycle',
     `PerformHttpRequest typeof=${typeof window?.go?.main?.App?.PerformHttpRequest} PerformHttpRequestRaw typeof=${typeof window?.go?.main?.App?.PerformHttpRequestRaw} AppendClientLog typeof=${typeof window?.go?.main?.App?.AppendClientLog}`
   );
+  await hydrateLastResultsSnapshotCache();
   resetImportExtensionState();
   isDarkMode.value = document.body.classList.contains('dark-mode');
   loadDesktopTokenSourceMode();
@@ -2732,14 +2733,9 @@ onMounted(() => {
       void probeBackendHealth();
     }, 10000);
   }
-  const hist = localStorage.getItem('api_check_last_results');
-  if (hist) {
-    try {
-      const parsed = JSON.parse(hist);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        hasHistory.value = true;
-      }
-  } catch(e) {}
+  syncHistoryAvailability();
+  if (typeof window !== 'undefined') {
+    window.addEventListener(HISTORY_SNAPSHOT_SYNC_EVENT, syncHistoryAvailability);
   }
   const pendingBatchStart = consumePendingBatchStart();
   const pendingRestoreKeys = consumePendingSiteRestore();
@@ -2793,6 +2789,9 @@ onBeforeUnmount(() => {
   resetImportExtensionState();
   stopFetchKeysProgressPolling();
   stopBridgeImportPolling();
+  if (typeof window !== 'undefined') {
+    window.removeEventListener(HISTORY_SNAPSHOT_SYNC_EVENT, syncHistoryAvailability);
+  }
   activeSiteTreeSession.replaceSites = null;
   activeSiteTreeSession.requestDiscoveryRefresh = null;
   activeSiteTreeSession.syncCacheSnapshot = null;
@@ -2803,32 +2802,23 @@ onBeforeUnmount(() => {
 });
 
 const loadHistory = async () => {
-  const hist = localStorage.getItem('api_check_last_results');
-  if (hist) {
-    try {
-      await maximiseMainWindow();
-      const parsed = JSON.parse(hist);
-      testResults.value = (Array.isArray(parsed) ? parsed : []).map((task, index) => ({
-        ...task,
-        id: String(task?.id || `history_task_${index}`),
-        siteId: String(task?.siteId || '').trim(),
-        siteName: String(task?.siteName || '未命名站点').trim() || '未命名站点',
-        siteUrl: String(task?.siteUrl || '').trim(),
-        apiKey: String(task?.apiKey || '').trim(),
-        modelName: String(task?.modelName || '').trim(),
-        status: String(task?.status || 'pending').trim() || 'pending',
-        statusText: String(task?.statusText || '').trim() || '等待重测',
-        responseTime: String(task?.responseTime || '-').trim() || '-',
-        remark: String(task?.remark || '-').trim() || '-',
-      })).filter(task => task.siteUrl && task.apiKey && task.modelName);
-      organizedSourceResults.value = [...testResults.value];
-      totalTasks.value = testResults.value.length;
-      completedTasks.value = testResults.value.filter(task => !['pending', 'testing'].includes(String(task?.status || ''))).length;
-      step.value = 3;
-      message.success('历史检测结果已恢复');
-    } catch (e) {
-      message.error('解析历史数据失败');
+  try {
+    await maximiseMainWindow();
+    const snapshot = await loadLastResultsSnapshot();
+    if (!Array.isArray(snapshot) || snapshot.length === 0) {
+      message.info('当前没有可恢复的历史记录');
+      hasHistory.value = false;
+      return;
     }
+    testResults.value = snapshot;
+    organizedSourceResults.value = [...testResults.value];
+    totalTasks.value = testResults.value.length;
+    completedTasks.value = testResults.value.filter(task => !['pending', 'testing'].includes(String(task?.status || ''))).length;
+    step.value = 3;
+    hasHistory.value = true;
+    message.success('历史检测结果已恢复');
+  } catch (e) {
+    message.error('解析历史数据失败');
   }
 };
 
@@ -6536,7 +6526,7 @@ const startBatchCheck = async () => {
 
   totalTasks.value = tasksQueue.length;
   completedTasks.value = 0;
-  saveLastResultsSnapshot();
+  await saveLastResultsSnapshot(testResults.value);
   scheduleOrganizedSourceRefresh(true);
   console.log(`[BatchCheck] 开始检测: selectedModelKeys=${selectedModelKeys.length}, queuedTasks=${tasksQueue.length}`);
 
@@ -6571,7 +6561,7 @@ const startBatchCheck = async () => {
     await syncDetectedKeysToLocalStorage({ silent: true });
     message.success('批量检测完成！');
     // Save to history
-    saveLastResultsSnapshot();
+    await saveLastResultsSnapshot(testResults.value);
   }
 };
 
@@ -6877,7 +6867,7 @@ const retestAllFromResults = async () => {
     scheduleOrganizedSourceRefresh(true);
     await syncDetectedKeysToLocalStorage({ silent: true });
     message.success('再次批量检测完成！');
-    saveLastResultsSnapshot();
+    await saveLastResultsSnapshot(testResults.value);
   }
 };
 

@@ -3,11 +3,11 @@ import { apiFetch } from './runtimeApi.js';
 import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from './balance.js';
 import { buildQuickTestMessages } from './quickTestPrompts.js';
 import { derivePerformanceMetricsFromResponse } from './performanceMetrics.js';
+import { getCachedLastResultsSnapshotRaw } from './historySnapshotStore.js';
 
 export const STORAGE_KEY = 'api_check_key_management_records_v1';
 export const MANUAL_STORAGE_KEY = 'api_check_key_management_manual_records_v1';
 export const META_STORAGE_KEY = 'api_check_key_management_meta_v1';
-export const LAST_RESULTS_STORAGE_KEY = 'api_check_last_results';
 export const KEY_MANAGEMENT_SYNC_EVENT = 'batch-api-check:key-management-sync';
 
 const DEFAULT_TEST_TIMEOUT_MS = 18000;
@@ -104,7 +104,7 @@ function pickPreferredModel(candidates) {
 
 function loadBatchHistoryBalanceMap() {
   try {
-    const raw = localStorage.getItem(LAST_RESULTS_STORAGE_KEY);
+    const raw = getCachedLastResultsSnapshotRaw();
     if (raw === cachedHistoryBalanceRaw && cachedHistoryBalanceMap instanceof Map) {
       return cachedHistoryBalanceMap;
     }
@@ -138,7 +138,7 @@ function loadBatchHistoryBalanceMap() {
 
 export function loadBatchHistoryContextMap() {
   try {
-    const raw = localStorage.getItem(LAST_RESULTS_STORAGE_KEY);
+    const raw = getCachedLastResultsSnapshotRaw();
     if (raw === cachedHistoryContextRaw && cachedHistoryContextMap instanceof Map) {
       return cachedHistoryContextMap;
     }
