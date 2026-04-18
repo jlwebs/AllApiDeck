@@ -71,8 +71,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: package-lock.json
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
 
       - name: Prepare Go caches
         run: |
@@ -88,9 +91,7 @@ jobs:
 
       - name: Install frontend dependencies
         run: |
-          npm config set registry https://registry.npmjs.org
-          npm config set replace-registry-host always
-          npm install --no-fund --no-audit
+          bun install
         shell: pwsh
 
       - name: Install Wails CLI
@@ -122,7 +123,7 @@ jobs:
       - name: Build Windows desktop binary
         if: runner.os == 'Windows'
         run: |
-          npm run build:desktop -- --platform ${{ matrix.platform }} -o ${{ matrix.wails_output }}
+          bun run build:desktop -- --platform ${{ matrix.platform }} -o ${{ matrix.wails_output }}
           New-Item -ItemType Directory -Path release-assets -Force | Out-Null
           Copy-Item "build/bin/${{ matrix.release_file }}" "release-assets/${{ matrix.release_file }}"
         shell: pwsh
@@ -130,7 +131,7 @@ jobs:
       - name: Build macOS app bundle and package DMG
         if: runner.os == 'macOS'
         run: |
-          npm run build:desktop -- --platform ${{ matrix.platform }} -o ${{ matrix.wails_output }}
+          bun run build:desktop -- --platform ${{ matrix.platform }} -o ${{ matrix.wails_output }}
           app="build/bin/${{ matrix.wails_output }}.app"
           if [ ! -d "$app" ]; then
             app="$(find build/bin -maxdepth 1 -name '*.app' | head -n 1)"
@@ -150,7 +151,7 @@ jobs:
       - name: Build Linux binary and package release assets
         if: runner.os == 'Linux'
         run: |
-          npm run build:desktop -- --platform ${{ matrix.platform }} -tags webkit2_41 -o ${{ matrix.wails_output }}
+          bun run build:desktop -- --platform ${{ matrix.platform }} -tags webkit2_41 -o ${{ matrix.wails_output }}
           bash scripts/package-linux.sh "${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}" "build/bin/${{ matrix.wails_output }}" "release-assets"
         shell: bash
 

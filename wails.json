@@ -4,7 +4,7 @@
   "outputfilename": "all-api-deck",
   "frontend:dir": ".",
   "frontend:install": "node -e \"process.exit(0)\"",
-  "frontend:build": "npm run build:web",
+  "frontend:build": "bun run build:web",
   "frontend:dev:watcher": "node -e \"process.exit(0)\"",
   "frontend:dev:serverUrl": "auto",
   "author": {
