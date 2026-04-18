@@ -739,7 +739,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
-import { ConfigProvider, message, theme, Modal } from 'ant-design-vue';
+import { ConfigProvider, message, theme, Modal, Select } from 'ant-design-vue';
 import { HomeOutlined, ReloadOutlined, MenuUnfoldOutlined, MenuFoldOutlined, InboxOutlined, PlayCircleOutlined, SearchOutlined, CopyOutlined, FilterOutlined, HistoryOutlined, ShareAltOutlined, DownOutlined, RightOutlined, UserOutlined, LockOutlined, MessageOutlined, CopyFilled, SmileOutlined, RedoOutlined, CloudSyncOutlined, StopOutlined, CheckCircleOutlined, DeleteOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import AppHeader from './AppHeader.vue';
 import AdvancedProxyModal from './AdvancedProxyModal.vue';
@@ -2638,32 +2638,29 @@ const chooseCCSwitchTargetApp = () => {
     const selectedApp = ref('claude');
 
     Modal.confirm({
-      title: '选择目标平台',
-      width: 560,
+      title: '选择 CC-Switch 目标平台',
+      width: 480,
       centered: true,
       closable: false,
       maskClosable: false,
       okText: '继续导入',
       cancelText: '取消',
       content: () => h('div', { class: 'cc-switch-target-dialog' }, [
-        h('p', { class: 'cc-switch-target-dialog-hint' }, '请选择写入 schemaurl 的 app 参数。'),
+        h('p', { class: 'cc-switch-target-dialog-hint' }, '选择后会写入对应的 app 参数。'),
         h('div', { class: 'cc-switch-target-dialog-select-row' }, [
-          h('select', {
+          h(Select, {
             class: 'cc-switch-target-dialog-select',
             value: selectedApp.value,
-            onChange: (event) => {
-              selectedApp.value = String(event?.target?.value || 'claude');
-            },
-          }, CC_SWITCH_APP_OPTIONS.map(option => h(
-            'option',
-            {
-              key: option.value,
+            options: CC_SWITCH_APP_OPTIONS.map(option => ({
               value: option.value,
+              label: option.label,
+            })),
+            placeholder: '请选择平台',
+            onChange: (value) => {
+              selectedApp.value = normalizeCCSwitchAppId(value);
             },
-            option.label,
-          ))),
+          }),
         ]),
-        h('div', { class: 'cc-switch-target-dialog-select-tip' }, '选择后会按对应 app 参数拼接 ccswitch://v1/import 链接。'),
       ]),
       onOk: () => resolve(selectedApp.value),
       onCancel: () => resolve(null),
@@ -8412,8 +8409,8 @@ const copyOrganizedResults = () => {
 .cc-switch-target-dialog-hint {
   margin: 0;
   color: #8c8c8c;
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .cc-switch-target-dialog-select-row {
@@ -8423,48 +8420,19 @@ const copyOrganizedResults = () => {
 
 .cc-switch-target-dialog-select {
   width: 100%;
-  min-height: 42px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(217, 119, 6, 0.18);
-  background: rgba(255, 247, 237, 0.92);
-  color: #1f1f1f;
-  font-size: 14px;
-  outline: none;
-  cursor: pointer;
 }
 
-.cc-switch-target-dialog-select:hover {
-  border-color: rgba(22, 119, 255, 0.35);
+:deep(.cc-switch-target-dialog-select .ant-select-selector) {
+  min-height: 44px;
+  border-radius: 12px !important;
+  align-items: center;
 }
 
-.cc-switch-target-dialog-select:focus {
-  border-color: #1677ff;
-  box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.12);
+:deep(.cc-switch-target-dialog-select .ant-select-selection-item),
+:deep(.cc-switch-target-dialog-select .ant-select-selection-placeholder) {
+  line-height: 42px;
 }
 
-.cc-switch-target-dialog-select-tip {
-  font-size: 12px;
-  color: #8c8c8c;
-  line-height: 1.5;
-}
-
-:deep(.dark-mode) .cc-switch-target-dialog-select {
-  border-color: rgba(250, 173, 20, 0.18);
-  background: rgba(60, 38, 0, 0.44);
-  color: #f5f5f5;
-}
-
-:deep(.dark-mode) .cc-switch-target-dialog-select:hover {
-  border-color: rgba(22, 119, 255, 0.42);
-}
-
-:deep(.dark-mode) .cc-switch-target-dialog-select:focus {
-  border-color: #69b1ff;
-  box-shadow: 0 0 0 3px rgba(105, 177, 255, 0.16);
-}
-
-:deep(.dark-mode) .cc-switch-target-dialog-select-tip,
 :deep(.dark-mode) .cc-switch-target-dialog-hint {
   color: #bfbfbf;
 }
