@@ -446,6 +446,8 @@ func (a *App) OpenManualSidebarPanel() error {
 			debugLogf("manual panel open: write show signal failed: %v", err)
 		} else if waitForPanelManualReadySignal(2200 * time.Millisecond) {
 			debugLogf("manual panel open: existing panel acknowledged visible state")
+			wruntime.WindowHide(a.ctx)
+			wruntime.Hide(a.ctx)
 			return nil
 		} else {
 			debugLogf("manual panel open: existing panel did not acknowledge visible state in time")
@@ -464,7 +466,9 @@ func (a *App) OpenManualSidebarPanel() error {
 		debugLogf("manual panel open: new manual panel did not become ready before timeout")
 		return fmt.Errorf("manual panel ready timeout")
 	}
-	debugLogf("manual panel open: new manual panel acknowledged ready; leaving main window visible")
+	debugLogf("manual panel open: new manual panel acknowledged ready; hiding main window to tray")
+	wruntime.WindowHide(a.ctx)
+	wruntime.Hide(a.ctx)
 	return nil
 }
 
@@ -935,7 +939,9 @@ func (a *App) applyManualPanelWindowState(screenWidth int, screenHeight int) err
 	wruntime.WindowSetPosition(a.ctx, x, y)
 	wruntime.WindowShow(a.ctx)
 	wruntime.Show(a.ctx)
-	_ = hidePanelWindowFromTaskbar()
+	if !a.isManualPanelStart() {
+		_ = hidePanelWindowFromTaskbar()
+	}
 	return nil
 }
 
