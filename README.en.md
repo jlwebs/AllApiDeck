@@ -1,38 +1,20 @@
-﻿<div align="center">
+﻿# All API Deck
 
-<img src="./assets/appicon.png" alt="All API Deck" width="80">
+[中文](./README.md) | [English](./README.en.md)
 
-**The middleman for AI gateways - unify distributed proxy sites into one entry point**
+<img src="./assets/appicon.png" alt="All API Deck Logo" width="80" />
 
-<p>
-Aggregate the New API / One API / OneHub / DoneHub / Veloera / AnyRouter / Sub2API style sites you already use,
-<br>
-into <strong>one API key and one entry point</strong>, with model discovery, smart routing, and cost-aware dispatch.
-</p>
+A desktop tool for large-scale API checking and key management.
 
-<p align="center">
-<a href="https://github.com/jlwebs/AllApiDeck/releases">
-  <img alt="GitHub Release" src="https://img.shields.io/github/v/release/jlwebs/AllApiDeck?label=Release&logo=github&style=flat">
-</a><!--
---><a href="https://github.com/jlwebs/AllApiDeck/stargazers">
-  <img alt="GitHub Stars" src="https://img.shields.io/github/stars/jlwebs/AllApiDeck?style=flat&logo=github&label=Stars">
-</a><!--
---><a href="https://deepwiki.com/jlwebs/AllApiDeck">
-  <img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg">
-</a><!--
---><a href="LICENSE">
-  <img alt="License" src="https://img.shields.io/badge/license-MIT-brightgreen?style=flat">
-</a><!--
---><img alt="Node.js" src="https://img.shields.io/badge/Node.js-22.15%2B-339933?logo=node.js&style=flat"><!--
---><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&style=flat">
-</p>
+This project is built with `Wails + Vue 3`, mainly for the following workflows:
 
-<p align="center">
-  <a href="README.md"><strong>中文</strong></a> |
-  <a href="README.en.md">English</a>
-</p>
+- Import site accounts from browser extension data or backup files
+- Fetch model lists from many sites, then quickly filter and find useful custom models
+- Batch-check model availability, balance, and quick chat capability
+- Use a local key management panel with CCSwitch-style workflow and a Windows side panel for fast status checks and key switching
+- Preview configuration diffs clearly when switching models, while keeping historical conversations visible after switching
+- One-click switch and preview configs for Claude, Codex, OpenCode, OpenClaw, and similar desktop clients
 
-</div>
 ## Preview
 
 <img src="./allapideck.webp" alt="All API Dock Home" width="50%" />
