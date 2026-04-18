@@ -201,7 +201,7 @@
                   />
                 </div>
                 <div class="advanced-proxy-inline-control">
-                  <span class="advanced-proxy-inline-label">动态优化队列</span>
+                  <span class="advanced-proxy-inline-label">动态优化队列（基于故障率调整队列）</span>
                   <a-switch
                     :checked="draft.highAvailability.dynamicOptimizeQueue"
                     @change="value => handleHighAvailabilityFieldMutation('dynamicOptimizeQueue', value)"
