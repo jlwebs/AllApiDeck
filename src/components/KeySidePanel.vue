@@ -75,9 +75,13 @@
                       <div class="panel-queue-tooltip-status">
                         <span
                           class="panel-queue-tooltip-state"
-                          :class="{ 'is-active': item.hasDispatchingRoute }"
+                          :class="{
+                            'is-active': item.dispatchState.active,
+                            'is-fading': item.dispatchState.fading,
+                          }"
+                          :style="{ opacity: item.dispatchState.opacity }"
                         >
-                          {{ item.hasDispatchingRoute ? `⭐ ${item.activeRouteLabel || '代理调用中'}` : '🪨 Not Hit' }}
+                          {{ item.dispatchState.visible ? `⭐ ${item.dispatchState.labelText || '代理调用中'}` : '● Not Hit' }}
                         </span>
                       </div>
                       <div v-if="item.hitSummaryText" class="panel-queue-tooltip-hit-summary">
@@ -97,6 +101,15 @@
                 <div v-else class="panel-queue-item-avatar">
                   <span class="panel-record-emoji">{{ item.avatar }}</span>
                 </div>
+                <span
+                  v-if="item.dispatchState.visible"
+                  class="panel-queue-item-star"
+                  :class="{ 'is-fading': item.dispatchState.fading }"
+                  :style="{ opacity: item.dispatchState.opacity }"
+                  aria-hidden="true"
+                >
+                  ★
+                </span>
                 <span v-if="item.order" class="panel-queue-item-order">No.{{ item.order }}</span>
               </div>
 
@@ -346,6 +359,9 @@ const SIDEBAR_QUICK_TEST_TIMEOUT_MS = 25000;
 const SIDEBAR_QUICK_TEST_TIMEOUT_SECONDS = Math.round(SIDEBAR_QUICK_TEST_TIMEOUT_MS / 1000);
 const ADVANCED_PROXY_ACTIVE_ROUTE_WINDOW_MS = 4500;
 const ADVANCED_PROXY_RECENT_ROUTE_WINDOW_MS = 45000;
+const ADVANCED_PROXY_DISPATCH_HOLD_MS = 10000;
+const ADVANCED_PROXY_DISPATCH_FADE_MS = 2500;
+const ADVANCED_PROXY_DISPATCH_TICK_MS = 500;
 const ADVANCED_PROXY_APP_META = {
   claude: { label: 'Claude', className: 'panel-record-avatar-app-claude' },
   codex: { label: 'Codex', className: 'panel-record-avatar-app-codex' },
@@ -359,6 +375,7 @@ const advancedProxyConfigSnapshot = ref(getAdvancedProxyLocalSnapshot());
 const contextMap = ref(new Map());
 const advancedProxyTakeoverMap = ref(getAdvancedProxyTakeoverMap());
 const advancedProxyRoutingSnapshot = ref({ apps: {}, providers: {} });
+const advancedProxyDispatchClock = ref(Date.now());
 const activePopoverRowKey = ref('');
 const activeModelDropdownRowKey = ref('');
 const panelBodyRef = ref(null);
@@ -370,6 +387,7 @@ const PANEL_PERSIST_DEBOUNCE_MS = 120;
 let panelBodyResizeObserver = null;
 let panelPersistTimer = null;
 let advancedProxyRoutingTimer = null;
+let advancedProxyDispatchTimer = null;
 let lastSidebarRoutingLogAt = 0;
 const panelQueueDragState = {
   active: false,
@@ -417,11 +435,82 @@ async function reloadAdvancedProxyRoutingState() {
     advancedProxyRoutingSnapshot.value = snapshot && typeof snapshot === 'object'
       ? snapshot
       : getAdvancedProxyRoutingLocalSnapshot();
+    advancedProxyDispatchClock.value = Date.now();
     emitSidebarRoutingDiagnostics();
   } catch {
     advancedProxyRoutingSnapshot.value = getAdvancedProxyRoutingLocalSnapshot();
+    advancedProxyDispatchClock.value = Date.now();
     emitSidebarRoutingDiagnostics();
   }
+}
+
+function buildAdvancedProxyHitSummaryText(record) {
+  const siteName = String(record?.siteName || '').trim() || 'Provider';
+  const modelLabel = String(
+    record?.selectedModel ||
+    record?.quickTestModel ||
+    record?.model ||
+    '未设置模型'
+  ).trim() || '未设置模型';
+  const performanceMetrics = extractPerformanceMetrics(record || {});
+  const latencyText = performanceMetrics.latencySeconds != null
+    ? `${performanceMetrics.latencySeconds.toFixed(2)}s`
+    : '-';
+  const ttftText = performanceMetrics.ttftMs != null
+    ? `${Math.round(performanceMetrics.ttftMs)}ms`
+    : '-';
+  const tpsText = performanceMetrics.tps != null
+    ? performanceMetrics.tps.toFixed(2)
+    : '-';
+  return `最近命中：${siteName} ${modelLabel} + Latency ${latencyText} + TTFT ${ttftText} + TPS ${tpsText}`;
+}
+
+function getAdvancedProxyDispatchVisualState(record) {
+  const routeStates = record ? getAdvancedProxyProviderRouteStatesForRecord(record) : [];
+  const activeRoute = routeStates.find(item => item.isActive) || null;
+  const recentRoute = routeStates.find(item => item.isRecent) || null;
+  const now = Number(advancedProxyDispatchClock.value) || Date.now();
+  const currentRoute = activeRoute || recentRoute;
+  if (!currentRoute) {
+    return {
+      visible: false,
+      active: false,
+      fading: false,
+      opacity: 0,
+      labelText: '',
+      summaryText: '',
+    };
+  }
+
+  const sourceUpdatedAtMs = Number(currentRoute.updatedAtMs || 0);
+  const expireAtMs = (Number.isFinite(sourceUpdatedAtMs) && sourceUpdatedAtMs > 0
+    ? sourceUpdatedAtMs
+    : now) + ADVANCED_PROXY_DISPATCH_HOLD_MS;
+
+  if (!activeRoute && now > expireAtMs) {
+    return {
+      visible: false,
+      active: false,
+      fading: false,
+      opacity: 0,
+      labelText: '',
+      summaryText: '',
+    };
+  }
+
+  const remainingMs = Math.max(0, expireAtMs - now);
+  const opacity = activeRoute
+    ? 1
+    : Math.max(0, Math.min(1, remainingMs / ADVANCED_PROXY_DISPATCH_FADE_MS));
+
+  return {
+    visible: true,
+    active: Boolean(activeRoute),
+    fading: !activeRoute && remainingMs <= ADVANCED_PROXY_DISPATCH_FADE_MS,
+    opacity,
+    labelText: currentRoute.appTypeLabelText || '',
+    summaryText: buildAdvancedProxyHitSummaryText(record),
+  };
 }
 
 function emitSidebarRoutingDiagnostics() {
@@ -612,6 +701,7 @@ function normalizeAdvancedProxyProviderRouteState(record, providerKey, routeStat
     routeKind: String(routeState?.routeKind || '').trim(),
     targetUrl: String(routeState?.targetUrl || '').trim(),
     updatedAt,
+    updatedAtMs: Number.isFinite(updatedAtMs) ? updatedAtMs : 0,
     isActive,
     isRecent,
   };
@@ -705,18 +795,16 @@ const advancedProxyQueueItems = computed(() => {
       ? appIds.map(appId => ADVANCED_PROXY_APP_META[appId]?.label || appId).join(' / ')
       : '全局继承';
     const order = skKey ? orderMap.get(skKey) || null : null;
-    const performanceMetrics = extractPerformanceMetrics(record || {});
-    const hitRoute = activeRoute;
-    const latencyText = performanceMetrics.latencySeconds != null
-      ? `${performanceMetrics.latencySeconds.toFixed(2)}s`
-      : '-';
-    const ttftText = performanceMetrics.ttftMs != null
-      ? `${Math.round(performanceMetrics.ttftMs)}ms`
-      : '-';
-    const tpsText = performanceMetrics.tps != null
-      ? performanceMetrics.tps.toFixed(2)
-      : '-';
-    const dispatchLabel = activeRoute?.appTypeLabelText || '';
+    const dispatchSource = record || {
+      rowKey,
+      siteName,
+      siteUrl: endpoint,
+      apiKey: skKey,
+      selectedModel: modelLabel,
+      model: modelLabel,
+    };
+    const dispatchState = getAdvancedProxyDispatchVisualState(dispatchSource);
+    const dispatchLabel = dispatchState.labelText || activeRoute?.appTypeLabelText || '';
     const tooltipLines = [
       siteName,
       modelLabel,
@@ -724,9 +812,6 @@ const advancedProxyQueueItems = computed(() => {
       endpoint,
       apiKey,
     ].map(text => String(text || '').trim()).filter(Boolean);
-    const hitSummaryText = hitRoute
-      ? `最近命中：${siteName} ${modelLabel} + Latency ${latencyText} + TTFT ${ttftText} + TPS ${tpsText}`
-      : '';
 
     return {
       id: rowKey || `provider-${index}`,
@@ -738,15 +823,16 @@ const advancedProxyQueueItems = computed(() => {
       endpoint,
       avatar: getSiteEmoji(siteName),
       queueScopeText,
-      hasActiveRoute: Boolean(activeRoute),
+      hasActiveRoute: dispatchState.active,
       hasRecentRoute: Boolean(recentRoute),
       hasFailedRoute: Boolean(failedRoute),
-      hasDispatchingRoute: Boolean(activeRoute),
+      hasDispatchingRoute: dispatchState.visible,
+      dispatchState,
       activeRouteLabel: dispatchLabel,
       recentRouteLabel: recentRoute?.appTypeLabelText || '',
       dispatchLabel,
       hasTooltip: tooltipLines.length > 0,
-      hitSummaryText,
+      hitSummaryText: dispatchState.summaryText,
     };
   });
 });
@@ -1200,6 +1286,9 @@ onMounted(async () => {
   advancedProxyRoutingTimer = window.setInterval(() => {
     void reloadAdvancedProxyRoutingState();
   }, 1200);
+  advancedProxyDispatchTimer = window.setInterval(() => {
+    advancedProxyDispatchClock.value = Date.now();
+  }, ADVANCED_PROXY_DISPATCH_TICK_MS);
 });
 
 watch(visibleRecords, async () => {
@@ -1215,6 +1304,10 @@ onBeforeUnmount(() => {
   if (advancedProxyRoutingTimer) {
     window.clearInterval(advancedProxyRoutingTimer);
     advancedProxyRoutingTimer = null;
+  }
+  if (advancedProxyDispatchTimer) {
+    window.clearInterval(advancedProxyDispatchTimer);
+    advancedProxyDispatchTimer = null;
   }
   window.removeEventListener('resize', syncScrollIndicator);
   window.removeEventListener(KEY_MANAGEMENT_SYNC_EVENT, reloadRecords);
@@ -1613,6 +1706,19 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
+.panel-queue-item-star {
+  position: absolute;
+  left: -2px;
+  top: 0px;
+  z-index: 10;
+  color: #f5d06d;
+  font-size: 7px;
+  line-height: 1;
+  font-weight: 700;
+  text-shadow: 0 0 6px rgba(255, 196, 72, 0.28);
+  pointer-events: none;
+}
+
 .panel-queue-empty {
   padding: 10px 8px;
   border-radius: 16px;
@@ -1679,6 +1785,10 @@ onBeforeUnmount(() => {
 .panel-queue-tooltip-state.is-active {
   background: rgba(255, 255, 255, 0.12);
   color: #ffffff;
+}
+
+.panel-queue-tooltip-state.is-fading {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .panel-queue-tooltip-hit-summary {
