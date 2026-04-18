@@ -286,7 +286,7 @@
                         <span>{{ node.isModelDiscovering ? (node.modelDiscoveringHint || '模型检测中') : node.pendingHint }}</span>
                       </span>
                       <div v-if="node.isSiteRoot" class="site-tree-actions">
-                        <a-tooltip title="基于缓存用户态 token 重新读取站点数据">
+                        <a-tooltip title="重新加载">
                           <button type="button" class="site-tree-action-btn" @click.stop="handleTreeSiteRefresh(node)">
                             <ReloadOutlined />
                           </button>
@@ -330,19 +330,19 @@
               </div>
 
                 <div class="settings-action-bar">
-                <div class="batch-settings">
-                  <span class="batch-settings-label" style="margin-right: 10px;">并发数：</span>
-                  <a-input-number v-model:value="batchConcurrency" :min="1" :max="100" />
-                  <span class="batch-settings-label" style="margin-left: 20px; margin-right: 10px;">超时(秒)：</span>
-                  <a-input-number v-model:value="modelTimeout" :min="1" />
-                </div>
-                <div class="actions">
-                  <a-button @click="resetStep1" style="margin-right: 10px;">重新导入</a-button>
-                  <a-button type="primary" size="large" @click="startBatchCheck" :disabled="isDiscoveringModels">
+                  <div class="batch-settings">
+                    <span class="batch-settings-label">并发数</span>
+                    <a-input-number v-model:value="batchConcurrency" :min="1" :max="100" class="batch-setting-input" />
+                    <span class="batch-settings-label">超时(秒)</span>
+                    <a-input-number v-model:value="modelTimeout" :min="1" class="batch-setting-input" />
+                  </div>
+                  <div class="actions">
+                    <a-button class="batch-reset-button" @click="resetStep1">重新导入</a-button>
+                    <a-button class="batch-start-button" type="primary" size="large" @click="startBatchCheck" :disabled="isDiscoveringModels">
                     <PlayCircleOutlined /> 开始检测
-                  </a-button>
+                    </a-button>
+                  </div>
                 </div>
-              </div>
             </div>
 
             <!-- 步骤 3：显示检测结果 -->
@@ -7021,8 +7021,94 @@ const copyOrganizedResults = () => {
 }
 
 .batch-settings-label {
-  font-size: 14px;
-  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #5d6d57;
+  white-space: nowrap;
+}
+
+.settings-action-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(116, 144, 104, 0.16);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(246, 250, 244, 0.88));
+  box-shadow: 0 14px 34px rgba(90, 117, 79, 0.08);
+  backdrop-filter: blur(14px);
+}
+
+.batch-settings {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  min-width: 0;
+}
+
+.batch-setting-input {
+  width: 92px;
+  min-width: 92px;
+  height: 38px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 142, 109, 0.18);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  overflow: hidden;
+}
+
+.batch-setting-input :deep(.ant-input-number-input) {
+  height: 36px;
+  padding-left: 12px;
+  padding-right: 12px;
+  font-size: 13px;
+  color: #314032;
+}
+
+.batch-setting-input :deep(.ant-input-number-handler-wrap) {
+  border-radius: 0 12px 12px 0;
+  opacity: 0.92;
+}
+
+.actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.batch-reset-button,
+.batch-start-button {
+  height: 38px;
+  border-radius: 999px;
+  font-weight: 600;
+  padding: 0 16px;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+
+.batch-reset-button {
+  border-color: rgba(116, 144, 104, 0.18) !important;
+  color: #4a5b46 !important;
+  background: rgba(255, 255, 255, 0.8) !important;
+}
+
+.batch-reset-button:hover,
+.batch-start-button:hover {
+  transform: translateY(-1px);
+}
+
+.batch-start-button {
+  min-width: 132px;
+  border: 0 !important;
+  background: linear-gradient(135deg, #4f6e49, #7b9a5d) !important;
+  box-shadow: 0 10px 20px rgba(87, 118, 76, 0.2) !important;
 }
 
 .selection-quick-filters {
@@ -7753,14 +7839,6 @@ const copyOrganizedResults = () => {
 .tree-wrapper :deep(.site-root-summary-node > .ant-tree-checkbox) {
   display: none;
 }
-.settings-action-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  border-top: 1px solid rgba(90, 117, 79, 0.12);
-  padding-top: 15px;
-}
 .result-container {
   border: 1px solid rgba(90, 117, 79, 0.12);
   border-radius: 24px;
@@ -8347,6 +8425,36 @@ const copyOrganizedResults = () => {
   gap: 12px;
 }
 
+:deep(body.dark-mode) .settings-action-bar {
+  border-color: rgba(154, 191, 142, 0.16);
+  background: linear-gradient(180deg, rgba(22, 28, 22, 0.94), rgba(18, 24, 18, 0.9));
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.18);
+}
+
+:deep(body.dark-mode) .batch-settings-label {
+  color: #d3dfcd;
+}
+
+:deep(body.dark-mode) .batch-setting-input {
+  border-color: rgba(154, 191, 142, 0.18);
+  background: rgba(28, 35, 27, 0.94);
+}
+
+:deep(body.dark-mode) .batch-setting-input :deep(.ant-input-number-input) {
+  color: #edf6e9;
+}
+
+:deep(body.dark-mode) .batch-reset-button {
+  border-color: rgba(154, 191, 142, 0.18) !important;
+  color: #e4f1df !important;
+  background: rgba(28, 35, 27, 0.94) !important;
+}
+
+:deep(body.dark-mode) .batch-start-button {
+  background: linear-gradient(135deg, #5d8255, #89a864) !important;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.22) !important;
+}
+
 :deep(body.dark-mode) .key-sync-strategy-summary {
   color: #d5e6cf;
 }
@@ -8444,6 +8552,30 @@ const copyOrganizedResults = () => {
   .result-side-controls {
     width: 100%;
     min-width: 0;
+  }
+
+  .settings-action-bar {
+    padding: 12px 13px;
+  }
+
+  .batch-settings {
+    width: 100%;
+  }
+
+  .batch-setting-input {
+    width: min(100%, 112px);
+    min-width: 0;
+    flex: 1 1 112px;
+  }
+
+  .actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .batch-reset-button,
+  .batch-start-button {
+    flex: 1 1 0;
   }
 
   .portable-settings-actions {

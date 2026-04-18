@@ -174,7 +174,7 @@
                         <span>{{ node.isModelDiscovering ? (node.modelDiscoveringHint || '模型检测中') : node.pendingHint }}</span>
                       </span>
                       <div v-if="node.isSiteRoot" class="site-tree-actions">
-                        <a-tooltip title="基于缓存用户态 token 重新读取站点数据">
+                        <a-tooltip title="重新加载">
                           <button type="button" class="site-tree-action-btn" @click.stop="refreshOneByNode(node)">
                             <ReloadOutlined />
                           </button>
@@ -1117,8 +1117,38 @@ onBeforeUnmount(() => {
 .selection-action-group {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
   flex-wrap: wrap;
   margin-left: auto;
+}
+
+.selection-action-group :deep(.ant-btn) {
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(116, 144, 104, 0.18);
+  background: rgba(255, 255, 255, 0.82);
+  color: #445347;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: 0 8px 20px rgba(90, 117, 79, 0.08);
+  backdrop-filter: blur(10px);
+  transition: transform 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.selection-action-group :deep(.ant-btn:hover),
+.selection-action-group :deep(.ant-btn:focus-visible) {
+  transform: translateY(-1px);
+  border-color: rgba(96, 128, 84, 0.3);
+  background: rgba(255, 255, 255, 0.96);
+  color: #30412f;
+  box-shadow: 0 10px 24px rgba(90, 117, 79, 0.12);
+}
+
+.selection-action-group :deep(.ant-btn:active) {
+  transform: translateY(0);
 }
 
 .quick-filter-toolbar {
@@ -1443,17 +1473,98 @@ onBeforeUnmount(() => {
 }
 
 .batch-settings-label {
-  font-size: 14px;
-  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #5d6d57;
+  white-space: nowrap;
+  margin: 0 !important;
 }
 
 .settings-action-bar {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 14px;
   flex-wrap: wrap;
-  border-top: 1px solid rgba(90, 117, 79, 0.12);
-  padding-top: 15px;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(116, 144, 104, 0.16);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(246, 250, 244, 0.88));
+  box-shadow: 0 14px 34px rgba(90, 117, 79, 0.08);
+  backdrop-filter: blur(14px);
+}
+
+.batch-settings {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  min-width: 0;
+}
+
+.batch-settings :deep(.ant-input-number) {
+  width: 94px;
+  min-width: 94px;
+  height: 38px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 142, 109, 0.18);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  overflow: hidden;
+}
+
+.batch-settings :deep(.ant-input-number-input) {
+  height: 36px;
+  padding-left: 12px;
+  padding-right: 12px;
+  font-size: 13px;
+  color: #314032;
+}
+
+.batch-settings :deep(.ant-input-number-handler-wrap) {
+  border-radius: 0 12px 12px 0;
+  opacity: 0.92;
+}
+
+.actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.actions > .ant-btn {
+  height: 38px;
+  border-radius: 999px;
+  font-weight: 600;
+  padding: 0 16px;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+
+.actions > .ant-btn:first-child {
+  margin-right: 0 !important;
+  border-color: rgba(116, 144, 104, 0.18) !important;
+  color: #4a5b46 !important;
+  background: rgba(255, 255, 255, 0.8) !important;
+}
+
+.actions > .ant-btn:last-child {
+  border: 0 !important;
+  min-width: 132px;
+  background: linear-gradient(135deg, #4f6e49, #7b9a5d) !important;
+  box-shadow: 0 10px 20px rgba(87, 118, 76, 0.2) !important;
+}
+
+.actions > .ant-btn:hover {
+  transform: translateY(-1px);
+}
+
+.actions > .ant-btn:last-child:hover {
+  background: linear-gradient(135deg, #4e7a43, #86a860) !important;
 }
 
 .batch-hero-motion {
@@ -1701,6 +1812,51 @@ onBeforeUnmount(() => {
 :deep(body.dark-mode) .tree-wrapper {
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(160, 189, 144, 0.12);
+}
+
+:deep(body.dark-mode) .selection-action-group :deep(.ant-btn) {
+  border-color: rgba(154, 191, 142, 0.18);
+  background: rgba(22, 28, 22, 0.94);
+  color: #e4f1df;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.18);
+}
+
+:deep(body.dark-mode) .selection-action-group :deep(.ant-btn:hover),
+:deep(body.dark-mode) .selection-action-group :deep(.ant-btn:focus-visible) {
+  border-color: rgba(154, 191, 142, 0.34);
+  background: rgba(30, 38, 29, 0.98);
+  color: #f1f8ec;
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.22);
+}
+
+:deep(body.dark-mode) .settings-action-bar {
+  border-color: rgba(154, 191, 142, 0.16);
+  background: linear-gradient(180deg, rgba(22, 28, 22, 0.94), rgba(18, 24, 18, 0.9));
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.18);
+}
+
+:deep(body.dark-mode) .batch-settings-label {
+  color: #d3dfcd;
+}
+
+:deep(body.dark-mode) .batch-settings :deep(.ant-input-number) {
+  border-color: rgba(154, 191, 142, 0.18);
+  background: rgba(28, 35, 27, 0.94);
+}
+
+:deep(body.dark-mode) .batch-settings :deep(.ant-input-number-input) {
+  color: #edf6e9;
+}
+
+:deep(body.dark-mode) .actions > .ant-btn:first-child {
+  border-color: rgba(154, 191, 142, 0.18) !important;
+  color: #e4f1df !important;
+  background: rgba(28, 35, 27, 0.94) !important;
+}
+
+:deep(body.dark-mode) .actions > .ant-btn:last-child {
+  background: linear-gradient(135deg, #5d8255, #89a864) !important;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.22) !important;
 }
 
 :deep(body.dark-mode) .site-tree-action-btn {
