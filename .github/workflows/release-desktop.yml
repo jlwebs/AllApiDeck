@@ -34,26 +34,26 @@ jobs:
           - label: Windows EXE
             os: windows-latest
             platform: windows/amd64
-            artifact_name: batch-api-check-windows-amd64
-            release_file: batch-api-check-windows-amd64.exe
-            wails_output: batch-api-check-windows-amd64.exe
-            upload_path: release-assets/batch-api-check-windows-amd64.exe
+            artifact_name: allapideck-windows-amd64
+            release_file: allapideck-windows-amd64.exe
+            wails_output: allapideck-windows-amd64.exe
+            upload_path: release-assets/allapideck-windows-amd64.exe
           - label: macOS DMG
             os: macos-latest
             platform: darwin/universal
-            artifact_name: batch-api-check-macos-universal
-            release_file: batch-api-check-macos-universal.dmg
-            wails_output: batch-api-check-macos-universal
-            upload_path: release-assets/batch-api-check-macos-universal.dmg
+            artifact_name: allapideck-macos-universal
+            release_file: allapideck-macos-universal.dmg
+            wails_output: allapideck-macos-universal
+            upload_path: release-assets/allapideck-macos-universal.dmg
           - label: Linux tar.gz
             os: ubuntu-24.04
             platform: linux/amd64
-            artifact_name: batch-api-check-linux-amd64
-            wails_output: batch-api-check-linux-amd64
+            artifact_name: allapideck-linux-amd64
+            wails_output: allapideck-linux-amd64
             upload_path: |
-              release-assets/batch-api-check-linux-amd64.tar.gz
-              release-assets/batch-api-check-linux-amd64.deb
-              release-assets/batch-api-check-linux-amd64.AppImage
+              release-assets/allapideck-linux-amd64.tar.gz
+              release-assets/allapideck-linux-amd64.deb
+              release-assets/allapideck-linux-amd64.AppImage
 
     steps:
       - name: Checkout

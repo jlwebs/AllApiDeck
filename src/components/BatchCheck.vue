@@ -629,6 +629,20 @@
 
             <AdvancedProxyModal v-model:open="showExperimentalFeatures" />
 
+            <TextPromptModal
+              v-model:open="textPromptOpen"
+              v-model:value="textPromptValue"
+              :title="textPromptTitle"
+              :placeholder="textPromptPlaceholder"
+              :ok-text="textPromptOkText"
+              :multiline="textPromptMode === 'sk'"
+              :rows="textPromptMode === 'sk' ? 5 : 1"
+              :max-length="textPromptMode === 'note' ? SITE_NOTE_MAX_LENGTH : 0"
+              :show-count="textPromptMode === 'note'"
+              @ok="submitTextPromptModal"
+              @cancel="closeTextPromptModal"
+            />
+
             <BridgeImportWizardModal
               :open="bridgeImportModalOpen"
               :opening="bridgeImportSessionOpening"
@@ -717,6 +731,7 @@ import { HomeOutlined, ReloadOutlined, MenuUnfoldOutlined, MenuFoldOutlined, Inb
 import AppHeader from './AppHeader.vue';
 import AdvancedProxyModal from './AdvancedProxyModal.vue';
 import BridgeImportWizardModal from './BridgeImportWizardModal.vue';
+import TextPromptModal from './TextPromptModal.vue';
 import SystemSettingsModal from './SystemSettingsModal.vue';
 import { fetchModelList } from '../utils/api.js';
 import { listDesktopLogFiles, readDesktopLogFile, isDesktopLogBridgeAvailable } from '../utils/desktopLogBridge.js';
@@ -779,6 +794,10 @@ const backendHealth = reactive({
 });
 const totalAccountsCount = ref(0);
 const showExperimentalFeatures = ref(false);
+const textPromptOpen = ref(false);
+const textPromptMode = ref('sk');
+const textPromptValue = ref('');
+const textPromptSiteCacheKey = ref('');
 const bridgeImportModalOpen = ref(false);
 const bridgeImportSessionOpening = ref(false);
 const bridgeImportOpeningInstall = ref(false);
@@ -823,6 +842,15 @@ const KEY_MANAGEMENT_STORAGE_KEY = 'api_check_key_management_records_v1';
 const KEY_MANAGEMENT_META_STORAGE_KEY = 'api_check_key_management_meta_v1';
 const KEY_MANAGEMENT_SYNC_EVENT = 'batch-api-check:key-management-sync';
 const SITE_NOTE_MAX_LENGTH = 10;
+const textPromptTitle = computed(() =>
+  textPromptMode.value === 'sk' ? '手动追加自定义 sk' : '设置 10 字以内备注'
+);
+const textPromptPlaceholder = computed(() =>
+  textPromptMode.value === 'sk'
+    ? '请输入一个或多个 sk，支持换行、空格、逗号分隔'
+    : `请输入 ${SITE_NOTE_MAX_LENGTH} 个字以内备注`
+);
+const textPromptOkText = computed(() => (textPromptMode.value === 'sk' ? '追加' : '保存'));
 // Temporary kill switch:
 // Only disable the built-in WebView2/Profile Assist window fallback.
 // Keep the profile-file manual recovery flow alive:
@@ -1377,16 +1405,63 @@ const replaceActiveSiteFromCacheRecord = async (siteCacheKey, reason = 'site-cac
   }), reason, { syncCache: false });
 };
 
-const promptSiteNote = (initialValue = '') => {
-  const next = window.prompt(`请输入 ${SITE_NOTE_MAX_LENGTH} 个字以内备注`, String(initialValue || ''));
-  if (next == null) return null;
-  return String(next || '').trim().slice(0, SITE_NOTE_MAX_LENGTH);
+const closeTextPromptModal = () => {
+  textPromptOpen.value = false;
+  textPromptSiteCacheKey.value = '';
+  textPromptValue.value = '';
 };
 
-const promptCustomSkInput = () => {
-  const next = window.prompt('请输入一个或多个 sk，支持换行、空格、逗号分隔');
-  if (next == null) return null;
-  return String(next || '').trim();
+const openCustomSkPrompt = record => {
+  const siteCacheKey = String(record?.siteCacheKey || '').trim();
+  if (!siteCacheKey) return;
+  textPromptMode.value = 'sk';
+  textPromptSiteCacheKey.value = siteCacheKey;
+  textPromptValue.value = '';
+  textPromptOpen.value = true;
+};
+
+const openSiteNotePrompt = record => {
+  const siteCacheKey = String(record?.siteCacheKey || '').trim();
+  if (!siteCacheKey) return;
+  textPromptMode.value = 'note';
+  textPromptSiteCacheKey.value = siteCacheKey;
+  textPromptValue.value = String(record?.siteNote || '').trim().slice(0, SITE_NOTE_MAX_LENGTH);
+  textPromptOpen.value = true;
+};
+
+const submitTextPromptModal = async () => {
+  const siteCacheKey = String(textPromptSiteCacheKey.value || '').trim();
+  if (!siteCacheKey) {
+    message.warning('当前节点缺少站点缓存标识');
+    return;
+  }
+
+  if (textPromptMode.value === 'sk') {
+    const raw = String(textPromptValue.value || '').trim();
+    if (!raw) {
+      message.warning('请输入一个或多个 sk');
+      return;
+    }
+    appendCustomKeysToSiteCache(siteCacheKey, raw);
+    syncSiteCacheSnapshot(loadAllSiteCacheRecords(), {
+      importSource: 'site_tree_custom_sk',
+      refreshedAt: Date.now(),
+    });
+    await replaceActiveSiteFromCacheRecord(siteCacheKey, 'site-tree-custom-sk');
+    message.success('自定义 SK 已追加');
+    closeTextPromptModal();
+    return;
+  }
+
+  const nextNote = String(textPromptValue.value || '').trim().slice(0, SITE_NOTE_MAX_LENGTH);
+  updateSiteCacheNote(siteCacheKey, nextNote);
+  syncSiteCacheSnapshot(loadAllSiteCacheRecords(), {
+    importSource: 'site_tree_note',
+    refreshedAt: Date.now(),
+  });
+  await replaceActiveSiteFromCacheRecord(siteCacheKey, 'site-tree-note');
+  message.success('备注已更新');
+  closeTextPromptModal();
 };
 
 const getManualTokenKeyFromTreeNode = node => {
@@ -1504,11 +1579,7 @@ const handleTreeSiteRefresh = async node => {
 const handleTreeSiteCustomSk = async node => {
   const siteCacheKey = String(node?.siteCacheKey || '').trim();
   if (!siteCacheKey) return;
-  const raw = promptCustomSkInput();
-  if (!raw) return;
-  appendCustomKeysToSiteCache(siteCacheKey, raw);
-  await replaceActiveSiteFromCacheRecord(siteCacheKey, 'site-tree-custom-sk');
-  message.success('自定义 SK 已追加');
+  openCustomSkPrompt(getRecordBySiteCacheKey(siteCacheKey));
 };
 
 const handleTreeManualTokenDelete = async node => {
@@ -1532,11 +1603,7 @@ const handleTreeSiteToggleDisabled = async node => {
 const handleTreeSiteEditNote = async node => {
   const siteCacheKey = String(node?.siteCacheKey || '').trim();
   if (!siteCacheKey) return;
-  const nextNote = promptSiteNote(node?.siteNote || '');
-  if (nextNote == null) return;
-  updateSiteCacheNote(siteCacheKey, nextNote);
-  await replaceActiveSiteFromCacheRecord(siteCacheKey, 'site-tree-note');
-  message.success('备注已更新');
+  openSiteNotePrompt(getRecordBySiteCacheKey(siteCacheKey));
 };
 
 const handleTreeSiteDelete = async node => {

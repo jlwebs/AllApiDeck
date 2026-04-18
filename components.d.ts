@@ -72,5 +72,6 @@ declare module 'vue' {
     SiteManagement: typeof import('./src/components/SiteManagement.vue')['default']
     SystemSettingsModal: typeof import('./src/components/SystemSettingsModal.vue')['default']
     TagsOutlined: typeof import('@ant-design/icons-vue')['TagsOutlined']
+    TextPromptModal: typeof import('./src/components/TextPromptModal.vue')['default']
   }
 }

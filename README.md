@@ -185,11 +185,11 @@ build/bin/
 
 GitHub Release 当前会附带这些桌面端产物：
 
-- Windows：`batch-api-check-windows-amd64.exe`
-- macOS：`batch-api-check-macos-universal.dmg`
-- Linux：`batch-api-check-linux-amd64.tar.gz`
-- Linux AppImage：`batch-api-check-linux-amd64.AppImage`
-- Linux DEB：`batch-api-check-linux-amd64.deb`
+- Windows：`allapideck-windows-amd64.exe`
+- macOS：`allapideck-macos-universal.dmg`
+- Linux：`allapideck-linux-amd64.tar.gz`
+- Linux AppImage：`allapideck-linux-amd64.AppImage`
+- Linux DEB：`allapideck-linux-amd64.deb`
 
 Linux 的 `.deb` 和 `AppImage` 目前是在 CI 里基于 Wails 构建产物再额外组装出来的，因为 Wails v2 本身不会直接生成这两类发布包。
 

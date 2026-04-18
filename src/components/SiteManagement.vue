@@ -236,6 +236,19 @@
         </div>
       </div>
     </div>
+    <TextPromptModal
+      v-model:open="textPromptOpen"
+      v-model:value="textPromptValue"
+      :title="textPromptTitle"
+      :placeholder="textPromptPlaceholder"
+      :ok-text="textPromptOkText"
+      :multiline="textPromptMode === 'sk'"
+      :rows="textPromptMode === 'sk' ? 5 : 1"
+      :max-length="textPromptMode === 'note' ? SITE_NOTE_MAX_LENGTH : 0"
+      :show-count="textPromptMode === 'note'"
+      @ok="submitTextPromptModal"
+      @cancel="closeTextPromptModal"
+    />
     <SystemSettingsModal
       v-model:open="showAppSettingsModal"
       v-model:tree-expanded="globalTreeExpanded"
@@ -260,6 +273,7 @@ import {
 } from '@ant-design/icons-vue';
 import AppHeader from './AppHeader.vue';
 import AdvancedProxyModal from './AdvancedProxyModal.vue';
+import TextPromptModal from './TextPromptModal.vue';
 import SystemSettingsModal from './SystemSettingsModal.vue';
 import { openUrlInSystemBrowser } from '../utils/runtimeApi.js';
 import { loadDesktopTokenSourceMode, loadTreeExpandedSetting } from '../utils/systemSettings.js';
@@ -283,6 +297,10 @@ const SITE_NOTE_MAX_LENGTH = 10;
 
 const router = useRouter();
 const showExperimentalFeatures = ref(false);
+const textPromptOpen = ref(false);
+const textPromptMode = ref('sk');
+const textPromptValue = ref('');
+const textPromptSiteCacheKey = ref('');
 const showAppSettingsModal = ref(false);
 const globalTreeExpanded = ref(loadTreeExpandedSetting(true));
 const desktopTokenSourceMode = ref(loadDesktopTokenSourceMode());
@@ -304,6 +322,15 @@ const configProviderTheme = computed(() => ({
 
 const disabledCount = computed(() => records.value.filter(item => item.disabled).length);
 const customTokenCount = computed(() => records.value.reduce((sum, item) => sum + (item.customTokens?.length || 0), 0));
+const textPromptTitle = computed(() =>
+  textPromptMode.value === 'sk' ? '手动追加自定义 sk' : '设置 10 字以内备注'
+);
+const textPromptPlaceholder = computed(() =>
+  textPromptMode.value === 'sk'
+    ? '请输入一个或多个 sk，支持换行、空格、逗号分隔'
+    : `请输入 ${SITE_NOTE_MAX_LENGTH} 个字以内备注`
+);
+const textPromptOkText = computed(() => (textPromptMode.value === 'sk' ? '追加' : '保存'));
 
 const cloneNodeList = value => {
   if (!Array.isArray(value)) return [];
@@ -934,12 +961,59 @@ const refreshOne = async record => {
   }
 };
 
-const appendCustomSk = record => {
-  const raw = window.prompt('请输入一个或多个 sk，支持换行、空格、逗号分隔');
-  if (!raw) return;
-  appendCustomKeysToSiteCache(record.siteCacheKey, raw);
+const closeTextPromptModal = () => {
+  textPromptOpen.value = false;
+  textPromptSiteCacheKey.value = '';
+  textPromptValue.value = '';
+};
+
+const openCustomSkPrompt = record => {
+  const siteCacheKey = String(record?.siteCacheKey || '').trim();
+  if (!siteCacheKey) return;
+  textPromptMode.value = 'sk';
+  textPromptSiteCacheKey.value = siteCacheKey;
+  textPromptValue.value = '';
+  textPromptOpen.value = true;
+};
+
+const openSiteNotePrompt = record => {
+  const siteCacheKey = String(record?.siteCacheKey || '').trim();
+  if (!siteCacheKey) return;
+  textPromptMode.value = 'note';
+  textPromptSiteCacheKey.value = siteCacheKey;
+  textPromptValue.value = String(record?.note || '').trim().slice(0, SITE_NOTE_MAX_LENGTH);
+  textPromptOpen.value = true;
+};
+
+const submitTextPromptModal = () => {
+  const siteCacheKey = String(textPromptSiteCacheKey.value || '').trim();
+  if (!siteCacheKey) {
+    message.warning('当前节点缺少站点缓存标识');
+    return;
+  }
+
+  if (textPromptMode.value === 'sk') {
+    const raw = String(textPromptValue.value || '').trim();
+    if (!raw) {
+      message.warning('请输入一个或多个 sk');
+      return;
+    }
+    appendCustomKeysToSiteCache(siteCacheKey, raw);
+    reloadRecords();
+    message.success('自定义 SK 已追加');
+    closeTextPromptModal();
+    return;
+  }
+
+  const nextNote = String(textPromptValue.value || '').trim().slice(0, SITE_NOTE_MAX_LENGTH);
+  updateSiteCacheNote(siteCacheKey, nextNote);
   reloadRecords();
-  message.success('自定义 SK 已追加');
+  message.success('备注已更新');
+  closeTextPromptModal();
+};
+
+const appendCustomSk = record => {
+  openCustomSkPrompt(record);
 };
 
 const toggleDisabled = record => {
@@ -949,11 +1023,7 @@ const toggleDisabled = record => {
 };
 
 const editNote = record => {
-  const raw = window.prompt(`请输入 ${SITE_NOTE_MAX_LENGTH} 个字以内备注`, String(record.note || ''));
-  if (raw == null) return;
-  updateSiteCacheNote(record.siteCacheKey, raw);
-  reloadRecords();
-  message.success('备注已更新');
+  openSiteNotePrompt(record);
 };
 
 const removeRecord = record => {

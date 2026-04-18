@@ -169,11 +169,11 @@ build/bin/
 
 GitHub Release desktop assets currently include:
 
-- Windows: `batch-api-check-windows-amd64.exe`
-- macOS: `batch-api-check-macos-universal.dmg`
-- Linux: `batch-api-check-linux-amd64.tar.gz`
-- Linux AppImage: `batch-api-check-linux-amd64.AppImage`
-- Linux DEB: `batch-api-check-linux-amd64.deb`
+- Windows: `allapideck-windows-amd64.exe`
+- macOS: `allapideck-macos-universal.dmg`
+- Linux: `allapideck-linux-amd64.tar.gz`
+- Linux AppImage: `allapideck-linux-amd64.AppImage`
+- Linux DEB: `allapideck-linux-amd64.deb`
 
 The Linux packages are assembled manually in CI on top of the Wails build output because Wails v2 does not generate `.deb` or `AppImage` release artifacts by itself.
 

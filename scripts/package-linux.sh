@@ -24,7 +24,7 @@ fi
 
 APP_SLUG="batch-api-check"
 APP_NAME="Batch API Check"
-PACKAGE_PREFIX="batch-api-check-linux-amd64"
+PACKAGE_PREFIX="allapideck-linux-amd64"
 DEB_PACKAGE_NAME="batch-api-check"
 DEB_ARCH="amd64"
 APPIMAGE_ARCH="x86_64"
