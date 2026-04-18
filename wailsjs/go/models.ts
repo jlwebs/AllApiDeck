@@ -48,6 +48,22 @@ export namespace main {
 	        this.requestThinkingBudget = source["requestThinkingBudget"];
 	    }
 	}
+	export class HighAvailabilityConfig {
+	    enabled: boolean;
+	    dynamicOptimizeQueue: boolean;
+	    dispatchMode: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new HighAvailabilityConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.dynamicOptimizeQueue = source["dynamicOptimizeQueue"];
+	        this.dispatchMode = source["dispatchMode"];
+	    }
+	}
 	export class AppFailoverConfig {
 	    appType: string;
 	    enabled: boolean;
@@ -230,6 +246,7 @@ export namespace main {
 	    opencode: AdvancedProxyAppConfig;
 	    openclaw: AdvancedProxyAppConfig;
 	    failover: AppFailoverConfig;
+	    highAvailability: HighAvailabilityConfig;
 	    rectifier: RectifierConfig;
 	    optimizer: OptimizerConfig;
 	    updatedAt: string;
@@ -249,6 +266,7 @@ export namespace main {
 	        this.opencode = this.convertValues(source["opencode"], AdvancedProxyAppConfig);
 	        this.openclaw = this.convertValues(source["openclaw"], AdvancedProxyAppConfig);
 	        this.failover = this.convertValues(source["failover"], AppFailoverConfig);
+	        this.highAvailability = this.convertValues(source["highAvailability"], HighAvailabilityConfig);
 	        this.rectifier = this.convertValues(source["rectifier"], RectifierConfig);
 	        this.optimizer = this.convertValues(source["optimizer"], OptimizerConfig);
 	        this.updatedAt = source["updatedAt"];
@@ -273,6 +291,34 @@ export namespace main {
 		}
 	}
 	
+	export class AdvancedProxyProviderRoutingState {
+	    providerId: string;
+	    providerRowKey: string;
+	    providerName: string;
+	    appTypes: string[];
+	    activeCount: number;
+	    routeKind: string;
+	    status: string;
+	    targetUrl: string;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AdvancedProxyProviderRoutingState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.providerId = source["providerId"];
+	        this.providerRowKey = source["providerRowKey"];
+	        this.providerName = source["providerName"];
+	        this.appTypes = source["appTypes"];
+	        this.activeCount = source["activeCount"];
+	        this.routeKind = source["routeKind"];
+	        this.status = source["status"];
+	        this.targetUrl = source["targetUrl"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
 	
 	
 	export class AdvancedProxyRoutingState {
@@ -303,6 +349,7 @@ export namespace main {
 	}
 	export class AdvancedProxyRoutingSnapshot {
 	    apps: Record<string, AdvancedProxyRoutingState>;
+	    providers: Record<string, AdvancedProxyProviderRoutingState>;
 	
 	    static createFrom(source: any = {}) {
 	        return new AdvancedProxyRoutingSnapshot(source);
@@ -311,6 +358,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.apps = this.convertValues(source["apps"], AdvancedProxyRoutingState, true);
+	        this.providers = this.convertValues(source["providers"], AdvancedProxyProviderRoutingState, true);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -704,6 +752,7 @@ export namespace main {
 	        this.enabled = source["enabled"];
 	    }
 	}
+	
 	export class ManagedAppConfigAppliedFile {
 	    appId: string;
 	    fileId: string;

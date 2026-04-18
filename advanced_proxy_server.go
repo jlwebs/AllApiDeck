@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -15,6 +17,10 @@ type providerAttemptResult struct {
 	Response   map[string]any
 	StatusCode int
 	Message    string
+	Headers    http.Header
+	StreamBody io.ReadCloser
+	APIFormat  string
+	Model      string
 }
 
 type rawProviderAttemptResult struct {
@@ -109,6 +115,7 @@ func openAIMessageContentToText(value any) string {
 			text := firstNonEmpty(
 				strings.TrimSpace(toStringValue(contentMap["text"])),
 				strings.TrimSpace(toStringValue(contentMap["content"])),
+				strings.TrimSpace(toStringValue(contentMap["refusal"])),
 			)
 			if text != "" {
 				parts = append(parts, text)
@@ -120,18 +127,57 @@ func openAIMessageContentToText(value any) string {
 	}
 }
 
+func openAIMessageThinkingToText(message map[string]any) string {
+	if message == nil {
+		return ""
+	}
+	return firstNonEmpty(
+		openAIMessageContentToText(message["reasoning_content"]),
+		openAIMessageContentToText(message["thinking"]),
+	)
+}
+
 func mapOpenAIStopReason(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "tool_calls", "function_call":
 		return "tool_use"
 	case "length":
 		return "max_tokens"
+	case "content_filter":
+		return "end_turn"
 	default:
 		return "end_turn"
 	}
 }
 
-func openAIChatToAnthropic(response map[string]any, fallbackModel string) map[string]any {
+func openAIUsageToAnthropic(response map[string]any) map[string]any {
+	usage := map[string]any{
+		"input_tokens":  0,
+		"output_tokens": 0,
+	}
+	usageMap, ok := response["usage"].(map[string]any)
+	if !ok || usageMap == nil {
+		return usage
+	}
+
+	usage["input_tokens"] = toIntValue(usageMap["prompt_tokens"])
+	usage["output_tokens"] = toIntValue(usageMap["completion_tokens"])
+
+	if promptDetails, ok := usageMap["prompt_tokens_details"].(map[string]any); ok {
+		if cached := toIntValue(promptDetails["cached_tokens"]); cached > 0 {
+			usage["cache_read_input_tokens"] = cached
+		}
+	}
+	if cachedRead := toIntValue(usageMap["cache_read_input_tokens"]); cachedRead > 0 {
+		usage["cache_read_input_tokens"] = cachedRead
+	}
+	if cacheCreated := toIntValue(usageMap["cache_creation_input_tokens"]); cacheCreated > 0 {
+		usage["cache_creation_input_tokens"] = cacheCreated
+	}
+	return usage
+}
+
+func openAIChatToAnthropic(response map[string]any, fallbackModel string, includeThinking bool) map[string]any {
 	choices, _ := response["choices"].([]any)
 	message := map[string]any{}
 	finishReason := "end_turn"
@@ -146,6 +192,13 @@ func openAIChatToAnthropic(response map[string]any, fallbackModel string) map[st
 	}
 
 	contentBlocks := make([]map[string]any, 0, 2)
+	thinkingContent := openAIMessageThinkingToText(message)
+	if includeThinking && thinkingContent != "" {
+		contentBlocks = append(contentBlocks, map[string]any{
+			"type":     "thinking",
+			"thinking": thinkingContent,
+		})
+	}
 	textContent := openAIMessageContentToText(message["content"])
 	if textContent != "" {
 		contentBlocks = append(contentBlocks, map[string]any{
@@ -168,15 +221,18 @@ func openAIChatToAnthropic(response map[string]any, fallbackModel string) map[st
 			})
 		}
 	}
+	if functionMap, ok := message["function_call"].(map[string]any); ok && functionMap != nil {
+		contentBlocks = append(contentBlocks, map[string]any{
+			"type":  "tool_use",
+			"id":    fmt.Sprintf("tool_%d", len(contentBlocks)+1),
+			"name":  strings.TrimSpace(toStringValue(functionMap["name"])),
+			"input": parseJSONStringMap(functionMap["arguments"]),
+		})
+	}
 	if len(contentBlocks) == 0 {
 		contentBlocks = append(contentBlocks, map[string]any{"type": "text", "text": ""})
 	}
 
-	usage := map[string]any{}
-	if usageMap, ok := response["usage"].(map[string]any); ok {
-		usage["input_tokens"] = toIntValue(usageMap["prompt_tokens"])
-		usage["output_tokens"] = toIntValue(usageMap["completion_tokens"])
-	}
 	model := strings.TrimSpace(toStringValue(response["model"]))
 	if model == "" {
 		model = fallbackModel
@@ -189,7 +245,7 @@ func openAIChatToAnthropic(response map[string]any, fallbackModel string) map[st
 		"content":       contentBlocks,
 		"stop_reason":   finishReason,
 		"stop_sequence": nil,
-		"usage":         usage,
+		"usage":         openAIUsageToAnthropic(response),
 	}
 }
 
@@ -265,14 +321,14 @@ func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) m
 	}
 }
 
-func performJSONUpstreamRequest(method string, targetURL string, headers map[string]string, payload map[string]any, timeoutSeconds int) (int, []byte, error) {
+func performJSONUpstreamRequest(method string, targetURL string, headers map[string]string, payload map[string]any, timeoutSeconds int) (int, http.Header, []byte, error) {
 	rawBody, err := json.Marshal(payload)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	request, err := http.NewRequest(method, targetURL, bytes.NewReader(rawBody))
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	for key, value := range headers {
 		if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
@@ -282,18 +338,18 @@ func performJSONUpstreamRequest(method string, targetURL string, headers map[str
 	}
 	client, err := newOutboundHTTPClient(time.Duration(clampInt(timeoutSeconds, 5, 900)) * time.Second)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 8*1024*1024))
 	if err != nil {
-		return response.StatusCode, nil, err
+		return response.StatusCode, response.Header.Clone(), nil, err
 	}
-	return response.StatusCode, body, nil
+	return response.StatusCode, response.Header.Clone(), body, nil
 }
 
 func performRawUpstreamRequest(method string, targetURL string, headers map[string]string, rawBody []byte, timeoutSeconds int, keepStream bool) (int, http.Header, []byte, io.ReadCloser, error) {
@@ -326,19 +382,354 @@ func performRawUpstreamRequest(method string, targetURL string, headers map[stri
 	return response.StatusCode, response.Header.Clone(), body, nil, nil
 }
 
-func buildProviderHeaders(provider AdvancedProxyProvider, apiFormat string) map[string]string {
+func buildClaudeProviderHeaders(provider AdvancedProxyProvider, apiFormat string, requestHeaders http.Header, stream bool) map[string]string {
 	headers := map[string]string{
 		"Content-Type": "application/json",
-		"Accept":       "application/json",
 		"User-Agent":   "AllApiDeck/advanced-proxy",
+	}
+	if stream {
+		headers["Accept"] = "text/event-stream"
+	} else {
+		headers["Accept"] = "application/json"
+	}
+	if requestHeaders != nil {
+		if userAgent := strings.TrimSpace(requestHeaders.Get("User-Agent")); userAgent != "" {
+			headers["User-Agent"] = userAgent
+		}
 	}
 	if apiFormat == "anthropic" {
 		headers["x-api-key"] = provider.APIKey
-		headers["anthropic-version"] = "2023-06-01"
+		headers["anthropic-version"] = firstNonEmpty(strings.TrimSpace(requestHeaders.Get("anthropic-version")), "2023-06-01")
+		if beta := strings.TrimSpace(requestHeaders.Get("anthropic-beta")); beta != "" {
+			headers["anthropic-beta"] = beta
+		}
 		return headers
 	}
 	headers["Authorization"] = "Bearer " + provider.APIKey
 	return headers
+}
+
+func copySelectedHeaders(target http.Header, source http.Header, keys ...string) {
+	if target == nil || source == nil {
+		return
+	}
+	for _, key := range keys {
+		for _, value := range source.Values(key) {
+			if strings.TrimSpace(value) != "" {
+				target.Add(key, value)
+			}
+		}
+	}
+}
+
+func anthropicThinkingEnabled(body map[string]any) bool {
+	thinking, ok := body["thinking"].(map[string]any)
+	if !ok || thinking == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(toStringValue(thinking["type"]))) {
+	case "enabled", "adaptive":
+		return true
+	default:
+		return false
+	}
+}
+
+type anthropicToolStreamState struct {
+	Index       int
+	ID          string
+	Name        string
+	Started     bool
+	PendingArgs string
+}
+
+func mapOpenAIStopReasonOptional(value string) any {
+	resolved := strings.TrimSpace(mapOpenAIStopReason(value))
+	if resolved == "" {
+		return nil
+	}
+	return resolved
+}
+
+func writeAnthropicSSEFromOpenAIChatStream(writer http.ResponseWriter, streamBody io.ReadCloser, fallbackModel string, includeThinking bool) {
+	writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-cache")
+	writer.Header().Set("Connection", "keep-alive")
+	writer.WriteHeader(http.StatusOK)
+
+	defer streamBody.Close()
+
+	flusher, _ := writer.(http.Flusher)
+	writeEvent := func(event string, payload any) {
+		raw, _ := json.Marshal(payload)
+		_, _ = fmt.Fprintf(writer, "event: %s\ndata: %s\n\n", event, string(raw))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	messageID := ""
+	model := strings.TrimSpace(fallbackModel)
+	if model == "" {
+		model = "claude-proxy"
+	}
+	messageStarted := false
+	messageDeltaSent := false
+	nextContentIndex := 0
+	currentBlockType := ""
+	currentBlockIndex := -1
+	stopReason := "end_turn"
+	usage := map[string]any{
+		"input_tokens":  0,
+		"output_tokens": 0,
+	}
+	toolStates := map[int]*anthropicToolStreamState{}
+	openToolIndices := map[int]struct{}{}
+
+	emitMessageStart := func() {
+		if messageStarted {
+			return
+		}
+		writeEvent("message_start", map[string]any{
+			"type": "message_start",
+			"message": map[string]any{
+				"id":    firstNonEmpty(messageID, fmt.Sprintf("msg_%d", time.Now().UnixNano())),
+				"type":  "message",
+				"role":  "assistant",
+				"model": model,
+				"usage": usage,
+			},
+		})
+		messageStarted = true
+	}
+	closeCurrentBlock := func() {
+		if currentBlockIndex < 0 {
+			return
+		}
+		writeEvent("content_block_stop", map[string]any{
+			"type":  "content_block_stop",
+			"index": currentBlockIndex,
+		})
+		currentBlockType = ""
+		currentBlockIndex = -1
+	}
+	closeOpenToolBlocks := func() {
+		if len(openToolIndices) == 0 {
+			return
+		}
+		indices := make([]int, 0, len(openToolIndices))
+		for index := range openToolIndices {
+			indices = append(indices, index)
+		}
+		sort.Ints(indices)
+		for _, index := range indices {
+			writeEvent("content_block_stop", map[string]any{
+				"type":  "content_block_stop",
+				"index": index,
+			})
+			delete(openToolIndices, index)
+		}
+	}
+	emitMessageDelta := func() {
+		if messageDeltaSent {
+			return
+		}
+		writeEvent("message_delta", map[string]any{
+			"type": "message_delta",
+			"delta": map[string]any{
+				"stop_reason":   mapOpenAIStopReasonOptional(stopReason),
+				"stop_sequence": nil,
+			},
+			"usage": usage,
+		})
+		messageDeltaSent = true
+	}
+	ensureContentBlock := func(blockType string, payload map[string]any) {
+		if currentBlockType == blockType && currentBlockIndex >= 0 {
+			return
+		}
+		closeCurrentBlock()
+		emitMessageStart()
+		currentBlockIndex = nextContentIndex
+		nextContentIndex++
+		currentBlockType = blockType
+		writeEvent("content_block_start", map[string]any{
+			"type":          "content_block_start",
+			"index":         currentBlockIndex,
+			"content_block": payload,
+		})
+	}
+
+	scanner := bufio.NewScanner(streamBody)
+	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" {
+			continue
+		}
+		if payload == "[DONE]" {
+			closeCurrentBlock()
+			closeOpenToolBlocks()
+			emitMessageStart()
+			emitMessageDelta()
+			writeEvent("message_stop", map[string]any{"type": "message_stop"})
+			return
+		}
+
+		chunk := map[string]any{}
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			continue
+		}
+		if strings.TrimSpace(toStringValue(chunk["id"])) != "" && messageID == "" {
+			messageID = strings.TrimSpace(toStringValue(chunk["id"]))
+		}
+		if strings.TrimSpace(toStringValue(chunk["model"])) != "" {
+			model = strings.TrimSpace(toStringValue(chunk["model"]))
+		}
+		if chunkUsage := openAIUsageToAnthropic(chunk); len(chunkUsage) > 0 {
+			for key, value := range chunkUsage {
+				if toIntValue(value) > 0 {
+					usage[key] = value
+				}
+			}
+		}
+
+		choices, _ := chunk["choices"].([]any)
+		if len(choices) == 0 {
+			continue
+		}
+		choiceMap, _ := choices[0].(map[string]any)
+		if choiceMap == nil {
+			continue
+		}
+		if finish := strings.TrimSpace(toStringValue(choiceMap["finish_reason"])); finish != "" {
+			stopReason = finish
+		}
+		delta, _ := choiceMap["delta"].(map[string]any)
+		if delta == nil {
+			continue
+		}
+
+		if includeThinking {
+			thinkingText := firstNonEmpty(
+				strings.TrimSpace(toStringValue(delta["reasoning_content"])),
+				strings.TrimSpace(toStringValue(delta["thinking"])),
+				strings.TrimSpace(toStringValue(delta["reasoning"])),
+			)
+			if thinkingText != "" {
+				ensureContentBlock("thinking", map[string]any{
+					"type":     "thinking",
+					"thinking": "",
+				})
+				writeEvent("content_block_delta", map[string]any{
+					"type":  "content_block_delta",
+					"index": currentBlockIndex,
+					"delta": map[string]any{
+						"type":     "thinking_delta",
+						"thinking": thinkingText,
+					},
+				})
+			}
+		}
+
+		if text := strings.TrimSpace(toStringValue(delta["content"])); text != "" {
+			ensureContentBlock("text", map[string]any{
+				"type": "text",
+				"text": "",
+			})
+			writeEvent("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": currentBlockIndex,
+				"delta": map[string]any{
+					"type": "text_delta",
+					"text": text,
+				},
+			})
+		}
+
+		if toolCalls, ok := delta["tool_calls"].([]any); ok && len(toolCalls) > 0 {
+			closeCurrentBlock()
+			for _, rawToolCall := range toolCalls {
+				toolCallMap, ok := rawToolCall.(map[string]any)
+				if !ok {
+					continue
+				}
+				toolIndex := toIntValue(toolCallMap["index"])
+				state, exists := toolStates[toolIndex]
+				if !exists {
+					state = &anthropicToolStreamState{Index: nextContentIndex}
+					nextContentIndex++
+					toolStates[toolIndex] = state
+				}
+				if id := strings.TrimSpace(toStringValue(toolCallMap["id"])); id != "" {
+					state.ID = id
+				}
+				functionMap, _ := toolCallMap["function"].(map[string]any)
+				if functionMap != nil {
+					if name := strings.TrimSpace(toStringValue(functionMap["name"])); name != "" {
+						state.Name = name
+					}
+					args := toStringValue(functionMap["arguments"])
+					if args != "" {
+						if state.Started {
+							writeEvent("content_block_delta", map[string]any{
+								"type":  "content_block_delta",
+								"index": state.Index,
+								"delta": map[string]any{
+									"type":         "input_json_delta",
+									"partial_json": args,
+								},
+							})
+						} else {
+							state.PendingArgs += args
+						}
+					}
+				}
+				if !state.Started && state.ID != "" && state.Name != "" {
+					emitMessageStart()
+					writeEvent("content_block_start", map[string]any{
+						"type":  "content_block_start",
+						"index": state.Index,
+						"content_block": map[string]any{
+							"type": "tool_use",
+							"id":   state.ID,
+							"name": state.Name,
+						},
+					})
+					openToolIndices[state.Index] = struct{}{}
+					state.Started = true
+					if state.PendingArgs != "" {
+						writeEvent("content_block_delta", map[string]any{
+							"type":  "content_block_delta",
+							"index": state.Index,
+							"delta": map[string]any{
+								"type":         "input_json_delta",
+								"partial_json": state.PendingArgs,
+							},
+						})
+						state.PendingArgs = ""
+					}
+				}
+			}
+		}
+
+		if strings.TrimSpace(toStringValue(choiceMap["finish_reason"])) != "" {
+			closeCurrentBlock()
+			closeOpenToolBlocks()
+			emitMessageStart()
+			emitMessageDelta()
+		}
+	}
+
+	closeCurrentBlock()
+	closeOpenToolBlocks()
+	emitMessageStart()
+	emitMessageDelta()
+	writeEvent("message_stop", map[string]any{"type": "message_stop"})
 }
 
 func buildOpenAIProviderHeaders(provider AdvancedProxyProvider) map[string]string {
@@ -350,10 +741,17 @@ func buildOpenAIProviderHeaders(provider AdvancedProxyProvider) map[string]strin
 	}
 }
 
-func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody map[string]any, stream bool, config AdvancedProxyConfig) providerAttemptResult {
+func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody map[string]any, requestHeaders http.Header, stream bool, config AdvancedProxyConfig) providerAttemptResult {
 	failoverActive := config.Failover.Enabled && config.Failover.AutoFailoverEnabled
 	timeoutSeconds := computeAdvancedProxyTimeoutSeconds(stream, failoverActive, config.Failover)
 	apiFormat := normalizeClaudeAPIFormat(provider.APIFormat)
+	routeKind := "messages"
+	switch apiFormat {
+	case "openai_chat":
+		routeKind = "chat"
+	case "openai_responses":
+		routeKind = "responses"
+	}
 
 	targets := []string{}
 	switch apiFormat {
@@ -369,7 +767,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 	}
 
 	basePayload := deepCopyJSONMap(requestBody)
-	basePayload["stream"] = false
+	basePayload["stream"] = stream
 	if strings.TrimSpace(provider.Model) != "" {
 		basePayload["model"] = provider.Model
 	}
@@ -390,8 +788,41 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 		}
 
 		for _, targetURL := range targets {
-			statusCode, rawResponse, err := performJSONUpstreamRequest(http.MethodPost, targetURL, buildProviderHeaders(provider, apiFormat), transformed, timeoutSeconds)
+			advancedProxyRuntime.MarkDispatch("claude", provider, routeKind, targetURL)
+			fallbackModel := firstNonEmpty(strings.TrimSpace(provider.Model), strings.TrimSpace(toStringValue(basePayload["model"])))
+			if stream && apiFormat == "openai_chat" {
+				rawTransformed, err := json.Marshal(transformed)
+				if err != nil {
+					advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
+					return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "invalid upstream JSON request"}
+				}
+				statusCode, responseHeaders, _, streamBody, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, apiFormat, requestHeaders, stream), rawTransformed, timeoutSeconds, true)
+				if err != nil {
+					advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
+					return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: err.Error()}
+				}
+				if statusCode < 200 || statusCode >= 300 {
+					advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
+					if streamBody != nil {
+						streamBody.Close()
+					}
+					return providerAttemptResult{
+						StatusCode: statusCode,
+						Message:    fmt.Sprintf("HTTP %d", statusCode),
+					}
+				}
+				advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, true)
+				return providerAttemptResult{
+					StatusCode: http.StatusOK,
+					Headers:    responseHeaders,
+					StreamBody: streamBody,
+					APIFormat:  apiFormat,
+					Model:      fallbackModel,
+				}
+			}
+			statusCode, responseHeaders, rawResponse, err := performJSONUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, apiFormat, requestHeaders, stream), transformed, timeoutSeconds)
 			if err != nil {
+				advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
 				return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: err.Error()}
 			}
 			if statusCode < 200 || statusCode >= 300 {
@@ -404,6 +835,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 					budgetRectified = true
 					goto retryProvider
 				}
+				advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
 				if isRetryableCheckStatus(statusCode) && (apiFormat == "openai_chat" || apiFormat == "openai_responses") {
 					continue
 				}
@@ -415,16 +847,17 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 
 			responseMap := map[string]any{}
 			if err := json.Unmarshal(rawResponse, &responseMap); err != nil {
+				advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
 				return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "invalid upstream JSON response"}
 			}
-			fallbackModel := firstNonEmpty(strings.TrimSpace(provider.Model), strings.TrimSpace(toStringValue(basePayload["model"])))
 			switch apiFormat {
 			case "openai_chat":
-				responseMap = openAIChatToAnthropic(responseMap, fallbackModel)
+				responseMap = openAIChatToAnthropic(responseMap, fallbackModel, anthropicThinkingEnabled(requestBody))
 			case "openai_responses":
 				responseMap = openAIResponsesToAnthropic(responseMap, fallbackModel)
 			}
-			return providerAttemptResult{Response: responseMap, StatusCode: http.StatusOK}
+			advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, true)
+			return providerAttemptResult{Response: responseMap, StatusCode: http.StatusOK, Headers: responseHeaders}
 		}
 
 		return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "no compatible upstream endpoint found"}
@@ -604,6 +1037,27 @@ func writeAnthropicSSE(writer http.ResponseWriter, response map[string]any) {
 				"type":          "content_block_start",
 				"index":         index,
 				"content_block": blockMap,
+			})
+			writeEvent("content_block_stop", map[string]any{
+				"type":  "content_block_stop",
+				"index": index,
+			})
+		case "thinking":
+			writeEvent("content_block_start", map[string]any{
+				"type":  "content_block_start",
+				"index": index,
+				"content_block": map[string]any{
+					"type":     "thinking",
+					"thinking": "",
+				},
+			})
+			writeEvent("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": index,
+				"delta": map[string]any{
+					"type":     "thinking_delta",
+					"thinking": strings.TrimSpace(toStringValue(blockMap["thinking"])),
+				},
 			})
 			writeEvent("content_block_stop", map[string]any{
 				"type":  "content_block_stop",
@@ -798,18 +1252,34 @@ func (a *App) handleAdvancedProxyClaude(writer http.ResponseWriter, request *htt
 			continue
 		}
 		attempted++
-		result := forwardClaudeRequestViaProvider(provider, requestBody, stream, config)
+		result := forwardClaudeRequestViaProvider(provider, requestBody, request.Header, stream, config)
 		if result.Response != nil && result.StatusCode >= 200 && result.StatusCode < 300 {
 			if failoverActive {
 				advancedProxyRuntime.Record("claude", provider.ID, config.Failover, true)
 			}
 			if stream {
+				copySelectedHeaders(writer.Header(), result.Headers, "Request-Id", "X-Request-Id")
 				writeAnthropicSSE(writer, result.Response)
 				return
 			}
+			copySelectedHeaders(writer.Header(), result.Headers, "Request-Id", "X-Request-Id", "Cache-Control")
 			writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 			writer.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(writer).Encode(result.Response)
+			return
+		}
+		if result.StreamBody != nil && result.StatusCode >= 200 && result.StatusCode < 300 {
+			if failoverActive {
+				advancedProxyRuntime.Record("claude", provider.ID, config.Failover, true)
+			}
+			copySelectedHeaders(writer.Header(), result.Headers, "Request-Id", "X-Request-Id")
+			switch result.APIFormat {
+			case "openai_chat":
+				writeAnthropicSSEFromOpenAIChatStream(writer, result.StreamBody, result.Model, anthropicThinkingEnabled(requestBody))
+			default:
+				result.StreamBody.Close()
+				writeAnthropicProxyError(writer, http.StatusBadGateway, "unsupported Claude streaming proxy format")
+			}
 			return
 		}
 		if failoverActive {

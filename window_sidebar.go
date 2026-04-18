@@ -21,19 +21,19 @@ const (
 	panelWindowWidth       = 192
 	panelWideWindowWidth   = 520
 	panelMaxWindowWidth    = 680
-	panelWindowHeight      = 780
+	panelWindowHeight      = 936
 	manualPanelWindowWidth = 136
 	manualPanelWideWidth   = 300
 	manualPanelMaxWidth    = 420
-	manualPanelHeight      = 430
-	manualPanelMinHeight   = 260
+	manualPanelHeight      = 671
+	manualPanelMinHeight   = 406
 	panelTriggerWidth      = 22
 	panelExpandedEdgeGap   = 0
 	panelDockThreshold     = 28
 	panelWindowMarginY     = 20
 	panelEdgeActivateGap   = 2
 	panelRightDockShiftPct = 0
-	panelHideGrace         = 1500 * time.Millisecond
+	panelHideGrace         = 1000 * time.Millisecond
 	panelAutoTickInterval  = 60 * time.Millisecond
 	windowMonitorInterval  = 450 * time.Millisecond
 	panelRestoreSignal     = "panel-restore.signal"
@@ -902,7 +902,7 @@ func (a *App) applyManualPanelWindowState(screenWidth int, screenHeight int) err
 	}
 
 	x := int(workArea.Left) + maxInt((workArea.Width()-width)/2, 0)
-	y := int(workArea.Top) + maxInt((workArea.Height()-height)/2, 0)
+	y := int(workArea.Top)
 	dockEdge := panelDockFree
 	hasPreferredX := true
 

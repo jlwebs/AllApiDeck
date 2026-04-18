@@ -77,6 +77,12 @@ type AppFailoverConfig struct {
 	CircuitMinRequests        int     `json:"circuitMinRequests"`
 }
 
+type HighAvailabilityConfig struct {
+	Enabled              bool   `json:"enabled"`
+	DynamicOptimizeQueue bool   `json:"dynamicOptimizeQueue"`
+	DispatchMode         string `json:"dispatchMode"`
+}
+
 type RectifierConfig struct {
 	Enabled                  bool `json:"enabled"`
 	RequestThinkingSignature bool `json:"requestThinkingSignature"`
@@ -91,18 +97,19 @@ type OptimizerConfig struct {
 }
 
 type AdvancedProxyConfig struct {
-	Enabled    bool                      `json:"enabled"`
-	ListenHost string                    `json:"listenHost"`
-	ListenPort int                       `json:"listenPort"`
-	Queues     AdvancedProxyQueuesConfig `json:"queues"`
-	Claude     ClaudeProxyCompatConfig   `json:"claude"`
-	Codex      AdvancedProxyAppConfig    `json:"codex"`
-	OpenCode   AdvancedProxyAppConfig    `json:"opencode"`
-	OpenClaw   AdvancedProxyAppConfig    `json:"openclaw"`
-	Failover   AppFailoverConfig         `json:"failover"`
-	Rectifier  RectifierConfig           `json:"rectifier"`
-	Optimizer  OptimizerConfig           `json:"optimizer"`
-	UpdatedAt  string                    `json:"updatedAt"`
+	Enabled          bool                      `json:"enabled"`
+	ListenHost       string                    `json:"listenHost"`
+	ListenPort       int                       `json:"listenPort"`
+	Queues           AdvancedProxyQueuesConfig `json:"queues"`
+	Claude           ClaudeProxyCompatConfig   `json:"claude"`
+	Codex            AdvancedProxyAppConfig    `json:"codex"`
+	OpenCode         AdvancedProxyAppConfig    `json:"opencode"`
+	OpenClaw         AdvancedProxyAppConfig    `json:"openclaw"`
+	Failover         AppFailoverConfig         `json:"failover"`
+	HighAvailability HighAvailabilityConfig    `json:"highAvailability"`
+	Rectifier        RectifierConfig           `json:"rectifier"`
+	Optimizer        OptimizerConfig           `json:"optimizer"`
+	UpdatedAt        string                    `json:"updatedAt"`
 }
 
 type FailoverQueueItem struct {
@@ -131,8 +138,21 @@ type AdvancedProxyRoutingState struct {
 	UpdatedAt      string `json:"updatedAt"`
 }
 
+type AdvancedProxyProviderRoutingState struct {
+	ProviderID     string   `json:"providerId"`
+	ProviderRowKey string   `json:"providerRowKey"`
+	ProviderName   string   `json:"providerName"`
+	AppTypes       []string `json:"appTypes"`
+	ActiveCount    int      `json:"activeCount"`
+	RouteKind      string   `json:"routeKind"`
+	Status         string   `json:"status"`
+	TargetURL      string   `json:"targetUrl"`
+	UpdatedAt      string   `json:"updatedAt"`
+}
+
 type AdvancedProxyRoutingSnapshot struct {
-	Apps map[string]AdvancedProxyRoutingState `json:"apps"`
+	Apps      map[string]AdvancedProxyRoutingState         `json:"apps"`
+	Providers map[string]AdvancedProxyProviderRoutingState `json:"providers"`
 }
 
 func defaultAdvancedProxyQueueConfig(inheritGlobal bool) AdvancedProxyQueueConfig {
@@ -189,6 +209,11 @@ func defaultAdvancedProxyConfig() AdvancedProxyConfig {
 			CircuitTimeoutSeconds:     45,
 			CircuitErrorRateThreshold: 0.6,
 			CircuitMinRequests:        3,
+		},
+		HighAvailability: HighAvailabilityConfig{
+			Enabled:              false,
+			DynamicOptimizeQueue: false,
+			DispatchMode:         "fixed",
 		},
 		Rectifier: RectifierConfig{
 			Enabled:                  true,
@@ -289,11 +314,29 @@ func sanitizeAdvancedProxyConfig(config AdvancedProxyConfig) AdvancedProxyConfig
 		config.Failover.CircuitErrorRateThreshold = defaults.Failover.CircuitErrorRateThreshold
 	}
 	config.Failover.CircuitMinRequests = clampInt(config.Failover.CircuitMinRequests, 1, 100)
+	if strings.EqualFold(strings.TrimSpace(config.HighAvailability.DispatchMode), "ha_round_robin") {
+		config.HighAvailability.Enabled = true
+		config.HighAvailability.DispatchMode = "fixed"
+	}
+	config.HighAvailability.DispatchMode = normalizeAdvancedProxyDispatchMode(config.HighAvailability.DispatchMode)
 	if strings.TrimSpace(config.Optimizer.CacheTTL) == "" {
 		config.Optimizer.CacheTTL = defaults.Optimizer.CacheTTL
 	}
 	config.Enabled = advancedProxyAnyAppEnabled(config)
 	return config
+}
+
+func normalizeAdvancedProxyDispatchMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "fixed":
+		return "fixed"
+	case "ordered":
+		return "ordered"
+	case "random":
+		return "random"
+	default:
+		return "fixed"
+	}
 }
 
 func advancedProxyQueuesLikelyMissing(queues AdvancedProxyQueuesConfig) bool {

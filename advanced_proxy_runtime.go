@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,17 +40,32 @@ type proxyRouteState struct {
 	UpdatedAt      time.Time
 }
 
+type proxyProviderRouteState struct {
+	ProviderID     string
+	ProviderRowKey string
+	ProviderName   string
+	RouteKind      string
+	Status         string
+	TargetURL      string
+	UpdatedAt      time.Time
+	activeRoutes   map[string]int
+	activeAppTypes map[string]int
+	activeCount    int
+}
+
 type advancedProxyRuntimeState struct {
-	mu       sync.Mutex
-	breakers map[string]*proxyCircuitBreaker
-	routes   map[string]*proxyRouteState
-	logs     map[string]time.Time
+	mu             sync.Mutex
+	breakers       map[string]*proxyCircuitBreaker
+	routes         map[string]*proxyRouteState
+	providerRoutes map[string]*proxyProviderRouteState
+	logs           map[string]time.Time
 }
 
 var advancedProxyRuntime = &advancedProxyRuntimeState{
-	breakers: map[string]*proxyCircuitBreaker{},
-	routes:   map[string]*proxyRouteState{},
-	logs:     map[string]time.Time{},
+	breakers:       map[string]*proxyCircuitBreaker{},
+	routes:         map[string]*proxyRouteState{},
+	providerRoutes: map[string]*proxyProviderRouteState{},
+	logs:           map[string]time.Time{},
 }
 
 func normalizeAdvancedProxyRuntimeAppType(appType string) string {
@@ -63,6 +79,27 @@ func normalizeAdvancedProxyRuntimeAppType(appType string) string {
 func breakerKey(appType string, providerID string) string {
 	appType = normalizeAdvancedProxyRuntimeAppType(appType)
 	return appType + ":" + strings.TrimSpace(providerID)
+}
+
+func providerRoutingKey(provider AdvancedProxyProvider) string {
+	if rowKey := strings.TrimSpace(provider.RowKey); rowKey != "" {
+		return "row:" + rowKey
+	}
+	if id := strings.TrimSpace(provider.ID); id != "" {
+		return "id:" + id
+	}
+	if name := strings.TrimSpace(provider.Name); name != "" {
+		return "name:" + strings.ToLower(name)
+	}
+	return "provider:unknown"
+}
+
+func providerRouteAttemptKey(appType string, routeKind string, targetURL string) string {
+	return strings.Join([]string{
+		normalizeAdvancedProxyRuntimeAppType(appType),
+		strings.TrimSpace(routeKind),
+		strings.TrimSpace(targetURL),
+	}, "|")
 }
 
 func (r *advancedProxyRuntimeState) getBreaker(appType string, providerID string) *proxyCircuitBreaker {
@@ -98,6 +135,7 @@ func (r *advancedProxyRuntimeState) Reset(appType string, providerID string) {
 func (r *advancedProxyRuntimeState) MarkDispatch(appType string, provider AdvancedProxyProvider, routeKind string, targetURL string) {
 	r.logRoutePass(appType, provider, routeKind, targetURL)
 	r.setRouteState(appType, provider, routeKind, targetURL, "dispatching")
+	r.setProviderRouteState(appType, provider, routeKind, targetURL, true, false)
 }
 
 func (r *advancedProxyRuntimeState) MarkResult(appType string, provider AdvancedProxyProvider, routeKind string, targetURL string, success bool) {
@@ -106,6 +144,7 @@ func (r *advancedProxyRuntimeState) MarkResult(appType string, provider Advanced
 		status = "success"
 	}
 	r.setRouteState(appType, provider, routeKind, targetURL, status)
+	r.setProviderRouteState(appType, provider, routeKind, targetURL, false, success)
 }
 
 func (r *advancedProxyRuntimeState) setRouteState(appType string, provider AdvancedProxyProvider, routeKind string, targetURL string, status string) {
@@ -153,6 +192,76 @@ func (r *advancedProxyRuntimeState) setRouteState(appType string, provider Advan
 	r.persistRoutingSnapshot(snapshot)
 }
 
+func (r *advancedProxyRuntimeState) setProviderRouteState(appType string, provider AdvancedProxyProvider, routeKind string, targetURL string, dispatching bool, success bool) {
+	normalizedAppType := normalizeAdvancedProxyRuntimeAppType(appType)
+	providerKey := providerRoutingKey(provider)
+	routeKey := providerRouteAttemptKey(normalizedAppType, routeKind, targetURL)
+	now := time.Now()
+
+	r.mu.Lock()
+	if r.providerRoutes == nil {
+		r.providerRoutes = map[string]*proxyProviderRouteState{}
+	}
+	state := r.providerRoutes[providerKey]
+	if state == nil {
+		state = &proxyProviderRouteState{
+			ProviderID:     strings.TrimSpace(provider.ID),
+			ProviderRowKey: strings.TrimSpace(provider.RowKey),
+			ProviderName:   strings.TrimSpace(provider.Name),
+			activeRoutes:   map[string]int{},
+			activeAppTypes: map[string]int{},
+		}
+		r.providerRoutes[providerKey] = state
+	}
+	if state.activeRoutes == nil {
+		state.activeRoutes = map[string]int{}
+	}
+	if state.activeAppTypes == nil {
+		state.activeAppTypes = map[string]int{}
+	}
+	if dispatching {
+		state.activeRoutes[routeKey]++
+		state.activeAppTypes[normalizedAppType]++
+		state.activeCount++
+		state.RouteKind = strings.TrimSpace(routeKind)
+		state.TargetURL = strings.TrimSpace(targetURL)
+		state.Status = "dispatching"
+		state.UpdatedAt = now
+	} else {
+		if current := state.activeRoutes[routeKey]; current > 0 {
+			if current == 1 {
+				delete(state.activeRoutes, routeKey)
+			} else {
+				state.activeRoutes[routeKey] = current - 1
+			}
+			if state.activeCount > 0 {
+				state.activeCount--
+			}
+		}
+		if current := state.activeAppTypes[normalizedAppType]; current > 0 {
+			if current == 1 {
+				delete(state.activeAppTypes, normalizedAppType)
+			} else {
+				state.activeAppTypes[normalizedAppType] = current - 1
+			}
+		}
+		if state.activeCount > 0 {
+			state.Status = "dispatching"
+		} else {
+			if success {
+				state.Status = "success"
+			} else {
+				state.Status = "failed"
+			}
+		}
+		state.UpdatedAt = now
+	}
+	snapshot := r.routingSnapshotLocked()
+	r.mu.Unlock()
+
+	r.persistRoutingSnapshot(snapshot)
+}
+
 func (r *advancedProxyRuntimeState) GetRoutingSnapshot() AdvancedProxyRoutingSnapshot {
 	snapshot := loadAdvancedProxyRoutingSnapshotFromDisk()
 
@@ -161,6 +270,9 @@ func (r *advancedProxyRuntimeState) GetRoutingSnapshot() AdvancedProxyRoutingSna
 
 	if snapshot.Apps == nil {
 		snapshot.Apps = map[string]AdvancedProxyRoutingState{}
+	}
+	if snapshot.Providers == nil {
+		snapshot.Providers = map[string]AdvancedProxyProviderRoutingState{}
 	}
 	for appType, route := range r.routes {
 		if route == nil {
@@ -178,6 +290,15 @@ func (r *advancedProxyRuntimeState) GetRoutingSnapshot() AdvancedProxyRoutingSna
 		}
 		if shouldReplaceAdvancedProxyRoutingState(snapshot.Apps[appType], nextState) {
 			snapshot.Apps[appType] = nextState
+		}
+	}
+	for providerKey, route := range r.providerRoutes {
+		if route == nil {
+			continue
+		}
+		nextState := route.toSnapshot()
+		if shouldReplaceAdvancedProxyProviderRoutingState(snapshot.Providers[providerKey], nextState) {
+			snapshot.Providers[providerKey] = nextState
 		}
 	}
 	return snapshot
@@ -240,7 +361,14 @@ func (r *advancedProxyRuntimeState) routingSnapshotLocked() AdvancedProxyRouting
 			UpdatedAt:      route.UpdatedAt.Format(time.RFC3339Nano),
 		}
 	}
-	return AdvancedProxyRoutingSnapshot{Apps: apps}
+	providers := make(map[string]AdvancedProxyProviderRoutingState, len(r.providerRoutes))
+	for providerKey, route := range r.providerRoutes {
+		if route == nil {
+			continue
+		}
+		providers[providerKey] = route.toSnapshot()
+	}
+	return AdvancedProxyRoutingSnapshot{Apps: apps, Providers: providers}
 }
 
 func (r *advancedProxyRuntimeState) persistRoutingSnapshot(snapshot AdvancedProxyRoutingSnapshot) {
@@ -266,15 +394,24 @@ func loadAdvancedProxyRoutingSnapshotFromDisk() AdvancedProxyRoutingSnapshot {
 	path := resolveAdvancedProxyRoutingSnapshotPath()
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return AdvancedProxyRoutingSnapshot{Apps: map[string]AdvancedProxyRoutingState{}}
+		return AdvancedProxyRoutingSnapshot{
+			Apps:      map[string]AdvancedProxyRoutingState{},
+			Providers: map[string]AdvancedProxyProviderRoutingState{},
+		}
 	}
 	var snapshot AdvancedProxyRoutingSnapshot
 	if err := json.Unmarshal(raw, &snapshot); err != nil {
 		appendClientRuntimeLog("advanced_proxy.routing_snapshot", fmt.Sprintf("read failed: %v", err))
-		return AdvancedProxyRoutingSnapshot{Apps: map[string]AdvancedProxyRoutingState{}}
+		return AdvancedProxyRoutingSnapshot{
+			Apps:      map[string]AdvancedProxyRoutingState{},
+			Providers: map[string]AdvancedProxyProviderRoutingState{},
+		}
 	}
 	if snapshot.Apps == nil {
 		snapshot.Apps = map[string]AdvancedProxyRoutingState{}
+	}
+	if snapshot.Providers == nil {
+		snapshot.Providers = map[string]AdvancedProxyProviderRoutingState{}
 	}
 	return snapshot
 }
@@ -289,6 +426,47 @@ func shouldReplaceAdvancedProxyRoutingState(current AdvancedProxyRoutingState, n
 		return true
 	}
 	return nextTime.After(currentTime)
+}
+
+func shouldReplaceAdvancedProxyProviderRoutingState(current AdvancedProxyProviderRoutingState, next AdvancedProxyProviderRoutingState) bool {
+	currentTime := parseAdvancedProxyRoutingSnapshotTime(current.UpdatedAt)
+	nextTime := parseAdvancedProxyRoutingSnapshotTime(next.UpdatedAt)
+	if nextTime.IsZero() {
+		return currentTime.IsZero()
+	}
+	if currentTime.IsZero() {
+		return true
+	}
+	return nextTime.After(currentTime)
+}
+
+func (r *proxyProviderRouteState) toSnapshot() AdvancedProxyProviderRoutingState {
+	appTypes := make([]string, 0, len(r.activeAppTypes))
+	for appType, count := range r.activeAppTypes {
+		if count > 0 {
+			appTypes = append(appTypes, appType)
+		}
+	}
+	sort.Strings(appTypes)
+	activeCount := r.activeCount
+	if activeCount < 0 {
+		activeCount = 0
+	}
+	status := strings.TrimSpace(r.Status)
+	if activeCount > 0 {
+		status = "dispatching"
+	}
+	return AdvancedProxyProviderRoutingState{
+		ProviderID:     strings.TrimSpace(r.ProviderID),
+		ProviderRowKey: strings.TrimSpace(r.ProviderRowKey),
+		ProviderName:   strings.TrimSpace(r.ProviderName),
+		AppTypes:       appTypes,
+		ActiveCount:    activeCount,
+		RouteKind:      strings.TrimSpace(r.RouteKind),
+		Status:         status,
+		TargetURL:      strings.TrimSpace(r.TargetURL),
+		UpdatedAt:      r.UpdatedAt.Format(time.RFC3339Nano),
+	}
 }
 
 func parseAdvancedProxyRoutingSnapshotTime(value string) time.Time {
@@ -990,7 +1168,7 @@ func anthropicRequestToOpenAIChat(body map[string]any, provider AdvancedProxyPro
 	request := map[string]any{
 		"model":    model,
 		"messages": messages,
-		"stream":   false,
+		"stream":   truthy(body["stream"]),
 	}
 	copyOptionalField(body, request, "temperature")
 	copyOptionalField(body, request, "top_p")
@@ -1058,7 +1236,7 @@ func anthropicRequestToOpenAIResponses(body map[string]any, provider AdvancedPro
 	request := map[string]any{
 		"model":  model,
 		"input":  inputItems,
-		"stream": false,
+		"stream": truthy(body["stream"]),
 	}
 	if tools := anthropicToolsToResponses(body["tools"]); len(tools) > 0 {
 		request["tools"] = tools
