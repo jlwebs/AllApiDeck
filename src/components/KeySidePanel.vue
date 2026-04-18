@@ -79,7 +79,7 @@
                             'is-active': item.dispatchState.active,
                             'is-fading': item.dispatchState.fading,
                           }"
-                          :style="{ opacity: item.dispatchState.opacity }"
+                          :style="{ opacity: item.dispatchState.visible ? item.dispatchState.opacity : 1 }"
                         >
                           {{ item.dispatchState.visible ? `⭐ ${item.dispatchState.labelText || '代理调用中'}` : '● Not Hit' }}
                         </span>
