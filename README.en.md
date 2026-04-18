@@ -1,8 +1,8 @@
-# All API Deck
+# All API Dock
 
 [中文](./README.md) | [English](./README.en.md)
 
-<img src="./assets/appicon.png" alt="All API Deck Logo" width="120" />
+<img src="./assets/appicon.png" alt="All API Dock Logo" width="120" />
 
 A desktop tool for large-scale API checking and key management.
 
@@ -17,9 +17,8 @@ This project is built with `Wails + Vue 3`, mainly for the following workflows:
 
 ## Preview
 
-<img src="./docs/images/all-api-deck-home.png" alt="All API Deck Home" width="72%" />
-<img src="./docs/images/all-api-deck-site-management.png" alt="All API Deck Site Management" width="72%" />
-<img src="./docs/images/all-api-deck-sidebar.png" alt="Side Panel" width="24%" />
+<img src="./allapideck.webp" alt="All API Dock Home" width="50%" />
+<img src="./PixPin_2026-04-12_04-03-39.png" alt="Side Panel" width="20%" />
 
 ## Positioning
 
