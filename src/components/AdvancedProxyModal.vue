@@ -150,7 +150,7 @@
               <div class="advanced-proxy-section-head">
                 <div>
                   <h4>请求策略与并发</h4>
-                  <p>随机、轮询请求队列来应对中转站 RPM 限制。</p>
+                  <p>分发策略负责挑选请求路径，RPM 在下方单独按 scope 设定。</p>
                 </div>
               </div>
 
@@ -174,12 +174,41 @@
                 </div>
                 <div class="advanced-proxy-inline-control advanced-proxy-ha-toggle-card">
                   <div class="advanced-proxy-ha-toggle-copy">
-                    <label class="advanced-proxy-compact-label">高可用轮询</label>
-                    <p class="advanced-proxy-radio-hint">启用后按轮询策略分摊请求，适合缓解 RPM 限制。</p>
+                    <label class="advanced-proxy-compact-label">高可用智能调度</label>
+                    <p class="advanced-proxy-radio-hint">启用后按健康度、实时负载和当前 RPM 限制执行请求分发。</p>
                   </div>
                   <a-switch
                     :checked="highAvailabilityEnabled"
                     @change="handleHighAvailabilityToggle"
+                  />
+                </div>
+              </div>
+
+              <div class="advanced-proxy-inline-control advanced-proxy-rpm-row">
+                <a-tooltip placement="topLeft">
+                  <template #title>
+                    <div class="advanced-proxy-tooltip">
+                      <span>0 表示不限制。</span>
+                      <span>默认从“全局”读取；选择某个 provider 后会优先使用自己的值。</span>
+                      <span>下拉框包含全局和全部 provider。</span>
+                    </div>
+                  </template>
+                  <span class="advanced-proxy-inline-label">RPM 设置</span>
+                </a-tooltip>
+                <div class="advanced-proxy-rpm-controls">
+                  <a-select
+                    class="advanced-proxy-rpm-select"
+                    :value="selectedHighAvailabilityRpmScope"
+                    :options="queueScopeOptions"
+                    @change="handleHighAvailabilityRpmScopeChange"
+                  />
+                  <a-input-number
+                    class="advanced-proxy-rpm-input"
+                    :value="selectedHighAvailabilityRpmValue"
+                    :min="0"
+                    :precision="0"
+                    :step="1"
+                    @change="handleHighAvailabilityRpmValueChange"
                   />
                 </div>
               </div>
@@ -201,7 +230,7 @@
                   />
                 </div>
                 <div class="advanced-proxy-inline-control">
-                  <span class="advanced-proxy-inline-label">动态优化队列（基于故障率调整队列）</span>
+                  <span class="advanced-proxy-inline-label">动态优化队列（仅基于故障率调整队列）</span>
                   <a-switch
                     :checked="draft.highAvailability.dynamicOptimizeQueue"
                     @change="value => handleHighAvailabilityFieldMutation('dynamicOptimizeQueue', value)"
@@ -344,9 +373,9 @@ const ADVANCED_PROXY_APP_ICONS = {
   openclaw: openclawAppIcon,
 };
 const DISPATCH_MODE_OPTIONS = [
-  { value: 'fixed', label: '固定', description: '初始默认选队头 provider，依赖于故障转移才会切换。' },
-  { value: 'ordered', label: '顺序', description: '按队列顺序请求，行为最稳定。' },
-  { value: 'random', label: '随机', description: '从可用队列中随机挑选目标，分散单点压力。' },
+  { value: 'fixed', label: '固定', description: '按当前队列顺序执行，不额外重排。' },
+  { value: 'ordered', label: '顺序', description: '按健康度、负载和 RPM 约束动态排队。' },
+  { value: 'random', label: '随机', description: '在满足约束的候选中随机分散压力。' },
 ];
 
 const props = defineProps({
@@ -362,6 +391,7 @@ const loading = ref(false);
 const saving = ref(false);
 const previewOpen = ref(false);
 const selectedQueueScope = ref(ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
+const selectedHighAvailabilityRpmScope = ref(ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
 const availableRecords = ref([]);
 const breakerStatsMap = ref({});
 const loadedConfigSnapshot = ref(normalizeAdvancedProxyConfig({}));
@@ -385,6 +415,7 @@ const enabledAppLabels = computed(() =>
     .map(app => app.label)
     .join(' / ')
 );
+const highAvailabilityEnabled = computed(() => draft?.highAvailability?.enabled === true);
 const unifiedFailoverEnabled = computed(() =>
   draft?.failover?.enabled === true && draft?.failover?.autoFailoverEnabled === true
 );
@@ -393,6 +424,18 @@ const selectedDispatchModeDescription = computed(() =>
   DISPATCH_MODE_OPTIONS.find(option => option.value === draft?.highAvailability?.dispatchMode)?.description
   || DISPATCH_MODE_OPTIONS[0].description
 );
+const selectedHighAvailabilityRpmValue = computed(() => {
+  const rpm = draft?.highAvailability?.rpm || {};
+  const scope = selectedHighAvailabilityRpmScope.value;
+  if (scope === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
+    return Number.isFinite(Number(rpm.global)) ? Number(rpm.global) : 0;
+  }
+  const scopedValue = rpm?.providers?.[scope];
+  if (scopedValue == null || scopedValue === '') {
+    return Number.isFinite(Number(rpm.global)) ? Number(rpm.global) : 0;
+  }
+  return Number.isFinite(Number(scopedValue)) ? Number(scopedValue) : 0;
+});
 const proxyMasterEnabled = computed(() => enabledAppIds.value.length > 0);
 const selectedQueueLabel = computed(() =>
   ADVANCED_PROXY_QUEUE_SCOPES.find(item => item.id === selectedQueueScope.value)?.label || '全局'
@@ -535,6 +578,7 @@ function overwriteDraft(nextConfig) {
   const normalized = normalizeAdvancedProxyConfig(nextConfig);
   Object.keys(draft).forEach(key => delete draft[key]);
   Object.assign(draft, normalized);
+  selectedHighAvailabilityRpmScope.value = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
 }
 
 function ensureQueueSection(config, scope) {
@@ -849,6 +893,47 @@ function handleHighAvailabilityFieldMutation(field, value) {
     }
     next.highAvailability[field] = value;
   }, '高可用与并发配置已更新');
+}
+
+function handleHighAvailabilityToggle(value) {
+  handleHighAvailabilityFieldMutation('enabled', Boolean(value));
+}
+
+function normalizeRpmInputValue(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+  return Math.floor(parsed);
+}
+
+function handleHighAvailabilityRpmScopeChange(scope) {
+  selectedHighAvailabilityRpmScope.value = ADVANCED_PROXY_QUEUE_SCOPES.some(item => item.id === scope)
+    ? scope
+    : ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
+}
+
+function handleHighAvailabilityRpmValueChange(value) {
+  const rpmValue = normalizeRpmInputValue(value);
+  handleConfigMutation(next => {
+    if (!next.highAvailability || typeof next.highAvailability !== 'object') {
+      next.highAvailability = {};
+    }
+    if (!next.highAvailability.rpm || typeof next.highAvailability.rpm !== 'object') {
+      next.highAvailability.rpm = {
+        global: 0,
+        providers: Object.fromEntries(ADVANCED_PROXY_APPS.map(app => [app.id, null])),
+      };
+    }
+    if (!next.highAvailability.rpm.providers || typeof next.highAvailability.rpm.providers !== 'object') {
+      next.highAvailability.rpm.providers = Object.fromEntries(ADVANCED_PROXY_APPS.map(app => [app.id, null]));
+    }
+    if (selectedHighAvailabilityRpmScope.value === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
+      next.highAvailability.rpm.global = rpmValue;
+      return;
+    }
+    next.highAvailability.rpm.providers[selectedHighAvailabilityRpmScope.value] = rpmValue;
+  }, '高可用 RPM 设置已更新');
 }
 
 function handleDispatchModeChange(event) {
@@ -1530,6 +1615,30 @@ function handleCancel() {
 
 .advanced-proxy-ha-toggle-card {
   align-items: flex-start;
+}
+
+.advanced-proxy-rpm-row {
+  margin-top: 8px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.advanced-proxy-rpm-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.advanced-proxy-rpm-select {
+  min-width: 160px;
+}
+
+.advanced-proxy-rpm-input {
+  width: 132px;
 }
 
 .advanced-proxy-ha-toggle-copy {

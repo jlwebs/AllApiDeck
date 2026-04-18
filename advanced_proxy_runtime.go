@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
@@ -53,19 +54,39 @@ type proxyProviderRouteState struct {
 	activeCount    int
 }
 
+type proxyProviderHealthState struct {
+	ProviderID     string
+	ProviderRowKey string
+	ProviderName   string
+	AppType        string
+	SuccessEWMA    float64
+	FailureEWMA    float64
+	TimeoutEWMA    float64
+	LatencyEWMA    float64
+	SampleEWMA     float64
+	TotalRequests  int
+	LastStatusCode int
+	LastOutcome    string
+	UpdatedAt      time.Time
+}
+
 type advancedProxyRuntimeState struct {
-	mu             sync.Mutex
-	breakers       map[string]*proxyCircuitBreaker
-	routes         map[string]*proxyRouteState
-	providerRoutes map[string]*proxyProviderRouteState
-	logs           map[string]time.Time
+	mu                 sync.Mutex
+	breakers           map[string]*proxyCircuitBreaker
+	routes             map[string]*proxyRouteState
+	providerRoutes     map[string]*proxyProviderRouteState
+	providerHealth     map[string]*proxyProviderHealthState
+	rpmDispatchHistory map[string][]time.Time
+	logs               map[string]time.Time
 }
 
 var advancedProxyRuntime = &advancedProxyRuntimeState{
-	breakers:       map[string]*proxyCircuitBreaker{},
-	routes:         map[string]*proxyRouteState{},
-	providerRoutes: map[string]*proxyProviderRouteState{},
-	logs:           map[string]time.Time{},
+	breakers:           map[string]*proxyCircuitBreaker{},
+	routes:             map[string]*proxyRouteState{},
+	providerRoutes:     map[string]*proxyProviderRouteState{},
+	providerHealth:     map[string]*proxyProviderHealthState{},
+	rpmDispatchHistory: map[string][]time.Time{},
+	logs:               map[string]time.Time{},
 }
 
 func normalizeAdvancedProxyRuntimeAppType(appType string) string {
@@ -102,6 +123,38 @@ func providerRouteAttemptKey(appType string, routeKind string, targetURL string)
 	}, "|")
 }
 
+func providerHealthKey(appType string, provider AdvancedProxyProvider) string {
+	return strings.Join([]string{
+		normalizeAdvancedProxyRuntimeAppType(appType),
+		providerRoutingKey(provider),
+	}, "|")
+}
+
+func rpmDispatchHistoryKey(appType string) string {
+	return normalizeAdvancedProxyRuntimeAppType(appType)
+}
+
+func providerOutcomeLabel(success bool, timeout bool) string {
+	switch {
+	case success:
+		return "success"
+	case timeout:
+		return "timeout"
+	default:
+		return "failure"
+	}
+}
+
+func clampFloat64(value float64, min float64, max float64) float64 {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
 func (r *advancedProxyRuntimeState) getBreaker(appType string, providerID string) *proxyCircuitBreaker {
 	key := breakerKey(appType, providerID)
 	r.mu.Lock()
@@ -130,9 +183,355 @@ func (r *advancedProxyRuntimeState) GetStats(appType string, providerID string) 
 
 func (r *advancedProxyRuntimeState) Reset(appType string, providerID string) {
 	r.getBreaker(appType, providerID).reset()
+	normalizedAppType := normalizeAdvancedProxyRuntimeAppType(appType)
+	normalizedProviderID := strings.TrimSpace(providerID)
+	if normalizedProviderID == "" {
+		return
+	}
+
+	r.mu.Lock()
+	if len(r.providerHealth) > 0 {
+		for key, state := range r.providerHealth {
+			if state == nil {
+				continue
+			}
+			if state.AppType != normalizedAppType {
+				continue
+			}
+			if strings.TrimSpace(state.ProviderID) != normalizedProviderID {
+				continue
+			}
+			delete(r.providerHealth, key)
+		}
+	}
+	r.mu.Unlock()
+}
+
+func (r *advancedProxyRuntimeState) recordRPMDispatch(appType string, at time.Time) {
+	normalizedAppType := rpmDispatchHistoryKey(appType)
+	cutoff := at.Add(-60 * time.Second)
+
+	r.mu.Lock()
+	if r.rpmDispatchHistory == nil {
+		r.rpmDispatchHistory = map[string][]time.Time{}
+	}
+	key := rpmDispatchHistoryKey(normalizedAppType)
+	history := r.rpmDispatchHistory[key]
+	nextHistory := make([]time.Time, 0, len(history)+1)
+	for _, item := range history {
+		if item.After(cutoff) {
+			nextHistory = append(nextHistory, item)
+		}
+	}
+	nextHistory = append(nextHistory, at)
+	r.rpmDispatchHistory[key] = nextHistory
+	r.mu.Unlock()
+}
+
+func (r *advancedProxyRuntimeState) currentRPMDispatchCountLocked(appType string, now time.Time) int {
+	if r.rpmDispatchHistory == nil {
+		return 0
+	}
+	key := rpmDispatchHistoryKey(appType)
+	history := r.rpmDispatchHistory[key]
+	if len(history) == 0 {
+		return 0
+	}
+	cutoff := now.Add(-60 * time.Second)
+	nextHistory := history[:0]
+	for _, item := range history {
+		if item.After(cutoff) {
+			nextHistory = append(nextHistory, item)
+		}
+	}
+	if len(nextHistory) == 0 {
+		delete(r.rpmDispatchHistory, key)
+		return 0
+	}
+	r.rpmDispatchHistory[key] = append([]time.Time(nil), nextHistory...)
+	return len(nextHistory)
+}
+
+func (r *advancedProxyRuntimeState) ObserveProviderOutcome(appType string, provider AdvancedProxyProvider, statusCode int, elapsed time.Duration, success bool, timeout bool) {
+	normalizedAppType := normalizeAdvancedProxyRuntimeAppType(appType)
+	key := providerHealthKey(normalizedAppType, provider)
+	now := time.Now()
+	elapsedMs := float64(elapsed.Milliseconds())
+	if elapsedMs < 0 {
+		elapsedMs = 0
+	}
+
+	const alpha = 0.2
+	const decay = 1 - alpha
+
+	r.mu.Lock()
+	if r.providerHealth == nil {
+		r.providerHealth = map[string]*proxyProviderHealthState{}
+	}
+	state := r.providerHealth[key]
+	if state == nil {
+		state = &proxyProviderHealthState{
+			ProviderID:     strings.TrimSpace(provider.ID),
+			ProviderRowKey: strings.TrimSpace(provider.RowKey),
+			ProviderName:   strings.TrimSpace(provider.Name),
+			AppType:        normalizedAppType,
+			LatencyEWMA:    elapsedMs,
+			SampleEWMA:     1,
+			TotalRequests:  1,
+			LastStatusCode: statusCode,
+			LastOutcome:    providerOutcomeLabel(success, timeout),
+			UpdatedAt:      now,
+		}
+		if success {
+			state.SuccessEWMA = 1
+		}
+		if !success {
+			state.FailureEWMA = 1
+		}
+		if timeout {
+			state.TimeoutEWMA = 1
+		}
+		r.providerHealth[key] = state
+		r.mu.Unlock()
+		return
+	}
+	state.ProviderID = firstNonEmpty(strings.TrimSpace(provider.ID), state.ProviderID)
+	state.ProviderRowKey = firstNonEmpty(strings.TrimSpace(provider.RowKey), state.ProviderRowKey)
+	state.ProviderName = firstNonEmpty(strings.TrimSpace(provider.Name), state.ProviderName)
+	state.AppType = normalizedAppType
+	state.SampleEWMA = state.SampleEWMA*decay + alpha
+	if success {
+		state.SuccessEWMA = state.SuccessEWMA*decay + alpha
+		state.FailureEWMA = state.FailureEWMA * decay
+	} else {
+		state.SuccessEWMA = state.SuccessEWMA * decay
+		state.FailureEWMA = state.FailureEWMA*decay + alpha
+	}
+	if timeout {
+		state.TimeoutEWMA = state.TimeoutEWMA*decay + alpha
+	} else {
+		state.TimeoutEWMA = state.TimeoutEWMA * decay
+	}
+	if elapsedMs > 0 {
+		if state.LatencyEWMA <= 0 {
+			state.LatencyEWMA = elapsedMs
+		} else {
+			state.LatencyEWMA = state.LatencyEWMA*decay + elapsedMs*alpha
+		}
+	}
+	state.TotalRequests++
+	state.LastStatusCode = statusCode
+	state.LastOutcome = providerOutcomeLabel(success, timeout)
+	state.UpdatedAt = now
+	r.mu.Unlock()
+}
+
+func (r *advancedProxyRuntimeState) OrderProvidersByHealth(config AdvancedProxyConfig, appType string, providers []AdvancedProxyProvider) []AdvancedProxyProvider {
+	ordered := append([]AdvancedProxyProvider(nil), providers...)
+	if len(ordered) < 2 {
+		return ordered
+	}
+	if !config.HighAvailability.DynamicOptimizeQueue {
+		return ordered
+	}
+
+	normalizedAppType := normalizeAdvancedProxyRuntimeAppType(appType)
+	type scoredProvider struct {
+		provider  AdvancedProxyProvider
+		score     float64
+		baseIndex int
+	}
+
+	scored := make([]scoredProvider, 0, len(ordered))
+	r.mu.Lock()
+	for index, provider := range ordered {
+		score := float64(index) * 0.0001
+		healthKey := providerHealthKey(normalizedAppType, provider)
+		health := r.providerHealth[healthKey]
+		if health != nil {
+			score += clampFloat64(health.FailureEWMA, 0, 1) * 1000
+			score += float64(index) * 0.0001
+		}
+		scored = append(scored, scoredProvider{
+			provider:  provider,
+			score:     score,
+			baseIndex: index,
+		})
+	}
+	r.mu.Unlock()
+
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score == scored[j].score {
+			return scored[i].baseIndex < scored[j].baseIndex
+		}
+		return scored[i].score < scored[j].score
+	})
+
+	result := make([]AdvancedProxyProvider, 0, len(scored))
+	for _, item := range scored {
+		result = append(result, item.provider)
+	}
+	return result
+}
+
+func (r *advancedProxyRuntimeState) OrderProvidersForDispatch(config AdvancedProxyConfig, appType string, providers []AdvancedProxyProvider) []AdvancedProxyProvider {
+	ordered := append([]AdvancedProxyProvider(nil), providers...)
+	if len(ordered) < 2 || !config.HighAvailability.Enabled {
+		return ordered
+	}
+
+	dispatchMode := normalizeAdvancedProxyDispatchMode(config.HighAvailability.DispatchMode)
+
+	normalizedAppType := normalizeAdvancedProxyRuntimeAppType(appType)
+	now := time.Now()
+	r.mu.Lock()
+	scored := make([]struct {
+		provider  AdvancedProxyProvider
+		score     float64
+		baseIndex int
+	}, 0, len(ordered))
+	rpmLimit := resolveAdvancedProxyHighAvailabilityRPM(config, normalizedAppType)
+	rpmDispatchCount := r.currentRPMDispatchCountLocked(normalizedAppType, now)
+	appActiveCount := r.activeCountForAppTypeLocked(normalizedAppType)
+	for index, provider := range ordered {
+		score := float64(index) * 0.0001
+		healthKey := providerHealthKey(normalizedAppType, provider)
+		health := r.providerHealth[healthKey]
+		failureEWMA := 0.0
+		timeoutEWMA := 0.0
+		latencyEWMA := 0.0
+		if health != nil {
+			failureEWMA = health.FailureEWMA
+			timeoutEWMA = health.TimeoutEWMA
+			latencyEWMA = health.LatencyEWMA
+		}
+
+		activeCount := 0
+		activeAppCountForProvider := 0
+		if route := r.providerRoutes[providerRoutingKey(provider)]; route != nil {
+			activeCount = route.activeCount
+			if route.activeAppTypes != nil {
+				activeAppCountForProvider = route.activeAppTypes[normalizedAppType]
+			}
+		}
+
+		breakerState := circuitStateClosed
+		breakerAge := time.Duration(0)
+		if breaker := r.breakers[breakerKey(normalizedAppType, provider.ID)]; breaker != nil {
+			breaker.mu.Lock()
+			breakerState = breaker.state
+			if !breaker.lastOpenedAt.IsZero() {
+				breakerAge = time.Since(breaker.lastOpenedAt)
+			}
+			breaker.mu.Unlock()
+		}
+
+		switch breakerState {
+		case circuitStateOpen:
+			score += 1000
+			if rpmLimit > 0 && appActiveCount >= rpmLimit {
+				score += 250
+			}
+			if breakerAge > 0 {
+				score += math.Min(float64(breakerAge/time.Second), 60)
+			}
+		case circuitStateHalfOpen:
+			score += 160
+		}
+
+		if dispatchMode != "fixed" {
+			score += clampFloat64(failureEWMA, 0, 1) * 140
+			score += clampFloat64(timeoutEWMA, 0, 1) * 220
+			if latencyEWMA > 0 {
+				score += math.Min(latencyEWMA/400.0, 120)
+			}
+		}
+		score += float64(activeCount) * 28
+		score += float64(activeAppCountForProvider) * 36
+		if rpmLimit > 0 {
+			ratio := float64(rpmDispatchCount) / float64(rpmLimit)
+			score += math.Min(ratio*180, 360)
+			if rpmDispatchCount >= rpmLimit {
+				score += 220
+			}
+		}
+		scored = append(scored, struct {
+			provider  AdvancedProxyProvider
+			score     float64
+			baseIndex int
+		}{
+			provider:  provider,
+			score:     score,
+			baseIndex: index,
+		})
+	}
+	r.mu.Unlock()
+
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score == scored[j].score {
+			return scored[i].baseIndex < scored[j].baseIndex
+		}
+		return scored[i].score < scored[j].score
+	})
+
+	if dispatchMode == "random" {
+		return shuffleAdvancedProxyProvidersByScore(scored)
+	}
+
+	result := make([]AdvancedProxyProvider, 0, len(scored))
+	for _, item := range scored {
+		result = append(result, item.provider)
+	}
+	return result
+}
+
+func (r *advancedProxyRuntimeState) activeCountForAppTypeLocked(appType string) int {
+	total := 0
+	for _, route := range r.providerRoutes {
+		if route == nil || route.activeAppTypes == nil {
+			continue
+		}
+		total += route.activeAppTypes[appType]
+	}
+	return total
+}
+
+func shuffleAdvancedProxyProvidersByScore(scored []struct {
+	provider  AdvancedProxyProvider
+	score     float64
+	baseIndex int
+}) []AdvancedProxyProvider {
+	if len(scored) < 2 {
+		result := make([]AdvancedProxyProvider, 0, len(scored))
+		for _, item := range scored {
+			result = append(result, item.provider)
+		}
+		return result
+	}
+	result := make([]AdvancedProxyProvider, 0, len(scored))
+	buckets := map[int][]AdvancedProxyProvider{}
+	order := make([]int, 0, len(scored))
+	for _, item := range scored {
+		bucket := int(math.Floor(item.score / 120.0))
+		if _, exists := buckets[bucket]; !exists {
+			order = append(order, bucket)
+		}
+		buckets[bucket] = append(buckets[bucket], item.provider)
+	}
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	sort.Ints(order)
+	for _, bucket := range order {
+		items := append([]AdvancedProxyProvider(nil), buckets[bucket]...)
+		rng.Shuffle(len(items), func(i, j int) {
+			items[i], items[j] = items[j], items[i]
+		})
+		result = append(result, items...)
+	}
+	return result
 }
 
 func (r *advancedProxyRuntimeState) MarkDispatch(appType string, provider AdvancedProxyProvider, routeKind string, targetURL string) {
+	r.recordRPMDispatch(appType, time.Now())
 	r.logRoutePass(appType, provider, routeKind, targetURL)
 	r.setRouteState(appType, provider, routeKind, targetURL, "dispatching")
 	r.setProviderRouteState(appType, provider, routeKind, targetURL, true, false)

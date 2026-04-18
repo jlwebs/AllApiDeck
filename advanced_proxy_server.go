@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -321,14 +323,15 @@ func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) m
 	}
 }
 
-func performJSONUpstreamRequest(method string, targetURL string, headers map[string]string, payload map[string]any, timeoutSeconds int) (int, http.Header, []byte, error) {
+func performJSONUpstreamRequest(method string, targetURL string, headers map[string]string, payload map[string]any, timeoutSeconds int) (int, http.Header, []byte, time.Duration, error) {
+	startedAt := time.Now()
 	rawBody, err := json.Marshal(payload)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, time.Since(startedAt), err
 	}
 	request, err := http.NewRequest(method, targetURL, bytes.NewReader(rawBody))
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, time.Since(startedAt), err
 	}
 	for key, value := range headers {
 		if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
@@ -338,24 +341,25 @@ func performJSONUpstreamRequest(method string, targetURL string, headers map[str
 	}
 	client, err := newOutboundHTTPClient(time.Duration(clampInt(timeoutSeconds, 5, 900)) * time.Second)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, time.Since(startedAt), err
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, time.Since(startedAt), err
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 8*1024*1024))
 	if err != nil {
-		return response.StatusCode, response.Header.Clone(), nil, err
+		return response.StatusCode, response.Header.Clone(), nil, time.Since(startedAt), err
 	}
-	return response.StatusCode, response.Header.Clone(), body, nil
+	return response.StatusCode, response.Header.Clone(), body, time.Since(startedAt), nil
 }
 
-func performRawUpstreamRequest(method string, targetURL string, headers map[string]string, rawBody []byte, timeoutSeconds int, keepStream bool) (int, http.Header, []byte, io.ReadCloser, error) {
+func performRawUpstreamRequest(method string, targetURL string, headers map[string]string, rawBody []byte, timeoutSeconds int, keepStream bool) (int, http.Header, []byte, io.ReadCloser, time.Duration, error) {
+	startedAt := time.Now()
 	request, err := http.NewRequest(method, targetURL, bytes.NewReader(rawBody))
 	if err != nil {
-		return 0, nil, nil, nil, err
+		return 0, nil, nil, nil, time.Since(startedAt), err
 	}
 	for key, value := range headers {
 		if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
@@ -365,21 +369,47 @@ func performRawUpstreamRequest(method string, targetURL string, headers map[stri
 	}
 	client, err := newOutboundHTTPClient(time.Duration(clampInt(timeoutSeconds, 5, 900)) * time.Second)
 	if err != nil {
-		return 0, nil, nil, nil, err
+		return 0, nil, nil, nil, time.Since(startedAt), err
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return 0, nil, nil, nil, err
+		return 0, nil, nil, nil, time.Since(startedAt), err
 	}
 	if keepStream && response.StatusCode >= 200 && response.StatusCode < 300 {
-		return response.StatusCode, response.Header.Clone(), nil, response.Body, nil
+		return response.StatusCode, response.Header.Clone(), nil, response.Body, time.Since(startedAt), nil
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 8*1024*1024))
 	if err != nil {
-		return response.StatusCode, response.Header.Clone(), nil, nil, err
+		return response.StatusCode, response.Header.Clone(), nil, nil, time.Since(startedAt), err
 	}
-	return response.StatusCode, response.Header.Clone(), body, nil, nil
+	return response.StatusCode, response.Header.Clone(), body, nil, time.Since(startedAt), nil
+}
+
+func isAdvancedProxyTimeoutStatusCode(statusCode int) bool {
+	switch statusCode {
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout, 524, 598, 599:
+		return true
+	default:
+		return false
+	}
+}
+
+func isAdvancedProxyTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded")
+}
+
+func observeAdvancedProxyAttempt(appType string, provider AdvancedProxyProvider, statusCode int, elapsed time.Duration, err error) {
+	timeout := isAdvancedProxyTimeoutError(err) || isAdvancedProxyTimeoutStatusCode(statusCode)
+	success := err == nil && statusCode >= 200 && statusCode < 300
+	advancedProxyRuntime.ObserveProviderOutcome(appType, provider, statusCode, elapsed, success, timeout)
 }
 
 func buildClaudeProviderHeaders(provider AdvancedProxyProvider, apiFormat string, requestHeaders http.Header, stream bool) map[string]string {
@@ -794,15 +824,18 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 				rawTransformed, err := json.Marshal(transformed)
 				if err != nil {
 					advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
+					observeAdvancedProxyAttempt("claude", provider, 0, 0, err)
 					return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "invalid upstream JSON request"}
 				}
-				statusCode, responseHeaders, _, streamBody, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, apiFormat, requestHeaders, stream), rawTransformed, timeoutSeconds, true)
+				statusCode, responseHeaders, _, streamBody, elapsed, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, apiFormat, requestHeaders, stream), rawTransformed, timeoutSeconds, true)
 				if err != nil {
 					advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
+					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, err)
 					return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: err.Error()}
 				}
 				if statusCode < 200 || statusCode >= 300 {
 					advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
+					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
 					if streamBody != nil {
 						streamBody.Close()
 					}
@@ -812,6 +845,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 					}
 				}
 				advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, true)
+				observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
 				return providerAttemptResult{
 					StatusCode: http.StatusOK,
 					Headers:    responseHeaders,
@@ -820,22 +854,26 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 					Model:      fallbackModel,
 				}
 			}
-			statusCode, responseHeaders, rawResponse, err := performJSONUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, apiFormat, requestHeaders, stream), transformed, timeoutSeconds)
+			statusCode, responseHeaders, rawResponse, elapsed, err := performJSONUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, apiFormat, requestHeaders, stream), transformed, timeoutSeconds)
 			if err != nil {
 				advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
+				observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, err)
 				return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: err.Error()}
 			}
 			if statusCode < 200 || statusCode >= 300 {
 				errorMessage := normalizeAnthropicErrorMessage(rawResponse)
 				if apiFormat == "anthropic" && !signatureRectified && shouldRectifyThinkingSignature(errorMessage, config.Rectifier) && rectifyThinkingSignature(basePayload) {
+					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
 					signatureRectified = true
 					goto retryProvider
 				}
 				if apiFormat == "anthropic" && !budgetRectified && shouldRectifyThinkingBudget(errorMessage, config.Rectifier) && rectifyThinkingBudget(basePayload) {
+					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
 					budgetRectified = true
 					goto retryProvider
 				}
 				advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
+				observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
 				if isRetryableCheckStatus(statusCode) && (apiFormat == "openai_chat" || apiFormat == "openai_responses") {
 					continue
 				}
@@ -857,6 +895,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 				responseMap = openAIResponsesToAnthropic(responseMap, fallbackModel)
 			}
 			advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, true)
+			observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
 			return providerAttemptResult{Response: responseMap, StatusCode: http.StatusOK, Headers: responseHeaders}
 		}
 
@@ -926,9 +965,10 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 			timeoutSeconds,
 			describeOutboundProxyMode(),
 		)
-		statusCode, headers, body, streamBody, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildOpenAIProviderHeaders(provider), rawBody, timeoutSeconds, stream)
+		statusCode, headers, body, streamBody, elapsed, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildOpenAIProviderHeaders(provider), rawBody, timeoutSeconds, stream)
 		if err != nil {
 			advancedProxyRuntime.MarkResult(appType, provider, routeKind, targetURL, false)
+			observeAdvancedProxyAttempt(appType, provider, statusCode, elapsed, err)
 			message := formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, fmt.Sprintf("upstream request failed (%s, outbound=%s)", err.Error(), describeOutboundProxyMode()))
 			appendAdvancedProxyLogf("[OPENAI_PROXY_ERROR] status=%d app=%s route=%s provider=%s endpoint=%s detail=%s", http.StatusBadGateway, appType, routeKind, providerLabel, targetURL, previewAdvancedProxyText(message, 260))
 			return rawProviderAttemptResult{
@@ -942,6 +982,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 		}
 		if statusCode < 200 || statusCode >= 300 {
 			advancedProxyRuntime.MarkResult(appType, provider, routeKind, targetURL, false)
+			observeAdvancedProxyAttempt(appType, provider, statusCode, elapsed, nil)
 			lastStatus = statusCode
 			lastMessage = formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, firstNonEmpty(summarizeAdvancedProxyBody(body), fmt.Sprintf("HTTP %d", statusCode)))
 			appendAdvancedProxyLogf("[OPENAI_PROXY_FAIL] status=%d app=%s route=%s provider=%s endpoint=%s detail=%s", statusCode, appType, routeKind, providerLabel, targetURL, previewAdvancedProxyText(lastMessage, 260))
@@ -960,6 +1001,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 			}
 		}
 		advancedProxyRuntime.MarkResult(appType, provider, routeKind, targetURL, true)
+		observeAdvancedProxyAttempt(appType, provider, statusCode, elapsed, nil)
 		appendAdvancedProxyLogf("[OPENAI_PROXY_OK] status=%d app=%s route=%s provider=%s endpoint=%s stream=%t", statusCode, appType, routeKind, providerLabel, targetURL, stream)
 		return rawProviderAttemptResult{
 			StatusCode: statusCode,
@@ -1222,6 +1264,7 @@ func (a *App) handleAdvancedProxyClaude(writer http.ResponseWriter, request *htt
 		return
 	}
 	providers := resolveAdvancedProxyEffectiveProviders(config, "claude")
+	providers = advancedProxyRuntime.OrderProvidersForDispatch(config, "claude", providers)
 	if !config.Enabled || !config.Claude.Enabled || len(providers) == 0 {
 		writeAnthropicProxyError(writer, http.StatusServiceUnavailable, "advanced Claude proxy is disabled or has no providers")
 		return
@@ -1344,6 +1387,7 @@ func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWrit
 		return
 	}
 	providers := resolveAdvancedProxyEffectiveProviders(config, appType)
+	providers = advancedProxyRuntime.OrderProvidersForDispatch(config, appType, providers)
 	if !config.Enabled || !advancedProxyAppEnabled(config, appType) || len(providers) == 0 {
 		writeOpenAIProxyError(writer, http.StatusServiceUnavailable, "advanced proxy is disabled or has no providers")
 		return

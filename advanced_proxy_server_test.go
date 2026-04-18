@@ -133,6 +133,8 @@ func resetAdvancedProxyRuntimeForTest(t *testing.T) string {
 	advancedProxyRuntime.breakers = map[string]*proxyCircuitBreaker{}
 	advancedProxyRuntime.routes = map[string]*proxyRouteState{}
 	advancedProxyRuntime.providerRoutes = map[string]*proxyProviderRouteState{}
+	advancedProxyRuntime.providerHealth = map[string]*proxyProviderHealthState{}
+	advancedProxyRuntime.rpmDispatchHistory = map[string][]time.Time{}
 	advancedProxyRuntime.logs = map[string]time.Time{}
 	advancedProxyRuntime.mu.Unlock()
 
@@ -502,4 +504,179 @@ func TestAdvancedProxyRoutingSnapshotTracksConcurrentProvidersForOneAppType(t *t
 
 	close(release)
 	wg.Wait()
+}
+
+func TestOrderProvidersByHealthPrefersLowerFailureRate(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	healthy := AdvancedProxyProvider{
+		ID:        "provider-healthy",
+		RowKey:    "row-healthy",
+		Name:      "Healthy Provider",
+		BaseURL:   "http://127.0.0.1:1",
+		APIFormat: "openai_chat",
+	}
+	unhealthy := AdvancedProxyProvider{
+		ID:        "provider-unhealthy",
+		RowKey:    "row-unhealthy",
+		Name:      "Unhealthy Provider",
+		BaseURL:   "http://127.0.0.1:2",
+		APIFormat: "openai_chat",
+	}
+
+	for i := 0; i < 4; i++ {
+		advancedProxyRuntime.ObserveProviderOutcome("codex", healthy, http.StatusOK, 100*time.Millisecond, true, false)
+	}
+	for i := 0; i < 4; i++ {
+		advancedProxyRuntime.ObserveProviderOutcome("codex", unhealthy, http.StatusBadGateway, 1500*time.Millisecond, false, false)
+	}
+
+	ordered := advancedProxyRuntime.OrderProvidersByHealth(
+		AdvancedProxyConfig{
+			HighAvailability: HighAvailabilityConfig{
+				DynamicOptimizeQueue: true,
+			},
+		},
+		"codex",
+		[]AdvancedProxyProvider{unhealthy, healthy},
+	)
+
+	if len(ordered) != 2 {
+		t.Fatalf("expected two providers, got %#v", ordered)
+	}
+	if ordered[0].ID != healthy.ID {
+		t.Fatalf("expected healthy provider first, got %#v", ordered)
+	}
+	if ordered[1].ID != unhealthy.ID {
+		t.Fatalf("expected unhealthy provider second, got %#v", ordered)
+	}
+}
+
+func TestOrderProvidersForDispatchAccountsForActiveLoadAndRpm(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	providerA := AdvancedProxyProvider{
+		ID:        "provider-a",
+		RowKey:    "row-a",
+		Name:      "Provider A",
+		BaseURL:   "http://127.0.0.1:3",
+		APIFormat: "openai_chat",
+	}
+	providerB := AdvancedProxyProvider{
+		ID:        "provider-b",
+		RowKey:    "row-b",
+		Name:      "Provider B",
+		BaseURL:   "http://127.0.0.1:4",
+		APIFormat: "openai_chat",
+	}
+
+	advancedProxyRuntime.mu.Lock()
+	advancedProxyRuntime.providerRoutes[providerRoutingKey(providerA)] = &proxyProviderRouteState{
+		ProviderID:     providerA.ID,
+		ProviderRowKey: providerA.RowKey,
+		ProviderName:   providerA.Name,
+		activeRoutes:   map[string]int{"codex|chat|http://127.0.0.1:3": 3},
+		activeAppTypes: map[string]int{"codex": 3},
+		activeCount:    3,
+		Status:         "dispatching",
+	}
+	advancedProxyRuntime.mu.Unlock()
+
+	ordered := advancedProxyRuntime.OrderProvidersForDispatch(
+		AdvancedProxyConfig{
+			HighAvailability: HighAvailabilityConfig{
+				Enabled:      true,
+				DispatchMode: "ordered",
+				RPM: HighAvailabilityRPMConfig{
+					Global: 0,
+					Providers: map[string]*int{
+						"codex": intPtr(2),
+					},
+				},
+			},
+		},
+		"codex",
+		[]AdvancedProxyProvider{providerA, providerB},
+	)
+
+	if len(ordered) != 2 {
+		t.Fatalf("expected two providers, got %#v", ordered)
+	}
+	if ordered[0].ID != providerB.ID {
+		t.Fatalf("expected idle provider first, got %#v", ordered)
+	}
+	if ordered[1].ID != providerA.ID {
+		t.Fatalf("expected loaded provider second, got %#v", ordered)
+	}
+}
+
+func intPtr(value int) *int {
+	return &value
+}
+
+func TestAdvancedProxyResetClearsProviderHealthForProvider(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	provider := AdvancedProxyProvider{
+		ID:        "provider-reset",
+		RowKey:    "row-reset",
+		Name:      "Reset Provider",
+		BaseURL:   "http://127.0.0.1:5",
+		APIFormat: "openai_chat",
+	}
+
+	advancedProxyRuntime.ObserveProviderOutcome("codex", provider, http.StatusOK, 50*time.Millisecond, true, false)
+
+	advancedProxyRuntime.mu.Lock()
+	healthCount := 0
+	for _, state := range advancedProxyRuntime.providerHealth {
+		if state != nil && state.AppType == "codex" && state.ProviderID == provider.ID {
+			healthCount++
+		}
+	}
+	advancedProxyRuntime.mu.Unlock()
+	if healthCount == 0 {
+		t.Fatalf("expected provider health to be recorded")
+	}
+
+	advancedProxyRuntime.Reset("codex", provider.ID)
+
+	advancedProxyRuntime.mu.Lock()
+	defer advancedProxyRuntime.mu.Unlock()
+	for _, state := range advancedProxyRuntime.providerHealth {
+		if state != nil && state.AppType == "codex" && state.ProviderID == provider.ID {
+			t.Fatalf("expected provider health to be cleared, got %#v", state)
+		}
+	}
+}
+
+func TestRPMDispatchHistoryTracksRecentDispatches(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	provider := AdvancedProxyProvider{
+		ID:        "provider-rpm",
+		RowKey:    "row-rpm",
+		Name:      "RPM Provider",
+		BaseURL:   "http://127.0.0.1:6",
+		APIFormat: "openai_chat",
+	}
+
+	advancedProxyRuntime.recordRPMDispatch("codex", time.Now().Add(-70*time.Second))
+	advancedProxyRuntime.recordRPMDispatch("codex", time.Now())
+
+	advancedProxyRuntime.mu.Lock()
+	recentCount := advancedProxyRuntime.currentRPMDispatchCountLocked("codex", time.Now())
+	advancedProxyRuntime.mu.Unlock()
+	if recentCount != 1 {
+		t.Fatalf("expected one recent RPM dispatch, got %d", recentCount)
+	}
+
+	advancedProxyRuntime.MarkDispatch("codex", provider, "chat", provider.BaseURL)
+
+	advancedProxyRuntime.mu.Lock()
+	defer advancedProxyRuntime.mu.Unlock()
+	recentCount = advancedProxyRuntime.currentRPMDispatchCountLocked("codex", time.Now())
+	if recentCount != 2 {
+		t.Fatalf("expected two recent RPM dispatches after mark dispatch, got %d", recentCount)
+	}
 }

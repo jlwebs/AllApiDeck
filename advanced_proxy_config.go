@@ -78,9 +78,15 @@ type AppFailoverConfig struct {
 }
 
 type HighAvailabilityConfig struct {
-	Enabled              bool   `json:"enabled"`
-	DynamicOptimizeQueue bool   `json:"dynamicOptimizeQueue"`
-	DispatchMode         string `json:"dispatchMode"`
+	Enabled              bool                      `json:"enabled"`
+	DynamicOptimizeQueue bool                      `json:"dynamicOptimizeQueue"`
+	DispatchMode         string                    `json:"dispatchMode"`
+	RPM                  HighAvailabilityRPMConfig `json:"rpm"`
+}
+
+type HighAvailabilityRPMConfig struct {
+	Global    int             `json:"global"`
+	Providers map[string]*int `json:"providers"`
 }
 
 type RectifierConfig struct {
@@ -214,6 +220,7 @@ func defaultAdvancedProxyConfig() AdvancedProxyConfig {
 			Enabled:              false,
 			DynamicOptimizeQueue: false,
 			DispatchMode:         "fixed",
+			RPM:                  defaultAdvancedProxyHighAvailabilityRPMConfig(),
 		},
 		Rectifier: RectifierConfig{
 			Enabled:                  true,
@@ -319,11 +326,24 @@ func sanitizeAdvancedProxyConfig(config AdvancedProxyConfig) AdvancedProxyConfig
 		config.HighAvailability.DispatchMode = "fixed"
 	}
 	config.HighAvailability.DispatchMode = normalizeAdvancedProxyDispatchMode(config.HighAvailability.DispatchMode)
+	config.HighAvailability.RPM = normalizeAdvancedProxyHighAvailabilityRPMConfig(config.HighAvailability.RPM)
 	if strings.TrimSpace(config.Optimizer.CacheTTL) == "" {
 		config.Optimizer.CacheTTL = defaults.Optimizer.CacheTTL
 	}
 	config.Enabled = advancedProxyAnyAppEnabled(config)
 	return config
+}
+
+func defaultAdvancedProxyHighAvailabilityRPMConfig() HighAvailabilityRPMConfig {
+	return HighAvailabilityRPMConfig{
+		Global: 0,
+		Providers: map[string]*int{
+			"claude":   nil,
+			"codex":    nil,
+			"opencode": nil,
+			"openclaw": nil,
+		},
+	}
 }
 
 func normalizeAdvancedProxyDispatchMode(value string) string {
@@ -337,6 +357,39 @@ func normalizeAdvancedProxyDispatchMode(value string) string {
 	default:
 		return "fixed"
 	}
+}
+
+func normalizeAdvancedProxyHighAvailabilityRPMConfig(config HighAvailabilityRPMConfig) HighAvailabilityRPMConfig {
+	normalized := defaultAdvancedProxyHighAvailabilityRPMConfig()
+	normalized.Global = clampInt(config.Global, 0, 1000000)
+	if config.Providers == nil {
+		return normalized
+	}
+	for scope, rawValue := range config.Providers {
+		scope = strings.ToLower(strings.TrimSpace(scope))
+		if scope != "claude" && scope != "codex" && scope != "opencode" && scope != "openclaw" {
+			continue
+		}
+		if rawValue == nil {
+			normalized.Providers[scope] = nil
+			continue
+		}
+		value := clampInt(*rawValue, 0, 1000000)
+		normalized.Providers[scope] = &value
+	}
+	return normalized
+}
+
+func resolveAdvancedProxyHighAvailabilityRPM(config AdvancedProxyConfig, appType string) int {
+	normalizedAppType := normalizeAdvancedProxyRuntimeAppType(appType)
+	if normalizedAppType != advancedProxyGlobalScope {
+		if config.HighAvailability.RPM.Providers != nil {
+			if rawValue, exists := config.HighAvailability.RPM.Providers[normalizedAppType]; exists && rawValue != nil {
+				return clampInt(*rawValue, 0, 1000000)
+			}
+		}
+	}
+	return clampInt(config.HighAvailability.RPM.Global, 0, 1000000)
 }
 
 func advancedProxyQueuesLikelyMissing(queues AdvancedProxyQueuesConfig) bool {
@@ -555,7 +608,7 @@ func resolveAdvancedProxyEffectiveProviders(config AdvancedProxyConfig, appType 
 			filtered = append(filtered, provider)
 		}
 	}
-	return filtered
+	return advancedProxyRuntime.OrderProvidersByHealth(config, appType, filtered)
 }
 
 func (a *App) GetAdvancedProxyConfig() (*AdvancedProxyConfig, error) {

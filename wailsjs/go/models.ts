@@ -48,10 +48,37 @@ export namespace main {
 	        this.requestThinkingBudget = source["requestThinkingBudget"];
 	    }
 	}
+	export class int {
+	
+	
+	    static createFrom(source: any = {}) {
+	        return new int(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	
+	    }
+	}
+	export class HighAvailabilityRPMConfig {
+	    global: number;
+	    providers: Record<string, number>;
+	
+	    static createFrom(source: any = {}) {
+	        return new HighAvailabilityRPMConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.global = source["global"];
+	        this.providers = source["providers"];
+	    }
+	}
 	export class HighAvailabilityConfig {
 	    enabled: boolean;
 	    dynamicOptimizeQueue: boolean;
 	    dispatchMode: string;
+	    rpm: HighAvailabilityRPMConfig;
 	
 	    static createFrom(source: any = {}) {
 	        return new HighAvailabilityConfig(source);
@@ -62,7 +89,26 @@ export namespace main {
 	        this.enabled = source["enabled"];
 	        this.dynamicOptimizeQueue = source["dynamicOptimizeQueue"];
 	        this.dispatchMode = source["dispatchMode"];
+	        this.rpm = this.convertValues(source["rpm"], HighAvailabilityRPMConfig);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class AppFailoverConfig {
 	    appType: string;
@@ -752,6 +798,7 @@ export namespace main {
 	        this.enabled = source["enabled"];
 	    }
 	}
+	
 	
 	export class ManagedAppConfigAppliedFile {
 	    appId: string;

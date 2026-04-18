@@ -40,6 +40,17 @@ function getDefaultQueueSection(inheritGlobal = false) {
   };
 }
 
+function isPlainObject(value) {
+  return Boolean(value) && Object.prototype.toString.call(value) === '[object Object]';
+}
+
+function getDefaultRpmSection() {
+  return {
+    global: 0,
+    providers: Object.fromEntries(ADVANCED_PROXY_APPS.map(app => [app.id, null])),
+  };
+}
+
 function normalizeQueueScope(scope) {
   const normalized = String(scope || ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE).trim().toLowerCase();
   if (normalized === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
@@ -88,6 +99,7 @@ export function createDefaultAdvancedProxyConfig() {
       enabled: false,
       dynamicOptimizeQueue: false,
       dispatchMode: 'fixed',
+      rpm: getDefaultRpmSection(),
     },
     rectifier: {
       enabled: true,
@@ -170,6 +182,27 @@ function normalizeQueueSection(input, defaults, fallbackProviders = null) {
     : (Array.isArray(fallbackProviders) ? fallbackProviders : []);
   next.inheritGlobal = next.inheritGlobal === true;
   next.providers = sanitizeProviders(providers);
+  return next;
+}
+
+function normalizeRpmSection(input) {
+  const defaults = getDefaultRpmSection();
+  const next = {
+    ...defaults,
+    ...(input || {}),
+  };
+  const providers = isPlainObject(next.providers) ? next.providers : {};
+  next.global = Math.max(0, Number(next.global || 0));
+  next.providers = Object.fromEntries(
+    ADVANCED_PROXY_APPS.map(app => {
+      const rawValue = providers[app.id];
+      if (rawValue == null || rawValue === '') {
+        return [app.id, null];
+      }
+      const parsed = Math.max(0, Number(rawValue));
+      return [app.id, Number.isFinite(parsed) ? parsed : null];
+    }),
+  );
   return next;
 }
 
@@ -265,6 +298,7 @@ export function normalizeAdvancedProxyConfig(input) {
   next.highAvailability.enabled = next.highAvailability.enabled === true;
   next.highAvailability.dynamicOptimizeQueue = next.highAvailability.dynamicOptimizeQueue === true;
   next.highAvailability.dispatchMode = normalizeDispatchMode(next.highAvailability.dispatchMode);
+  next.highAvailability.rpm = normalizeRpmSection(next.highAvailability.rpm);
   next.optimizer.cacheTtl = String(next.optimizer.cacheTtl || defaults.optimizer.cacheTtl).trim() || defaults.optimizer.cacheTtl;
 
   next.enabled = ADVANCED_PROXY_APPS.some(app => next?.[app.id]?.enabled === true);
