@@ -1,22 +1,36 @@
-﻿# All API Deck
+﻿<div align="center">
 
-[中文](./README.md) | [English](./README.en.md)
+<img src="./assets/appicon.png" alt="All API Deck" width="80">
 
-<img src="./assets/appicon.png" alt="All API Deck Logo" width="80" />
+**批量管理站点账号、模型与密钥的桌面工具**
 
-桌面端批量 API 检测与密钥整理工具。
+<p>
+支持浏览器扩展导入、批量模型发现、可用性检测，以及 Claude / Codex / OpenCode / OpenClaw 的配置切换。
+</p>
 
-这是一款面向所有级别使用、管理AI资产的低门槛桌面挂件工具，当前项目基于 `Wails + Vue 3`，主要服务于以下几类场景：
+<p align="center">
+<a href="https://github.com/jlwebs/AllApiDeck/releases">
+  <img alt="GitHub Release" src="https://img.shields.io/github/v/release/jlwebs/AllApiDeck?label=Release&logo=github&style=flat">
+</a><!--
+--><a href="https://github.com/jlwebs/AllApiDeck/stargazers">
+  <img alt="GitHub Stars" src="https://img.shields.io/github/stars/jlwebs/AllApiDeck?style=flat&logo=github&label=Stars">
+</a><!--
+--><a href="https://deepwiki.com/jlwebs/AllApiDeck">
+  <img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg">
+</a><!--
+--><a href="LICENSE">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-brightgreen?style=flat">
+</a><!--
+--><img alt="Node.js" src="https://img.shields.io/badge/Node.js-22.15%2B-339933?logo=node.js&style=flat"><!--
+--><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&style=flat">
+</p>
 
-- 支持从浏览器扩展或备份文件导入站点账号
-- 批量读取各站点模型列表，高效筛选强自定义，便捷地从海量站点中寻找有效自选模型
-- 批量检测模型可用性、余额、快速对话、模型性能统计（TTFT、TPS、Latency）能力
-- 中转站管理面板：随时发起可用性全面了解，优化你的琐碎时间
-- 类CCSwitch能力的本地密钥面板，支持Windows侧边栏快速查看状态切换密钥，友好且操作简单
-- 切换模型时候有清晰的改动对照、切换后可支持历史对话
-- 一键切换 Claude / Codex / OpenCode / OpenClaw 等桌面客户端配置&&预览
-- 内置高级代理，支持优先级自定义、自动切换、故障转移、多渠道队列、整流修正功能
+<p align="center">
+  <a href="README.md"><strong>中文</strong></a> |
+  <a href="README.en.md">English</a>
+</p>
 
+</div>
 ## 界面预览
 
 <img src="./docs/images/all-api-deck-home.png" alt="All API Deck 首页预览" width="72%" />
