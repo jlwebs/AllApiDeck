@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <a-modal :open="open" title="高级代理功能" :width="modalWidth" :footer="null" @cancel="handleCancel">
     <a-spin :spinning="loading || saving">
       <div class="advanced-proxy-shell">
@@ -63,7 +63,7 @@
           <article class="advanced-proxy-summary-card">
             <span>熔断打开数</span>
             <strong>{{ openCircuitCount }}</strong>
-            <small>故障转移 {{ draft.failover.enabled ? '已开启' : '未开启' }}</small>
+            <small>故障自动转移 {{ unifiedFailoverEnabled ? '已开启' : '未开启' }}</small>
           </article>
         </section>
 
@@ -146,6 +146,44 @@
           </section>
 
           <aside class="advanced-proxy-side">
+                      <section class="advanced-proxy-section">
+              <div class="advanced-proxy-section-head">
+                <div>
+                  <h4>请求策略与并发</h4>
+                  <p>随机、轮询请求队列来应对中转站 RPM 限制。</p>
+                </div>
+              </div>
+
+              <div class="advanced-proxy-ha-grid">
+                <div class="advanced-proxy-radio-card">
+                  <label class="advanced-proxy-compact-label">请求分发策略</label>
+                  <a-radio-group
+                    class="advanced-proxy-radio-group"
+                    :value="draft.highAvailability.dispatchMode"
+                    @change="handleDispatchModeChange"
+                  >
+                    <a-radio-button
+                      v-for="option in dispatchModeOptions"
+                      :key="option.value"
+                      :value="option.value"
+                    >
+                      {{ option.label }}
+                    </a-radio-button>
+                  </a-radio-group>
+                  <p class="advanced-proxy-radio-hint">{{ selectedDispatchModeDescription }}</p>
+                </div>
+                <div class="advanced-proxy-inline-control advanced-proxy-ha-toggle-card">
+                  <div class="advanced-proxy-ha-toggle-copy">
+                    <label class="advanced-proxy-compact-label">高可用轮询</label>
+                    <p class="advanced-proxy-radio-hint">启用后按轮询策略分摊请求，适合缓解 RPM 限制。</p>
+                  </div>
+                  <a-switch
+                    :checked="highAvailabilityEnabled"
+                    @change="handleHighAvailabilityToggle"
+                  />
+                </div>
+              </div>
+            </section>
             <section class="advanced-proxy-section">
               <div class="advanced-proxy-section-head">
                 <div>
@@ -156,17 +194,17 @@
 
               <div class="advanced-proxy-inline-grid">
                 <div class="advanced-proxy-inline-control">
-                  <span class="advanced-proxy-inline-label">启用故障转移</span>
+                  <span class="advanced-proxy-inline-label">故障自动转移</span>
                   <a-switch
-                    :checked="draft.failover.enabled"
-                    @change="value => handleConfigMutation(next => { next.failover.enabled = value; }, '故障转移开关已更新')"
+                    :checked="unifiedFailoverEnabled"
+                    @change="handleUnifiedFailoverToggle"
                   />
                 </div>
                 <div class="advanced-proxy-inline-control">
-                  <span class="advanced-proxy-inline-label">启用自动切换</span>
+                  <span class="advanced-proxy-inline-label">动态优化队列</span>
                   <a-switch
-                    :checked="draft.failover.autoFailoverEnabled"
-                    @change="value => handleConfigMutation(next => { next.failover.autoFailoverEnabled = value; }, '自动切换开关已更新')"
+                    :checked="draft.highAvailability.dynamicOptimizeQueue"
+                    @change="value => handleHighAvailabilityFieldMutation('dynamicOptimizeQueue', value)"
                   />
                 </div>
               </div>
@@ -216,6 +254,7 @@
                 </div>
               </div>
             </section>
+
             <section class="advanced-proxy-section">
               <div class="advanced-proxy-section-head">
                 <div>
@@ -304,6 +343,11 @@ const ADVANCED_PROXY_APP_ICONS = {
   opencode: opencodeAppIcon,
   openclaw: openclawAppIcon,
 };
+const DISPATCH_MODE_OPTIONS = [
+  { value: 'fixed', label: '固定', description: '初始默认选队头 provider，依赖于故障转移才会切换。' },
+  { value: 'ordered', label: '顺序', description: '按队列顺序请求，行为最稳定。' },
+  { value: 'random', label: '随机', description: '从可用队列中随机挑选目标，分散单点压力。' },
+];
 
 const props = defineProps({
   open: {
@@ -340,6 +384,14 @@ const enabledAppLabels = computed(() =>
     .filter(app => enabledAppIds.value.includes(app.id))
     .map(app => app.label)
     .join(' / ')
+);
+const unifiedFailoverEnabled = computed(() =>
+  draft?.failover?.enabled === true && draft?.failover?.autoFailoverEnabled === true
+);
+const dispatchModeOptions = DISPATCH_MODE_OPTIONS;
+const selectedDispatchModeDescription = computed(() =>
+  DISPATCH_MODE_OPTIONS.find(option => option.value === draft?.highAvailability?.dispatchMode)?.description
+  || DISPATCH_MODE_OPTIONS[0].description
 );
 const proxyMasterEnabled = computed(() => enabledAppIds.value.length > 0);
 const selectedQueueLabel = computed(() =>
@@ -781,6 +833,28 @@ function handleFailoverFieldMutation(field, value) {
   handleConfigMutation(next => {
     next.failover[field] = value;
   }, '故障转移配置已更新');
+}
+
+function handleUnifiedFailoverToggle(value) {
+  handleConfigMutation(next => {
+    next.failover.enabled = value === true;
+    next.failover.autoFailoverEnabled = value === true;
+  }, '故障自动转移开关已更新');
+}
+
+function handleHighAvailabilityFieldMutation(field, value) {
+  handleConfigMutation(next => {
+    if (!next.highAvailability || typeof next.highAvailability !== 'object') {
+      next.highAvailability = {};
+    }
+    next.highAvailability[field] = value;
+  }, '高可用与并发配置已更新');
+}
+
+function handleDispatchModeChange(event) {
+  const value = event?.target?.value;
+  if (!value) return;
+  handleHighAvailabilityFieldMutation('dispatchMode', value);
 }
 
 function handleQueueScopeChange(scope) {
@@ -1433,6 +1507,50 @@ function handleCancel() {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.advanced-proxy-radio-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.advanced-proxy-radio-card {
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(90, 117, 79, 0.13);
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.advanced-proxy-ha-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.18fr) minmax(240px, 0.82fr);
+  gap: 8px;
+  align-items: stretch;
+}
+
+.advanced-proxy-ha-toggle-card {
+  align-items: flex-start;
+}
+
+.advanced-proxy-ha-toggle-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.advanced-proxy-radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.advanced-proxy-radio-hint {
+  margin: 0;
+  color: #6a7867;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .advanced-proxy-toggle-row span,
 .advanced-proxy-inline-label {
   flex: 1;
@@ -1460,6 +1578,19 @@ function handleCancel() {
 .advanced-proxy-short-number {
   width: 100%;
   min-width: 0;
+}
+
+.advanced-proxy-section :deep(.ant-radio-group) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.advanced-proxy-section :deep(.ant-radio-button-wrapper) {
+  height: 30px;
+  line-height: 28px;
+  border-radius: 10px;
+  font-size: 11px;
 }
 
 .advanced-proxy-notes {
@@ -1519,6 +1650,7 @@ function handleCancel() {
 @media (max-width: 620px) {
   .advanced-proxy-summary-grid,
   .advanced-proxy-provider-grid,
+  .advanced-proxy-ha-grid,
   .advanced-proxy-inline-grid,
   .advanced-proxy-dense-grid,
   .advanced-proxy-toggle-list {

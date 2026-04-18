@@ -1095,6 +1095,16 @@ const maskTokenPreview = (token) => {
   return `${text.slice(0, 8)}...${text.slice(-4)}`;
 };
 
+const saveLastResultsSnapshot = (results = testResults.value) => {
+  try {
+    const snapshot = Array.isArray(results) ? results : [];
+    localStorage.setItem('api_check_last_results', JSON.stringify(snapshot));
+    hasHistory.value = snapshot.length > 0;
+  } catch (error) {
+    console.warn('[BatchCheck] save history snapshot failed:', error?.message || String(error));
+  }
+};
+
 const stringifyPreview = (value, maxLength = 280) => {
   if (value == null) return '';
   let text = '';
@@ -2537,7 +2547,7 @@ const resendPayload = async () => {
   await runSingleTest(editingRecord.value, custom);
   
   // Also update history immediately
-  localStorage.setItem('api_check_last_results', JSON.stringify(testResults.value));
+  saveLastResultsSnapshot();
 };
 
 onMounted(() => {
@@ -6364,6 +6374,7 @@ const startBatchCheck = async () => {
 
   totalTasks.value = tasksQueue.length;
   completedTasks.value = 0;
+  saveLastResultsSnapshot();
   scheduleOrganizedSourceRefresh(true);
   console.log(`[BatchCheck] 开始检测: selectedModelKeys=${selectedModelKeys.length}, queuedTasks=${tasksQueue.length}`);
 
@@ -6398,8 +6409,7 @@ const startBatchCheck = async () => {
     await syncDetectedKeysToLocalStorage({ silent: true });
     message.success('批量检测完成！');
     // Save to history
-    localStorage.setItem('api_check_last_results', JSON.stringify(testResults.value));
-    hasHistory.value = true;
+    saveLastResultsSnapshot();
   }
 };
 
@@ -6705,8 +6715,7 @@ const retestAllFromResults = async () => {
     scheduleOrganizedSourceRefresh(true);
     await syncDetectedKeysToLocalStorage({ silent: true });
     message.success('再次批量检测完成！');
-    localStorage.setItem('api_check_last_results', JSON.stringify(testResults.value));
-    hasHistory.value = true;
+    saveLastResultsSnapshot();
   }
 };
 

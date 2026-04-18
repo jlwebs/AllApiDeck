@@ -84,6 +84,11 @@ export function createDefaultAdvancedProxyConfig() {
       circuitErrorRateThreshold: 0.6,
       circuitMinRequests: 3,
     },
+    highAvailability: {
+      enabled: false,
+      dynamicOptimizeQueue: false,
+      dispatchMode: 'fixed',
+    },
     rectifier: {
       enabled: true,
       requestThinkingSignature: true,
@@ -110,6 +115,14 @@ function normalizeApiKeyField(value) {
   return String(value || '').trim() === 'ANTHROPIC_API_KEY'
     ? 'ANTHROPIC_API_KEY'
     : 'ANTHROPIC_AUTH_TOKEN';
+}
+
+function normalizeDispatchMode(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'fixed' || normalized === 'ordered' || normalized === 'random') {
+    return normalized;
+  }
+  return 'fixed';
 }
 
 function sanitizeProviders(providers) {
@@ -198,6 +211,10 @@ export function normalizeAdvancedProxyConfig(input) {
       ...defaults.failover,
       ...(input?.failover || {}),
     },
+    highAvailability: {
+      ...defaults.highAvailability,
+      ...(input?.highAvailability || {}),
+    },
     rectifier: {
       ...defaults.rectifier,
       ...(input?.rectifier || {}),
@@ -241,6 +258,13 @@ export function normalizeAdvancedProxyConfig(input) {
   }
   next.failover.circuitMinRequests = Math.max(1, Number(next.failover.circuitMinRequests || defaults.failover.circuitMinRequests));
   next.failover.appType = String(next.failover.appType || defaults.failover.appType).trim() || defaults.failover.appType;
+  if (String(input?.highAvailability?.dispatchMode || '').trim().toLowerCase() === 'ha_round_robin') {
+    next.highAvailability.enabled = true;
+    next.highAvailability.dispatchMode = 'fixed';
+  }
+  next.highAvailability.enabled = next.highAvailability.enabled === true;
+  next.highAvailability.dynamicOptimizeQueue = next.highAvailability.dynamicOptimizeQueue === true;
+  next.highAvailability.dispatchMode = normalizeDispatchMode(next.highAvailability.dispatchMode);
   next.optimizer.cacheTtl = String(next.optimizer.cacheTtl || defaults.optimizer.cacheTtl).trim() || defaults.optimizer.cacheTtl;
 
   next.enabled = ADVANCED_PROXY_APPS.some(app => next?.[app.id]?.enabled === true);
@@ -342,9 +366,12 @@ export async function getAdvancedProxyRoutingSnapshot() {
     return getAdvancedProxyRoutingLocalSnapshot();
   }
   const snapshot = await app.GetAdvancedProxyRoutingSnapshot();
-  const normalized = snapshot && typeof snapshot === 'object' && snapshot.apps && typeof snapshot.apps === 'object'
-    ? snapshot
-    : { apps: {} };
+  const normalized = snapshot && typeof snapshot === 'object'
+    ? {
+      apps: snapshot.apps && typeof snapshot.apps === 'object' ? snapshot.apps : {},
+      providers: snapshot.providers && typeof snapshot.providers === 'object' ? snapshot.providers : {},
+    }
+    : { apps: {}, providers: {} };
   try {
     localStorage.setItem(ROUTING_SNAPSHOT_STORAGE_KEY, JSON.stringify(normalized));
   } catch {}
@@ -355,11 +382,14 @@ export function getAdvancedProxyRoutingLocalSnapshot() {
   try {
     const raw = localStorage.getItem(ROUTING_SNAPSHOT_STORAGE_KEY);
     const parsed = JSON.parse(raw || '{}');
-    if (parsed && typeof parsed === 'object' && parsed.apps && typeof parsed.apps === 'object') {
-      return parsed;
+    if (parsed && typeof parsed === 'object') {
+      return {
+        apps: parsed.apps && typeof parsed.apps === 'object' ? parsed.apps : {},
+        providers: parsed.providers && typeof parsed.providers === 'object' ? parsed.providers : {},
+      };
     }
   } catch {}
-  return { apps: {} };
+  return { apps: {}, providers: {} };
 }
 
 export async function resetCircuitBreaker(appType, providerId) {

@@ -26,6 +26,92 @@
         </header>
       </div>
 
+      <section
+        v-if="showAdvancedProxyQueueCard"
+        class="panel-queue-card"
+        :class="[`panel-queue-card-${advancedProxyQueueTone}`]"
+      >
+        <div class="panel-queue-head">
+          <span class="panel-queue-title">{{ advancedProxyQueueTitle }}</span>
+
+          <div class="panel-queue-signals" aria-hidden="true">
+            <span class="panel-queue-signal panel-queue-signal-red" :class="{ 'is-active': advancedProxyQueueTone === 'red' }"></span>
+            <span class="panel-queue-signal panel-queue-signal-yellow" :class="{ 'is-active': advancedProxyQueueTone === 'yellow' }"></span>
+            <span class="panel-queue-signal panel-queue-signal-green" :class="{ 'is-active': advancedProxyQueueTone === 'green' }"></span>
+          </div>
+        </div>
+
+        <div
+          v-if="advancedProxyQueueItems.length > 0"
+          ref="panelQueueStripRef"
+          class="panel-queue-strip"
+          @pointerdown="beginQueueStripDrag"
+          @pointermove="dragQueueStrip"
+          @pointerup="endQueueStripDrag"
+          @pointercancel="endQueueStripDrag"
+          @pointerleave="endQueueStripDrag"
+        >
+          <transition-group
+            name="panel-queue-item"
+            tag="div"
+            class="panel-queue-strip-track"
+          >
+            <div
+              v-for="item in advancedProxyQueueItems"
+              :key="item.id"
+              class="panel-queue-item"
+            >
+              <div class="panel-queue-item-avatar-wrap">
+                <a-tooltip
+                  v-if="item.hasTooltip"
+                  placement="top"
+                  overlay-class-name="panel-queue-tooltip"
+                  :overlay-style="getQueueTooltipOverlayStyle(item)"
+                  :destroy-tooltip-on-hide="true"
+                >
+                  <template #title>
+                    <div class="panel-queue-tooltip-content">
+                      <strong>{{ item.siteName }}</strong>
+                      <div class="panel-queue-tooltip-status">
+                        <span
+                          class="panel-queue-tooltip-state"
+                          :class="{ 'is-active': item.hasDispatchingRoute }"
+                        >
+                          {{ item.hasDispatchingRoute ? `⭐ ${item.activeRouteLabel || '代理调用中'}` : '🪨 Not Hit' }}
+                        </span>
+                      </div>
+                      <div v-if="item.hitSummaryText" class="panel-queue-tooltip-hit-summary">
+                        {{ item.hitSummaryText }}
+                      </div>
+                      <span>{{ item.modelLabel }}</span>
+                      <span v-if="item.queueScopeText">{{ item.queueScopeText }}</span>
+                      <code v-if="item.endpoint">{{ item.endpoint }}</code>
+                      <code v-if="item.apiKey">{{ item.apiKey }}</code>
+                    </div>
+                  </template>
+
+                  <div class="panel-queue-item-avatar">
+                    <span class="panel-record-emoji">{{ item.avatar }}</span>
+                  </div>
+                </a-tooltip>
+                <div v-else class="panel-queue-item-avatar">
+                  <span class="panel-record-emoji">{{ item.avatar }}</span>
+                </div>
+                <span v-if="item.order" class="panel-queue-item-order">No.{{ item.order }}</span>
+              </div>
+
+              <div class="panel-queue-item-copy">
+                <span class="panel-queue-item-name">{{ item.siteName.slice(0, 3) }}</span>
+              </div>
+            </div>
+          </transition-group>
+        </div>
+
+        <div v-else class="panel-queue-empty">
+          当前还没有可用 Provider，去高级代理里补一条队列记录就会出现在这里。
+        </div>
+      </section>
+
       <section ref="panelBodyRef" class="panel-body" @scroll.passive="handlePanelScroll">
         <div v-if="visibleRecords.length === 0" class="panel-empty">
           <div class="panel-empty-badge">SK</div>
@@ -45,27 +131,48 @@
           <div class="panel-record-top">
             <div class="panel-record-sitebox">
               <a-tooltip
+                v-if="getAdvancedProxyTooltipLines(record).length > 0"
                 placement="top"
                 :mouse-enter-delay="0.08"
               >
                 <template #title>
-                  <div v-if="getAdvancedProxyTooltipLines(record).length" class="panel-routing-tooltip">
+                  <div class="panel-routing-tooltip">
                     <div v-for="line in getAdvancedProxyTooltipLines(record)" :key="line">{{ line }}</div>
                   </div>
                 </template>
                 <div class="panel-record-avatar" :class="getAdvancedProxyAvatarClass(record)">
                   <span class="panel-record-emoji">{{ getSiteEmoji(record.siteName) }}</span>
-                  <span class="panel-record-order">No.{{ index + 1 }}</span>
+                  <span v-if="isAdvancedProxyDispatching(record)" class="panel-record-dispatch-star">
+                    ⭐ {{ getAdvancedProxyDispatchLabel(record) || '代理调用中' }}
+                  </span>
+                  <span v-if="getAdvancedProxyQueueOrder(record)" class="panel-record-order">
+                    No.{{ getAdvancedProxyQueueOrder(record) }}
+                  </span>
                 </div>
               </a-tooltip>
+              <div v-else class="panel-record-avatar" :class="getAdvancedProxyAvatarClass(record)">
+                <span class="panel-record-emoji">{{ getSiteEmoji(record.siteName) }}</span>
+                <span v-if="isAdvancedProxyDispatching(record)" class="panel-record-dispatch-star">
+                  ⭐ {{ getAdvancedProxyDispatchLabel(record) || '代理调用中' }}
+                </span>
+                <span v-if="getAdvancedProxyQueueOrder(record)" class="panel-record-order">
+                  No.{{ getAdvancedProxyQueueOrder(record) }}
+                </span>
+              </div>
               <div class="panel-record-copy">
                 <span class="panel-record-site">{{ getSiteShortName(record.siteName) }}</span>
                 <span class="panel-record-model" :title="getModelSummary(record)">{{ getModelSummary(record) }}</span>
               </div>
             </div>
 
-            <span class="panel-record-status" :class="`panel-record-status-${record.status === 1 ? 'ok' : 'bad'}`">
-              {{ record.status === 1 ? '可用' : '异常' }}
+            <span
+              class="panel-record-status"
+              :class="`panel-record-status-${record.status === 1 ? 'ok' : 'bad'}`"
+              :title="record.status === 1 ? '可用' : '异常'"
+              :aria-label="record.status === 1 ? '可用' : '异常'"
+            >
+              <span v-if="record.status === 1" class="panel-record-status-dot" aria-hidden="true"></span>
+              <span v-else>异常</span>
             </span>
           </div>
 
@@ -84,15 +191,17 @@
                   </span>
                 </a-tooltip>
               </div>
-              <button
-                v-if="canRefreshBalance(record, contextMap)"
-                type="button"
-                class="panel-refresh-button"
-                :disabled="record.balanceLoading"
-                @click="handleRefreshBalance(record)"
-              >
-                <ReloadOutlined :class="{ 'panel-spinning': record.balanceLoading }" />
-              </button>
+              <a-tooltip v-if="canRefreshBalance(record, contextMap)" title="刷新余额">
+                <button
+                  type="button"
+                  class="panel-refresh-button"
+                  :disabled="record.balanceLoading"
+                  aria-label="刷新余额"
+                  @click="handleRefreshBalance(record)"
+                >
+                  <ReloadOutlined :class="{ 'panel-spinning': record.balanceLoading }" />
+                </button>
+              </a-tooltip>
             </div>
             <div
               v-if="getCompactBalanceText(record)"
@@ -208,12 +317,19 @@ import {
 } from '../utils/keyPanelStore.js';
 import {
   ADVANCED_PROXY_SYNC_EVENT,
+  ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
   getAdvancedProxyRoutingLocalSnapshot,
   getAdvancedProxyRoutingSnapshot,
+  getAdvancedProxyLocalSnapshot,
+  getAdvancedProxyQueueProviders,
   getAdvancedProxyTakeoverMap,
 } from '../utils/advancedProxyBridge.js';
 import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
-import { buildPerformanceTooltipLines, hasPerformanceMetrics } from '../utils/performanceMetrics.js';
+import {
+  buildPerformanceTooltipLines,
+  extractPerformanceMetrics,
+  hasPerformanceMetrics,
+} from '../utils/performanceMetrics.js';
 
 const SITE_EMOJI_LIST = [
   '🦊', '🦉', '🦋', '🦭', '🦜', '🪿', '🐬', '🦄', '🐿️', '🪼',
@@ -239,12 +355,14 @@ const ADVANCED_PROXY_APP_META = {
 const ADVANCED_PROXY_APP_ORDER = ['claude', 'codex', 'opencode', 'openclaw'];
 
 const records = ref([]);
+const advancedProxyConfigSnapshot = ref(getAdvancedProxyLocalSnapshot());
 const contextMap = ref(new Map());
 const advancedProxyTakeoverMap = ref(getAdvancedProxyTakeoverMap());
-const advancedProxyRoutingSnapshot = ref({ apps: {} });
+const advancedProxyRoutingSnapshot = ref({ apps: {}, providers: {} });
 const activePopoverRowKey = ref('');
 const activeModelDropdownRowKey = ref('');
 const panelBodyRef = ref(null);
+const panelQueueStripRef = ref(null);
 const panelScrollRatio = ref(0);
 const hasScrollableContent = ref(false);
 const PANEL_PERSIST_DEBOUNCE_MS = 120;
@@ -253,6 +371,13 @@ let panelBodyResizeObserver = null;
 let panelPersistTimer = null;
 let advancedProxyRoutingTimer = null;
 let lastSidebarRoutingLogAt = 0;
+const panelQueueDragState = {
+  active: false,
+  pointerId: -1,
+  startX: 0,
+  startScrollLeft: 0,
+  moved: false,
+};
 
 const visibleRecords = computed(() => records.value.filter(record => Number(record?.status || 0) === 1));
 const panelScrollDotStyle = computed(() => {
@@ -267,6 +392,7 @@ function reloadRecords() {
   const loaded = loadPanelRecords();
   contextMap.value = loaded.contextMap || loadBatchHistoryContextMap();
   records.value = loaded.records;
+  reloadAdvancedProxyConfigState();
   reloadAdvancedProxyTakeoverState();
   void nextTick(syncScrollIndicator);
 }
@@ -276,6 +402,13 @@ function reloadAdvancedProxyTakeoverState(event = null) {
   advancedProxyTakeoverMap.value = takeoverMap && typeof takeoverMap === 'object'
     ? takeoverMap
     : getAdvancedProxyTakeoverMap();
+}
+
+function reloadAdvancedProxyConfigState(event = null) {
+  const config = event?.detail?.config;
+  advancedProxyConfigSnapshot.value = config && typeof config === 'object'
+    ? config
+    : getAdvancedProxyLocalSnapshot();
 }
 
 async function reloadAdvancedProxyRoutingState() {
@@ -423,16 +556,221 @@ function getAdvancedProxyRouteStatesForRecord(record) {
 }
 
 function getPrimaryAdvancedProxyVisualApp(record) {
-  const currentState = getAdvancedProxyRouteStatesForRecord(record).find(item => item.isActive || item.isRecent);
-  if (currentState?.appId) return currentState.appId;
+  const currentState = getAdvancedProxyProviderRouteStatesForRecord(record).find(item => item.isActive || item.isRecent);
+  if (currentState?.appTypeIds?.[0]) return currentState.appTypeIds[0];
   return getPrimaryAdvancedProxyApp(record);
 }
+
+function matchesAdvancedProxyProviderRoute(record, routeState) {
+  if (!record || !routeState || typeof routeState !== 'object') return false;
+  const rowKey = String(record?.rowKey || '').trim();
+  const providerRowKey = String(routeState?.providerRowKey || '').trim();
+  if (rowKey && providerRowKey && rowKey === providerRowKey) {
+    return true;
+  }
+
+  const siteName = String(record?.siteName || '').trim().toLowerCase();
+  const providerName = String(routeState?.providerName || '').trim().toLowerCase();
+  if (siteName && providerName && siteName === providerName) {
+    return true;
+  }
+
+  const siteUrl = String(record?.siteUrl || '').trim().replace(/\/+$/, '').toLowerCase();
+  const targetUrl = String(routeState?.targetUrl || '').trim().replace(/\/+$/, '').toLowerCase();
+  if (siteUrl && targetUrl && (targetUrl === siteUrl || targetUrl.startsWith(`${siteUrl}/`))) {
+    return true;
+  }
+
+  return false;
+}
+
+function normalizeAdvancedProxyProviderRouteState(record, providerKey, routeState) {
+  if (!matchesAdvancedProxyProviderRoute(record, routeState)) return null;
+
+  const updatedAt = String(routeState?.updatedAt || '').trim();
+  const updatedAtMs = updatedAt ? Date.parse(updatedAt) : NaN;
+  const ageMs = Number.isFinite(updatedAtMs) ? Math.max(0, Date.now() - updatedAtMs) : Number.POSITIVE_INFINITY;
+  const activeCount = Math.max(0, Number(routeState?.activeCount || 0));
+  const appTypeIds = Array.isArray(routeState?.appTypes)
+    ? routeState.appTypes.map(appId => String(appId || '').trim()).filter(Boolean)
+    : [];
+  const appTypeLabels = appTypeIds.map(appId => ADVANCED_PROXY_APP_META[appId]?.label || appId);
+  const status = String(routeState?.status || '').trim().toLowerCase();
+  const isActive = activeCount > 0 || status === 'dispatching';
+  const isRecent = !isActive && ageMs <= ADVANCED_PROXY_RECENT_ROUTE_WINDOW_MS;
+  if (!isActive && !isRecent) return null;
+
+  return {
+    providerKey: String(providerKey || '').trim(),
+    providerRowKey: String(routeState?.providerRowKey || '').trim(),
+    providerId: String(routeState?.providerId || '').trim(),
+    providerName: String(routeState?.providerName || '').trim(),
+    appTypeIds,
+    appTypeLabels,
+    appTypeLabelText: appTypeLabels.join(' / '),
+    status,
+    routeKind: String(routeState?.routeKind || '').trim(),
+    targetUrl: String(routeState?.targetUrl || '').trim(),
+    updatedAt,
+    isActive,
+    isRecent,
+  };
+}
+
+function getAdvancedProxyProviderRouteStatesForRecord(record) {
+  const snapshotProviders = advancedProxyRoutingSnapshot.value?.providers;
+  if (!snapshotProviders || typeof snapshotProviders !== 'object') return [];
+
+  return Object.entries(snapshotProviders)
+    .map(([providerKey, routeState]) => normalizeAdvancedProxyProviderRouteState(record, providerKey, routeState))
+    .filter(Boolean)
+    .sort((left, right) => {
+      if (left.isActive !== right.isActive) {
+        return left.isActive ? -1 : 1;
+      }
+      return left.providerKey.localeCompare(right.providerKey);
+    });
+}
+
+const advancedProxyQueueProviders = computed(() =>
+  getAdvancedProxyQueueProviders(advancedProxyConfigSnapshot.value, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, {
+    effective: false,
+    enabledOnly: true,
+  })
+);
+
+const advancedProxyQueueTitle = computed(() => 'Proxy Providers');
+
+const advancedProxyQueueDescription = computed(() => {
+  const enabledAppLabels = Object.entries(advancedProxyConfigSnapshot.value?.queues || {})
+    .filter(([scope, section]) => scope !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE && section?.inheritGlobal !== true && Array.isArray(section?.providers) && section.providers.length > 0)
+    .map(([scope]) => String(ADVANCED_PROXY_APP_META?.[scope]?.label || scope).trim())
+    .filter(Boolean);
+
+  if (!advancedProxyConfigSnapshot.value?.enabled) {
+    return '高级代理尚未开启。开启总开关后，这里会显示当前可调度的上游 Provider 队列。';
+  }
+
+  if (advancedProxyQueueProviders.value.length === 0) {
+    return '当前全局队列还没有可用 Provider。点击下面的卡片加入队列后，这里会自动出现。';
+  }
+
+  const inheritanceText = enabledAppLabels.length > 0
+    ? `，${enabledAppLabels.join(' / ')} 的独立队列会优先按自己的配置调度`
+    : '，未覆盖应用默认继承全局';
+  return `全局队列启用 ${advancedProxyQueueProviders.value.length} 条${inheritanceText}`;
+});
+
+const advancedProxyQueueTone = computed(() => {
+  if (!advancedProxyConfigSnapshot.value?.enabled) return 'red';
+  if (advancedProxyQueueProviders.value.length === 0) return 'red';
+
+  const hasFailed = advancedProxyQueueItems.value.some(item => item.hasFailedRoute);
+  if (hasFailed) return 'red';
+
+  const hasActive = advancedProxyQueueItems.value.some(item => item.hasActiveRoute);
+  if (hasActive) return 'green';
+
+  const hasRecent = advancedProxyQueueItems.value.some(item => item.hasRecentRoute);
+  if (hasRecent) return 'yellow';
+
+  return 'yellow';
+});
+
+const advancedProxyQueueItems = computed(() => {
+  const orderMap = advancedProxyQueueOrderByApiKey.value;
+  const recordMap = new Map(
+    records.value.map(record => [String(record?.apiKey || '').trim(), record])
+  );
+
+  return advancedProxyQueueProviders.value.map((provider, index) => {
+    const rowKey = String(provider?.rowKey || provider?.id || '').trim();
+    const skKey = String(provider?.apiKey || '').trim();
+    const record = (skKey && recordMap.get(skKey)) || null;
+    const appIds = record ? getAdvancedProxyAppsForRecord(record) : [];
+    const routeStates = record ? getAdvancedProxyProviderRouteStatesForRecord(record) : [];
+    const activeRoute = routeStates.find(item => item.isActive) || null;
+    const recentRoute = routeStates.find(item => item.isRecent) || null;
+    const failedRoute = routeStates.some(item => item.status === 'failed');
+    const siteName = String(record?.siteName || provider?.name || 'Provider').trim() || 'Provider';
+    const modelLabel = String(
+      record?.selectedModel ||
+      record?.quickTestModel ||
+      provider?.model ||
+      '未设置模型'
+    ).trim() || '未设置模型';
+    const apiKey = String(record?.apiKey || provider?.apiKey || '').trim();
+    const endpoint = String(record?.siteUrl || provider?.baseUrl || '').trim();
+    const queueScopeText = appIds.length > 0
+      ? appIds.map(appId => ADVANCED_PROXY_APP_META[appId]?.label || appId).join(' / ')
+      : '全局继承';
+    const order = skKey ? orderMap.get(skKey) || null : null;
+    const performanceMetrics = extractPerformanceMetrics(record || {});
+    const hitRoute = activeRoute;
+    const latencyText = performanceMetrics.latencySeconds != null
+      ? `${performanceMetrics.latencySeconds.toFixed(2)}s`
+      : '-';
+    const ttftText = performanceMetrics.ttftMs != null
+      ? `${Math.round(performanceMetrics.ttftMs)}ms`
+      : '-';
+    const tpsText = performanceMetrics.tps != null
+      ? performanceMetrics.tps.toFixed(2)
+      : '-';
+    const dispatchLabel = activeRoute?.appTypeLabelText || '';
+    const tooltipLines = [
+      siteName,
+      modelLabel,
+      queueScopeText !== '全局继承' ? queueScopeText : '',
+      endpoint,
+      apiKey,
+    ].map(text => String(text || '').trim()).filter(Boolean);
+    const hitSummaryText = hitRoute
+      ? `最近命中：${siteName} ${modelLabel} + Latency ${latencyText} + TTFT ${ttftText} + TPS ${tpsText}`
+      : '';
+
+    return {
+      id: rowKey || `provider-${index}`,
+      order,
+      siteName,
+      modelLabel,
+      apiKey,
+      skKey,
+      endpoint,
+      avatar: getSiteEmoji(siteName),
+      queueScopeText,
+      hasActiveRoute: Boolean(activeRoute),
+      hasRecentRoute: Boolean(recentRoute),
+      hasFailedRoute: Boolean(failedRoute),
+      hasDispatchingRoute: Boolean(activeRoute),
+      activeRouteLabel: dispatchLabel,
+      recentRouteLabel: recentRoute?.appTypeLabelText || '',
+      dispatchLabel,
+      hasTooltip: tooltipLines.length > 0,
+      hitSummaryText,
+    };
+  });
+});
+
+const advancedProxyQueueOrderByApiKey = computed(() => {
+  const orderMap = new Map();
+  visibleRecords.value.forEach((record, index) => {
+    const skKey = String(record?.apiKey || '').trim();
+    if (skKey && !orderMap.has(skKey)) {
+      orderMap.set(skKey, index + 1);
+    }
+  });
+  return orderMap;
+});
+
+const showAdvancedProxyQueueCard = computed(() =>
+  advancedProxyConfigSnapshot.value?.enabled === true || advancedProxyQueueProviders.value.length > 0
+);
 
 function getAdvancedProxyAvatarClass(record) {
   const appId = getPrimaryAdvancedProxyVisualApp(record);
   if (!appId) return '';
   const className = ADVANCED_PROXY_APP_META[appId]?.className;
-  const routeStates = getAdvancedProxyRouteStatesForRecord(record);
+  const routeStates = getAdvancedProxyProviderRouteStatesForRecord(record);
   const hasActiveRoute = routeStates.some(item => item.isActive);
   const hasRecentRoute = !hasActiveRoute && routeStates.some(item => item.isRecent);
   return [
@@ -444,7 +782,7 @@ function getAdvancedProxyAvatarClass(record) {
 }
 
 function getAdvancedProxyCardStateClass(record) {
-  const routeStates = getAdvancedProxyRouteStatesForRecord(record);
+  const routeStates = getAdvancedProxyProviderRouteStatesForRecord(record);
   if (routeStates.some(item => item.isActive)) {
     return 'panel-record-routing-active';
   }
@@ -455,8 +793,8 @@ function getAdvancedProxyCardStateClass(record) {
 }
 
 function getAdvancedProxyTooltipLines(record) {
-  const routeStates = getAdvancedProxyRouteStatesForRecord(record);
-  const routeAppIds = routeStates.map(item => item.appId);
+  const routeStates = getAdvancedProxyProviderRouteStatesForRecord(record);
+  const routeAppIds = routeStates.flatMap(item => item.appTypeIds);
   const takeoverAppIds = getAdvancedProxyAppsForRecord(record);
   const appIds = ADVANCED_PROXY_APP_ORDER.filter(appId => takeoverAppIds.includes(appId) || routeAppIds.includes(appId));
   if (appIds.length === 0) return [];
@@ -466,22 +804,55 @@ function getAdvancedProxyTooltipLines(record) {
     const routeLabel = item.routeKind === 'responses_compact'
       ? 'responses/compact'
       : (item.routeKind === 'responses' ? 'responses' : (item.routeKind === 'chat' ? 'chat/completions' : item.routeKind || '代理路由'));
-    const statusLabel = item.status === 'failed'
-      ? '最近一次调度失败'
-      : (item.isActive ? '当前队列目标' : '最近一次命中');
+    const statusLabel = item.appTypeLabelText
+      ? `⭐ ${item.appTypeLabelText}`
+      : (item.isActive ? '⭐ 代理调用中' : '最近一次命中');
     const extra = item.providerName ? ` · ${item.providerName}` : '';
-    lines.push(`${item.appLabel}：${statusLabel} · ${routeLabel}${extra}`);
+    lines.push(`${statusLabel} · ${routeLabel}${extra}`);
   });
-  if (routeStates.length === 0) {
-    lines.push('没有正在调度中的 Provider，请在本地应用发起一次请求后观察切换。');
-  }
   return lines;
+}
+
+function getQueueItemShortLabel(item) {
+  const index = String(item?.order || '').trim();
+  const siteName = String(item?.siteName || '').trim();
+  const shortName = siteName ? siteName.slice(0, 3) : '---';
+  return `${index ? `${index}.` : ''}${shortName}`;
+}
+
+function getAdvancedProxyQueueOrder(record, fallbackOrder = '') {
+  const skKey = String(record?.apiKey || '').trim();
+  if (!skKey) return fallbackOrder;
+  return advancedProxyQueueOrderByApiKey.value.get(skKey) ?? fallbackOrder;
+}
+
+function isAdvancedProxyDispatching(record) {
+  return getAdvancedProxyProviderRouteStatesForRecord(record).some(item => item.isActive);
+}
+
+function getAdvancedProxyDispatchLabel(record) {
+  const routeStates = getAdvancedProxyProviderRouteStatesForRecord(record);
+  const labels = routeStates
+    .filter(item => item.isActive)
+    .flatMap(item => item.appTypeLabels)
+    .filter(Boolean);
+  if (labels.length === 0) return '';
+  return Array.from(new Set(labels)).join(' / ');
 }
 
 function getSiteShortName(siteName) {
   const text = String(siteName || '').trim();
   if (!text) return '未命名';
   return text.length > 6 ? text.slice(0, 6) : text;
+}
+
+function getQueueTooltipOverlayStyle(item) {
+  const total = Math.max(1, advancedProxyQueueItems.value.length);
+  const index = Math.max(0, Number(item?.order || 1) - 1);
+  const ratio = total <= 1 ? 0.5 : 0.2 + ((index / Math.max(1, total - 1)) * 0.6);
+  return {
+    '--panel-queue-tooltip-arrow-left': `${(ratio * 100).toFixed(2)}%`,
+  };
 }
 
 function getSiteEmoji(siteName) {
@@ -561,6 +932,44 @@ function syncScrollIndicator() {
   const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
   hasScrollableContent.value = maxScrollTop > 2;
   panelScrollRatio.value = maxScrollTop > 0 ? element.scrollTop / maxScrollTop : 0;
+}
+
+function beginQueueStripDrag(event) {
+  if (event?.button !== 0) return;
+  const target = panelQueueStripRef.value;
+  if (!target) return;
+  panelQueueDragState.active = true;
+  panelQueueDragState.pointerId = event.pointerId;
+  panelQueueDragState.startX = event.clientX;
+  panelQueueDragState.startScrollLeft = target.scrollLeft;
+  panelQueueDragState.moved = false;
+  try {
+    target.setPointerCapture?.(event.pointerId);
+  } catch {}
+}
+
+function dragQueueStrip(event) {
+  if (!panelQueueDragState.active || panelQueueDragState.pointerId !== event.pointerId) return;
+  const target = panelQueueStripRef.value;
+  if (!target) return;
+  const deltaX = event.clientX - panelQueueDragState.startX;
+  if (Math.abs(deltaX) > 3) {
+    panelQueueDragState.moved = true;
+  }
+  target.scrollLeft = panelQueueDragState.startScrollLeft - deltaX;
+}
+
+function endQueueStripDrag(event) {
+  const target = panelQueueStripRef.value;
+  if (target && panelQueueDragState.pointerId === event?.pointerId) {
+    try {
+      target.releasePointerCapture?.(event.pointerId);
+    } catch {}
+  }
+  panelQueueDragState.active = false;
+  panelQueueDragState.pointerId = -1;
+  panelQueueDragState.startX = 0;
+  panelQueueDragState.startScrollLeft = 0;
 }
 
 function handlePanelScroll() {
@@ -765,6 +1174,7 @@ async function handleRefreshBalance(record) {
 }
 
 onMounted(async () => {
+  reloadAdvancedProxyConfigState();
   reloadRecords();
   await reloadAdvancedProxyRoutingState();
   try {
@@ -783,7 +1193,9 @@ onMounted(async () => {
   window.addEventListener('resize', syncScrollIndicator);
   window.addEventListener(KEY_MANAGEMENT_SYNC_EVENT, reloadRecords);
   window.addEventListener('storage', reloadRecords);
+  window.addEventListener('storage', reloadAdvancedProxyConfigState);
   window.addEventListener('storage', reloadAdvancedProxyRoutingState);
+  window.addEventListener(ADVANCED_PROXY_SYNC_EVENT, reloadAdvancedProxyConfigState);
   window.addEventListener(ADVANCED_PROXY_SYNC_EVENT, reloadAdvancedProxyTakeoverState);
   advancedProxyRoutingTimer = window.setInterval(() => {
     void reloadAdvancedProxyRoutingState();
@@ -807,7 +1219,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', syncScrollIndicator);
   window.removeEventListener(KEY_MANAGEMENT_SYNC_EVENT, reloadRecords);
   window.removeEventListener('storage', reloadRecords);
+  window.removeEventListener('storage', reloadAdvancedProxyConfigState);
   window.removeEventListener('storage', reloadAdvancedProxyRoutingState);
+  window.removeEventListener(ADVANCED_PROXY_SYNC_EVENT, reloadAdvancedProxyConfigState);
   window.removeEventListener(ADVANCED_PROXY_SYNC_EVENT, reloadAdvancedProxyTakeoverState);
 });
 </script>
@@ -844,7 +1258,7 @@ onBeforeUnmount(() => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   padding: 8px 6px 12px 8px;
   border-radius: 28px 0 0 28px;
   background:
@@ -900,7 +1314,7 @@ onBeforeUnmount(() => {
 .panel-scroll-guide {
   position: absolute;
   left: 4px;
-  top: 86px;
+  top: 126px;
   bottom: 18px;
   width: 12px;
   z-index: 2;
@@ -983,6 +1397,318 @@ onBeforeUnmount(() => {
 
 .panel-topbar:active {
   cursor: grabbing;
+}
+
+.panel-queue-card {
+  position: relative;
+  z-index: 2;
+  margin: 0;
+  padding: 4px 6px 2px;
+  border-radius: 14px;
+  border: 1px solid rgba(150, 185, 151, 0.22);
+  background: linear-gradient(180deg, rgba(246, 251, 246, 0.96), rgba(232, 241, 231, 0.92));
+  box-shadow:
+    0 8px 18px rgba(19, 24, 19, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  overflow: hidden;
+}
+
+.panel-queue-card-red {
+  border-color: rgba(237, 109, 109, 0.24);
+  box-shadow:
+    0 10px 22px rgba(19, 24, 19, 0.08),
+    0 0 0 1px rgba(237, 109, 109, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.panel-queue-card-yellow {
+  border-color: rgba(235, 195, 92, 0.24);
+  box-shadow:
+    0 10px 22px rgba(19, 24, 19, 0.08),
+    0 0 0 1px rgba(235, 195, 92, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.panel-queue-card-green {
+  border-color: rgba(110, 183, 121, 0.26);
+  box-shadow:
+    0 10px 22px rgba(19, 24, 19, 0.08),
+    0 0 0 1px rgba(110, 183, 121, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.panel-queue-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 2px;
+  min-height: 0;
+  position: relative;
+}
+
+.panel-queue-copy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.panel-queue-title {
+  margin: 0;
+  color: rgba(33, 49, 32, 0.4);
+  font-size: 6px;
+  line-height: 1.1;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.panel-queue-signals {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 0;
+  flex: 0 0 auto;
+}
+
+.panel-queue-signal {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  opacity: 0.28;
+  transform: scale(0.92);
+  transition: opacity 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.panel-queue-signal.is-active {
+  opacity: 1;
+  transform: scale(1.12);
+}
+
+.panel-queue-signal-red {
+  background: #ef6a6a;
+  box-shadow: 0 0 12px rgba(239, 106, 106, 0.34);
+}
+
+.panel-queue-signal-yellow {
+  background: #ebb94f;
+  box-shadow: 0 0 12px rgba(235, 185, 79, 0.34);
+}
+
+.panel-queue-signal-green {
+  background: #57bd75;
+  box-shadow: 0 0 12px rgba(87, 189, 117, 0.34);
+}
+
+.panel-queue-strip {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  cursor: grab;
+  user-select: none;
+  touch-action: pan-y;
+}
+
+.panel-queue-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.panel-queue-strip-track {
+  display: flex;
+  gap: clamp(4px, 0.9vw, 8px);
+  flex-wrap: nowrap;
+  width: 100%;
+  min-width: 100%;
+  justify-content: flex-start;
+  padding-top: 0;
+}
+
+.panel-queue-item {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  min-width: 0;
+  width: auto;
+  min-height: 0;
+  padding: 0 2px 0;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 0;
+  text-align: center;
+  box-shadow: none;
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.panel-queue-item:hover {
+  transform: translateY(-1px);
+}
+
+.panel-queue-item-avatar-wrap {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+}
+
+.panel-queue-item-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  background: rgba(34, 49, 72, 0.06);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.panel-queue-item-avatar .panel-record-emoji {
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  background: transparent;
+  font-size: 15px;
+}
+
+.panel-queue-item-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: -5px;
+}
+
+.panel-queue-item-name {
+  width: 100%;
+  color: rgba(34, 49, 28, 0.56);
+  font-size: 7px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transform: translateY(-20%);
+}
+
+.panel-queue-item-order {
+  position: absolute;
+  right: -2px;
+  top: 0px;
+  z-index: 10;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  color: rgba(22, 35, 56, 0.72);
+  font-size: 6px;
+  line-height: 1;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.panel-queue-empty {
+  padding: 10px 8px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.64);
+  color: #6a7867;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.panel-queue-item-enter-active,
+.panel-queue-item-leave-active {
+  transition: opacity 0.22s ease, transform 0.22s ease, filter 0.22s ease;
+}
+
+.panel-queue-item-enter-from,
+.panel-queue-item-leave-to {
+  opacity: 0;
+  transform: translateY(8px) scale(0.92);
+  filter: blur(1px);
+}
+
+.panel-queue-item-move {
+  transition: transform 0.28s ease;
+}
+
+:global(.panel-queue-tooltip .ant-tooltip-inner) {
+  padding: 8px 10px;
+}
+
+.panel-queue-tooltip-content {
+  display: grid;
+  gap: 4px;
+  max-width: 280px;
+  line-height: 1.45;
+}
+
+.panel-queue-tooltip-content strong,
+.panel-queue-tooltip-content span,
+.panel-queue-tooltip-content code {
+  display: block;
+  word-break: break-word;
+}
+
+.panel-queue-tooltip-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.panel-queue-tooltip-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(233, 240, 232, 0.54);
+  font-size: 9px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.panel-queue-tooltip-state.is-active {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.panel-queue-tooltip-hit-summary {
+  color: #f1f5ed;
+  font-size: 10px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+}
+
+.panel-queue-tooltip-content strong {
+  color: #ffffff;
+  font-size: 12px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.24);
+}
+
+.panel-queue-tooltip-content span {
+  color: #5f6e5a;
+  font-size: 11px;
+}
+
+.panel-queue-tooltip-content code {
+  color: #4a5c45;
+  font-size: 10px;
+  white-space: pre-wrap;
+}
+
+:global(.panel-queue-tooltip .ant-tooltip-arrow) {
+  left: var(--panel-queue-tooltip-arrow-left, 50%) !important;
+  inset-inline-start: var(--panel-queue-tooltip-arrow-left, 50%) !important;
+  transform: translateX(-50%) !important;
 }
 
 .panel-header {
@@ -1070,10 +1796,10 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 10px 2px 12px 8px;
+  padding: 6px 2px 12px 8px;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
@@ -1130,9 +1856,9 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   min-height: 0;
-  padding: 13px 12px 14px;
+  padding: 10px 11px 8px;
   border-radius: 22px;
   background: var(--panel-card);
   box-shadow: 0 10px 20px rgba(21, 22, 28, 0.1);
@@ -1212,22 +1938,22 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
 }
 
 .panel-record-sitebox {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .panel-record-avatar {
   position: relative;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   flex: 0 0 auto;
-  border-radius: 11px;
+  border-radius: 10px;
 }
 
 .panel-record-avatar::before,
@@ -1365,48 +2091,67 @@ onBeforeUnmount(() => {
 .panel-record-emoji {
   position: relative;
   z-index: 1;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 11px;
+  border-radius: 10px;
   background: rgba(34, 49, 72, 0.07);
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1;
 }
 
 .panel-record-order {
   position: absolute;
-  right: -8px;
+  right: -7px;
   top: -6px;
   z-index: 2;
-  padding: 1px 4px;
+  padding: 1px 3px;
   border-radius: 999px;
   background: linear-gradient(180deg, rgba(61, 110, 88, 0.98), rgba(24, 44, 35, 0.98));
   box-shadow:
     0 4px 10px rgba(13, 24, 20, 0.24),
     inset 0 1px 0 rgba(223, 255, 239, 0.2);
   color: #eef8f1;
-  font-size: 8px;
+  font-size: 7px;
   line-height: 1.2;
   font-weight: 700;
   letter-spacing: 0.01em;
   white-space: nowrap;
 }
 
+.panel-record-dispatch-star {
+  position: absolute;
+  left: -7px;
+  top: -6px;
+  z-index: 2;
+  padding: 1px 3px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(61, 110, 88, 0.98), rgba(24, 44, 35, 0.98));
+  box-shadow:
+    0 4px 10px rgba(13, 24, 20, 0.24),
+    inset 0 1px 0 rgba(223, 255, 239, 0.2);
+  color: #eef8f1;
+  font-size: 7px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  pointer-events: none;
+}
+
 .panel-record-copy {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .panel-record-site {
   color: #162338;
-  font-size: 13px;
-  line-height: 1;
+  font-size: 11px;
+  line-height: 1.04;
   font-weight: 700;
   letter-spacing: 0.01em;
   white-space: nowrap;
@@ -1416,8 +2161,8 @@ onBeforeUnmount(() => {
 
 .panel-record-model {
   color: rgba(35, 49, 72, 0.62);
-  font-size: 10px;
-  line-height: 1.2;
+  font-size: 8px;
+  line-height: 1.08;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1425,16 +2170,22 @@ onBeforeUnmount(() => {
 
 .panel-record-status {
   width: fit-content;
-  padding: 4px 8px;
+  padding: 3px 6px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 9px;
   line-height: 1;
   font-weight: 700;
 }
 
 .panel-record-status-ok {
-  color: #117b53;
-  background: rgba(70, 200, 130, 0.16);
+  min-width: 14px;
+  min-height: 14px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  background: transparent;
 }
 
 .panel-record-status-bad {
@@ -1442,25 +2193,34 @@ onBeforeUnmount(() => {
   background: rgba(123, 98, 78, 0.12);
 }
 
+.panel-record-status-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: #57bd75;
+  box-shadow: 0 0 0 1px rgba(87, 189, 117, 0.2), 0 0 10px rgba(87, 189, 117, 0.24);
+}
+
 .panel-record-metrics {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 6px;
+  gap: 3px;
 }
 
 .panel-record-metrics-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
+  min-height: 24px;
 }
 
 .panel-record-quick-group {
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 .panel-record-balance {
@@ -1468,9 +2228,9 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 34px;
-  padding: 7px 10px;
-  border-radius: 14px;
+  min-height: 28px;
+  padding: 5px 8px;
+  border-radius: 12px;
   background: linear-gradient(180deg, rgba(255, 244, 201, 0.92), rgba(251, 230, 156, 0.84));
 }
 
@@ -1480,7 +2240,7 @@ onBeforeUnmount(() => {
 
 .panel-record-balance-label {
   color: rgba(22, 35, 56, 0.58);
-  font-size: 10px;
+  font-size: 8px;
   line-height: 1;
   font-weight: 600;
 }
@@ -1488,7 +2248,7 @@ onBeforeUnmount(() => {
 .panel-record-balance-value {
   min-width: 0;
   color: var(--panel-gold);
-  font-size: 12px;
+  font-size: 10px;
   line-height: 1;
   font-weight: 700;
   white-space: nowrap;
@@ -1509,7 +2269,8 @@ onBeforeUnmount(() => {
   justify-content: center;
   border-radius: 11px;
   color: #7b6113;
-  background: rgba(255, 249, 239, 0.9);
+  background: rgba(255, 249, 239, 0.92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
 .panel-record-meta {
@@ -1517,8 +2278,8 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding-top: 10px;
+  gap: 6px;
+  padding-top: 6px;
 }
 
 .panel-record-quick {
