@@ -57,8 +57,36 @@ download_tool() {
   if [ -f "$dest" ]; then
     return
   fi
-  curl -fsSL "$url" -o "$dest"
-  chmod +x "$dest"
+  local attempt=1
+  local max_attempts=5
+  local delay=2
+  while [ "$attempt" -le "$max_attempts" ]; do
+    if curl \
+      --fail \
+      --location \
+      --silent \
+      --show-error \
+      --retry 3 \
+      --retry-all-errors \
+      --retry-delay 2 \
+      --connect-timeout 15 \
+      --max-time 120 \
+      "$url" \
+      -o "$dest"; then
+      chmod +x "$dest"
+      return
+    fi
+
+    rm -f "$dest"
+    if [ "$attempt" -eq "$max_attempts" ]; then
+      echo "Failed to download tool after $max_attempts attempts: $url" >&2
+      exit 1
+    fi
+
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
 }
 
 generate_packaging_icon() {
