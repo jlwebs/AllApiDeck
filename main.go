@@ -24,11 +24,11 @@ type launchMode string
 type panelStartMode string
 
 const (
-	launchModeMain          launchMode = "main"
-	launchModePanel         launchMode = "panel"
-	launchModeEditor        launchMode = "editor"
-	launchModeDesktopConfig launchMode = "desktop-config"
-	webviewGroupPIDEnvKey   string     = "BATCH_API_CHECK_WEBVIEW_GROUP_PID"
+	launchModeMain          launchMode     = "main"
+	launchModePanel         launchMode     = "panel"
+	launchModeEditor        launchMode     = "editor"
+	launchModeDesktopConfig launchMode     = "desktop-config"
+	webviewGroupPIDEnvKey   string         = "BATCH_API_CHECK_WEBVIEW_GROUP_PID"
 	panelStartAuto          panelStartMode = "auto"
 	panelStartManual        panelStartMode = "manual"
 )
@@ -98,6 +98,18 @@ func buildAppOptions(app *App, mode launchMode) *options.App {
 		Bind: []interface{}{
 			app,
 		},
+	}
+
+	if mode == launchModeMain && runtime.GOOS == "darwin" {
+		appOptions.HideWindowOnClose = false
+		appOptions.SingleInstanceLock = &options.SingleInstanceLock{
+			UniqueId: "allapideck-main",
+			OnSecondInstanceLaunch: func(_ options.SecondInstanceData) {
+				go func() {
+					_ = app.ShowMainWindow()
+				}()
+			},
+		}
 	}
 
 	if mode == launchModePanel {

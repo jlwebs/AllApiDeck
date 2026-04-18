@@ -131,16 +131,21 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           npm run build:desktop -- --platform ${{ matrix.platform }} -o ${{ matrix.wails_output }}
-          $app = Get-ChildItem "build/bin" -Filter "*.app" | Where-Object { $_.BaseName -eq "${{ matrix.wails_output }}" } | Select-Object -First 1
-          if (-not $app) {
-            $app = Get-ChildItem "build/bin" -Filter "*.app" | Select-Object -First 1
-          }
-          if (-not $app) {
-            throw "No macOS .app bundle found in build/bin"
-          }
-          New-Item -ItemType Directory -Path release-assets -Force | Out-Null
-          hdiutil create -volname $app.BaseName -srcfolder $app.FullName -ov -format UDZO "release-assets/${{ matrix.release_file }}"
-        shell: pwsh
+          app="build/bin/${{ matrix.wails_output }}.app"
+          if [ ! -d "$app" ]; then
+            app="$(find build/bin -maxdepth 1 -name '*.app' | head -n 1)"
+          fi
+          if [ -z "$app" ] || [ ! -d "$app" ]; then
+            echo "No macOS .app bundle found in build/bin" >&2
+            exit 1
+          fi
+          stage="$(mktemp -d)"
+          ditto "$app" "$stage/$(basename "$app")"
+          ln -s /Applications "$stage/Applications"
+          mkdir -p release-assets
+          hdiutil create -volname "$(basename "$app" .app)" -srcfolder "$stage" -ov -format UDZO "release-assets/${{ matrix.release_file }}"
+          rm -rf "$stage"
+        shell: bash
 
       - name: Build Linux binary and package release assets
         if: runner.os == 'Linux'
