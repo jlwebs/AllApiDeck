@@ -1,6 +1,6 @@
 ﻿<div align="center">
 
-<img src="./assets/appicon.png" alt="All API Dock" width="280">
+<img src="./assets/appicon.png" alt="All API Dock" width="80">
 
 **中转站的中转站 - 将分散的 AI 中转站聚合为一个统一网关**
 
