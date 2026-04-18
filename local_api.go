@@ -884,6 +884,7 @@ func executeCheckKeyAttempt(payload normalizedCheckKeyPayload, targetURL string)
 			}
 		}
 		if _, ok := responsePayload["choices"]; ok {
+			usage := normalizeUsageTokenTotals(responsePayload["usage"])
 			appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] ok(json) %s | %s | %s", payload.Model, targetURL, duration))
 			return checkExecutionResult{
 				ok:       true,
@@ -892,7 +893,7 @@ func executeCheckKeyAttempt(payload normalizedCheckKeyPayload, targetURL string)
 				body: map[string]any{
 					"model":   firstNonEmpty(strings.TrimSpace(toStringValue(responsePayload["model"])), payload.Model),
 					"choices": responsePayload["choices"],
-					"usage":   responsePayload["usage"],
+					"usage":   usage,
 					"message": "success",
 				},
 			}
@@ -937,6 +938,7 @@ func executeCheckKeyAttempt(payload normalizedCheckKeyPayload, targetURL string)
 		if parseResult.ReasoningContent != "" {
 			messagePayload["reasoning_content"] = parseResult.ReasoningContent
 		}
+		usage := normalizeUsageTokenTotals(parseResult.Usage)
 		body := map[string]any{
 			"model": firstNonEmpty(parseResult.ReturnedModel, payload.Model),
 			"choices": []map[string]any{
@@ -944,7 +946,7 @@ func executeCheckKeyAttempt(payload normalizedCheckKeyPayload, targetURL string)
 					"message": messagePayload,
 				},
 			},
-			"usage":             parseResult.Usage,
+			"usage":             usage,
 			"isStreamAssembled": true,
 			"message":           "success",
 		}
@@ -1317,6 +1319,95 @@ func parseSSECompletionStream(reader io.Reader, startedAt time.Time) sseCompleti
 	}
 
 	return result
+}
+
+func normalizeUsageTokenTotals(raw any) any {
+	usageMap, ok := raw.(map[string]any)
+	if !ok || usageMap == nil {
+		return raw
+	}
+
+	normalized := make(map[string]any, len(usageMap)+1)
+	for key, value := range usageMap {
+		normalized[key] = value
+	}
+
+	if total := usageTotalTokens(normalized); total > 0 {
+		normalized["total_tokens"] = total
+		return normalized
+	}
+
+	input := usageFirstPositive(
+		normalized["input_tokens"],
+		normalized["prompt_tokens"],
+		usageNestedValue(normalized, "input_tokens_details", "input_tokens"),
+		usageNestedValue(normalized, "prompt_tokens_details", "input_tokens"),
+	)
+	output := usageFirstPositive(
+		normalized["output_tokens"],
+		normalized["completion_tokens"],
+		usageNestedValue(normalized, "output_tokens_details", "output_tokens"),
+		usageNestedValue(normalized, "completion_tokens_details", "completion_tokens"),
+	)
+	reasoning := usageFirstPositive(
+		normalized["reasoning_tokens"],
+		usageNestedValue(normalized, "completion_tokens_details", "reasoning_tokens"),
+		usageNestedValue(normalized, "output_tokens_details", "reasoning_tokens"),
+	)
+	cached := usageFirstPositive(
+		normalized["cached_tokens"],
+		usageNestedValue(normalized, "prompt_tokens_details", "cached_tokens"),
+		usageNestedValue(normalized, "input_tokens_details", "cached_tokens"),
+		usageNestedValue(normalized, "cache_read_input_tokens"),
+		usageNestedValue(normalized, "cache_creation_input_tokens"),
+	)
+
+	total := input + output + reasoning
+	if total <= 0 {
+		total = input + output + reasoning + cached
+	}
+	if total > 0 {
+		normalized["total_tokens"] = int64(total)
+		return normalized
+	}
+
+	return normalized
+}
+
+func usageTotalTokens(usage map[string]any) int64 {
+	if usage == nil {
+		return 0
+	}
+	return int64(usageFirstPositive(usage["total_tokens"]))
+}
+
+func usageFirstPositive(candidates ...any) float64 {
+	for _, candidate := range candidates {
+		value := toFloat64OrZero(candidate)
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func usageNestedValue(root map[string]any, path ...string) any {
+	current := any(root)
+	for _, key := range path {
+		if current == nil {
+			return nil
+		}
+		nextMap, ok := current.(map[string]any)
+		if !ok {
+			return nil
+		}
+		nextValue, exists := nextMap[key]
+		if !exists {
+			return nil
+		}
+		current = nextValue
+	}
+	return current
 }
 
 func extractHTMLTitle(body string) string {
