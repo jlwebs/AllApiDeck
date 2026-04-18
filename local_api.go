@@ -756,6 +756,9 @@ func executeCheckKeyAttempt(payload normalizedCheckKeyPayload, targetURL string)
 		"messages": payload.Messages,
 		"stream":   true,
 	}
+	requestBody["stream_options"] = map[string]any{
+		"include_usage": true,
+	}
 	if requestBody["messages"] == nil {
 		requestBody["messages"] = []map[string]any{{"role": "user", "content": "hi"}}
 	}
