@@ -584,27 +584,40 @@
                     block-node
                   >
                     <template #title="node">
-                       <div class="custom-tree-node-wrapper" style="display: flex; align-items: center;">
-                         <span :class="['custom-tree-node', node.class]">{{ node.title }}</span>
-                         <span v-if="node.isBrowserPending" class="tree-node-pending-hint">
-                           <a-spin size="small" />
-                           <span>{{ node.pendingHint }}</span>
-                         </span>
-                         
-                         <!-- 仅在叶子节点（模型项）显示快捷拉起图标，空两格紧跟 -->
-                         <div v-if="node.isLeaf" class="shortcut-actions" style="margin-left: 12px; display: flex; gap: 8px;">
-                           <a-tooltip title="一键添加到 Cherry Studio">
-                             <span class="app-icon cherry-icon" @click.stop="launchCherryStudio(node)">
-                               🍒
-                             </span>
-                           </a-tooltip>
-                           <a-tooltip title="一键添加到 CC-Switch">
-                             <span class="app-icon switch-icon" @click.stop="launchCCSwitch(node)">
-                               🔄
-                             </span>
-                           </a-tooltip>
-                         </div>
-                       </div>
+                      <div class="custom-tree-node-wrapper organized-tree-node-wrapper">
+                        <div class="organized-tree-node-main">
+                          <span :class="['custom-tree-node', node.class]">{{ node.title }}</span>
+                          <span v-if="node.isLeaf && node.performancePreviewText" class="tree-performance-preview">
+                            <a-tooltip>
+                              <template #title>
+                                <div class="performance-tooltip-list">
+                                  <div v-for="line in getPerformanceTooltipLines(node)" :key="line">{{ line }}</div>
+                                </div>
+                              </template>
+                              <span class="performance-badge performance-badge-inline" aria-label="性能指标">
+                                <ThunderboltOutlined />
+                              </span>
+                            </a-tooltip>
+                            <span class="tree-performance-preview-text">{{ node.performancePreviewText }}</span>
+                          </span>
+                          <div v-if="node.isLeaf" class="shortcut-actions organized-tree-shortcut-actions">
+                            <a-tooltip title="一键添加到 Cherry Studio">
+                              <span class="app-icon cherry-icon" @click.stop="launchCherryStudio(node)">
+                                🍒
+                              </span>
+                            </a-tooltip>
+                            <a-tooltip title="一键添加到 CC-Switch">
+                              <span class="app-icon switch-icon" @click.stop="launchCCSwitch(node)">
+                                🔄
+                              </span>
+                            </a-tooltip>
+                          </div>
+                          <span v-if="node.isBrowserPending" class="tree-node-pending-hint">
+                            <a-spin size="small" />
+                            <span>{{ node.pendingHint }}</span>
+                          </span>
+                        </div>
+                      </div>
                     </template>
                   </a-tree>
                 </div>
@@ -748,7 +761,7 @@ import {
   normalizeModels as normalizeKeyPanelModels,
   persistPanelRecords,
 } from '../utils/keyPanelStore.js';
-import { buildPerformanceTooltipLines, derivePerformanceMetricsFromResponse, hasPerformanceMetrics } from '../utils/performanceMetrics.js';
+import { buildPerformanceTooltipLines, derivePerformanceMetricsFromResponse, extractPerformanceMetrics, hasPerformanceMetrics } from '../utils/performanceMetrics.js';
 import {
   appendCustomKeysToSiteCache,
   buildSiteCacheKey,
@@ -2276,6 +2289,10 @@ const organizedTreeData = computed(() => {
         key: t.id,
         isLeaf: true,
         class: `status-${t.status}`,
+        ttftMs: t.ttftMs,
+        tps: t.tps,
+        latencySeconds: t.responseTime,
+        performancePreviewText: getPerformancePreviewText(t),
         siteName: t.siteName,
         siteUrl: t.siteUrl,
         apiKey: t.apiKey,
@@ -2390,6 +2407,25 @@ const getStatusTooltip = (record) => {
 };
 
 const getPerformanceTooltipLines = (record) => buildPerformanceTooltipLines(record);
+
+const getPerformancePreviewText = (record) => {
+  const metrics = extractPerformanceMetrics(record);
+  const parts = [];
+
+  if (metrics.ttftMs != null) {
+    parts.push(`TTFT ${Math.round(metrics.ttftMs)}ms`);
+  }
+
+  if (metrics.tps != null) {
+    parts.push(`TPS ${metrics.tps.toFixed(2)} tok/s`);
+  }
+
+  if (!parts.length && metrics.latencySeconds != null) {
+    parts.push(`${metrics.latencySeconds.toFixed(2)}s`);
+  }
+
+  return parts.join(' · ');
+};
 
 const formatBalance = (amount) => {
   if (amount == null) return '0.000';
@@ -2569,24 +2605,86 @@ const launchCherryStudio = (node) => {
   }
 };
 
+const CC_SWITCH_APP_OPTIONS = [
+  { value: 'claude', label: 'Claude', hint: 'claude' },
+  { value: 'codex', label: 'Codex', hint: 'codex' },
+  { value: 'gemini', label: 'Gemini', hint: 'gemini' },
+  { value: 'opencode', label: 'OpenCode', hint: 'opencode' },
+  { value: 'openclaw', label: 'OpenClaw', hint: 'openclaw' },
+];
+
+const normalizeCCSwitchAppId = (value) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return CC_SWITCH_APP_OPTIONS.some(option => option.value === normalized)
+    ? normalized
+    : 'claude';
+};
+
+const buildCCSwitchImportUrl = (node, appId = 'claude') => {
+  const siteName = String(node?.siteName || '站点').trim() || '站点';
+  const params = new URLSearchParams();
+  params.set('resource', 'provider');
+  params.set('app', normalizeCCSwitchAppId(appId));
+  params.set('name', node?.model ? `${siteName} - ${node.model}` : siteName);
+  params.set('homepage', node.siteUrl);
+  params.set('endpoint', node.siteUrl);
+  params.set('apiKey', node.apiKey);
+  params.set('model', node.model || '');
+  return `ccswitch://v1/import?${params.toString()}`;
+};
+
+const chooseCCSwitchTargetApp = () => {
+  return new Promise(resolve => {
+    const selectedApp = ref('claude');
+
+    Modal.confirm({
+      title: '选择目标平台',
+      width: 560,
+      centered: true,
+      closable: false,
+      maskClosable: false,
+      okText: '继续导入',
+      cancelText: '取消',
+      content: () => h('div', { class: 'cc-switch-target-dialog' }, [
+        h('p', { class: 'cc-switch-target-dialog-hint' }, '请选择写入 schemaurl 的 app 参数。'),
+        h('div', { class: 'cc-switch-target-dialog-select-row' }, [
+          h('select', {
+            class: 'cc-switch-target-dialog-select',
+            value: selectedApp.value,
+            onChange: (event) => {
+              selectedApp.value = String(event?.target?.value || 'claude');
+            },
+          }, CC_SWITCH_APP_OPTIONS.map(option => h(
+            'option',
+            {
+              key: option.value,
+              value: option.value,
+            },
+            option.label,
+          ))),
+        ]),
+        h('div', { class: 'cc-switch-target-dialog-select-tip' }, '选择后会按对应 app 参数拼接 ccswitch://v1/import 链接。'),
+      ]),
+      onOk: () => resolve(selectedApp.value),
+      onCancel: () => resolve(null),
+    });
+  });
+};
+
 // ── NEW: 一键拉起 CC-Switch ──
-const launchCCSwitch = (node) => {
+const launchCCSwitch = async (node) => {
   if (!node.apiKey || !node.siteUrl) {
     message.warning('配置信息不完整，无法导出');
     return;
   }
 
-  const params = new URLSearchParams();
-  params.set('resource', 'provider');
-  params.set('app', 'claude'); // 默认映射为 claude 类型
-  params.set('name', `${node.siteName} - ${node.model}`);
-  params.set('homepage', node.siteUrl);
-  params.set('endpoint', node.siteUrl);
-  params.set('apiKey', node.apiKey);
-  params.set('model', node.model);
+  const appId = await chooseCCSwitchTargetApp();
+  if (!appId) {
+    return;
+  }
 
-  const url = `ccswitch://v1/import?${params.toString()}`;
-  window.open(url, '_blank');
+  const url = buildCCSwitchImportUrl(node, appId);
+  openUrlInSystemBrowser(url);
   message.success('正在尝试唤起 CC-Switch...');
 };
 
@@ -8174,6 +8272,26 @@ const copyOrganizedResults = () => {
   width: 100%;
 }
 
+.organized-tree-node-wrapper {
+  gap: 12px;
+}
+
+.organized-tree-node-main {
+  min-width: 0;
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.organized-tree-shortcut-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 2px;
+}
+
 .tree-provider-node-wrapper {
   gap: 10px;
 }
@@ -8259,6 +8377,96 @@ const copyOrganizedResults = () => {
 .performance-badge-inline {
   flex: 0 0 auto;
   cursor: help;
+}
+
+.tree-performance-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(217, 119, 6, 0.18);
+  background: rgba(255, 247, 237, 0.88);
+  color: #d97706;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+:deep(.dark-mode) .tree-performance-preview {
+  border-color: rgba(250, 173, 20, 0.22);
+  background: rgba(60, 38, 0, 0.42);
+  color: #ffd666;
+}
+
+.tree-performance-preview-text {
+  font-weight: 600;
+}
+
+.cc-switch-target-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cc-switch-target-dialog-hint {
+  margin: 0;
+  color: #8c8c8c;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.cc-switch-target-dialog-select-row {
+  display: flex;
+  align-items: center;
+}
+
+.cc-switch-target-dialog-select {
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(217, 119, 6, 0.18);
+  background: rgba(255, 247, 237, 0.92);
+  color: #1f1f1f;
+  font-size: 14px;
+  outline: none;
+  cursor: pointer;
+}
+
+.cc-switch-target-dialog-select:hover {
+  border-color: rgba(22, 119, 255, 0.35);
+}
+
+.cc-switch-target-dialog-select:focus {
+  border-color: #1677ff;
+  box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.12);
+}
+
+.cc-switch-target-dialog-select-tip {
+  font-size: 12px;
+  color: #8c8c8c;
+  line-height: 1.5;
+}
+
+:deep(.dark-mode) .cc-switch-target-dialog-select {
+  border-color: rgba(250, 173, 20, 0.18);
+  background: rgba(60, 38, 0, 0.44);
+  color: #f5f5f5;
+}
+
+:deep(.dark-mode) .cc-switch-target-dialog-select:hover {
+  border-color: rgba(22, 119, 255, 0.42);
+}
+
+:deep(.dark-mode) .cc-switch-target-dialog-select:focus {
+  border-color: #69b1ff;
+  box-shadow: 0 0 0 3px rgba(105, 177, 255, 0.16);
+}
+
+:deep(.dark-mode) .cc-switch-target-dialog-select-tip,
+:deep(.dark-mode) .cc-switch-target-dialog-hint {
+  color: #bfbfbf;
 }
 
 .site-tree-action-btn {
