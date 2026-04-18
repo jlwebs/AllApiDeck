@@ -2,7 +2,7 @@
 
 <img src="./assets/appicon.png" alt="All API Deck" width="80">
 
-**批量管理站点账号、模型与密钥的桌面工具**
+**All API Deck：批量管理站点账号、模型与密钥的桌面工具**
 
 <p>
 支持浏览器扩展导入、批量模型发现、可用性检测，以及 Claude / Codex / OpenCode / OpenClaw 的配置切换。
