@@ -21,7 +21,7 @@
 --><a href="LICENSE">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-brightgreen?style=flat">
 </a><!--
---><img alt="Node.js" src="https://img.shields.io/badge/Node.js-22.15%2B-339933?logo=node.js&style=flat"><!--
+--><img alt="Golang" src="https://img.shields.io/badge/Golang-1.24%2B-00ADD8?logo=go&style=flat"><!--
 --><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&style=flat">
 </p>
 
