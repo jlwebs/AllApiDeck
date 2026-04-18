@@ -1,6 +1,6 @@
 ﻿<div align="center">
 
-<img src="./assets/appicon.png" alt="All API Dock" width="280">
+<img src="./assets/appicon.png" alt="All API Dock" width="80">
 
 **The middleman for AI gateways - unify distributed proxy sites into one entry point**
 
