@@ -1,6 +1,6 @@
 <template>
-  <div class="key-side-panel">
-    <div class="panel-shell">
+  <div class="key-side-panel" :class="{ 'is-super-mini': superMiniMode }">
+    <div ref="panelShellRef" class="panel-shell" :class="{ 'is-super-mini': superMiniMode }">
       <div class="panel-ambient panel-ambient-top"></div>
       <div class="panel-ambient panel-ambient-bottom"></div>
       <div class="panel-scroll-guide" :class="{ 'is-idle': !hasScrollableContent }" aria-hidden="true">
@@ -30,6 +30,13 @@
         v-if="showAdvancedProxyQueueCard"
         class="panel-queue-card"
         :class="[`panel-queue-card-${advancedProxyQueueTone}`]"
+        title="double click me!"
+        @pointerdown="beginSuperMiniWindowDrag"
+        @pointermove="dragSuperMiniWindow"
+        @pointerrawupdate="dragSuperMiniWindow"
+        @pointerup="endSuperMiniWindowDrag"
+        @pointercancel="endSuperMiniWindowDrag"
+        @dblclick.stop.prevent="toggleSuperMiniMode"
       >
         <div class="panel-queue-head">
           <span class="panel-queue-title">{{ advancedProxyQueueTitle }}</span>
@@ -110,7 +117,7 @@
                 >
                   ★
                 </span>
-                <span v-if="item.order" class="panel-queue-item-order">No.{{ item.order }}</span>
+                <span v-if="item.order !== null && item.order !== undefined" class="panel-queue-item-order">No.{{ item.order }}</span>
               </div>
 
               <div class="panel-queue-item-copy">
@@ -308,11 +315,20 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons-vue';
 import {
+  AppendClientLog,
+  GetPanelDockState,
   InitPanelWindow,
+  GetPanelWindowBounds,
   OpenDesktopConfigWindow,
   OpenKeyEditor,
   RequestMainWindowRestore,
 } from '../../wailsjs/go/main/App.js';
+import {
+  WindowGetPosition,
+  WindowGetSize,
+  WindowSetPosition,
+  WindowSetSize,
+} from '../../wailsjs/runtime/runtime.js';
 import quickSetupIcon from '../assets/action-icons/quick-setup-cute.svg';
 import {
   KEY_MANAGEMENT_SYNC_EVENT,
@@ -363,6 +379,8 @@ const ADVANCED_PROXY_RECENT_ROUTE_WINDOW_MS = 45000;
 const ADVANCED_PROXY_DISPATCH_HOLD_MS = 10000;
 const ADVANCED_PROXY_DISPATCH_FADE_MS = 2500;
 const ADVANCED_PROXY_DISPATCH_TICK_MS = 500;
+const SUPER_MINI_SCALE = 1.2;
+const SUPER_MINI_DRAG_SCALE = 1.0;
 const ADVANCED_PROXY_APP_META = {
   claude: { label: 'Claude', className: 'panel-record-avatar-app-claude' },
   codex: { label: 'Codex', className: 'panel-record-avatar-app-codex' },
@@ -381,8 +399,10 @@ const activePopoverRowKey = ref('');
 const activeModelDropdownRowKey = ref('');
 const panelBodyRef = ref(null);
 const panelQueueStripRef = ref(null);
+const panelShellRef = ref(null);
 const panelScrollRatio = ref(0);
 const hasScrollableContent = ref(false);
+const superMiniMode = ref(false);
 const PANEL_PERSIST_DEBOUNCE_MS = 120;
 
 let panelBodyResizeObserver = null;
@@ -390,13 +410,374 @@ let panelPersistTimer = null;
 let advancedProxyRoutingTimer = null;
 let advancedProxyDispatchTimer = null;
 let lastSidebarRoutingLogAt = 0;
+let superMiniQueueScrollLeft = 0;
+let superMiniWindowBounds = null;
+let superMiniRestoreBounds = null;
+let superMiniTransitionToken = 0;
+let superMiniWindowDragLogAt = 0;
+let panelQueueDragLogAt = 0;
+const superMiniWindowDragState = {
+  active: false,
+  pointerId: -1,
+  startX: 0,
+  startY: 0,
+  startWindowX: 0,
+  startWindowY: 0,
+  rafId: 0,
+  pendingWindowX: 0,
+  pendingWindowY: 0,
+  moved: false,
+};
 const panelQueueDragState = {
   active: false,
+  armed: false,
   pointerId: -1,
   startX: 0,
   startScrollLeft: 0,
   moved: false,
 };
+
+function syncSuperMiniBodyClass() {
+  if (typeof document === 'undefined') return;
+  document.body.classList.toggle('panel-super-mini-mode', superMiniMode.value);
+}
+
+function appendPanelClientLog(scope, message) {
+  if (typeof window === 'undefined') return;
+  if (!AppendClientLog) return;
+  try {
+    void AppendClientLog(scope, message);
+  } catch {}
+}
+
+function formatSidebarBounds(bounds) {
+  if (!bounds) return 'null';
+  return `x=${Math.round(Number(bounds.x || 0))},y=${Math.round(Number(bounds.y || 0))},w=${Math.round(Number(bounds.width || 0))},h=${Math.round(Number(bounds.height || 0))}`;
+}
+
+function normalizeSidebarWindowBounds(bounds) {
+  if (!bounds) return null;
+  return {
+    width: Number(bounds?.width ?? bounds?.Width ?? 0),
+    height: Number(bounds?.height ?? bounds?.Height ?? 0),
+    x: Number(bounds?.x ?? bounds?.X ?? 0),
+    y: Number(bounds?.y ?? bounds?.Y ?? 0),
+  };
+}
+
+function isValidSidebarWindowBounds(bounds) {
+  return Boolean(bounds && Number(bounds.width) > 0 && Number(bounds.height) > 0);
+}
+
+async function readSidebarWindowBounds() {
+  try {
+    const backendBounds = await GetPanelWindowBounds().catch(() => null);
+    const normalizedBackendBounds = normalizeSidebarWindowBounds(backendBounds);
+    if (isValidSidebarWindowBounds(normalizedBackendBounds)) {
+      return { bounds: normalizedBackendBounds, source: 'backend' };
+    }
+  } catch {}
+
+  try {
+    const [size, position] = await Promise.all([
+      WindowGetSize().catch(() => null),
+      WindowGetPosition().catch(() => null),
+    ]);
+    const fallbackBounds = normalizeSidebarWindowBounds({
+      width: size?.w,
+      height: size?.h,
+      x: position?.x,
+      y: position?.y,
+    });
+    if (isValidSidebarWindowBounds(fallbackBounds)) {
+      return { bounds: fallbackBounds, source: 'runtime' };
+    }
+  } catch {}
+
+  return { bounds: null, source: 'none' };
+}
+
+async function logSuperMiniWindowSnapshot(stage, token, extra = '') {
+  try {
+    const current = await readSidebarWindowBounds();
+    const shellRect = panelShellRef.value?.getBoundingClientRect?.();
+    const shellSize = shellRect ? `${Math.ceil(Number(shellRect.width || 0))}x${Math.ceil(Number(shellRect.height || 0))}` : 'null';
+    const suffix = String(extra || '').trim();
+    appendPanelClientLog(
+      'panel.super-mini',
+      `${stage} token=${token} enabled=${superMiniMode.value} source=${current.source} window=${formatSidebarBounds(current.bounds)} shell=${shellSize}${suffix ? ` ${suffix}` : ''}`,
+    );
+  } catch (error) {
+    appendPanelClientLog(
+      'panel.super-mini',
+      `${stage} token=${token} snapshot failed=${error?.message || String(error)}`,
+    );
+  }
+}
+
+async function applySuperMiniWindowMode(enabled) {
+  const transitionToken = ++superMiniTransitionToken;
+  appendPanelClientLog(
+    'panel.super-mini',
+    `toggle request enabled=${Boolean(enabled)} token=${transitionToken} current=${superMiniMode.value} queueScroll=${panelQueueStripRef.value?.scrollLeft || 0}`,
+  );
+  if (typeof window === 'undefined') {
+    superMiniMode.value = Boolean(enabled);
+    syncSuperMiniBodyClass();
+    return;
+  }
+
+  const queueStrip = panelQueueStripRef.value;
+  if (enabled && queueStrip) {
+    superMiniQueueScrollLeft = queueStrip.scrollLeft || 0;
+  }
+
+  if (enabled) {
+    try {
+      const current = await readSidebarWindowBounds();
+      const restoreBounds = current.bounds;
+      if (isValidSidebarWindowBounds(restoreBounds)) {
+        superMiniRestoreBounds = restoreBounds;
+        superMiniWindowBounds = {
+          ...restoreBounds,
+          width: Math.max(1, Math.round(restoreBounds.width)),
+          height: Math.max(1, Math.round(restoreBounds.height)),
+        };
+        appendPanelClientLog(
+          'panel.super-mini',
+          `captured restore bounds token=${transitionToken} source=${current.source} bounds=${formatSidebarBounds(restoreBounds)}`,
+        );
+      } else {
+        appendPanelClientLog(
+          'panel.super-mini',
+          `capture skipped token=${transitionToken} source=${current.source}`,
+        );
+      }
+    } catch {}
+  }
+
+  if (transitionToken !== superMiniTransitionToken) {
+    appendPanelClientLog('panel.super-mini', `toggle aborted by newer request token=${transitionToken}`);
+    return;
+  }
+
+  superMiniMode.value = Boolean(enabled);
+  syncSuperMiniBodyClass();
+  appendPanelClientLog('panel.super-mini', `mode applied enabled=${Boolean(enabled)} token=${transitionToken}`);
+  await logSuperMiniWindowSnapshot('mode applied snapshot', transitionToken, `step=${enabled ? 'enable' : 'disable'}`);
+
+  if (queueStrip) {
+    await nextTick();
+    if (transitionToken !== superMiniTransitionToken) {
+      appendPanelClientLog('panel.super-mini', `queue scroll aborted by newer request token=${transitionToken}`);
+      return;
+    }
+    queueStrip.scrollLeft = enabled ? 0 : superMiniQueueScrollLeft;
+    appendPanelClientLog(
+      'panel.super-mini',
+      `queue scroll applied enabled=${Boolean(enabled)} token=${transitionToken} value=${queueStrip.scrollLeft || 0}`,
+    );
+  }
+
+  if (enabled) {
+    await nextTick();
+    if (transitionToken !== superMiniTransitionToken) {
+      appendPanelClientLog('panel.super-mini', `enable stage aborted after nextTick token=${transitionToken}`);
+      return;
+    }
+    await new Promise(resolve => window.requestAnimationFrame(() => resolve()));
+    if (transitionToken !== superMiniTransitionToken) {
+      appendPanelClientLog('panel.super-mini', `enable stage aborted after raf token=${transitionToken}`);
+      return;
+    }
+    const shellRect = panelShellRef.value?.getBoundingClientRect?.();
+    const shellWidth = Math.ceil(Number(shellRect?.width || 0));
+    const shellHeight = Math.ceil(Number(shellRect?.height || 0));
+    const width = Math.round((shellWidth || 100) * SUPER_MINI_SCALE);
+    const height = Math.round((shellHeight || 100) * SUPER_MINI_SCALE * 0.9);
+    const cardScale = shellWidth > 0 ? width / shellWidth : SUPER_MINI_SCALE;
+    appendPanelClientLog(
+      'panel.super-mini',
+      `enable sizing token=${transitionToken} shell=${shellWidth}x${shellHeight} target=${width}x${height} scale=${cardScale.toFixed(4)}`,
+    );
+    const enableBounds = superMiniRestoreBounds || superMiniWindowBounds;
+    const dockState = String(await GetPanelDockState().catch(() => '')).trim();
+    const enableTargetX = isValidSidebarWindowBounds(enableBounds)
+      ? (dockState === 'right'
+        ? Math.round(enableBounds.x + enableBounds.width - width)
+        : Math.round(enableBounds.x))
+      : null;
+    const enableTargetY = isValidSidebarWindowBounds(enableBounds)
+      ? Math.round(enableBounds.y)
+      : null;
+    if (panelShellRef.value) {
+      panelShellRef.value.style.setProperty('--super-mini-card-width', `${width}px`);
+      panelShellRef.value.style.setProperty('--super-mini-card-height', `${height}px`);
+      panelShellRef.value.style.setProperty('--super-mini-card-scale', `${cardScale}`);
+    }
+    try {
+      if (enableTargetX !== null && enableTargetY !== null) {
+        WindowSetPosition(enableTargetX, enableTargetY);
+        appendPanelClientLog(
+          'panel.super-mini',
+          `enable position set token=${transitionToken} dock=${dockState || 'unknown'} pos=${enableTargetX},${enableTargetY}`,
+        );
+      }
+      WindowSetSize(width, height);
+      appendPanelClientLog('panel.super-mini', `window size set token=${transitionToken} size=${width}x${height}`);
+      await logSuperMiniWindowSnapshot('after resize', transitionToken, `target=${width}x${height}`);
+    } catch {}
+    return;
+  }
+
+  const restoreBounds = isValidSidebarWindowBounds(superMiniRestoreBounds)
+    ? superMiniRestoreBounds
+    : isValidSidebarWindowBounds(superMiniWindowBounds)
+      ? superMiniWindowBounds
+      : null;
+  appendPanelClientLog(
+    'panel.super-mini',
+    `restore sizing enabled=${Boolean(enabled)} token=${transitionToken} bounds=${formatSidebarBounds(restoreBounds)}`,
+  );
+  try {
+    if (restoreBounds) {
+      WindowSetPosition(
+        Math.round(restoreBounds.x),
+        Math.round(restoreBounds.y),
+      );
+      WindowSetSize(
+        Math.max(1, Math.round(restoreBounds.width)),
+        Math.max(1, Math.round(restoreBounds.height)),
+      );
+    }
+    await logSuperMiniWindowSnapshot('after restore', transitionToken, `restored=${formatSidebarBounds(restoreBounds)}`);
+  } catch {}
+  if (!enabled) {
+    superMiniQueueScrollLeft = 0;
+    appendPanelClientLog('panel.super-mini', `queue scroll reset token=${transitionToken}`);
+  }
+  if (panelShellRef.value) {
+    panelShellRef.value.style.removeProperty('--super-mini-card-width');
+    panelShellRef.value.style.removeProperty('--super-mini-card-height');
+    panelShellRef.value.style.removeProperty('--super-mini-card-scale');
+  }
+  superMiniWindowBounds = null;
+  superMiniRestoreBounds = null;
+  appendPanelClientLog('panel.super-mini', `transition cleared token=${transitionToken}`);
+}
+
+function toggleSuperMiniMode() {
+  appendPanelClientLog(
+    'panel.super-mini',
+    `toggle clicked next=${!superMiniMode.value} restore=${formatSidebarBounds(superMiniRestoreBounds)} current=${formatSidebarBounds(superMiniWindowBounds)}`,
+  );
+  void applySuperMiniWindowMode(!superMiniMode.value);
+}
+
+async function beginSuperMiniWindowDrag(event) {
+  if (!superMiniMode.value || event?.button !== 0) {
+    appendPanelClientLog(
+      'panel.super-mini.drag',
+      `ignored pointerdown mode=${superMiniMode.value} button=${Number(event?.button ?? -1)} pointer=${Number(event?.pointerId ?? -1)}`,
+    );
+    return;
+  }
+  const target = event.currentTarget;
+  if (!target) return;
+  event.preventDefault?.();
+  superMiniWindowDragState.active = true;
+  superMiniWindowDragState.pointerId = event.pointerId;
+  superMiniWindowDragState.startX = event.clientX;
+  superMiniWindowDragState.startY = event.clientY;
+  superMiniWindowDragState.startWindowX = Number(superMiniWindowBounds?.x || superMiniRestoreBounds?.x || 0);
+  superMiniWindowDragState.startWindowY = Number(superMiniWindowBounds?.y || superMiniRestoreBounds?.y || 0);
+  superMiniWindowDragState.pendingWindowX = superMiniWindowDragState.startWindowX;
+  superMiniWindowDragState.pendingWindowY = superMiniWindowDragState.startWindowY;
+  superMiniWindowDragState.moved = false;
+  superMiniWindowDragLogAt = 0;
+  appendPanelClientLog(
+    'panel.super-mini.drag',
+    `start pointer=${event.pointerId} client=${event.clientX},${event.clientY} window=${superMiniWindowDragState.startWindowX},${superMiniWindowDragState.startWindowY}`,
+  );
+  try {
+    target.setPointerCapture?.(event.pointerId);
+  } catch {}
+}
+
+function flushSuperMiniWindowDrag(force = false) {
+  if (!force && !superMiniWindowDragState.active) return;
+  try {
+    WindowSetPosition(
+      superMiniWindowDragState.pendingWindowX,
+      superMiniWindowDragState.pendingWindowY,
+    );
+    superMiniWindowBounds = {
+      width: Math.max(1, Math.round(superMiniWindowBounds?.width ?? superMiniRestoreBounds?.width ?? 1)),
+      height: Math.max(1, Math.round(superMiniWindowBounds?.height ?? superMiniRestoreBounds?.height ?? 1)),
+      x: superMiniWindowDragState.pendingWindowX,
+      y: superMiniWindowDragState.pendingWindowY,
+    };
+  } catch {}
+  superMiniWindowDragState.rafId = 0;
+}
+
+function dragSuperMiniWindow(event) {
+  if (!superMiniWindowDragState.active || superMiniWindowDragState.pointerId !== event.pointerId) return;
+  const deltaX = (event.clientX - superMiniWindowDragState.startX) * SUPER_MINI_DRAG_SCALE;
+  const deltaY = (event.clientY - superMiniWindowDragState.startY) * SUPER_MINI_DRAG_SCALE;
+  if (Math.abs(deltaX) > 0 || Math.abs(deltaY) > 0) {
+    superMiniWindowDragState.moved = true;
+  }
+  superMiniWindowDragState.pendingWindowX = Math.max(0, Math.round(superMiniWindowDragState.startWindowX + deltaX));
+  superMiniWindowDragState.pendingWindowY = Math.max(0, Math.round(superMiniWindowDragState.startWindowY + deltaY));
+  const now = Date.now();
+  if (!superMiniWindowDragLogAt || now - superMiniWindowDragLogAt >= 180) {
+    superMiniWindowDragLogAt = now;
+    appendPanelClientLog(
+      'panel.super-mini.drag',
+      `move pointer=${event.pointerId} client=${event.clientX},${event.clientY} pending=${superMiniWindowDragState.pendingWindowX},${superMiniWindowDragState.pendingWindowY}`,
+    );
+  }
+  if (superMiniWindowDragState.rafId) return;
+  superMiniWindowDragState.rafId = window.requestAnimationFrame(flushSuperMiniWindowDrag);
+}
+
+function endSuperMiniWindowDrag(event) {
+  const target = event?.currentTarget || event?.target;
+  const wasActive = superMiniWindowDragState.active && superMiniWindowDragState.pointerId === event?.pointerId;
+  if (target && superMiniWindowDragState.pointerId === event?.pointerId) {
+    try {
+      target.releasePointerCapture?.(event.pointerId);
+    } catch {}
+  }
+  superMiniWindowDragState.active = false;
+  superMiniWindowDragState.pointerId = -1;
+  superMiniWindowDragState.startX = 0;
+  superMiniWindowDragState.startY = 0;
+  superMiniWindowDragState.startWindowX = 0;
+  superMiniWindowDragState.startWindowY = 0;
+  if (superMiniWindowDragState.rafId) {
+    window.cancelAnimationFrame(superMiniWindowDragState.rafId);
+    superMiniWindowDragState.rafId = 0;
+  }
+  if (wasActive) {
+    if (superMiniWindowBounds) {
+      superMiniWindowBounds = {
+        ...superMiniWindowBounds,
+        x: Math.round(superMiniWindowDragState.pendingWindowX ?? superMiniWindowBounds.x ?? 0),
+        y: Math.round(superMiniWindowDragState.pendingWindowY ?? superMiniWindowBounds.y ?? 0),
+      };
+    }
+    flushSuperMiniWindowDrag(true);
+    superMiniWindowDragState.pendingWindowX = 0;
+    superMiniWindowDragState.pendingWindowY = 0;
+  }
+  appendPanelClientLog(
+    'panel.super-mini.drag',
+    `end pointer=${event?.pointerId ?? -1} active=${wasActive} moved=${superMiniWindowDragState.moved} final=${superMiniWindowBounds ? formatSidebarBounds(superMiniWindowBounds) : 'null'} current=${formatSidebarBounds(superMiniRestoreBounds)}`,
+  );
+  superMiniWindowDragState.moved = false;
+}
 
 const visibleRecords = computed(() => records.value.filter(record => Number(record?.status || 0) === 1));
 const panelScrollDotStyle = computed(() => {
@@ -1025,25 +1406,41 @@ function beginQueueStripDrag(event) {
   if (event?.button !== 0) return;
   const target = panelQueueStripRef.value;
   if (!target) return;
-  panelQueueDragState.active = true;
+  panelQueueDragState.active = false;
+  panelQueueDragState.armed = true;
   panelQueueDragState.pointerId = event.pointerId;
   panelQueueDragState.startX = event.clientX;
   panelQueueDragState.startScrollLeft = target.scrollLeft;
   panelQueueDragState.moved = false;
-  try {
-    target.setPointerCapture?.(event.pointerId);
-  } catch {}
+  panelQueueDragLogAt = 0;
+  appendPanelClientLog('panel.queue.drag', `arm pointer=${event.pointerId} client=${event.clientX},${event.clientY} scroll=${target.scrollLeft || 0}`);
 }
 
 function dragQueueStrip(event) {
-  if (!panelQueueDragState.active || panelQueueDragState.pointerId !== event.pointerId) return;
+  if (panelQueueDragState.pointerId !== event.pointerId) return;
   const target = panelQueueStripRef.value;
   if (!target) return;
   const deltaX = event.clientX - panelQueueDragState.startX;
+  if (!panelQueueDragState.active && Math.abs(deltaX) <= 4) {
+    return;
+  }
+  if (!panelQueueDragState.active) {
+    panelQueueDragState.active = true;
+    panelQueueDragState.moved = true;
+    try {
+      target.setPointerCapture?.(event.pointerId);
+    } catch {}
+    appendPanelClientLog('panel.queue.drag', `start pointer=${event.pointerId} client=${event.clientX},${event.clientY} scroll=${target.scrollLeft || 0}`);
+  }
   if (Math.abs(deltaX) > 3) {
     panelQueueDragState.moved = true;
   }
   target.scrollLeft = panelQueueDragState.startScrollLeft - deltaX;
+  const now = Date.now();
+  if (!panelQueueDragLogAt || now - panelQueueDragLogAt >= 180) {
+    panelQueueDragLogAt = now;
+    appendPanelClientLog('panel.queue.drag', `move pointer=${event.pointerId} client=${event.clientX},${event.clientY} scroll=${target.scrollLeft || 0}`);
+  }
 }
 
 function endQueueStripDrag(event) {
@@ -1054,9 +1451,11 @@ function endQueueStripDrag(event) {
     } catch {}
   }
   panelQueueDragState.active = false;
+  panelQueueDragState.armed = false;
   panelQueueDragState.pointerId = -1;
   panelQueueDragState.startX = 0;
   panelQueueDragState.startScrollLeft = 0;
+  appendPanelClientLog('panel.queue.drag', `end pointer=${event?.pointerId ?? -1} moved=${panelQueueDragState.moved} armed=${panelQueueDragState.armed} scroll=${target?.scrollLeft || 0}`);
 }
 
 function handlePanelScroll() {
@@ -1074,25 +1473,31 @@ async function syncPanelInteractionLock() {
 }
 
 async function restoreMainWindow() {
+  appendPanelClientLog('panel.actions', 'restore main window requested');
   try {
     await RequestMainWindowRestore();
   } catch (error) {
+    appendPanelClientLog('panel.actions', `restore main window failed: ${error?.message || String(error)}`);
     message.error(error?.message || '无法恢复主窗口');
   }
 }
 
 async function handleOpenEditor(rowKey) {
+  appendPanelClientLog('panel.actions', `open editor requested rowKey=${String(rowKey || '')}`);
   try {
     await OpenKeyEditor(String(rowKey || ''));
   } catch (error) {
+    appendPanelClientLog('panel.actions', `open editor failed rowKey=${String(rowKey || '')} err=${error?.message || String(error)}`);
     message.error(error?.message || '无法打开编辑窗口');
   }
 }
 
 async function handleQuickSetup(record) {
+  appendPanelClientLog('panel.actions', `quick setup requested rowKey=${String(record?.rowKey || '')}`);
   try {
     await OpenDesktopConfigWindow(String(record?.rowKey || ''));
   } catch (error) {
+    appendPanelClientLog('panel.actions', `quick setup failed rowKey=${String(record?.rowKey || '')} err=${error?.message || String(error)}`);
     message.error(error?.message || '无法打开一键配置');
   }
 }
@@ -1261,13 +1666,22 @@ async function handleRefreshBalance(record) {
 }
 
 onMounted(async () => {
+  appendPanelClientLog('panel.lifecycle', `mount start visibleRecords=${records.value.length} advancedProxyItems=${advancedProxyQueueItems.value?.length || 0}`);
   await hydrateLastResultsSnapshotCache();
   reloadAdvancedProxyConfigState();
   reloadRecords();
   await reloadAdvancedProxyRoutingState();
+  syncSuperMiniBodyClass();
+  appendPanelClientLog('panel.lifecycle', 'mount bootstrap complete');
   try {
     await InitPanelWindow(window?.screen?.availWidth || 1440, window?.screen?.availHeight || 900);
-  } catch {}
+    appendPanelClientLog(
+      'panel.lifecycle',
+      `init panel window called screen=${window?.screen?.availWidth || 1440}x${window?.screen?.availHeight || 900}`,
+    );
+  } catch (error) {
+    appendPanelClientLog('panel.lifecycle', `init panel window failed: ${error?.message || String(error)}`);
+  }
   await nextTick();
   syncScrollIndicator();
   if (typeof ResizeObserver === 'function' && panelBodyRef.value) {
@@ -1294,12 +1708,23 @@ onMounted(async () => {
   }, ADVANCED_PROXY_DISPATCH_TICK_MS);
 });
 
+watch(superMiniMode, async (enabled, previous) => {
+  if (enabled === previous) return;
+  appendPanelClientLog('panel.super-mini', `mode watch prev=${previous} next=${enabled}`);
+  await nextTick();
+  await logSuperMiniWindowSnapshot('mode watch snapshot', superMiniTransitionToken, `prev=${previous} next=${enabled}`);
+});
+
 watch(visibleRecords, async () => {
   await nextTick();
   syncScrollIndicator();
 }, { flush: 'post' });
 
 onBeforeUnmount(() => {
+  appendPanelClientLog('panel.lifecycle', 'before unmount');
+  if (typeof document !== 'undefined') {
+    document.body.classList.remove('panel-super-mini-mode');
+  }
   flushPanelPersist();
   void setPanelInteractionLocked(false);
   panelBodyResizeObserver?.disconnect?.();
@@ -1345,6 +1770,14 @@ onBeforeUnmount(() => {
   -webkit-user-select: none;
 }
 
+.key-side-panel.is-super-mini {
+  width: fit-content;
+  height: fit-content;
+  min-height: 0;
+  padding: 0;
+  overflow: visible;
+}
+
 .panel-shell {
   position: relative;
   z-index: 1;
@@ -1367,6 +1800,141 @@ onBeforeUnmount(() => {
   overflow: hidden;
   overflow-x: hidden;
   transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.panel-shell.is-super-mini {
+  width: fit-content;
+  height: fit-content;
+  padding: 1px;
+  gap: 1px;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  align-items: flex-start;
+  --super-mini-card-scale: 1;
+}
+
+.panel-shell.is-super-mini::before,
+.panel-shell.is-super-mini .panel-ambient,
+.panel-shell.is-super-mini .panel-topbar,
+.panel-shell.is-super-mini .panel-scroll-guide,
+.panel-shell.is-super-mini .panel-body {
+  display: none;
+}
+
+.panel-shell.is-super-mini .panel-queue-card {
+  position: relative;
+  inset: auto;
+  z-index: 3;
+  margin: 0;
+  width: var(--super-mini-card-width, 128px);
+  min-width: var(--super-mini-card-width, 128px);
+  max-width: var(--super-mini-card-width, 128px);
+  height: var(--super-mini-card-height, auto);
+  border-radius: calc(14px * var(--super-mini-card-scale, 1));
+  display: flex;
+  flex-direction: column;
+  box-shadow:
+    0 18px 36px rgba(19, 24, 19, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  cursor: grab;
+  --wails-draggable: no-drag;
+}
+
+.panel-shell.is-super-mini .panel-queue-card:active {
+  cursor: grabbing;
+}
+
+.panel-shell.is-super-mini .panel-queue-head {
+  gap: calc(4px * var(--super-mini-card-scale, 1));
+  margin-bottom: 0;
+}
+
+.panel-shell.is-super-mini .panel-queue-strip,
+.panel-shell.is-super-mini .panel-queue-empty {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.panel-shell.is-super-mini .panel-queue-strip {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+  max-width: 100%;
+  margin-top: -1px;
+}
+
+.panel-shell.is-super-mini .panel-queue-strip-track {
+  width: max-content;
+  min-width: 0;
+  gap: calc(1px * var(--super-mini-card-scale, 1));
+}
+
+.panel-shell.is-super-mini .panel-queue-item {
+  padding: 0 calc(1px * var(--super-mini-card-scale, 1)) 0;
+}
+
+.panel-shell.is-super-mini .panel-queue-item-avatar-wrap,
+.panel-shell.is-super-mini .panel-queue-item-avatar,
+.panel-shell.is-super-mini .panel-queue-item-avatar .panel-record-emoji {
+  width: calc(22px * var(--super-mini-card-scale, 1));
+  height: calc(22px * var(--super-mini-card-scale, 1));
+  border-radius: calc(8px * var(--super-mini-card-scale, 1));
+}
+
+.panel-shell.is-super-mini .panel-queue-item-avatar .panel-record-emoji {
+  font-size: calc(11px * var(--super-mini-card-scale, 1));
+}
+
+.panel-shell.is-super-mini .panel-queue-item-name {
+  font-size: calc(5px * var(--super-mini-card-scale, 1));
+}
+
+.panel-shell.is-super-mini .panel-queue-item-order,
+.panel-shell.is-super-mini .panel-queue-item-star {
+  font-size: calc(5px * var(--super-mini-card-scale, 1));
+  padding: 0 calc(1px * var(--super-mini-card-scale, 1));
+}
+
+.panel-shell.is-super-mini .panel-queue-title {
+  font-size: calc(5px * var(--super-mini-card-scale, 1));
+  letter-spacing: calc(0.12em * var(--super-mini-card-scale, 1));
+}
+
+.panel-shell.is-super-mini .panel-queue-signals {
+  gap: calc(3px * var(--super-mini-card-scale, 1));
+}
+
+.panel-shell.is-super-mini .panel-queue-signal {
+  width: calc(6px * var(--super-mini-card-scale, 1));
+  height: calc(6px * var(--super-mini-card-scale, 1));
+}
+
+.panel-shell.is-super-mini .panel-queue-item-copy {
+  margin-top: calc(-2px * var(--super-mini-card-scale, 1));
+}
+
+.panel-shell.is-super-mini .panel-queue-item {
+  gap: calc(0px * var(--super-mini-card-scale, 1));
+}
+
+.panel-shell.is-super-mini .panel-queue-item-order {
+  top: calc(-1px * var(--super-mini-card-scale, 1));
+  right: calc(-1px * var(--super-mini-card-scale, 1));
+}
+
+.panel-shell.is-super-mini .panel-queue-item-star {
+  top: calc(-1px * var(--super-mini-card-scale, 1));
+  left: calc(-1px * var(--super-mini-card-scale, 1));
+}
+
+.panel-shell.is-super-mini .panel-queue-item:hover {
+  transform: translateY(calc(-1px * var(--super-mini-card-scale, 1)));
+}
+
+:global(body.panel-super-mini-mode),
+:global(body.panel-super-mini-mode #app) {
+  background: transparent !important;
 }
 
 .panel-shell::before {
@@ -1508,6 +2076,12 @@ onBeforeUnmount(() => {
     0 8px 18px rgba(19, 24, 19, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.45);
   overflow: hidden;
+  cursor: grab;
+  --wails-draggable: no-drag;
+}
+
+.panel-queue-card:active {
+  cursor: grabbing;
 }
 
 .panel-queue-card-red {

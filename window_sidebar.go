@@ -34,6 +34,7 @@ const (
 	panelEdgeActivateGap   = 2
 	panelRightDockShiftPct = 0
 	panelHideGrace         = 500 * time.Millisecond
+	panelEdgeCooldown      = 1000 * time.Millisecond
 	panelAutoTickInterval  = 60 * time.Millisecond
 	windowMonitorInterval  = 450 * time.Millisecond
 	panelRestoreSignal     = "panel-restore.signal"
@@ -231,6 +232,7 @@ func (a *App) runPanelAutoController(stopCh <-chan struct{}) {
 
 	var lastInsideAt time.Time
 	lastInsideAt = time.Now()
+	var lastEdgeRevealAt time.Time
 
 	for {
 		select {
@@ -247,6 +249,10 @@ func (a *App) runPanelAutoController(stopCh <-chan struct{}) {
 			}
 
 			_ = hidePanelWindowFromTaskbar()
+
+			if !lastEdgeRevealAt.IsZero() && time.Since(lastEdgeRevealAt) < panelEdgeCooldown {
+				continue
+			}
 
 			cursorX, cursorY, err := getCursorPosition()
 			if err != nil {
@@ -299,6 +305,7 @@ func (a *App) runPanelAutoController(stopCh <-chan struct{}) {
 					if err := a.ensureNativePanelVisible(hwnd, bounds); err != nil {
 						debugLogf("panel edge-show failed: %v", err)
 					}
+					lastEdgeRevealAt = time.Now()
 					a.updatePanelRuntimeState(false, workArea, bounds, state.dockEdge)
 					continue
 				}
@@ -309,6 +316,7 @@ func (a *App) runPanelAutoController(stopCh <-chan struct{}) {
 					if err := a.ensureNativePanelVisible(hwnd, bounds); err != nil {
 						debugLogf("panel edge-show failed: %v", err)
 					}
+					lastEdgeRevealAt = time.Now()
 					a.updatePanelRuntimeState(false, workArea, bounds, state.dockEdge)
 					continue
 				}
@@ -335,13 +343,16 @@ func (a *App) runPanelAutoController(stopCh <-chan struct{}) {
 }
 
 func (a *App) captureNormalWindowBounds() {
-	if a.ctx == nil || a.isPanelMode() || !wruntime.WindowIsNormal(a.ctx) {
+	isNormal := a.ctx != nil && wruntime.WindowIsNormal(a.ctx)
+	if a.ctx == nil || a.isPanelMode() || !isNormal {
+		debugLogf("capture normal bounds skipped: ctx=%t panel=%t normal=%t", a.ctx != nil, a.isPanelMode(), isNormal)
 		return
 	}
 
 	width, height := wruntime.WindowGetSize(a.ctx)
 	x, y := wruntime.WindowGetPosition(a.ctx)
 	if width <= 0 || height <= 0 {
+		debugLogf("capture normal bounds invalid size: size=%dx%d pos=(%d,%d)", width, height, x, y)
 		return
 	}
 
@@ -354,6 +365,7 @@ func (a *App) captureNormalWindowBounds() {
 	}
 	appWindowState.hasNormalBounds = true
 	appWindowState.mu.Unlock()
+	debugLogf("capture normal bounds stored: size=%dx%d pos=(%d,%d)", width, height, x, y)
 }
 
 func (a *App) HideToTrayPanel() error {
@@ -361,13 +373,16 @@ func (a *App) HideToTrayPanel() error {
 		return nil
 	}
 
+	debugLogf("hide to tray panel requested")
 	a.captureNormalWindowBounds()
 	if err := a.startPanelProcessWithMode(panelStartAuto); err != nil {
+		debugLogf("hide to tray panel start process failed: %v", err)
 		return err
 	}
 
 	wruntime.WindowHide(a.ctx)
 	wruntime.Hide(a.ctx)
+	debugLogf("hide to tray panel completed")
 	return nil
 }
 
@@ -387,6 +402,7 @@ func (a *App) ShowMainWindow() error {
 		return nil
 	}
 
+	debugLogf("show main window requested")
 	a.stopPanelProcess()
 	defaultWidth, defaultHeight, minWidth, minHeight := resolveMainWindowSize()
 
@@ -404,11 +420,13 @@ func (a *App) ShowMainWindow() error {
 	if hasBounds && bounds.Width > 0 && bounds.Height > 0 {
 		width := clampWindowSize(bounds.Width, minWidth, defaultWidth)
 		height := clampWindowSize(bounds.Height, minHeight, defaultHeight)
+		debugLogf("show main window restoring bounds: size=%dx%d pos=(%d,%d)", width, height, bounds.X, bounds.Y)
 		wruntime.WindowSetSize(a.ctx, width, height)
 		wruntime.WindowSetPosition(a.ctx, bounds.X, bounds.Y)
 		return nil
 	}
 
+	debugLogf("show main window falling back to center: default=%dx%d", defaultWidth, defaultHeight)
 	wruntime.WindowSetSize(a.ctx, defaultWidth, defaultHeight)
 	wruntime.WindowCenter(a.ctx)
 	return nil
@@ -436,6 +454,7 @@ func (a *App) OpenManualSidebarPanel() error {
 		return nil
 	}
 
+	debugLogf("open manual sidebar panel requested")
 	a.captureNormalWindowBounds()
 	debugLogf("manual panel open requested")
 	clearPanelManualReadySignal()
@@ -682,6 +701,7 @@ func (a *App) InitPanelWindow(screenWidth int, screenHeight int) error {
 	if !a.isPanelMode() || a.ctx == nil {
 		return nil
 	}
+	debugLogf("panel init entry: manual=%t screen=%dx%d state=%+v", a.isManualPanelStart(), screenWidth, screenHeight, a.getPanelStateSnapshot())
 	if a.isManualPanelStart() {
 		debugLogf("panel init: manual panel start detected")
 		if err := a.applyManualPanelWindowState(screenWidth, screenHeight); err != nil {
@@ -695,6 +715,7 @@ func (a *App) InitPanelWindow(screenWidth int, screenHeight int) error {
 		}
 		return nil
 	}
+	debugLogf("panel init: auto panel start detected screen=%dx%d", screenWidth, screenHeight)
 	workArea := resolvePanelWorkArea(screenWidth, screenHeight)
 	appWindowState.mu.Lock()
 	appWindowState.panel.screenWidth = maxInt(workArea.Width(), screenWidth)
@@ -709,10 +730,12 @@ func (a *App) InitPanelWindow(screenWidth int, screenHeight int) error {
 	appWindowState.panel.hasPreferredY = false
 	appWindowState.panel.dockEdge = panelDockRight
 	appWindowState.mu.Unlock()
+	debugLogf("panel init: auto state reset complete workArea=(%d,%d)-(%d,%d)", workArea.Left, workArea.Top, workArea.Right, workArea.Bottom)
 	if nativePanelControllerSupported() {
 		a.startPanelAutoController()
 		return nil
 	}
+	debugLogf("panel init: applying non-native panel state")
 	return a.applyPanelWindowState(screenWidth, screenHeight, true)
 }
 
@@ -720,6 +743,7 @@ func (a *App) CollapsePanel() error {
 	if !a.isPanelMode() {
 		return nil
 	}
+	debugLogf("collapse panel requested")
 	if nativePanelControllerSupported() {
 		appWindowState.mu.Lock()
 		appWindowState.panel.collapsed = true
@@ -746,9 +770,11 @@ func (a *App) ExpandPanel() error {
 	if !a.isPanelMode() {
 		return nil
 	}
+	debugLogf("expand panel requested")
 	if nativePanelControllerSupported() {
 		hwnd, err := findPanelWindowHandle()
 		if err != nil || hwnd == 0 {
+			debugLogf("expand panel skipped: hwnd unavailable err=%v", err)
 			return nil
 		}
 		cursorX, cursorY, cursorErr := getCursorPosition()
@@ -760,10 +786,13 @@ func (a *App) ExpandPanel() error {
 		}
 		state := a.getPanelStateSnapshot()
 		bounds := a.resolveNativePanelBounds(workArea, state)
+		debugLogf("expand panel resolved bounds: workArea=(%d,%d)-(%d,%d) bounds=%dx%d pos=(%d,%d)", workArea.Left, workArea.Top, workArea.Right, workArea.Bottom, bounds.Width, bounds.Height, bounds.X, bounds.Y)
 		if err := a.ensureNativePanelVisible(hwnd, bounds); err != nil {
+			debugLogf("expand panel ensure visible failed: %v", err)
 			return err
 		}
 		a.updatePanelRuntimeState(false, workArea, bounds, state.dockEdge)
+		debugLogf("expand panel applied state: dock=%s", state.dockEdge)
 		return nil
 	}
 	appWindowState.mu.Lock()
@@ -809,8 +838,21 @@ func (a *App) GetPanelWindowBounds() (sidebarWindowBounds, error) {
 	}
 
 	hwnd, err := findPanelWindowHandle()
+	state := a.getPanelStateSnapshot()
+	workArea := resolvePanelWorkArea(state.screenWidth, state.screenHeight)
 	if err == nil && hwnd != 0 {
 		if rect, rectErr := getNativePanelWindowRect(hwnd); rectErr == nil && rect.Width() > 0 && rect.Height() > 0 {
+			if state.dockEdge == panelDockRight && int(rect.Left) <= int(workArea.Left)+panelEdgeActivateGap {
+				debugLogf(
+					"panel bounds fallback: native rect at left edge rect=(%d,%d)-(%d,%d) state=%+v",
+					rect.Left,
+					rect.Top,
+					rect.Right,
+					rect.Bottom,
+					state,
+				)
+				return a.resolveNativePanelBounds(workArea, state), nil
+			}
 			return sidebarWindowBounds{
 				Width:  rect.Width(),
 				Height: rect.Height(),
@@ -820,8 +862,6 @@ func (a *App) GetPanelWindowBounds() (sidebarWindowBounds, error) {
 		}
 	}
 
-	state := a.getPanelStateSnapshot()
-	workArea := resolvePanelWorkArea(state.screenWidth, state.screenHeight)
 	return a.resolveNativePanelBounds(workArea, state), nil
 }
 
@@ -835,7 +875,18 @@ func (a *App) applyPanelWindowState(screenWidth int, screenHeight int, collapsed
 	storedScreenWidth := appWindowState.panel.screenWidth
 	storedScreenHeight := appWindowState.panel.screenHeight
 	expandedWidth := appWindowState.panel.expandedWidth
+	currentState := appWindowState.panel
 	appWindowState.mu.Unlock()
+	debugLogf(
+		"panel apply state entry: collapsed=%t screen=%dx%d storedScreen=%dx%d expanded=%d state=%+v",
+		collapsed,
+		screenWidth,
+		screenHeight,
+		storedScreenWidth,
+		storedScreenHeight,
+		expandedWidth,
+		currentState,
+	)
 	if screenWidth <= 0 {
 		screenWidth = storedScreenWidth
 	}
@@ -901,6 +952,7 @@ func (a *App) applyPanelWindowState(screenWidth int, screenHeight int, collapsed
 	wruntime.WindowSetPosition(a.ctx, x, y)
 	wruntime.WindowShow(a.ctx)
 	wruntime.Show(a.ctx)
+	debugLogf("panel apply state committed: collapsed=%t size=%dx%d pos=(%d,%d)", collapsed, width, height, x, y)
 	return nil
 }
 
@@ -910,6 +962,7 @@ func (a *App) applyManualPanelWindowState(screenWidth int, screenHeight int) err
 	}
 
 	workArea := resolvePanelWorkArea(screenWidth, screenHeight)
+	debugLogf("manual panel apply entry: screen=%dx%d workArea=(%d,%d)-(%d,%d) state=%+v", screenWidth, screenHeight, workArea.Left, workArea.Top, workArea.Right, workArea.Bottom, a.getPanelStateSnapshot())
 	width := manualPanelWideWidth
 	if width > manualPanelMaxWidth {
 		width = manualPanelMaxWidth
@@ -1049,6 +1102,7 @@ func (a *App) SetPanelExpandedWidth(width int) error {
 	if !a.isPanelMode() {
 		return nil
 	}
+	debugLogf("set panel expanded width requested: width=%d state=%+v", width, a.getPanelStateSnapshot())
 	if width < panelWindowWidth {
 		width = panelWindowWidth
 	}
@@ -1076,6 +1130,7 @@ func (a *App) SetPanelExpandedWidth(width int) error {
 			return err
 		}
 		a.updatePanelRuntimeState(false, workArea, bounds, state.dockEdge)
+		debugLogf("set panel expanded width applied native: width=%d bounds=%dx%d pos=(%d,%d) dock=%s", width, bounds.Width, bounds.Height, bounds.X, bounds.Y, state.dockEdge)
 		return nil
 	}
 	return a.applyPanelWindowState(screenWidth, screenHeight, collapsed)
@@ -1085,6 +1140,7 @@ func (a *App) ResetPanelExpandedWidth() error {
 	if !a.isPanelMode() {
 		return nil
 	}
+	debugLogf("reset panel expanded width requested: state=%+v", a.getPanelStateSnapshot())
 	appWindowState.mu.Lock()
 	screenWidth := appWindowState.panel.screenWidth
 	screenHeight := appWindowState.panel.screenHeight
@@ -1106,6 +1162,7 @@ func (a *App) ResetPanelExpandedWidth() error {
 			return err
 		}
 		a.updatePanelRuntimeState(false, workArea, bounds, state.dockEdge)
+		debugLogf("reset panel expanded width applied native: bounds=%dx%d pos=(%d,%d) dock=%s", bounds.Width, bounds.Height, bounds.X, bounds.Y, state.dockEdge)
 		return nil
 	}
 	return a.applyPanelWindowState(screenWidth, screenHeight, collapsed)
