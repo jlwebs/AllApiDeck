@@ -1,6 +1,8 @@
 <template>
   <a-config-provider :theme="theme">
-    <router-view />
+    <div class="app-shell">
+      <router-view v-if="appReady" />
+    </div>
   </a-config-provider>
 </template>
 
@@ -16,6 +18,7 @@ export default {
   setup() {
     const { t } = useI18n();
     const router = useRouter();
+    const appReady = ref(false);
     const theme = ref({
       primaryColor: '#1890ff',
     });
@@ -24,19 +27,21 @@ export default {
       try {
         const mode = await GetLaunchMode();
         if (mode === 'panel' && router.currentRoute.value.path !== '/panel') {
-          router.replace('/panel');
+          await router.replace('/panel');
         } else if (mode === 'editor' && router.currentRoute.value.path !== '/editor') {
-          router.replace('/editor');
+          await router.replace('/editor');
         } else if (mode === 'desktop-config' && router.currentRoute.value.path !== '/desktop-config') {
-          router.replace('/desktop-config');
+          await router.replace('/desktop-config');
         }
         if (mode !== 'panel') {
           installSidebarRoutingDiagnostics(mode || 'main');
         }
       } catch {}
+      appReady.value = true;
     });
 
     return {
+      appReady,
       theme,
       t,
     };
@@ -46,4 +51,9 @@ export default {
 
 <style>
 @import './styles/global.css';
+
+.app-shell {
+  min-height: 100vh;
+  min-width: 0;
+}
 </style>
