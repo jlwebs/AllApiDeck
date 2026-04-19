@@ -19,11 +19,16 @@
             <a-alert type="info" show-icon class="sync-alert sync-alert-inline" :message="syncSummary" />
           </div>
           <div class="sync-panel-trigger-slot">
-            <a-tooltip title="打开 Mini Bar 侧栏">
+            <a-tooltip
+              title="打开 Mini Bar 侧栏"
+              placement="topRight"
+              overlay-class-name="key-management-mini-bar-tooltip"
+              :getPopupContainer="getSidebarPopupContainer"
+            >
               <button
                 type="button"
                 class="sync-panel-trigger-button"
-                :disabled="openingManualSidebar || !manualSidebarBridgeReady"
+                :disabled="openingManualSidebar"
                 @click="openManualMiniBar"
               >
                 <MenuFoldOutlined />
@@ -52,21 +57,47 @@
         <template #extra>
           <a-space wrap>
             <a-checkbox v-model:checked="hideInvalidKeys">隐藏无效密钥</a-checkbox>
-            <a-button @click="openManualRecordModal()">手工添加</a-button>
+            <a-tooltip title="手工添加">
+              <button type="button" class="inventory-icon-button inventory-icon-button-primary" @click="openManualRecordModal()">
+                <PlusOutlined />
+              </button>
+            </a-tooltip>
             <a-button v-if="isCompactMode" size="small" @click="exitCompactSidebar">展开</a-button>
-            <a-popover trigger="hover" placement="bottom">
+            <a-popover
+              trigger="hover"
+              placement="bottomRight"
+              overlay-class-name="key-management-import-popover"
+              :getPopupContainer="getSidebarPopupContainer"
+            >
               <template #content>
                 <div class="import-export-menu">
-                  <a-button size="small" block @click="exportAllValidKeysPackage">导出全部有效 Key</a-button>
-                  <a-button size="small" block @click="importFromClipboardPackage">从剪贴板导入</a-button>
+                  <button type="button" class="import-export-menu-item" @click="exportAllValidKeysPackage">
+                    <DownloadOutlined />
+                    <span>导出全部有效 Key</span>
+                  </button>
+                  <button type="button" class="import-export-menu-item" :disabled="displayedRows.length === 0" @click="exportCsv">
+                    <FileTextOutlined />
+                    <span>导出 CSV</span>
+                  </button>
+                  <button type="button" class="import-export-menu-item" @click="importFromClipboardPackage">
+                    <ImportOutlined />
+                    <span>从剪贴板导入</span>
+                  </button>
                 </div>
               </template>
-              <a-button type="primary">导入/导出</a-button>
+              <a-tooltip title="导入/导出">
+                <button type="button" class="inventory-icon-button inventory-icon-button-primary">
+                  <SwapOutlined />
+                </button>
+              </a-tooltip>
             </a-popover>
-            <a-button v-if="!isCompactMode" :disabled="displayedRows.length === 0" @click="exportCsv">导出 CSV</a-button>
-            <a-popconfirm v-if="!isCompactMode" title="确认清空本地密钥库？" ok-text="清空" cancel-text="取消" @confirm="clearLocalRecords">
-              <a-button danger :disabled="tableData.length === 0">清空本地库</a-button>
-            </a-popconfirm>
+            <a-tooltip v-if="!isCompactMode" title="清空本地库">
+              <a-popconfirm title="确认清空本地密钥库？" ok-text="清空" cancel-text="取消" @confirm="clearLocalRecords">
+                <button type="button" class="inventory-icon-button inventory-icon-button-danger" :disabled="tableData.length === 0">
+                  <DeleteOutlined />
+                </button>
+              </a-popconfirm>
+            </a-tooltip>
           </a-space>
         </template>
 
@@ -361,7 +392,7 @@
 
 <script setup>
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
-import { ClockCircleOutlined, MenuFoldOutlined, ReloadOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
+import { ClockCircleOutlined, DeleteOutlined, DownloadOutlined, FileTextOutlined, ImportOutlined, MenuFoldOutlined, PlusOutlined, ReloadOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import { ConfigProvider, message, Modal, theme } from 'ant-design-vue';
 import { useRoute } from 'vue-router';
 import AppHeader from './AppHeader.vue';
@@ -384,6 +415,7 @@ import {
   HISTORY_SNAPSHOT_SYNC_EVENT,
   getCachedLastResultsSnapshotRaw,
 } from '../utils/historySnapshotStore.js';
+import { ExportTextFile } from '../../wailsjs/go/main/App.js';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
 import geminiAppIcon from '../assets/app-icons/gemini.svg';
@@ -470,6 +502,10 @@ const recordRenderMetaCache = new Map();
 const configProviderTheme = computed(() => ({
   algorithm: isDarkMode.value ? theme.darkAlgorithm : theme.defaultAlgorithm,
 }));
+
+function getSidebarPopupContainer(triggerNode) {
+  return triggerNode?.ownerDocument?.body || document.body;
+}
 
 const refreshManualSidebarBridgeReady = () => {
   manualSidebarBridgeReady.value = isManualSidebarBridgeAvailable();
@@ -697,7 +733,7 @@ async function exitCompactSidebar() {
 }
 
 async function openManualMiniBar() {
-  if (!manualSidebarBridgeReady.value || openingManualSidebar.value) return;
+  if (openingManualSidebar.value) return;
   openingManualSidebar.value = true;
   try {
     await openManualSidebarPanel();
@@ -1206,16 +1242,25 @@ function base64UrlToBytes(value) {
   return bytes;
 }
 
-function exportCsv() {
+async function exportCsv() {
   if (!displayedRows.value.length) return;
   let csv = '\uFEFF网站,Token名称,API Key,接口地址,模型候选,状态,最近同步,最近快测,快测结果\n';
   displayedRows.value.forEach(record => {
     csv += [`"${record.siteName}"`, `"${record.tokenName || ''}"`, `"${record.apiKey}"`, `"${record.siteUrl}"`, `"${record.modelsText || ''}"`, `"${record.status === 1 ? '正常' : '禁用/异常'}"`, `"${formatDateTime(record.updatedAt)}"`, `"${formatDateTime(record.quickTestAt)}"`, `"${record.quickTestRemark || ''}"`].join(',');
     csv += '\n';
   });
+  const filename = `key-management-${Date.now()}.csv`;
+  if (isWailsRuntime) {
+    const savedPath = await ExportTextFile(csv, filename);
+    if (savedPath) {
+      message.success(`CSV 已导出：${savedPath}`);
+    }
+    return;
+  }
+
   const anchor = document.createElement('a');
   anchor.href = `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`;
-  anchor.download = `key-management-${Date.now()}.csv`;
+  anchor.download = filename;
   anchor.click();
 }
 
@@ -2292,11 +2337,22 @@ function persistMeta() {
 .record-model-select :deep(.ant-select-selection-placeholder){font-size:11px;line-height:22px}
 :deep(.record-model-dropdown .ant-select-item-option-content){font-size:11px;line-height:1.35}
 :deep(.record-model-dropdown .ant-select-item){font-size:11px;min-height:34px;padding-block:6px}
-.import-export-menu{min-width:170px;display:flex;flex-direction:column;gap:8px}
+.import-export-menu{width:max-content;min-width:0;max-width:calc(100vw - 24px);display:flex;flex-direction:column;gap:8px}
+.import-export-menu-item{border:0;border-radius:12px;display:flex;align-items:center;gap:8px;width:100%;padding:10px 12px;background:#f8fafc;color:#0f172a;text-align:left;cursor:pointer;transition:background .18s ease,color .18s ease,transform .18s ease}
+.import-export-menu-item:hover:not(:disabled){background:#e0ecff;color:#1d4ed8;transform:translateY(-1px)}
+.import-export-menu-item:disabled{cursor:not-allowed;opacity:.5;box-shadow:none;transform:none}
+.import-export-menu-item :deep(.anticon),.import-export-menu-item svg{font-size:14px;flex:0 0 auto}
+.import-export-menu-item span{white-space:normal;overflow-wrap:anywhere}
 .export-actions-cell{display:flex;flex-direction:column;align-items:flex-start;gap:10px;min-width:0}
 .row-actions-stack{display:flex;flex-direction:column;align-items:stretch;gap:8px;width:100%}
 .row-actions-stack :deep(.ant-btn),.row-actions-stack :deep(.ant-popconfirm){width:100%}
 .inline-export-actions{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;min-width:max-content}
+.inventory-icon-button{width:34px;height:34px;border:0;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .18s ease, box-shadow .18s ease, filter .18s ease, opacity .18s ease;background:linear-gradient(135deg,#f8fafc,#e2e8f0);box-shadow:inset 0 0 0 1px rgba(148,163,184,.28);flex:0 0 auto;color:#0f172a}
+.inventory-icon-button:hover:not(:disabled){transform:translateY(-1px) scale(1.06);filter:saturate(1.08)}
+.inventory-icon-button:disabled{cursor:not-allowed;opacity:.45;transform:none;filter:none;box-shadow:inset 0 0 0 1px rgba(148,163,184,.18)}
+.inventory-icon-button :deep(.anticon),.inventory-icon-button svg{font-size:16px;line-height:1}
+.inventory-icon-button-primary{background:linear-gradient(135deg,#eff6ff,#dbeafe);color:#1d4ed8;box-shadow:0 10px 24px rgba(96,165,250,.18),inset 0 0 0 1px rgba(96,165,250,.22)}
+.inventory-icon-button-danger{background:linear-gradient(135deg,#fff1f2,#ffe4e6);color:#be123c;box-shadow:0 10px 24px rgba(244,63,94,.12),inset 0 0 0 1px rgba(244,63,94,.18)}
 .export-icon-button{width:32px;height:32px;border:0;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .18s ease, box-shadow .18s ease, filter .18s ease;background:linear-gradient(135deg,#f8fafc,#e2e8f0);box-shadow:inset 0 0 0 1px rgba(148,163,184,.28);flex:0 0 auto}
 .export-icon-button:hover{transform:translateY(-1px) scale(1.06);filter:saturate(1.08)}
 .export-icon-glyph{font-size:16px;line-height:1}
@@ -2309,6 +2365,9 @@ function persistMeta() {
 .switch-app-menu{min-width:132px;display:flex;flex-direction:column;gap:6px}
 .switch-app-item{border:0;border-radius:10px;background:#f8fafc;color:#0f172a;padding:8px 10px;text-align:left;cursor:pointer;transition:background .18s ease,color .18s ease}
 .switch-app-item:hover{background:#e0ecff;color:#1d4ed8}
+:global(.key-management-mini-bar-tooltip .ant-tooltip-inner){max-width:calc(100vw - 24px);white-space:normal;overflow-wrap:anywhere}
+:global(.key-management-import-popover .ant-popover-inner){max-width:calc(100vw - 24px)}
+:global(.key-management-import-popover .ant-popover-inner-content){padding:8px}
 .quick-test-tag{width:fit-content}
 .quick-test-cell{gap:6px;min-width:0;align-items:flex-start;padding-left:0}
 .export-quick-test-row{width:100%;flex-direction:row;align-items:center;gap:8px;flex-wrap:nowrap}
