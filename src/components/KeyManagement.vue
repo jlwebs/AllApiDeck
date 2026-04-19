@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <ConfigProvider :theme="configProviderTheme">
     <div class="key-management" :class="{ 'key-management-compact': isCompactMode }">
       <AppHeader v-if="!isCompactMode" current-page="keys" :is-dark-mode="isDarkMode" @experimental="showExperimentalFeatures = true" @settings="openSettingsModal" />
@@ -260,42 +260,88 @@
         </a-table>
       </a-card>
 
-      <a-modal v-model:open="manualRecordModalOpen" :title="manualRecordEditing ? '编辑记录' : '手工添加记录'" :confirm-loading="manualRecordSaving" ok-text="保存" cancel-text="取消" width="820px" @ok="submitManualRecord">
-        <a-form layout="vertical">
-          <div class="config-grid">
-            <a-form-item label="网站名称">
-              <a-input v-model:value="manualRecordDraft.siteName" placeholder="例如 My Site" />
-            </a-form-item>
-            <a-form-item label="Token 名称">
-              <a-input v-model:value="manualRecordDraft.tokenName" placeholder="可选" />
-            </a-form-item>
-            <a-form-item label="接口地址">
-              <a-input v-model:value="manualRecordDraft.siteUrl" placeholder="https://example.com" />
-            </a-form-item>
-            <a-form-item label="API Key">
-              <a-input-password v-model:value="manualRecordDraft.apiKey" placeholder="sk-..." />
-            </a-form-item>
-            <a-form-item label="模型候选">
-              <a-select
-                v-model:value="manualRecordDraft.modelsValue"
-                :options="manualModelOptions"
-                :loading="manualModelLoading"
-                show-search
-                :filter-option="true"
-                option-filter-prop="label"
-                placeholder="切换到这里会自动抓取模型，单选保留一个候选"
-                @dropdownVisibleChange="handleManualModelDropdownVisibleChange"
-                @change="handleManualModelSelectionChange"
-              />
-            </a-form-item>
-            <a-form-item label="状态">
-              <a-select v-model:value="manualRecordDraft.status">
-                <a-select-option :value="1">正常</a-select-option>
-                <a-select-option :value="2">禁用/异常</a-select-option>
-              </a-select>
-            </a-form-item>
+      <a-modal
+        v-model:open="manualRecordModalOpen"
+        :title="null"
+        :closable="false"
+        :footer="null"
+        :mask-closable="false"
+        :width="'min(96vw, 1120px)'"
+        wrap-class-name="manual-record-modal-wrap"
+        @cancel="closeManualRecordModal"
+      >
+        <div class="manual-record-dialog">
+          <div class="manual-record-header">
+            <div class="manual-record-header-copy">
+              <div class="manual-record-kicker">Key Editor</div>
+              <div class="manual-record-title">{{ manualRecordEditing ? '编辑密钥' : '手工添加密钥' }}</div>
+              <div class="manual-record-subtitle">常用字段两列排布，减少上下滚动和来回切换。</div>
+            </div>
+
+            <div class="manual-record-header-actions">
+              <a-button
+                type="text"
+                size="small"
+                class="manual-record-close-button"
+                aria-label="关闭"
+                title="关闭"
+                @click="closeManualRecordModal"
+              >
+                ×
+              </a-button>
+            </div>
           </div>
-        </a-form>
+
+          <a-form layout="vertical" class="manual-record-form">
+            <div class="manual-record-fields">
+              <div class="manual-record-row">
+                <a-form-item label="网站名称" class="manual-record-form-item">
+                  <a-input v-model:value="manualRecordDraft.siteName" size="small" placeholder="例如 My Site" />
+                </a-form-item>
+                <a-form-item label="Token 名称" class="manual-record-form-item">
+                  <a-input v-model:value="manualRecordDraft.tokenName" size="small" placeholder="可选" />
+                </a-form-item>
+              </div>
+
+              <div class="manual-record-row">
+                <a-form-item label="接口地址" class="manual-record-form-item">
+                  <a-input v-model:value="manualRecordDraft.siteUrl" size="small" placeholder="https://example.com" />
+                </a-form-item>
+                <a-form-item label="API Key" class="manual-record-form-item">
+                  <a-input-password v-model:value="manualRecordDraft.apiKey" size="small" placeholder="sk-..." />
+                </a-form-item>
+              </div>
+
+              <div class="manual-record-row manual-record-row-last">
+                <a-form-item label="状态" class="manual-record-form-item manual-record-form-item-tight">
+                  <a-select v-model:value="manualRecordDraft.status" size="small">
+                    <a-select-option :value="1">正常</a-select-option>
+                    <a-select-option :value="2">禁用/异常</a-select-option>
+                  </a-select>
+                </a-form-item>
+                <a-form-item label="模型候选" class="manual-record-form-item manual-record-form-item-tight">
+                  <a-select
+                    v-model:value="manualRecordDraft.modelsValue"
+                    :options="manualModelOptions"
+                    :loading="manualModelLoading"
+                    size="small"
+                    show-search
+                    :filter-option="true"
+                    option-filter-prop="label"
+                    placeholder="切换到这里会自动抓取模型，单选保留一个候选"
+                    @dropdownVisibleChange="handleManualModelDropdownVisibleChange"
+                    @change="handleManualModelSelectionChange"
+                  />
+                </a-form-item>
+              </div>
+            </div>
+          </a-form>
+
+          <div class="manual-record-footer">
+            <a-button size="small" @click="closeManualRecordModal">取消</a-button>
+            <a-button type="primary" size="small" :loading="manualRecordSaving" @click="submitManualRecord">保存</a-button>
+          </div>
+        </div>
       </a-modal>
 
       <a-modal v-model:open="desktopConfigModalOpen" title="专属一键配置" :confirm-loading="desktopConfigLoading" ok-text="生成变更预览" cancel-text="取消" width="1120px" @ok="generateDesktopConfigPreview">
@@ -1107,6 +1153,10 @@ function openManualRecordModal(record = null) {
   manualRecordModalOpen.value = true;
 }
 
+function closeManualRecordModal() {
+  manualRecordModalOpen.value = false;
+}
+
 async function submitManualRecord() {
   const siteName = String(manualRecordDraft.siteName || '').trim();
   const siteUrl = normalizeSiteUrl(manualRecordDraft.siteUrl);
@@ -1129,7 +1179,7 @@ async function submitManualRecord() {
       nextRecord,
     ];
     persistRecords();
-    manualRecordModalOpen.value = false;
+    closeManualRecordModal();
     message.success(manualRecordEditing.value ? '记录已更新' : '手工记录已添加');
   } finally {
     manualRecordSaving.value = false;
@@ -2404,6 +2454,119 @@ function persistMeta() {
 .desktop-app-gemini .desktop-app-logo{background:linear-gradient(135deg,#ffffff,#eef4ff)}
 .desktop-app-opencode .desktop-app-logo{background:linear-gradient(135deg,#eef2ff,#dbeafe)}
 .desktop-app-openclaw .desktop-app-logo{background:linear-gradient(135deg,#fff1f2,#ffe4e6)}
+.manual-record-modal-wrap :deep(.ant-modal-content){
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+.manual-record-modal-wrap :deep(.ant-modal-body){
+  padding: 0;
+}
+.manual-record-dialog{
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border-radius: 24px;
+  background: transparent;
+}
+.manual-record-header{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:6px;
+}
+.manual-record-header-copy{min-width:0}
+.manual-record-header-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.manual-record-close-button{
+  padding-inline:8px;
+  color:#ef4444;
+  font-size:20px;
+  font-weight:800;
+  line-height:1;
+}
+.manual-record-close-button:hover{
+  color:#dc2626 !important;
+  background:rgba(239,68,68,.08);
+}
+.manual-record-kicker{
+  margin-bottom:2px;
+  color:#2563eb;
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+}
+.manual-record-title{
+  color:#0f172a;
+  font-size:18px;
+  font-weight:800;
+  line-height:1.2;
+}
+.manual-record-subtitle{
+  max-width:48ch;
+  margin-top:2px;
+  color:#64748b;
+  font-size:12px;
+  line-height:1.35;
+}
+.manual-record-form{margin-top:0}
+.manual-record-fields{
+  display:grid;
+  gap:6px;
+}
+.manual-record-row{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));
+  gap:6px;
+  align-items:start;
+}
+.manual-record-row-last{
+  grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));
+}
+.manual-record-form-item{
+  margin-bottom:0;
+  min-width:0;
+}
+.manual-record-form-item :deep(.ant-form-item-label){
+  padding-bottom:1px;
+}
+.manual-record-form-item :deep(.ant-form-item-control){
+  min-width:0;
+}
+.manual-record-form-item :deep(.ant-form-item-label > label){
+  color:#334155;
+  font-size:10px;
+  font-weight:600;
+  line-height:14px;
+  height:14px;
+}
+.manual-record-form-item :deep(.ant-input),
+.manual-record-form-item :deep(.ant-input-password),
+.manual-record-form-item :deep(.ant-select-selector){
+  border-radius:11px;
+}
+.manual-record-form-item :deep(.ant-input),
+.manual-record-form-item :deep(.ant-input-password){
+  padding:1px 10px;
+}
+.manual-record-form-item :deep(.ant-select-selection-item),
+.manual-record-form-item :deep(.ant-select-selection-placeholder){
+  font-size:12px;
+  line-height:22px;
+}
+.manual-record-form-item-tight{
+  align-self:end;
+}
+.manual-record-footer{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:8px;
+  margin-top:6px;
+  padding-top:6px;
+  border-top:1px solid rgba(148,163,184,.18);
+}
 .config-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}
 .portable-settings-card{display:grid;gap:18px;padding:18px;border-radius:18px;border:1px solid rgba(116,144,104,.16);background:rgba(248,251,246,.96)}
 .portable-settings-copy{display:grid;gap:8px}
@@ -2456,3 +2619,4 @@ function persistMeta() {
 .key-management-compact .record-model-select :deep(.ant-select-selection-placeholder){font-size:11px;line-height:24px}
 @media (max-width:900px){.key-management{padding:0 8px 0}.desktop-config-layout{grid-template-columns:1fr}.desktop-app-grid{grid-template-columns:repeat(4,minmax(0,1fr));overflow:auto}.config-grid{grid-template-columns:1fr}}
 </style>
+
