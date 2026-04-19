@@ -1,5 +1,5 @@
 <template>
-  <div class="key-side-panel" :class="{ 'is-super-mini': superMiniMode }">
+  <div ref="keySidePanelRef" class="key-side-panel" :class="{ 'is-super-mini': superMiniMode }">
     <div ref="panelShellRef" class="panel-shell" :class="{ 'is-super-mini': superMiniMode }">
       <div class="panel-ambient panel-ambient-top"></div>
       <div class="panel-ambient panel-ambient-bottom"></div>
@@ -409,6 +409,7 @@ const advancedProxyDispatchClock = ref(Date.now());
 const activePopoverRowKey = ref('');
 const activeModelDropdownRowKey = ref('');
 const panelBodyRef = ref(null);
+const keySidePanelRef = ref(null);
 const panelQueueCardRef = ref(null);
 const panelQueueStripRef = ref(null);
 const panelShellRef = ref(null);
@@ -427,6 +428,7 @@ let superMiniQueueScrollLeft = 0;
 let superMiniQueueCardHintHoverStartedAt = 0;
 let superMiniWindowBounds = null;
 let superMiniRestoreBounds = null;
+let superMiniEnableAnchorCache = null;
 let superMiniTransitionToken = 0;
 let superMiniWindowDragLogAt = 0;
 let superMiniWindowDragTarget = null;
@@ -574,6 +576,37 @@ function measureSuperMiniContentHeight() {
   const cardBottom = Number(cardRect.bottom);
   const contentHeight = Math.ceil(cardBottom - top);
   return Number.isFinite(contentHeight) && contentHeight > 0 ? contentHeight : null;
+}
+
+function measureSuperMiniWindowAnchorOffset() {
+  const cardRect = panelQueueCardRef.value?.getBoundingClientRect?.();
+  if (!cardRect) return { x: 0, y: 0, card: null };
+
+  const scrollX = Number.isFinite(Number(window?.scrollX)) ? Number(window.scrollX) : 0;
+  const scrollY = Number.isFinite(Number(window?.scrollY)) ? Number(window.scrollY) : 0;
+  const offsetX = Number(cardRect.left || 0) + scrollX;
+  const offsetY = Number(cardRect.top || 0) + scrollY;
+
+  return {
+    x: Math.round(Number.isFinite(offsetX) ? offsetX : 0),
+    y: Math.round(Number.isFinite(offsetY) ? offsetY : 0),
+    card: {
+      left: Number(cardRect.left || 0),
+      top: Number(cardRect.top || 0),
+      width: Number(cardRect.width || 0),
+      height: Number(cardRect.height || 0),
+    },
+  };
+}
+
+function cacheSuperMiniEnableAnchor(reason = 'toggle') {
+  const anchor = measureSuperMiniWindowAnchorOffset();
+  superMiniEnableAnchorCache = anchor;
+  appendPanelClientLog(
+    'panel.super-mini',
+    `cache enable anchor reason=${reason} anchor=${anchor.x}x${anchor.y} cardRect=${JSON.stringify(anchor.card || null)}`,
+  );
+  return anchor;
 }
 
 function collectSuperMiniKSample(kValue, now = Date.now()) {
@@ -793,6 +826,8 @@ async function applySuperMiniWindowMode(enabled) {
   if (!enabled) {
     resetSuperMiniWindowDragState();
     resetQueueStripDragState();
+  } else {
+    cacheSuperMiniEnableAnchor('dblclick');
   }
   superMiniMode.value = Boolean(enabled);
   syncSuperMiniBodyClass();
@@ -826,6 +861,7 @@ async function applySuperMiniWindowMode(enabled) {
     const shellRect = panelShellRef.value?.getBoundingClientRect?.();
     const shellWidth = Math.ceil(Number(shellRect?.width || 0));
     const shellHeight = Math.ceil(Number(shellRect?.height || 0));
+    const preLayoutOffsetDetails = superMiniEnableAnchorCache || measureSuperMiniWindowAnchorOffset();
     const enableBounds = superMiniRestoreBounds || superMiniWindowBounds;
     const width = Math.round(Number(enableBounds?.width || shellWidth || 100)*0.93);
     const measuredHeight = measureSuperMiniContentHeight();
@@ -833,7 +869,7 @@ async function applySuperMiniWindowMode(enabled) {
     const cardScale = shellWidth > 0 ? width / shellWidth : SUPER_MINI_SCALE;
     appendPanelClientLog(
       'panel.super-mini',
-      `enable sizing token=${transitionToken} shell=${shellWidth}x${shellHeight} measured=${measuredHeight ?? 'n/a'} target=${width}x${height} scale=${cardScale.toFixed(4)}`,
+      `enable sizing token=${transitionToken} shell=${shellWidth}x${shellHeight} measured=${measuredHeight ?? 'n/a'} preAnchor=${preLayoutOffsetDetails.x}x${preLayoutOffsetDetails.y} preCardRect=${JSON.stringify(preLayoutOffsetDetails.card || null)} target=${width}x${height} scale=${cardScale.toFixed(4)}`,
     );
     const dockState = String(await GetPanelDockState().catch(() => '')).trim();
     const enableTargetX = isValidSidebarWindowBounds(enableBounds)
@@ -852,14 +888,26 @@ async function applySuperMiniWindowMode(enabled) {
       await SetPanelSuperMiniActive(true).catch(() => {});
       WindowSetMinSize(0, 0);
       WindowSetMaxSize(0, 0);
-      if (enableTargetX !== null && enableTargetY !== null) {
-        WindowSetPosition(enableTargetX, enableTargetY);
+      await WindowSetSize(width, height);
+      await new Promise(resolve => window.requestAnimationFrame(() => resolve()));
+      const settleOffsetDetails = measureSuperMiniWindowAnchorOffset();
+      const adjustedEnableTargetX = enableTargetX !== null
+        ? Math.round(enableTargetX + Number(preLayoutOffsetDetails.x || 0))
+        : null;
+      const adjustedEnableTargetY = enableTargetY !== null
+        ? Math.round(enableTargetY + Number(preLayoutOffsetDetails.y || 0))
+        : null;
+      appendPanelClientLog(
+        'panel.super-mini',
+        `enable settle token=${transitionToken} settleAnchor=${settleOffsetDetails.x}x${settleOffsetDetails.y} settleCardRect=${JSON.stringify(settleOffsetDetails.card || null)} cachedAnchor=${preLayoutOffsetDetails.x}x${preLayoutOffsetDetails.y} rawPos=${enableTargetX},${enableTargetY} finalPos=${adjustedEnableTargetX},${adjustedEnableTargetY}`,
+      );
+      if (adjustedEnableTargetX !== null && adjustedEnableTargetY !== null) {
+        await WindowSetPosition(adjustedEnableTargetX, adjustedEnableTargetY);
         appendPanelClientLog(
           'panel.super-mini',
-          `enable position set token=${transitionToken} dock=${dockState || 'unknown'} pos=${enableTargetX},${enableTargetY}`,
+          `enable position set token=${transitionToken} dock=${dockState || 'unknown'} rawPos=${enableTargetX},${enableTargetY} cachedOffset=${preLayoutOffsetDetails.x}x${preLayoutOffsetDetails.y} settleOffset=${settleOffsetDetails.x}x${settleOffsetDetails.y} finalPos=${adjustedEnableTargetX},${adjustedEnableTargetY}`,
         );
       }
-      WindowSetSize(width, height);
       appendPanelClientLog('panel.super-mini', `window size set token=${transitionToken} size=${width}x${height}`);
       await logSuperMiniWindowSnapshot('after resize', transitionToken, `target=${width}x${height}`);
     } catch (error) {
@@ -882,13 +930,13 @@ async function applySuperMiniWindowMode(enabled) {
   );
   try {
     if (restoreBounds) {
-      WindowSetPosition(
-        Math.round(restoreBounds.x),
-        Math.round(restoreBounds.y),
-      );
       WindowSetSize(
         Math.max(1, Math.round(restoreBounds.width)),
         Math.max(1, Math.round(restoreBounds.height)),
+      );
+      WindowSetPosition(
+        Math.round(restoreBounds.x),
+        Math.round(restoreBounds.y),
       );
     }
     await logSuperMiniWindowSnapshot('after restore', transitionToken, `restored=${formatSidebarBounds(restoreBounds)}`);
@@ -904,6 +952,9 @@ async function applySuperMiniWindowMode(enabled) {
   }
   superMiniWindowBounds = null;
   superMiniRestoreBounds = null;
+  if (!enabled) {
+    superMiniEnableAnchorCache = null;
+  }
   appendPanelClientLog('panel.super-mini', `transition cleared token=${transitionToken}`);
 }
 
