@@ -2,49 +2,64 @@
   <div class="editor-view">
     <div class="editor-shell">
       <div class="editor-header">
-        <div>
+        <div class="editor-header-copy">
+          <div class="editor-kicker">Key Editor</div>
           <div class="editor-title">{{ editingRecord ? '编辑密钥' : '手工添加密钥' }}</div>
-          <div class="editor-subtitle">保存后会直接写入本地密钥库</div>
+          <div class="editor-subtitle">常用字段两列排布，减少上下滚动和来回切换。</div>
         </div>
-        <a-button type="text" @click="closeWindow">关闭</a-button>
+
+        <div class="editor-header-actions">
+          <a-button type="text" size="small" class="editor-close-button" aria-label="关闭" title="关闭" @click="closeWindow">×</a-button>
+        </div>
       </div>
 
       <a-form layout="vertical" class="editor-form">
-        <a-form-item label="网站">
-          <a-input v-model:value="draft.siteName" placeholder="例如 Claude Hub" />
-        </a-form-item>
-        <a-form-item label="Token 名称">
-          <a-input v-model:value="draft.tokenName" placeholder="可选" />
-        </a-form-item>
-        <a-form-item label="接口地址">
-          <a-input v-model:value="draft.siteUrl" placeholder="https://example.com" />
-        </a-form-item>
-        <a-form-item label="API Key">
-          <a-input-password v-model:value="draft.apiKey" placeholder="sk-..." />
-        </a-form-item>
-        <a-form-item label="模型">
-          <a-select
-            v-model:value="draft.modelsValue"
-            :options="modelOptions"
-            :loading="modelLoading"
-            show-search
-            :filter-option="true"
-            option-filter-prop="label"
-            placeholder="打开这里后自动抓取模型"
-            @dropdownVisibleChange="handleModelDropdownVisibleChange"
-          />
-        </a-form-item>
-        <a-form-item label="状态">
-          <a-select v-model:value="draft.status">
-            <a-select-option :value="1">正常</a-select-option>
-            <a-select-option :value="2">禁用/异常</a-select-option>
-          </a-select>
-        </a-form-item>
+        <div class="editor-fields">
+          <div class="editor-row">
+            <a-form-item label="网站" class="editor-form-item">
+              <a-input v-model:value="draft.siteName" size="small" placeholder="例如 Claude Hub" />
+            </a-form-item>
+            <a-form-item label="Token 名称" class="editor-form-item">
+              <a-input v-model:value="draft.tokenName" size="small" placeholder="可选" />
+            </a-form-item>
+          </div>
+
+          <div class="editor-row">
+            <a-form-item label="接口地址" class="editor-form-item">
+              <a-input v-model:value="draft.siteUrl" size="small" placeholder="https://example.com" />
+            </a-form-item>
+            <a-form-item label="API Key" class="editor-form-item">
+              <a-input-password v-model:value="draft.apiKey" size="small" placeholder="sk-..." />
+            </a-form-item>
+          </div>
+
+          <div class="editor-row editor-row-last">
+            <a-form-item label="状态" class="editor-form-item editor-form-item-tight">
+              <a-select v-model:value="draft.status" size="small">
+                <a-select-option :value="1">正常</a-select-option>
+                <a-select-option :value="2">禁用/异常</a-select-option>
+              </a-select>
+            </a-form-item>
+            <a-form-item label="模型" class="editor-form-item editor-form-item-tight">
+              <a-select
+                v-model:value="draft.modelsValue"
+                :options="modelOptions"
+                :loading="modelLoading"
+                size="small"
+                show-search
+                :filter-option="true"
+                option-filter-prop="label"
+                placeholder="打开后自动抓取模型"
+                @dropdownVisibleChange="handleModelDropdownVisibleChange"
+              />
+            </a-form-item>
+          </div>
+        </div>
       </a-form>
 
       <div class="editor-footer">
-        <a-button @click="closeWindow">取消</a-button>
-        <a-button type="primary" :loading="saving" @click="submitRecord">保存</a-button>
+        <a-button size="small" @click="closeWindow">取消</a-button>
+        <a-button type="primary" size="small" :loading="saving" @click="submitRecord">保存</a-button>
       </div>
     </div>
   </div>
@@ -148,11 +163,179 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.editor-view{min-height:100vh;padding:20px;background:linear-gradient(180deg,#f8fafc,#eef2ff)}
-.editor-shell{max-width:560px;margin:0 auto;padding:22px 22px 18px;border-radius:24px;background:rgba(255,255,255,.96);box-shadow:0 24px 60px rgba(15,23,42,.14)}
-.editor-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:18px}
-.editor-title{font-size:22px;font-weight:700;color:#0f172a}
-.editor-subtitle{margin-top:4px;font-size:12px;color:#64748b}
-.editor-form{margin-top:8px}
-.editor-footer{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:8px}
+.editor-view {
+  width: 100%;
+  height: 100vh;
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 8px;
+  display: flex;
+  overflow: hidden;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(191, 219, 254, 0.75), transparent 34%),
+    radial-gradient(circle at top right, rgba(167, 243, 208, 0.45), transparent 30%),
+    linear-gradient(180deg, #f8fafc, #eef2ff);
+}
+
+.editor-shell {
+  width: min(100%, 880px);
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 10px 12px 8px;
+  border-radius: 21px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.94));
+  box-shadow:
+    0 18px 38px rgba(15, 23, 42, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(12px) saturate(108%);
+  overflow: hidden;
+}
+
+.editor-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  -webkit-app-region: drag;
+}
+
+.editor-header-copy {
+  min-width: 0;
+}
+
+.editor-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  -webkit-app-region: no-drag;
+}
+
+.editor-close-button {
+  padding-inline: 8px;
+  color: #ef4444;
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1;
+  -webkit-app-region: no-drag;
+}
+
+.editor-close-button:hover {
+  color: #dc2626 !important;
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.editor-kicker {
+  margin-bottom: 2px;
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.editor-title {
+  color: #0f172a;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.editor-subtitle {
+  max-width: 48ch;
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.editor-form {
+  margin-top: 0;
+}
+
+.editor-fields {
+  display: grid;
+  gap: 6px;
+}
+
+.editor-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+  align-items: start;
+}
+
+.editor-row-last {
+  grid-template-columns: minmax(150px, 0.7fr) minmax(0, 1.3fr);
+}
+
+.editor-form-item {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.editor-form-item :deep(.ant-form-item-label) {
+  padding-bottom: 1px;
+}
+
+.editor-form-item :deep(.ant-form-item-control) {
+  min-width: 0;
+}
+
+.editor-form-item :deep(.ant-form-item-label > label) {
+  color: #334155;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  height: 14px;
+}
+
+.editor-form-item :deep(.ant-input),
+.editor-form-item :deep(.ant-input-password),
+.editor-form-item :deep(.ant-select-selector) {
+  border-radius: 11px;
+}
+
+.editor-form-item :deep(.ant-input),
+.editor-form-item :deep(.ant-input-password) {
+  padding: 1px 10px;
+}
+
+.editor-form-item :deep(.ant-select-selection-item),
+.editor-form-item :deep(.ant-select-selection-placeholder) {
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.editor-form-item-tight {
+  align-self: end;
+}
+
+.editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+@media (max-width: 560px) {
+  .editor-view {
+    padding: 10px;
+  }
+
+  .editor-shell {
+    padding: 14px;
+  }
+
+  .editor-row,
+  .editor-row-last {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

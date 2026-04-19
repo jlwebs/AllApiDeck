@@ -136,12 +136,14 @@ func buildAppOptions(app *App, mode launchMode) *options.App {
 	}
 	if mode == launchModeEditor {
 		appOptions.Title = "Key Editor"
-		appOptions.Width = 580
-		appOptions.Height = 760
-		appOptions.MinWidth = 520
-		appOptions.MinHeight = 680
+		appOptions.Frameless = true
+		appOptions.Width = 720
+		appOptions.Height = 350
+		appOptions.MinWidth = 680
+		appOptions.MinHeight = 320
 		appOptions.HideWindowOnClose = false
 		appOptions.AlwaysOnTop = true
+		appOptions.BackgroundColour = &options.RGBA{R: 0, G: 0, B: 0, A: 0}
 	}
 	if mode == launchModeDesktopConfig {
 		appOptions.Title = "Desktop Config"
@@ -192,11 +194,16 @@ func buildWindowsOptions(mode launchMode) *windows.Options {
 		windowOptions.WindowIsTranslucent = true
 		windowOptions.DisableFramelessWindowDecorations = true
 	}
+	if mode == launchModeEditor {
+		windowOptions.WebviewIsTransparent = true
+		windowOptions.WindowIsTranslucent = true
+		windowOptions.DisableFramelessWindowDecorations = true
+	}
 	return windowOptions
 }
 
 func buildMacOptions(mode launchMode) *mac.Options {
-	if mode != launchModePanel {
+	if mode != launchModePanel && mode != launchModeEditor {
 		return nil
 	}
 	return &mac.Options{
@@ -206,7 +213,7 @@ func buildMacOptions(mode launchMode) *mac.Options {
 }
 
 func buildLinuxOptions(mode launchMode) *linux.Options {
-	if mode != launchModePanel {
+	if mode != launchModePanel && mode != launchModeEditor {
 		return &linux.Options{}
 	}
 	return &linux.Options{
