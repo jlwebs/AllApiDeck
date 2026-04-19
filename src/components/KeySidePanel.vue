@@ -29,7 +29,7 @@
       <section
         v-if="showAdvancedProxyQueueCard"
         class="panel-queue-card"
-        :class="[`panel-queue-card-${advancedProxyQueueTone}`]"
+        :class="[`panel-queue-card-${advancedProxyQueueTone}`, { 'is-native-drag': !superMiniMode }]"
         :title="superMiniQueueCardHintText"
         @mouseenter="beginSuperMiniQueueCardHintHover"
         @mouseleave="commitSuperMiniQueueCardHintSeen"
@@ -54,6 +54,7 @@
           v-if="advancedProxyQueueItems.length > 0"
           ref="panelQueueStripRef"
           class="panel-queue-strip"
+          :style="{ '--wails-draggable': superMiniMode ? 'no-drag' : 'drag' }"
           @pointerdown="beginQueueStripDrag"
           @pointermove="dragQueueStrip"
           @pointerup="endQueueStripDrag"
@@ -422,16 +423,28 @@ let superMiniWindowBounds = null;
 let superMiniRestoreBounds = null;
 let superMiniTransitionToken = 0;
 let superMiniWindowDragLogAt = 0;
+let superMiniWindowDragTarget = null;
 let panelQueueDragLogAt = 0;
 const superMiniWindowDragState = {
   active: false,
   pointerId: -1,
   offsetX: 0,
   offsetY: 0,
+  startMouseX: 0,
+  startMouseY: 0,
   startWindowX: 0,
   startWindowY: 0,
+  startRawWindowX: 0,
+  dragK: 1,
+  kSamples: [],
+  ultimateK: 1,
+  ultimateKUpdateCount: 0,
+  ultimateKLocked: false,
+  ultimateKLockedAt: 0,
   lastScreenX: 0,
   lastScreenY: 0,
+  lastWindowScreenX: 0,
+  lastWindowScreenY: 0,
   rafId: 0,
   pendingWindowX: 0,
   pendingWindowY: 0,
@@ -505,6 +518,116 @@ function appendPanelClientLog(scope, message) {
   try {
     void AppendClientLog(scope, message);
   } catch {}
+}
+
+function computeMedian(values) {
+  const list = values
+    .map(value => Number(value))
+    .filter(value => Number.isFinite(value))
+    .slice()
+    .sort((a, b) => a - b);
+  if (list.length === 0) return null;
+  const mid = Math.floor(list.length / 2);
+  return list.length % 2 === 1 ? list[mid] : (list[mid - 1] + list[mid]) / 2;
+}
+
+function readSuperMiniRawWindowX() {
+  // Raw window x must come from the browser window field itself.
+  // Keep the raw source as close to window.screenX as possible so the drag logs stay searchable.
+  const browserWindowX = Number.isFinite(Number(window?.screenX))
+    ? Number(window.screenX)
+    : Number(window?.screenLeft);
+  return Number.isFinite(browserWindowX) ? browserWindowX : 0;
+}
+
+function getSuperMiniDeltaK(mouseDeltaX, windowDeltaX) {
+  const mouse = Number(mouseDeltaX);
+  const windowDelta = Number(windowDeltaX);
+  if (!Number.isFinite(mouse) || !Number.isFinite(windowDelta)) return null;
+  if (Math.abs(windowDelta) < 0.0001) return null;
+  return mouse / windowDelta;
+}
+
+function isSuperMiniUltimateKFinalized() {
+  return Number(superMiniWindowDragState.ultimateKUpdateCount || 0) >= 20;
+}
+
+function normalizeSuperMiniWindowDeltaX(rawWindowDeltaX) {
+  const windowDelta = Number(rawWindowDeltaX);
+  if (!Number.isFinite(windowDelta)) return null;
+  const ultimateK = Number(superMiniWindowDragState.ultimateK);
+  if (!Number.isFinite(ultimateK) || Math.abs(ultimateK) < 0.0001) return windowDelta;
+  return windowDelta / ultimateK;
+}
+
+function collectSuperMiniKSample(kValue, now = Date.now()) {
+  if (isSuperMiniUltimateKFinalized()) return;
+  const numeric = Number(kValue);
+  if (!Number.isFinite(numeric) || numeric <= 0) return;
+  superMiniWindowDragState.kSamples.push(numeric);
+  const samples = superMiniWindowDragState.kSamples.filter(value => Number.isFinite(Number(value)) && Number(value) > 0);
+  if (samples.length === 0) return;
+  const ultimateK = computeMedian(samples);
+  if (!Number.isFinite(ultimateK) || ultimateK <= 0.5 || ultimateK >= 3) return;
+  superMiniWindowDragState.ultimateK = ultimateK;
+  superMiniWindowDragState.ultimateKUpdateCount += 1;
+  appendPanelClientLog(
+    'panel.super-mini.drag',
+    `set ultimateK=${ultimateK.toFixed(6)} updates=${superMiniWindowDragState.ultimateKUpdateCount} samples=${samples.length}`,
+  );
+  if (superMiniWindowDragState.ultimateKUpdateCount >= 20) {
+    finalizeSuperMiniUltimateK('update-threshold');
+  }
+}
+
+function finalizeSuperMiniUltimateK(reason = 'manual') {
+  if (isSuperMiniUltimateKFinalized()) return false;
+  const samples = superMiniWindowDragState.kSamples.filter(value => Number.isFinite(Number(value)) && Number(value) > 0);
+  if (superMiniWindowDragState.ultimateKUpdateCount < 20) return false;
+  const ultimateK = computeMedian(samples);
+  if (!Number.isFinite(ultimateK) || ultimateK <= 0.5 || ultimateK >= 3) return false;
+  superMiniWindowDragState.ultimateK = ultimateK;
+  superMiniWindowDragState.ultimateKUpdateCount = 20;
+  superMiniWindowDragState.ultimateKLocked = true;
+  superMiniWindowDragState.ultimateKLockedAt = Date.now();
+  appendPanelClientLog(
+    'panel.super-mini.drag',
+    `lock ultimateK=${ultimateK.toFixed(6)} samples=${samples.length} updates=${superMiniWindowDragState.ultimateKUpdateCount} reason=${reason}`,
+  );
+  return true;
+}
+
+function resetSuperMiniWindowDragState() {
+  const target = superMiniWindowDragTarget;
+  const pointerId = superMiniWindowDragState.pointerId;
+  if (target && pointerId !== -1) {
+    try {
+      target.releasePointerCapture?.(pointerId);
+    } catch {}
+  }
+  if (superMiniWindowDragState.rafId) {
+    window.cancelAnimationFrame(superMiniWindowDragState.rafId);
+    superMiniWindowDragState.rafId = 0;
+  }
+  superMiniWindowDragState.active = false;
+  superMiniWindowDragState.pointerId = -1;
+  superMiniWindowDragState.offsetX = 0;
+  superMiniWindowDragState.offsetY = 0;
+  superMiniWindowDragState.startMouseX = 0;
+  superMiniWindowDragState.startMouseY = 0;
+  superMiniWindowDragState.startWindowX = 0;
+  superMiniWindowDragState.startWindowY = 0;
+  superMiniWindowDragState.startRawWindowX = 0;
+  superMiniWindowDragState.dragK = 1;
+  superMiniWindowDragState.lastScreenX = 0;
+  superMiniWindowDragState.lastScreenY = 0;
+  superMiniWindowDragState.lastWindowScreenX = 0;
+  superMiniWindowDragState.lastWindowScreenY = 0;
+  superMiniWindowDragState.pendingWindowX = 0;
+  superMiniWindowDragState.pendingWindowY = 0;
+  superMiniWindowDragState.moved = false;
+  superMiniWindowDragTarget = null;
+  superMiniWindowDragLogAt = 0;
 }
 
 function formatSidebarBounds(bounds) {
@@ -651,6 +774,10 @@ async function applySuperMiniWindowMode(enabled) {
     return;
   }
 
+  if (!enabled) {
+    resetSuperMiniWindowDragState();
+    resetQueueStripDragState();
+  }
   superMiniMode.value = Boolean(enabled);
   syncSuperMiniBodyClass();
   appendPanelClientLog('panel.super-mini', `mode applied enabled=${Boolean(enabled)} token=${transitionToken}`);
@@ -775,12 +902,23 @@ async function beginSuperMiniWindowDrag(event) {
   const target = event.currentTarget;
   if (!target) return;
   event.preventDefault?.();
+  const currentBounds = (await readSidebarWindowBounds('drag-start')).bounds;
+  if (!superMiniMode.value) {
+    appendPanelClientLog(
+      'panel.super-mini.drag',
+      `aborted pointerdown mode toggled off pointer=${Number(event?.pointerId ?? -1)}`,
+    );
+    return;
+  }
   const baseBounds = isValidSidebarWindowBounds(superMiniWindowBounds)
     ? superMiniWindowBounds
     : isValidSidebarWindowBounds(superMiniRestoreBounds)
       ? superMiniRestoreBounds
       : null;
-  if (!baseBounds) {
+  const dragOriginBounds = isValidSidebarWindowBounds(currentBounds)
+    ? currentBounds
+    : baseBounds;
+  if (!dragOriginBounds) {
     appendPanelClientLog(
       'panel.super-mini.drag',
       `ignored pointerdown missing bounds pointer=${Number(event?.pointerId ?? -1)}`,
@@ -789,22 +927,36 @@ async function beginSuperMiniWindowDrag(event) {
   }
   const screenX = Number.isFinite(Number(event?.screenX)) ? Number(event.screenX) : Number(event?.clientX || 0) + Number(window?.screenX || 0);
   const screenY = Number.isFinite(Number(event?.screenY)) ? Number(event.screenY) : Number(event?.clientY || 0) + Number(window?.screenY || 0);
+  const currentWindowX = Number(dragOriginBounds.x || 0);
+  const currentWindowY = Number(dragOriginBounds.y || 0);
+  // Seed the tracked bounds at drag start so the raw-x reader has an authoritative
+  // window position immediately, before the first SetPosition round-trip completes.
+  superMiniWindowBounds = {
+    ...dragOriginBounds,
+    width: Math.max(1, Math.round(dragOriginBounds.width)),
+    height: Math.max(1, Math.round(dragOriginBounds.height)),
+  };
+  const rawWindowX = readSuperMiniRawWindowX();
   superMiniWindowDragState.active = true;
   superMiniWindowDragState.pointerId = event.pointerId;
-  superMiniWindowDragState.startWindowX = Number(baseBounds.x || 0);
-  superMiniWindowDragState.startWindowY = Number(baseBounds.y || 0);
+  superMiniWindowDragTarget = target;
+  superMiniWindowDragState.startMouseX = screenX;
+  superMiniWindowDragState.startMouseY = screenY;
+  superMiniWindowDragState.startWindowX = currentWindowX;
+  superMiniWindowDragState.startWindowY = currentWindowY;
+  superMiniWindowDragState.startRawWindowX = rawWindowX;
+  superMiniWindowDragState.dragK = Number.isFinite(superMiniWindowDragState.ultimateK) && superMiniWindowDragState.ultimateK > 0
+    ? superMiniWindowDragState.ultimateK
+    : 1;
   superMiniWindowDragState.offsetX = screenX - superMiniWindowDragState.startWindowX;
   superMiniWindowDragState.offsetY = screenY - superMiniWindowDragState.startWindowY;
   superMiniWindowDragState.lastScreenX = screenX;
   superMiniWindowDragState.lastScreenY = screenY;
+  superMiniWindowDragState.lastWindowScreenX = rawWindowX;
   superMiniWindowDragState.pendingWindowX = superMiniWindowDragState.startWindowX;
   superMiniWindowDragState.pendingWindowY = superMiniWindowDragState.startWindowY;
   superMiniWindowDragState.moved = false;
   superMiniWindowDragLogAt = 0;
-  appendPanelClientLog(
-    'panel.super-mini.drag',
-    `start pointer=${event.pointerId} screen=${screenX},${screenY} window=${superMiniWindowDragState.startWindowX},${superMiniWindowDragState.startWindowY} offset=${superMiniWindowDragState.offsetX},${superMiniWindowDragState.offsetY}`,
-  );
   try {
     target.setPointerCapture?.(event.pointerId);
   } catch {}
@@ -817,12 +969,6 @@ function flushSuperMiniWindowDrag(force = false) {
       superMiniWindowDragState.pendingWindowX,
       superMiniWindowDragState.pendingWindowY,
     );
-    superMiniWindowBounds = {
-      width: Math.max(1, Math.round(superMiniWindowBounds?.width ?? superMiniRestoreBounds?.width ?? 1)),
-      height: Math.max(1, Math.round(superMiniWindowBounds?.height ?? superMiniRestoreBounds?.height ?? 1)),
-      x: superMiniWindowDragState.pendingWindowX,
-      y: superMiniWindowDragState.pendingWindowY,
-    };
   } catch {}
   superMiniWindowDragState.rafId = 0;
 }
@@ -831,23 +977,49 @@ function dragSuperMiniWindow(event) {
   if (!superMiniWindowDragState.active || superMiniWindowDragState.pointerId !== event.pointerId) return;
   const screenX = Number.isFinite(Number(event?.screenX)) ? Number(event.screenX) : Number(event?.clientX || 0) + Number(window?.screenX || 0);
   const screenY = Number.isFinite(Number(event?.screenY)) ? Number(event.screenY) : Number(event?.clientY || 0) + Number(window?.screenY || 0);
-  superMiniWindowDragState.lastScreenX = screenX;
-  superMiniWindowDragState.lastScreenY = screenY;
-  const nextX = Math.max(0, Math.round(screenX - superMiniWindowDragState.offsetX));
-  const nextY = Math.max(0, Math.round(screenY - superMiniWindowDragState.offsetY));
+  const rawWindowX = readSuperMiniRawWindowX();
+  const deltaMouseX = screenX - superMiniWindowDragState.startMouseX;
+  const deltaMouseY = screenY - superMiniWindowDragState.startMouseY;
+  const rawWindowDeltaX = rawWindowX - superMiniWindowDragState.startRawWindowX;
+  const correctedRawWindowDeltaX = normalizeSuperMiniWindowDeltaX(rawWindowDeltaX);
+  const liveK = Number.isFinite(Number(superMiniWindowDragState.ultimateK)) && Number(superMiniWindowDragState.ultimateK) > 0
+    ? Number(superMiniWindowDragState.ultimateK)
+    : 1;
+  superMiniWindowDragState.dragK = liveK;
+  const nextX = Math.max(
+    0,
+    Math.round(
+      superMiniWindowDragState.startWindowX + (deltaMouseX * liveK),
+    ),
+  );
+  const nextY = Math.max(
+    0,
+    Math.round(
+      superMiniWindowDragState.startWindowY + (deltaMouseY * liveK),
+    ),
+  );
   if (nextX !== superMiniWindowDragState.startWindowX || nextY !== superMiniWindowDragState.startWindowY) {
     superMiniWindowDragState.moved = true;
   }
   superMiniWindowDragState.pendingWindowX = nextX;
   superMiniWindowDragState.pendingWindowY = nextY;
+  superMiniWindowDragState.lastScreenX = screenX;
+  superMiniWindowDragState.lastScreenY = screenY;
+  superMiniWindowDragState.lastWindowScreenX = rawWindowX;
+
   const now = Date.now();
-  if (!superMiniWindowDragLogAt || now - superMiniWindowDragLogAt >= 180) {
+  const kRaw = getSuperMiniDeltaK(deltaMouseX, correctedRawWindowDeltaX);
+  if (!isSuperMiniUltimateKFinalized()) {
+    collectSuperMiniKSample(kRaw, now);
+  }
+  if (!isSuperMiniUltimateKFinalized() && (!superMiniWindowDragLogAt || now - superMiniWindowDragLogAt >= 2000)) {
     superMiniWindowDragLogAt = now;
     appendPanelClientLog(
       'panel.super-mini.drag',
-      `move pointer=${event.pointerId} screen=${screenX},${screenY} pending=${superMiniWindowDragState.pendingWindowX},${superMiniWindowDragState.pendingWindowY}`,
+      `delta dx=${deltaMouseX} dw=${rawWindowDeltaX} k=${kRaw === null ? 'n/a' : kRaw.toFixed(6)} ultimateK=${superMiniWindowDragState.ultimateK.toFixed(6)} updates=${superMiniWindowDragState.ultimateKUpdateCount}`,
     );
   }
+
   if (superMiniWindowDragState.rafId) {
     window.cancelAnimationFrame(superMiniWindowDragState.rafId);
     superMiniWindowDragState.rafId = 0;
@@ -863,37 +1035,22 @@ function endSuperMiniWindowDrag(event) {
       target.releasePointerCapture?.(event.pointerId);
     } catch {}
   }
-  superMiniWindowDragState.active = false;
-  superMiniWindowDragState.pointerId = -1;
-  superMiniWindowDragState.startX = 0;
-  superMiniWindowDragState.startY = 0;
-  superMiniWindowDragState.startWindowX = 0;
-  superMiniWindowDragState.startWindowY = 0;
-  if (superMiniWindowDragState.rafId) {
-    window.cancelAnimationFrame(superMiniWindowDragState.rafId);
-    superMiniWindowDragState.rafId = 0;
+  const endMouseX = Number.isFinite(Number(event?.screenX)) ? Number(event.screenX) : Number(event?.clientX || 0) + Number(window?.screenX || 0);
+  const endRawWindowX = readSuperMiniRawWindowX();
+  const endDeltaMouseX = Number(endMouseX || 0) - Number(superMiniWindowDragState.startMouseX || 0);
+  const endRawWindowDeltaX = endRawWindowX - Number(superMiniWindowDragState.startRawWindowX || 0);
+  const endKRaw = getSuperMiniDeltaK(endDeltaMouseX, normalizeSuperMiniWindowDeltaX(endRawWindowDeltaX));
+  if (!isSuperMiniUltimateKFinalized()) {
+    collectSuperMiniKSample(endKRaw, Date.now());
   }
-  if (wasActive) {
-    if (superMiniWindowBounds) {
-      superMiniWindowBounds = {
-        ...superMiniWindowBounds,
-        x: Math.round(superMiniWindowDragState.pendingWindowX ?? superMiniWindowBounds.x ?? 0),
-        y: Math.round(superMiniWindowDragState.pendingWindowY ?? superMiniWindowBounds.y ?? 0),
-      };
-    }
+  if (wasActive && !isSuperMiniUltimateKFinalized()) {
+    appendPanelClientLog(
+      'panel.super-mini.drag',
+      `end dx=${endDeltaMouseX} dw=${endRawWindowDeltaX} k=${endKRaw === null ? 'n/a' : endKRaw.toFixed(6)} ultimateK=${superMiniWindowDragState.ultimateK.toFixed(6)} updates=${superMiniWindowDragState.ultimateKUpdateCount}`,
+    );
     flushSuperMiniWindowDrag(true);
-    superMiniWindowDragState.pendingWindowX = 0;
-    superMiniWindowDragState.pendingWindowY = 0;
   }
-  appendPanelClientLog(
-    'panel.super-mini.drag',
-    `end pointer=${event?.pointerId ?? -1} active=${wasActive} moved=${superMiniWindowDragState.moved} last=${superMiniWindowDragState.lastScreenX},${superMiniWindowDragState.lastScreenY} final=${superMiniWindowBounds ? formatSidebarBounds(superMiniWindowBounds) : 'null'} current=${formatSidebarBounds(superMiniRestoreBounds)}`,
-  );
-  superMiniWindowDragState.moved = false;
-  superMiniWindowDragState.offsetX = 0;
-  superMiniWindowDragState.offsetY = 0;
-  superMiniWindowDragState.lastScreenX = 0;
-  superMiniWindowDragState.lastScreenY = 0;
+  resetSuperMiniWindowDragState();
 }
 
 const visibleRecords = computed(() => records.value.filter(record => Number(record?.status || 0) === 1));
@@ -1545,15 +1702,35 @@ function flushQueueStripDrag(force = false) {
   panelQueueDragState.rafId = 0;
 }
 
+function resetQueueStripDragState() {
+  const target = panelQueueStripRef.value;
+  const pointerId = panelQueueDragState.pointerId;
+  if (target && pointerId !== -1) {
+    try {
+      target.releasePointerCapture?.(pointerId);
+    } catch {}
+  }
+  if (panelQueueDragState.rafId) {
+    window.cancelAnimationFrame(panelQueueDragState.rafId);
+    panelQueueDragState.rafId = 0;
+  }
+  panelQueueDragState.active = false;
+  panelQueueDragState.pointerId = -1;
+  panelQueueDragState.offsetX = 0;
+  panelQueueDragState.offsetY = 0;
+  panelQueueDragState.startWindowX = 0;
+  panelQueueDragState.startWindowY = 0;
+  panelQueueDragState.lastScreenX = 0;
+  panelQueueDragState.lastScreenY = 0;
+  panelQueueDragState.pendingWindowX = 0;
+  panelQueueDragState.pendingWindowY = 0;
+  panelQueueDragState.moved = false;
+  panelQueueDragLogAt = 0;
+}
+
 async function beginQueueStripDrag(event) {
   if (event?.button !== 0) return;
-  if (superMiniMode.value) {
-    appendPanelClientLog(
-      'panel.queue.drag',
-      `ignored pointerdown superMini=${superMiniMode.value} pointer=${Number(event?.pointerId ?? -1)}`,
-    );
-    return;
-  }
+  if (!superMiniMode.value) return;
   const target = panelQueueStripRef.value;
   if (!target) return;
   event.preventDefault?.();
@@ -1942,6 +2119,8 @@ onBeforeUnmount(() => {
   if (typeof document !== 'undefined') {
     document.body.classList.remove('panel-super-mini-mode');
   }
+  resetSuperMiniWindowDragState();
+  resetQueueStripDragState();
   superMiniQueueCardHintHoverStartedAt = 0;
   flushPanelPersist();
   void setPanelInteractionLocked(false);
@@ -2300,6 +2479,17 @@ onBeforeUnmount(() => {
 
 .panel-queue-card:active {
   cursor: grabbing;
+}
+
+.panel-queue-card.is-native-drag,
+.panel-queue-card.is-native-drag .panel-queue-strip,
+.panel-queue-card.is-native-drag .panel-queue-strip-track,
+.panel-queue-card.is-native-drag .panel-queue-item,
+.panel-queue-card.is-native-drag .panel-queue-item-avatar-wrap,
+.panel-queue-card.is-native-drag .panel-queue-item-avatar,
+.panel-queue-card.is-native-drag .panel-queue-item-avatar .panel-record-emoji,
+.panel-queue-card.is-native-drag .panel-queue-item-copy {
+  --wails-draggable: drag !important;
 }
 
 .panel-queue-card-red {
