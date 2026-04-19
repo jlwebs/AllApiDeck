@@ -34,6 +34,10 @@ export function ExpandPanel() {
   return window['go']['main']['App']['ExpandPanel']();
 }
 
+export function ExportTextFile(arg1, arg2) {
+  return window['go']['main']['App']['ExportTextFile'](arg1, arg2);
+}
+
 export function ExtractChromeProfileTokens(arg1) {
   return window['go']['main']['App']['ExtractChromeProfileTokens'](arg1);
 }
@@ -80,6 +84,10 @@ export function GetOutboundProxyConfig() {
 
 export function GetPanelDockState() {
   return window['go']['main']['App']['GetPanelDockState']();
+}
+
+export function GetPanelWindowBounds() {
+  return window['go']['main']['App']['GetPanelWindowBounds']();
 }
 
 export function GetSidebarMode() {

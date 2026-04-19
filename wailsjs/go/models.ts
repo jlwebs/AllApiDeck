@@ -1051,6 +1051,24 @@ export namespace main {
 	        this.lastUpdatedAt = source["lastUpdatedAt"];
 	    }
 	}
+	export class sidebarWindowBounds {
+	    Width: number;
+	    Height: number;
+	    X: number;
+	    Y: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new sidebarWindowBounds(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Width = source["Width"];
+	        this.Height = source["Height"];
+	        this.X = source["X"];
+	        this.Y = source["Y"];
+	    }
+	}
 
 }
 

@@ -18,6 +18,8 @@ export function ExitSidebarMode():Promise<void>;
 
 export function ExpandPanel():Promise<void>;
 
+export function ExportTextFile(arg1:string,arg2:string):Promise<string>;
+
 export function ExtractChromeProfileTokens(arg1:main.ChromeProfileTokenRequest):Promise<main.ChromeProfileTokenResponse>;
 
 export function GetAdvancedProxyConfig():Promise<main.AdvancedProxyConfig>;
@@ -41,6 +43,8 @@ export function GetLaunchRecordKey():Promise<string>;
 export function GetOutboundProxyConfig():Promise<main.OutboundProxyConfig>;
 
 export function GetPanelDockState():Promise<string>;
+
+export function GetPanelWindowBounds():Promise<main.sidebarWindowBounds>;
 
 export function GetSidebarMode():Promise<boolean>;
 

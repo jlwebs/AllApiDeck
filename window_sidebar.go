@@ -547,6 +547,18 @@ func (a *App) captureNativePanelPlacement(workArea desktopRect, rect desktopRect
 	appWindowState.mu.Lock()
 	defer appWindowState.mu.Unlock()
 
+	debugLogf(
+		"capture native panel placement entry: rect=(%d,%d)-(%d,%d) workArea=(%d,%d)-(%d,%d) state=%+v",
+		rect.Left,
+		rect.Top,
+		rect.Right,
+		rect.Bottom,
+		workArea.Left,
+		workArea.Top,
+		workArea.Right,
+		workArea.Bottom,
+		appWindowState.panel,
+	)
 	dockEdge := resolveNativePanelDockEdge(int(rect.Left), rect.Width(), workArea)
 	if rect.Width() > 0 {
 		appWindowState.panel.expandedWidth = rect.Width()
@@ -565,6 +577,16 @@ func (a *App) captureNativePanelPlacement(workArea desktopRect, rect desktopRect
 		appWindowState.panel.preferredX = int(rect.Left)
 		appWindowState.panel.hasPreferredX = false
 	}
+
+	debugLogf(
+		"capture native panel placement stored: dock=%s expanded=%d preferred=(%d,%d) hasPreferred=(%t,%t)",
+		appWindowState.panel.dockEdge,
+		appWindowState.panel.expandedWidth,
+		appWindowState.panel.preferredX,
+		appWindowState.panel.preferredY,
+		appWindowState.panel.hasPreferredX,
+		appWindowState.panel.hasPreferredY,
+	)
 
 	return appWindowState.panel
 }
@@ -607,12 +629,28 @@ func (a *App) resolveNativePanelBounds(workArea desktopRect, state panelWindowSt
 		x = int(workArea.Right) - width - panelExpandedEdgeGap - ((width * panelRightDockShiftPct) / 100)
 	}
 
-	return sidebarWindowBounds{
+	bounds := sidebarWindowBounds{
 		Width:  width,
 		Height: height,
 		X:      x,
 		Y:      y,
 	}
+	debugLogf(
+		"resolve native panel bounds: dock=%s expanded=%d collapsed=%t workArea=(%d,%d)-(%d,%d) bounds=%dx%d pos=(%d,%d) state=%+v",
+		state.dockEdge,
+		state.expandedWidth,
+		state.collapsed,
+		workArea.Left,
+		workArea.Top,
+		workArea.Right,
+		workArea.Bottom,
+		bounds.Width,
+		bounds.Height,
+		bounds.X,
+		bounds.Y,
+		state,
+	)
+	return bounds
 }
 
 func (a *App) ensureNativePanelVisible(hwnd uintptr, bounds sidebarWindowBounds) error {
@@ -641,6 +679,19 @@ func (a *App) updatePanelRuntimeState(collapsed bool, workArea desktopRect, boun
 	appWindowState.panel.hasPreferredY = true
 	appWindowState.panel.dockEdge = dockEdge
 	appWindowState.mu.Unlock()
+	debugLogf(
+		"update panel runtime state: collapsed=%t dock=%s workArea=(%d,%d)-(%d,%d) bounds=%dx%d pos=(%d,%d)",
+		collapsed,
+		dockEdge,
+		workArea.Left,
+		workArea.Top,
+		workArea.Right,
+		workArea.Bottom,
+		bounds.Width,
+		bounds.Height,
+		bounds.X,
+		bounds.Y,
+	)
 }
 
 func isPointInsideBounds(x int, y int, bounds sidebarWindowBounds) bool {
@@ -829,6 +880,7 @@ func (a *App) GetPanelDockState() string {
 	if dockEdge == "" {
 		dockEdge = panelDockRight
 	}
+	debugLogf("get panel dock state: dock=%s state=%+v", dockEdge, a.getPanelStateSnapshot())
 	return string(dockEdge)
 }
 
@@ -840,6 +892,7 @@ func (a *App) GetPanelWindowBounds() (sidebarWindowBounds, error) {
 	hwnd, err := findPanelWindowHandle()
 	state := a.getPanelStateSnapshot()
 	workArea := resolvePanelWorkArea(state.screenWidth, state.screenHeight)
+	debugLogf("get panel window bounds entry: hwnd=%d state=%+v workArea=(%d,%d)-(%d,%d)", hwnd, state, workArea.Left, workArea.Top, workArea.Right, workArea.Bottom)
 	if err == nil && hwnd != 0 {
 		if rect, rectErr := getNativePanelWindowRect(hwnd); rectErr == nil && rect.Width() > 0 && rect.Height() > 0 {
 			if state.dockEdge == panelDockRight && int(rect.Left) <= int(workArea.Left)+panelEdgeActivateGap {
@@ -851,8 +904,11 @@ func (a *App) GetPanelWindowBounds() (sidebarWindowBounds, error) {
 					rect.Bottom,
 					state,
 				)
-				return a.resolveNativePanelBounds(workArea, state), nil
+				bounds := a.resolveNativePanelBounds(workArea, state)
+				debugLogf("get panel window bounds fallback resolved: bounds=%+v state=%+v", bounds, state)
+				return bounds, nil
 			}
+			debugLogf("get panel window bounds native: rect=(%d,%d)-(%d,%d) state=%+v", rect.Left, rect.Top, rect.Right, rect.Bottom, state)
 			return sidebarWindowBounds{
 				Width:  rect.Width(),
 				Height: rect.Height(),
@@ -862,7 +918,9 @@ func (a *App) GetPanelWindowBounds() (sidebarWindowBounds, error) {
 		}
 	}
 
-	return a.resolveNativePanelBounds(workArea, state), nil
+	bounds := a.resolveNativePanelBounds(workArea, state)
+	debugLogf("get panel window bounds resolved: bounds=%+v state=%+v", bounds, state)
+	return bounds, nil
 }
 
 func (a *App) applyPanelWindowState(screenWidth int, screenHeight int, collapsed bool) error {
@@ -1115,6 +1173,7 @@ func (a *App) SetPanelExpandedWidth(width int) error {
 	collapsed := appWindowState.panel.collapsed
 	appWindowState.panel.expandedWidth = width
 	appWindowState.mu.Unlock()
+	debugLogf("set panel expanded width stored: width=%d collapsed=%t", width, collapsed)
 	if nativePanelControllerSupported() {
 		if collapsed {
 			return nil
@@ -1147,6 +1206,7 @@ func (a *App) ResetPanelExpandedWidth() error {
 	collapsed := appWindowState.panel.collapsed
 	appWindowState.panel.expandedWidth = panelWideWindowWidth
 	appWindowState.mu.Unlock()
+	debugLogf("reset panel expanded width stored: width=%d collapsed=%t", panelWideWindowWidth, collapsed)
 	if nativePanelControllerSupported() {
 		if collapsed {
 			return nil

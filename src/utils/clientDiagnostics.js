@@ -9,6 +9,7 @@ const queue = [];
 let flushTimer = null;
 let sidebarRoutingDiagnosticsTimer = null;
 let sidebarRoutingDiagnosticsLastPayload = '';
+let bridgeUnavailableWarned = false;
 
 function scheduleFlush() {
   if (flushTimer) {
@@ -17,6 +18,10 @@ function scheduleFlush() {
   flushTimer = setInterval(() => {
     const app = getAppBridge();
     if (!app?.AppendClientLog) {
+      if (!bridgeUnavailableWarned) {
+        bridgeUnavailableWarned = true;
+        console.warn('[clientDiagnostics] AppendClientLog unavailable; buffering client logs until the Wails bridge is ready.');
+      }
       return;
     }
     while (queue.length > 0) {
@@ -39,7 +44,7 @@ export function logClientDiagnostic(scope, message) {
 }
 
 export function installClientDiagnostics() {
-  logClientDiagnostic('bootstrap', 'main.js start');
+  logClientDiagnostic('bootstrap', `main.js start bridge=${String(Boolean(getAppBridge()?.AppendClientLog))}`);
 
   window.addEventListener('error', (event) => {
     const text = [

@@ -1,7 +1,7 @@
-﻿<template>
+<template>
   <ConfigProvider :theme="configProviderTheme">
     <div class="wrapper batch-wrapper">
-      <div class="batch-shell" :class="{ 'batch-shell-motion-active': step === 1 || step === -1 }">
+      <div class="batch-shell":class="{ 'batch-shell-motion-active': step === 1 || step === -1 }">
         <div class="batch-forest-scene" aria-hidden="true">
           <div class="forest-mist forest-mist-left"></div>
           <div class="forest-mist forest-mist-right"></div>
@@ -16,13 +16,12 @@
           <div class="container batch-page-container">
             <!-- Header section, similar to Check.vue for consistency -->
             <AppHeader
-              current-page="batch"
-              :is-dark-mode="isDarkMode"
+              current-page="batch":is-dark-mode="isDarkMode"
               @experimental="showExperimentalFeatures = true"
               @settings="openSettingsModal"
             />
 
-            <section class="batch-hero" :class="{ 'batch-hero-compact': step !== 1 }">
+            <section class="batch-hero":class="{ 'batch-hero-compact': step !== 1 }">
               <div class="batch-hero-motion" aria-hidden="true">
                 <span class="leaf leaf-a"></span>
                 <span class="leaf leaf-b"></span>
@@ -45,17 +44,16 @@
                         推荐从扩展一键导入/浏览器桥识别导入，或者从扩展备份文件恢复。
                       </p>
                     </div>
-                    <a-tooltip v-if="showBackendHealth" :title="backendHealthTooltip">
+                    <a-tooltip v-if="showBackendHealth":title="backendHealthTooltip">
                       <div
-                        class="backend-health-pill"
-                        :class="{
+                        class="backend-health-pill":class="{
                           'backend-health-ok': backendHealth.ok,
                           'backend-health-down': backendHealth.checked && !backendHealth.ok,
-                        }"
+}"
                       >
                         <span class="backend-health-dot"></span>
                         <span class="backend-health-label">
-                          {{ backendHealth.ok ? '本地后端正常' : (backendHealth.checked ? '本地后端异常' : '本地后端检测中') }}
+                          {{  backendHealth.ok ? '本地后端正常' : (backendHealth.checked ? '本地后端异常' : '本地后端检测中') }}
                         </span>
                       </div>
                     </a-tooltip>
@@ -92,11 +90,10 @@
                             v-if="isWailsRuntime"
                             type="primary"
                             size="large"
-                            @click="importFromExtension"
-                            :disabled="isImportingExtension"
+                            @click="importFromExtension":disabled="isImportingExtension"
                             class="hero-primary-button"
                           >
-                            <AppstoreOutlined /> {{ isImportingExtension ? '正在读取扩展数据...' : '从浏览器扩展导入' }}
+                            <AppstoreOutlined /> {{  isImportingExtension ? '正在读取扩展数据...' : '从浏览器扩展导入' }}
                           </a-button>
                           <p v-if="!isWailsRuntime" class="hero-action-note">当前环境非桌面模式，可改用右侧 JSON 导入。</p>
                         </div>
@@ -121,10 +118,7 @@
                       <p>备用入口，从All-API-Hub备份文件导入`。</p>
                     </div>
                     <a-upload-dragger
-                      name="file"
-                      :multiple="false"
-                      :before-upload="beforeUpload"
-                      :show-upload-list="false"
+                      name="file":multiple="false":before-upload="beforeUpload":show-upload-list="false"
                       accept=".json"
                       class="hero-upload-dragger"
                     >
@@ -141,7 +135,7 @@
                   v-if="isWailsRuntime && importExtensionStatusText"
                   class="extension-import-status-line"
                 >
-                  <a-tag :color="importExtensionStatusColor">{{ importExtensionStatusText }}</a-tag>
+                  <a-tag :color="importExtensionStatusColor">{{  importExtensionStatusText }}</a-tag>
                 </div>
               </div>
             </section>
@@ -149,11 +143,11 @@
             <!-- 加载状态 -->
             <div v-show="isLoadingModels && step === -1" class="step-container loading-container">
               <a-spin size="large" />
-              <p style="margin-top: 20px;">{{ loadingStageTitle }}</p>
-              <p style="margin-top: 8px; color: #8c8c8c;">{{ loadingStageDescription }}</p>
-              <p v-if="loadingStageMeta" style="margin-top: 4px; color: #bfbfbf; font-size: 12px;">{{ loadingStageMeta }}</p>
+              <p style="margin-top: 20px;">{{  loadingStageTitle }}</p>
+              <p style="margin-top: 8px; color: #8c8c8c;">{{  loadingStageDescription }}</p>
+              <p v-if="loadingStageMeta" style="margin-top: 4px; color: #bfbfbf; font-size: 12px;">{{  loadingStageMeta }}</p>
               <div v-if="loadingStageStatusText" class="loading-stage-status-line">
-                <a-tag :color="loadingStageStatusColor">{{ loadingStageStatusText }}</a-tag>
+                <a-tag :color="loadingStageStatusColor">{{  loadingStageStatusText }}</a-tag>
               </div>
             </div>
 
@@ -214,8 +208,8 @@
                       </a-popover>
                       <a-button
                         class="quick-filter-clear-trigger"
-                        @click="clearQuickFilters"
                         :disabled="!activeQuickFilters.length"
+                        @click="clearQuickFilters"
                       >
                         清空
                       </a-button>
@@ -231,16 +225,14 @@
                 style="display:flex; align-items:center; gap:8px; margin-bottom: 12px; color:#1677ff;"
               >
                 <a-spin size="small" />
-                <span v-if="isDiscoveringModels">模型发现进行中（{{ loadedSitesCount }} / {{ totalAccountsCount }}）</span>
+                <span v-if="isDiscoveringModels">模型发现进行中（{{  loadedSitesCount }} / {{  totalAccountsCount }}）</span>
                 <span v-if="isDiscoveringModels && browserSessionPolling.active">，</span>
-                <span v-if="browserSessionPolling.active">受控浏览器后台检测中（{{ browserSessionPolling.round }} / {{ browserSessionPolling.totalRounds }}），剩余 {{ browserSessionPolling.pending }} 个站点</span>
+                <span v-if="browserSessionPolling.active">受控浏览器后台检测中（{{  browserSessionPolling.round }} / {{  browserSessionPolling.totalRounds }}），剩余 {{  browserSessionPolling.pending }} 个站点</span>
               </div>
 
               <div class="tree-wrapper">
                 <a-tree
-                  v-model:checkedKeys="checkedKeys"
-                  :expanded-keys="selectionExpandedKeys"
-                  :tree-data="treeData"
+                  v-model:checkedKeys="checkedKeys":expanded-keys="selectionExpandedKeys":tree-data="treeData"
                   checkable
                   @expand="handleSelectionTreeExpand"
                 >
@@ -249,23 +241,21 @@
                       <div class="provider-tree-label">
                         <button
                           v-if="canOpenProviderSiteFromTreeNode(node) && getProviderTreeTitle(node)"
-                          type="button"
-                          :class="['provider-tree-link', { 'is-grey': node.isProviderDiagnostic || node.titleClass === 'tree-node-grey' || node.siteDisabled }]"
+                          type="button":class="['provider-tree-link', { 'is-grey': node.isProviderDiagnostic || node.titleClass === 'tree-node-grey' || node.siteDisabled }]"
                           @click.stop="openProviderSiteFromTreeNode(node)"
                         >
-                          {{ getProviderTreeTitle(node) }}
+                          {{  getProviderTreeTitle(node) }}
                         </button>
                         <span
-                          v-if="canOpenProviderSiteFromTreeNode(node) && getProviderTreeSuffix(node)"
-                          :class="['custom-tree-node', node.titleClass]"
+                          v-if="canOpenProviderSiteFromTreeNode(node) && getProviderTreeSuffix(node)":class="['custom-tree-node', node.titleClass]"
                         >
-                          {{ getProviderTreeSuffix(node) }}
+                          {{  getProviderTreeSuffix(node) }}
                         </span>
                         <span
                           v-else
                           :class="['custom-tree-node', node.titleClass]"
                         >
-                          {{ node.title }}
+                          {{  node.title }}
                         </span>
                         <span v-if="node.isManualToken" class="site-tree-inline-tag">手动添加</span>
                         <a-popconfirm
@@ -278,15 +268,15 @@
                           </button>
                         </a-popconfirm>
                         <span v-if="node.isSiteRoot && node.siteNote" class="site-tree-note-badge">
-                          {{ node.siteNote }}
+                          {{  node.siteNote }}
                         </span>
                       </div>
                       <span v-if="node.isModelDiscovering || node.isBrowserPending" class="tree-node-pending-hint">
                         <a-spin size="small" />
-                        <span>{{ node.isModelDiscovering ? (node.modelDiscoveringHint || '模型检测中') : node.pendingHint }}</span>
+                        <span>{{  node.isModelDiscovering ? (node.modelDiscoveringHint || '模型检测中') : node.pendingHint }}</span>
                       </span>
                       <div v-if="node.isSiteRoot" class="site-tree-actions">
-                        <a-tooltip title="重新加载">
+                        <a-tooltip title="基于缓存用户态 token 重新读取站点数据">
                           <button type="button" class="site-tree-action-btn" @click.stop="handleTreeSiteRefresh(node)">
                             <ReloadOutlined />
                           </button>
@@ -332,13 +322,13 @@
                 <div class="settings-action-bar">
                   <div class="batch-settings">
                     <span class="batch-settings-label">并发数</span>
-                    <a-input-number v-model:value="batchConcurrency" :min="1" :max="100" class="batch-setting-input" />
+                    <a-input-number v-model:value="batchConcurrency":min="1":max="100" class="batch-setting-input" />
                     <span class="batch-settings-label">超时(秒)</span>
-                    <a-input-number v-model:value="modelTimeout" :min="1" class="batch-setting-input" />
+                    <a-input-number v-model:value="modelTimeout":min="1" class="batch-setting-input" />
                   </div>
                   <div class="actions">
                     <a-button class="batch-reset-button" @click="resetStep1">重新导入</a-button>
-                    <a-button class="batch-start-button" type="primary" size="large" @click="startBatchCheck" :disabled="isDiscoveringModels">
+                    <a-button class="batch-start-button" type="primary" size="large" @click="startBatchCheck":disabled="isDiscoveringModels">
                     <PlayCircleOutlined /> 开始检测
                     </a-button>
                   </div>
@@ -359,63 +349,63 @@
                 style="display:flex; align-items:center; gap:8px; margin-bottom: 10px; color:#1677ff;"
               >
                 <a-spin size="small" />
-                <span>受控浏览器后台检测中（{{ browserSessionPolling.round }} / {{ browserSessionPolling.totalRounds }}），剩余 {{ browserSessionPolling.pending }} 个站点...</span>
+                <span>受控浏览器后台检测中（{{  browserSessionPolling.round }} / {{  browserSessionPolling.totalRounds }}），剩余 {{  browserSessionPolling.pending }} 个站点...</span>
               </div>
               <div v-show="isTableExpanded">
                 <div class="result-topbar">
-                  <div class="quick-filter-toolbar">
-                    <div class="quick-filter-strip" v-if="quickFilters.length">
-                      <a-popover
-                        v-for="family in quickFilters"
-                        :key="family.key"
-                        trigger="hover"
-                        placement="bottomLeft"
-                        overlayClassName="quick-filter-family-popover"
-                      >
-                        <template #content>
-                          <div class="quick-filter-family-panel">
-                            <div class="quick-filter-family-panel-title">{{ family.label }}</div>
-                            <div class="quick-filter-option-list">
-                              <a-button
-                                v-for="option in family.options"
-                                :key="option.key"
-                                size="small"
-                                :type="activeQuickFilters.includes(option.key) ? 'primary' : 'default'"
-                                @click="toggleQuickFilter(option.key)"
-                              >
-                                {{ option.label }}
-                              </a-button>
-                              <a-button
-                                size="small"
-                                class="quick-filter-family-select-all"
-                                @click="selectQuickFilterFamily(family)"
-                              >
-                                {{ isQuickFilterFamilyFullySelected(family) ? '取消' : '全选' }}
-                              </a-button>
-                            </div>
+                <div class="quick-filter-toolbar">
+                  <div class="quick-filter-strip" v-if="quickFilters.length">
+                    <a-popover
+                      v-for="family in quickFilters"
+                      :key="family.key"
+                      trigger="hover"
+                      placement="bottomLeft"
+                      overlayClassName="quick-filter-family-popover"
+                    >
+                      <template #content>
+                        <div class="quick-filter-family-panel">
+                          <div class="quick-filter-family-panel-title">{{ family.label }}</div>
+                          <div class="quick-filter-option-list">
+                            <a-button
+                              v-for="option in family.options"
+                              :key="option.key"
+                              size="small"
+                              :type="activeQuickFilters.includes(option.key) ? 'primary' : 'default'"
+                              @click="toggleQuickFilter(option.key)"
+                            >
+                              {{ option.label }}
+                            </a-button>
+                            <a-button
+                              size="small"
+                              class="quick-filter-family-select-all"
+                              @click="selectQuickFilterFamily(family)"
+                            >
+                              {{ isQuickFilterFamilyFullySelected(family) ? '取消' : '全选' }}
+                            </a-button>
                           </div>
-                        </template>
-                        <a-button
-                          class="quick-filter-family-trigger"
-                          :type="isQuickFilterFamilyActive(family) ? 'primary' : 'default'"
-                          @click="selectQuickFilterFamily(family)"
-                        >
-                          {{ family.label }}
-                          <span v-if="getQuickFilterFamilyActiveCount(family)" class="quick-filter-family-count">
-                            {{ getQuickFilterFamilyActiveCount(family) }}
-                          </span>
-                        </a-button>
-                      </a-popover>
+                        </div>
+                      </template>
                       <a-button
-                        class="quick-filter-clear-trigger"
-                        @click="clearQuickFilters"
-                        :disabled="!activeQuickFilters.length"
+                        class="quick-filter-family-trigger"
+                        :type="isQuickFilterFamilyActive(family) ? 'primary' : 'default'"
+                        @click="selectQuickFilterFamily(family)"
                       >
-                        清空
+                        {{ family.label }}
+                        <span v-if="getQuickFilterFamilyActiveCount(family)" class="quick-filter-family-count">
+                          {{ getQuickFilterFamilyActiveCount(family) }}
+                        </span>
                       </a-button>
-                    </div>
-                    <div v-else class="quick-filter-empty-inline">暂无可用快捷分组</div>
-                    <span v-if="activeQuickFilterSummary" class="quick-filter-summary">{{ activeQuickFilterSummary }}</span>
+                    </a-popover>
+                    <a-button
+                      class="quick-filter-clear-trigger"
+                      :disabled="!activeQuickFilters.length"
+                      @click="clearQuickFilters"
+                    >
+                      清空
+                    </a-button>
+                  </div>
+                  <div v-else class="quick-filter-empty-inline">暂无可用快捷分组</div>
+                  <span v-if="activeQuickFilterSummary" class="quick-filter-summary">{{ activeQuickFilterSummary }}</span>
                   </div>
 
                   <div class="result-side-controls">
@@ -428,7 +418,7 @@
                     </a-input-search>
 
                     <a-space wrap class="result-action-group">
-                      <a-dropdown-button @click="copyOrganizedResults" :disabled="testing || !testResults.length">
+                      <a-dropdown-button @click="copyOrganizedResults":disabled="testing || !testResults.length">
                         <CopyOutlined /> 整理有效配置
                         <template #overlay>
                           <a-menu>
@@ -438,7 +428,7 @@
                           </a-menu>
                         </template>
                       </a-dropdown-button>
-                      <a-button @click="retestAllFromResults" :disabled="testing || !testResults.length">
+                      <a-button @click="retestAllFromResults":disabled="testing || !testResults.length">
                         <RedoOutlined /> 再测一次
                       </a-button>
                       <a-button v-if="hasHistory && !testing" @click="loadHistory">
@@ -452,11 +442,8 @@
                 <a-progress :percent="testProgress" show-info style="margin-bottom: 15px" />
 
                 <a-table
-                  :columns="resultColumns"
-                  :data-source="currentResultData"
-                  :pagination="tablePagination"
-                  @change="handleTableChange"
-                  :row-class-name="record => record.id === highlightedTaskId ? 'highlighted-row' : ''"
+                  :columns="resultColumns":data-source="currentResultData":pagination="tablePagination"
+                  @change="handleTableChange":row-class-name="record => record.id === highlightedTaskId ? 'highlighted-row' : ''"
                   size="small"
                   row-key="id"
                 >
@@ -465,27 +452,27 @@
                   <template v-if="column.dataIndex === 'siteName'">
                     <a-tooltip :title="record.quota" placement="top">
                       <a href="" @click.prevent="openUrlInSystemBrowser(record.siteUrl)" @mouseenter="hoverQuota(record)">
-                        {{ record.siteName }}
+                        {{  record.siteName }}
                       </a>
                     </a-tooltip>
                   </template>
                   <template v-else-if="column.dataIndex === 'payload'">
                     <a-tooltip placement="top">
                       <template #title>
-                        <pre style="max-width:300px; white-space:pre-wrap; margin:0; font-size:12px;">{{ getPayloadJson(record) }}</pre>
+                        <pre style="max-width:300px; white-space:pre-wrap; margin:0; font-size:12px;">{{  getPayloadJson(record) }}</pre>
                       </template>
                       <div style="cursor: pointer; user-select: none;" @dblclick="openPayloadEditor(record)">
-                        {{ getMaskedKey(record.apiKey) }}
+                        {{  getMaskedKey(record.apiKey) }}
                       </div>
                     </a-tooltip>
                   </template>
                   <template v-else-if="column.dataIndex === 'status'">
                     <a-tooltip placement="topLeft">
                       <template #title>
-                        <pre style="max-width:560px; max-height:420px; overflow:auto; white-space:pre-wrap; margin:0; font-size:12px;">{{ getStatusTooltip(record) }}</pre>
+                        <pre style="max-width:560px; max-height:420px; overflow:auto; white-space:pre-wrap; margin:0; font-size:12px;">{{  getStatusTooltip(record) }}</pre>
                       </template>
                       <a-tag :color="getStatusColor(record.status)" style="cursor: pointer;">
-                        {{ record.statusText }}
+                        {{  record.statusText }}
                       </a-tag>
                     </a-tooltip>
                   </template>
@@ -495,7 +482,7 @@
                       <a-tooltip v-if="hasPerformanceMetrics(record)">
                         <template #title>
                           <div class="performance-tooltip-list">
-                            <div v-for="line in getPerformanceTooltipLines(record)" :key="line">{{ line }}</div>
+                            <div v-for="line in getPerformanceTooltipLines(record)":key="line">{{  line }}</div>
                           </div>
                         </template>
                         <span class="performance-badge performance-badge-inline" aria-label="性能指标">
@@ -507,7 +494,7 @@
                   <template v-else-if="column.dataIndex === 'remark'">
                     <a-tooltip :title="record.remark">
                       <span :style="{ color: record.status === 'error' ? '#ff4d4f' : 'inherit', fontWeight: record.status === 'error' ? 'bold' : 'normal' }">
-                        {{ record.remark }}
+                        {{  record.remark }}
                       </span>
                     </a-tooltip>
                   </template>
@@ -539,8 +526,7 @@
                     </a-button>
                     <a-button 
                       size="small" 
-                      type="link"
-                      :loading="isRefreshingBalances" 
+                      type="link":loading="isRefreshingBalances" 
                       @click="refreshAllBalances"
                       style="margin-right: 5px; color: #1677ff;"
                     >
@@ -552,8 +538,7 @@
                     <a-tooltip title="自动同步sk密钥到本地存储">
                       <a-button
                         size="small"
-                        type="link"
-                        :loading="isSyncingLocalKeys"
+                        type="link":loading="isSyncingLocalKeys"
                         @click="syncDetectedKeysToLocalStorage()"
                         style="margin-right: 6px; color: #1677ff;"
                       >
@@ -584,40 +569,27 @@
                     block-node
                   >
                     <template #title="node">
-                      <div class="custom-tree-node-wrapper organized-tree-node-wrapper">
-                        <div class="organized-tree-node-main">
-                          <span :class="['custom-tree-node', node.class]">{{ node.title }}</span>
-                          <span v-if="node.isLeaf && node.performancePreviewText" class="tree-performance-preview">
-                            <a-tooltip>
-                              <template #title>
-                                <div class="performance-tooltip-list">
-                                  <div v-for="line in getPerformanceTooltipLines(node)" :key="line">{{ line }}</div>
-                                </div>
-                              </template>
-                              <span class="performance-badge performance-badge-inline" aria-label="性能指标">
-                                <ThunderboltOutlined />
-                              </span>
-                            </a-tooltip>
-                            <span class="tree-performance-preview-text">{{ node.performancePreviewText }}</span>
-                          </span>
-                          <div v-if="node.isLeaf" class="shortcut-actions organized-tree-shortcut-actions">
-                            <a-tooltip title="一键添加到 Cherry Studio">
-                              <span class="app-icon cherry-icon" @click.stop="launchCherryStudio(node)">
-                                🍒
-                              </span>
-                            </a-tooltip>
-                            <a-tooltip title="一键添加到 CC-Switch">
-                              <span class="app-icon switch-icon" @click.stop="launchCCSwitch(node)">
-                                🔄
-                              </span>
-                            </a-tooltip>
-                          </div>
-                          <span v-if="node.isBrowserPending" class="tree-node-pending-hint">
-                            <a-spin size="small" />
-                            <span>{{ node.pendingHint }}</span>
-                          </span>
-                        </div>
-                      </div>
+                       <div class="custom-tree-node-wrapper" style="display: flex; align-items: center;">
+                         <span :class="['custom-tree-node', node.class]">{{  node.title }}</span>
+                         <span v-if="node.isBrowserPending" class="tree-node-pending-hint">
+                           <a-spin size="small" />
+                           <span>{{  node.pendingHint }}</span>
+                         </span>
+                         
+                         <!-- 仅在叶子节点（模型项）显示快捷拉起图标，空两格紧跟 -->
+                         <div v-if="node.isLeaf" class="shortcut-actions" style="margin-left: 12px; display: flex; gap: 8px;">
+                           <a-tooltip title="一键添加到 Cherry Studio">
+                             <span class="app-icon cherry-icon" @click.stop="launchCherryStudio(node)">
+                               🍒
+                             </span>
+                           </a-tooltip>
+                           <a-tooltip title="一键添加到 CC-Switch">
+                             <span class="app-icon switch-icon" @click.stop="launchCCSwitch(node)">
+                               🔄
+                             </span>
+                           </a-tooltip>
+                         </div>
+                       </div>
                     </template>
                   </a-tree>
                 </div>
@@ -637,41 +609,13 @@
               <div style="margin-bottom: 10px; color: #666;">
                 在此处修改您想重新测试的 JSON Payload (请确保格式准确)。点击重新发送将直接用此 Payload 请求后端。
               </div>
-              <a-textarea v-model:value="editingPayload" :rows="12" style="font-family: monospace;" />
+              <a-textarea v-model:value="editingPayload":rows="12" style="font-family: monospace;" />
             </a-modal>
 
             <AdvancedProxyModal v-model:open="showExperimentalFeatures" />
 
-            <TextPromptModal
-              v-model:open="textPromptOpen"
-              v-model:value="textPromptValue"
-              :title="textPromptTitle"
-              :placeholder="textPromptPlaceholder"
-              :ok-text="textPromptOkText"
-              :multiline="textPromptMode === 'sk'"
-              :rows="textPromptMode === 'sk' ? 5 : 1"
-              :max-length="textPromptMode === 'note' ? SITE_NOTE_MAX_LENGTH : 0"
-              :show-count="textPromptMode === 'note'"
-              @ok="submitTextPromptModal"
-              @cancel="closeTextPromptModal"
-            />
-
             <BridgeImportWizardModal
-              :open="bridgeImportModalOpen"
-              :opening="bridgeImportSessionOpening"
-              :opening-install="bridgeImportOpeningInstall"
-              :install-opened="bridgeImportInstallOpened"
-              :polling="bridgeImportPolling"
-              :importing="bridgeImportImporting"
-              :records="bridgeImportRecords"
-              :ready-count="bridgeImportReadyCount"
-              :last-received-at="bridgeImportLastReceivedAt"
-              :session-active="bridgeImportSessionActive"
-              :client-ready="bridgeImportClientReady"
-              :last-client-ping="bridgeImportLastClientPing"
-              :server-url="bridgeImportServerUrl"
-              :log-path="bridgeImportLogPath"
-              :last-logs="bridgeImportLastLogs"
+              :open="bridgeImportModalOpen":opening="bridgeImportSessionOpening":opening-install="bridgeImportOpeningInstall":install-opened="bridgeImportInstallOpened":polling="bridgeImportPolling":importing="bridgeImportImporting":records="bridgeImportRecords":ready-count="bridgeImportReadyCount":last-received-at="bridgeImportLastReceivedAt":session-active="bridgeImportSessionActive":client-ready="bridgeImportClientReady":last-client-ping="bridgeImportLastClientPing":server-url="bridgeImportServerUrl":log-path="bridgeImportLogPath":last-logs="bridgeImportLastLogs"
               @cancel="closeBridgeImportModal"
               @open-install="openBridgeScriptInstallPage"
               @finish-import="finalizeBridgeImportSession"
@@ -679,15 +623,12 @@
 
             <a-modal
               v-model:open="showKeySyncStrategyModal"
-              title="请选择密钥更新策略"
-              :mask-closable="false"
-              :keyboard="false"
-              :closable="false"
+              title="请选择密钥更新策略":mask-closable="false":keyboard="false":closable="false"
               @cancel="resolveKeySyncStrategy('keep')"
             >
               <div class="key-sync-strategy-modal">
                 <p class="key-sync-strategy-summary">
-                  本次检测获取到 {{ pendingKeySyncIncomingCount }} 条密钥，当前密钥管理中已有 {{ pendingKeySyncExistingCount }} 条自动同步记录。
+                  本次检测获取到 {{  pendingKeySyncIncomingCount }} 条密钥，当前密钥管理中已有 {{  pendingKeySyncExistingCount }} 条自动同步记录。
                 </p>
                 <div class="key-sync-strategy-option">
                   <span class="key-sync-strategy-index">1.</span>
@@ -723,10 +664,7 @@
             <SystemSettingsModal
               v-model:open="showAppSettingsModal"
               v-model:tree-expanded="isTreeExpanded"
-              v-model:desktop-token-source-mode="desktopTokenSourceMode"
-              :is-chrome-profile-auth-available="isChromeProfileAuthAvailable"
-              :app-name="appInfo.name"
-              :app-version="appInfo.version"
+              v-model:desktop-token-source-mode="desktopTokenSourceMode":is-chrome-profile-auth-available="isChromeProfileAuthAvailable":app-name="appInfo.name":app-version="appInfo.version"
             />
           </div>
         </div>
@@ -736,43 +674,46 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue';
-import { useI18n } from 'vue-i18n';
-import { useRouter } from 'vue-router';
-import { ConfigProvider, message, theme, Modal, Select } from 'ant-design-vue';
-import { HomeOutlined, ReloadOutlined, MenuUnfoldOutlined, MenuFoldOutlined, InboxOutlined, PlayCircleOutlined, SearchOutlined, CopyOutlined, FilterOutlined, HistoryOutlined, ShareAltOutlined, DownOutlined, RightOutlined, UserOutlined, LockOutlined, MessageOutlined, CopyFilled, SmileOutlined, RedoOutlined, CloudSyncOutlined, StopOutlined, CheckCircleOutlined, DeleteOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick, h
+} from 'vue';
+import { useI18n
+} from 'vue-i18n';
+import { useRouter
+} from 'vue-router';
+import { ConfigProvider, message, theme, Modal
+} from 'ant-design-vue';
+import { HomeOutlined, ReloadOutlined, MenuUnfoldOutlined, MenuFoldOutlined, InboxOutlined, PlayCircleOutlined, SearchOutlined, CopyOutlined, FilterOutlined, HistoryOutlined, ShareAltOutlined, DownOutlined, RightOutlined, UserOutlined, LockOutlined, MessageOutlined, CopyFilled, SmileOutlined, RedoOutlined, CloudSyncOutlined, StopOutlined, CheckCircleOutlined, DeleteOutlined, ThunderboltOutlined
+} from '@ant-design/icons-vue';
 import AppHeader from './AppHeader.vue';
 import AdvancedProxyModal from './AdvancedProxyModal.vue';
 import BridgeImportWizardModal from './BridgeImportWizardModal.vue';
-import TextPromptModal from './TextPromptModal.vue';
 import SystemSettingsModal from './SystemSettingsModal.vue';
-import { fetchModelList } from '../utils/api.js';
-import { listDesktopLogFiles, readDesktopLogFile, isDesktopLogBridgeAvailable } from '../utils/desktopLogBridge.js';
-import { apiFetch, isProbablyWailsRuntime, openUrlInSystemBrowser } from '../utils/runtimeApi.js';
-import { extractChromeProfileTokens, isChromeProfileAuthBridgeAvailable } from '../utils/profileAuthBridge.js';
-import { maximiseMainWindow } from '../utils/windowSizing.js';
-import { loadTreeExpandedSetting } from '../utils/systemSettings.js';
-import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils/balance.js';
-import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
-import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
-import {
-  hasCachedLastResultsSnapshot,
-  hydrateLastResultsSnapshotCache,
-  loadLastResultsSnapshot,
-  HISTORY_SNAPSHOT_SYNC_EVENT,
-  saveLastResultsSnapshot,
-} from '../utils/historySnapshotStore.js';
-import {
-  applyPortableLocalStorageSnapshot,
-  snapshotPortableLocalStorage,
-} from '../utils/portableSnapshot.js';
+import { fetchModelList
+} from '../utils/api.js';
+import { listDesktopLogFiles, readDesktopLogFile, isDesktopLogBridgeAvailable
+} from '../utils/desktopLogBridge.js';
+import { apiFetch, isProbablyWailsRuntime, openUrlInSystemBrowser
+} from '../utils/runtimeApi.js';
+import { extractChromeProfileTokens, isChromeProfileAuthBridgeAvailable
+} from '../utils/profileAuthBridge.js';
+import { maximiseMainWindow
+} from '../utils/windowSizing.js';
+import { loadTreeExpandedSetting
+} from '../utils/systemSettings.js';
+import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel
+} from '../utils/balance.js';
+import { logClientDiagnostic
+} from '../utils/clientDiagnostics.js';
+import { buildQuickTestMessages
+} from '../utils/quickTestPrompts.js';
 import {
   buildRowKey as buildKeyPanelRowKey,
   loadPanelRecords,
   normalizeModels as normalizeKeyPanelModels,
   persistPanelRecords,
 } from '../utils/keyPanelStore.js';
-import { buildPerformanceTooltipLines, derivePerformanceMetricsFromResponse, extractPerformanceMetrics, hasPerformanceMetrics } from '../utils/performanceMetrics.js';
+import { buildPerformanceTooltipLines, derivePerformanceMetricsFromResponse, hasPerformanceMetrics
+} from '../utils/performanceMetrics.js';
 import {
   appendCustomKeysToSiteCache,
   buildSiteCacheKey,
@@ -794,7 +735,8 @@ import {
 } from '../utils/siteCacheStore.js';
 
 const isWailsRuntime = isProbablyWailsRuntime();
-const { t } = useI18n();
+const { t
+} = useI18n();
 const router = useRouter();
 const isDarkMode = ref(false);
 const configProviderTheme = computed(() => ({
@@ -818,10 +760,6 @@ const backendHealth = reactive({
 });
 const totalAccountsCount = ref(0);
 const showExperimentalFeatures = ref(false);
-const textPromptOpen = ref(false);
-const textPromptMode = ref('sk');
-const textPromptValue = ref('');
-const textPromptSiteCacheKey = ref('');
 const bridgeImportModalOpen = ref(false);
 const bridgeImportSessionOpening = ref(false);
 const bridgeImportOpeningInstall = ref(false);
@@ -866,15 +804,6 @@ const KEY_MANAGEMENT_STORAGE_KEY = 'api_check_key_management_records_v1';
 const KEY_MANAGEMENT_META_STORAGE_KEY = 'api_check_key_management_meta_v1';
 const KEY_MANAGEMENT_SYNC_EVENT = 'batch-api-check:key-management-sync';
 const SITE_NOTE_MAX_LENGTH = 10;
-const textPromptTitle = computed(() =>
-  textPromptMode.value === 'sk' ? '手动追加自定义 sk' : '设置 10 字以内备注'
-);
-const textPromptPlaceholder = computed(() =>
-  textPromptMode.value === 'sk'
-    ? '请输入一个或多个 sk，支持换行、空格、逗号分隔'
-    : `请输入 ${SITE_NOTE_MAX_LENGTH} 个字以内备注`
-);
-const textPromptOkText = computed(() => (textPromptMode.value === 'sk' ? '追加' : '保存'));
 // Temporary kill switch:
 // Only disable the built-in WebView2/Profile Assist window fallback.
 // Keep the profile-file manual recovery flow alive:
@@ -894,9 +823,10 @@ const appInfo = reactive({
   name: 'API Checker',
   subtitle: '批量 API 检测工具',
   version: '2.5.0',
-  author: { url: 'https://github.com/jlwebs' }
+  author: { url: 'https: //github.com/jlwebs' }
 });
-const appDescription = ref(['支持 OpenAI / Claude / Gemini / NewAPI 等多种格式接口的批量并发检测与账号管理。']);
+const appDescription = ref(['支持 OpenAI / Claude / Gemini / NewAPI 等多种格式接口的批量并发检测与账号管理。'
+]);
 
 const openSettingsModal = () => {
   showAppSettingsModal.value = true;
@@ -914,7 +844,9 @@ const desktopLogGroups = computed(() => {
     const key = String(file?.groupKey || 'other').trim() || 'other';
     const label = String(file?.groupLabel || '其他日志').trim() || '其他日志';
     if (!groupMap.has(key)) {
-      groupMap.set(key, { key, label, files: [] });
+      groupMap.set(key,
+      { key, label, files: []
+      });
     }
     groupMap.get(key).files.push(file);
   });
@@ -936,9 +868,12 @@ const backendHealthTooltip = computed(() => {
   const statusText = backendHealth.ok
     ? '状态：正常'
     : (backendHealth.checked ? '状态：异常' : '状态：检测中');
-  const detailText = `详情：${backendHealth.detail || '无'}`;
-  const debugText = backendHealth.debug ? `诊断：${backendHealth.debug}` : '';
-  return [statusText, detailText, debugText].filter(Boolean).join('\n');
+  const detailText = `详情：${backendHealth.detail || '无'
+  }`;
+  const debugText = backendHealth.debug ? `诊断：${backendHealth.debug
+  }` : '';
+  return [statusText, detailText, debugText
+  ].filter(Boolean).join('\n');
 });
 
 const formatLogTimestamp = (ts) => {
@@ -952,9 +887,12 @@ const formatLogTimestamp = (ts) => {
 const formatLogSize = (size) => {
   const value = Number(size || 0);
   if (!Number.isFinite(value) || value <= 0) return '0 B';
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  if (value < 1024) return `${value
+  } B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)
+  } KB`;
+  return `${(value / 1024 / 1024).toFixed(1)
+  } MB`;
 };
 
 const loadDesktopLogContent = async (path) => {
@@ -992,12 +930,16 @@ const loadDesktopLogs = async () => {
     desktopLogFiles.value = Array.isArray(snapshot?.files) ? snapshot.files : [];
 
     const nextGroup = desktopLogGroups.value.find(group => group.key === selectedDesktopLogGroup.value)?.key
-      || desktopLogGroups.value[0]?.key
+      || desktopLogGroups.value[
+      0
+    ]?.key
       || '';
     selectedDesktopLogGroup.value = nextGroup;
 
     const nextPath = currentDesktopLogGroupFiles.value.find(file => String(file?.path || '') === selectedDesktopLogPath.value)?.path
-      || currentDesktopLogGroupFiles.value[0]?.path
+      || currentDesktopLogGroupFiles.value[
+      0
+    ]?.path
       || '';
     selectedDesktopLogPath.value = nextPath;
 
@@ -1028,6 +970,28 @@ const loadLocalCache = () => {
   }
 };
 
+const snapshotPortableLocalStorage = () => {
+  const snapshot = {};
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (!key) continue;
+    snapshot[key
+    ] = localStorage.getItem(key);
+  }
+  return snapshot;
+};
+
+const applyPortableLocalStorageSnapshot = (snapshot) => {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    throw new Error('invalid_localstorage_snapshot');
+  }
+  localStorage.clear();
+  Object.entries(snapshot).forEach(([key, value
+  ]) => {
+    localStorage.setItem(key, value == null ? '' : String(value));
+  });
+};
+
 const getPortableErrorMessage = (error, fallback) => {
   if (!error) return fallback;
   if (typeof error === 'string') return error.trim() || fallback;
@@ -1050,12 +1014,15 @@ const packagePortableData = async () => {
   }
   portablePacking.value = true;
   try {
-    const snapshotJson = JSON.stringify(await snapshotPortableLocalStorage());
+    const snapshotJson = JSON.stringify(snapshotPortableLocalStorage());
     const result = await packer(snapshotJson);
-    portableSettingsMeta.value = `封包完成：${result?.backupDir || 'backup'}，localStorage ${Number(result?.localStorageKeyCount || 0)} 项`;
+    portableSettingsMeta.value = `封包完成：${result?.backupDir || 'backup'
+    }，localStorage ${Number(result?.localStorageKeyCount || 0)
+    } 项`;
     message.success('已完成本地绿色化封包');
   } catch (error) {
-    message.error(`封包失败：${getPortableErrorMessage(error, '未知错误，请查看 logs/portable-data.log')}`);
+    message.error(`封包失败：${getPortableErrorMessage(error, '未知错误，请查看 logs/portable-data.log')
+    }`);
   } finally {
     portablePacking.value = false;
   }
@@ -1071,14 +1038,18 @@ const unpackPortableData = async () => {
   try {
     const result = await unpacker();
     const parsedSnapshot = JSON.parse(String(result?.localStorageJson || '{}'));
-    await applyPortableLocalStorageSnapshot(parsedSnapshot);
-    portableSettingsMeta.value = `解包完成：${result?.backupDir || 'backup'}，已恢复 ${Number(result?.localStorageKeyCount || 0)} 项本地数据`;
+    applyPortableLocalStorageSnapshot(parsedSnapshot);
+    portableSettingsMeta.value = `解包完成：${result?.backupDir || 'backup'
+    }，已恢复 ${Number(result?.localStorageKeyCount || 0)
+    } 项本地数据`;
     message.success('已从 backup 解包恢复本程序数据，页面即将刷新');
     setTimeout(() => {
       window.location.reload();
-    }, 600);
+    },
+    600);
   } catch (error) {
-    message.error(`解包失败：${getPortableErrorMessage(error, '未知错误，请查看 logs/portable-data.log')}`);
+    message.error(`解包失败：${getPortableErrorMessage(error, '未知错误，请查看 logs/portable-data.log')
+    }`);
   } finally {
     portableUnpacking.value = false;
   }
@@ -1117,14 +1088,28 @@ const loadLocalRecord = (id) => {
 
 const maskApiKey = (key) => {
   if (!key) return '';
-  return key.slice(0, 8) + '***' + key.slice(-4);
+  return key.slice(0,
+  8) + '***' + key.slice(-4);
 };
 
 const maskTokenPreview = (token) => {
   const text = String(token || '').trim();
   if (!text) return '';
   if (text.length <= 12) return text;
-  return `${text.slice(0, 8)}...${text.slice(-4)}`;
+  return `${text.slice(0,
+    8)
+  }...${text.slice(-4)
+  }`;
+};
+
+const saveLastResultsSnapshot = (results = testResults.value) => {
+  try {
+    const snapshot = Array.isArray(results) ? results : [];
+    localStorage.setItem('api_check_last_results', JSON.stringify(snapshot));
+    hasHistory.value = snapshot.length > 0;
+  } catch (error) {
+    console.warn('[BatchCheck] save history snapshot failed:', error?.message || String(error));
+  }
 };
 
 const stringifyPreview = (value, maxLength = 280) => {
@@ -1141,7 +1126,8 @@ const stringifyPreview = (value, maxLength = 280) => {
   }
   text = text.replace(/\s+/g, ' ').trim();
   if (!text) return '';
-  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+  return text.length > maxLength ? `${text.slice(0, maxLength)
+  }...` : text;
 };
 
 const buildCompatHeadersForUid = (uid) => {
@@ -1171,20 +1157,22 @@ const getTokenListEndpointCandidates = (siteType) => {
       '/api/v1/keys?p=0&size=100',
       '/api/token/?p=0&size=100',
       '/api/token?p=0&size=100',
-    ]
+  ]
     : [
       '/api/token/?p=0&size=100',
       '/api/token?p=0&size=100',
       '/api/v1/keys?page=1&page_size=100',
       '/api/v1/keys?p=0&size=100',
-    ];
+  ];
 };
 
-const buildProviderReplayHeaders = ({ tokenKey, uid, siteUrl }) => {
+const buildProviderReplayHeaders = ({ tokenKey, uid, siteUrl
+}) => {
   const normalizedSiteUrl = String(siteUrl || '').replace(/\/+$/, '').trim();
   const headers = {
-    Authorization: `Bearer ${String(tokenKey || '').trim()}`,
-    Accept: 'application/json, text/plain, */*',
+    Authorization: `Bearer ${String(tokenKey || '').trim()
+    }`,
+    Accept: 'application/json, text/plain, * /*',
     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
     'X-Requested-With': 'XMLHttpRequest',
     'Cache-Control': 'no-cache',
@@ -1399,63 +1387,16 @@ const replaceActiveSiteFromCacheRecord = async (siteCacheKey, reason = 'site-cac
   }), reason, { syncCache: false });
 };
 
-const closeTextPromptModal = () => {
-  textPromptOpen.value = false;
-  textPromptSiteCacheKey.value = '';
-  textPromptValue.value = '';
+const promptSiteNote = (initialValue = '') => {
+  const next = window.prompt(`请输入 ${SITE_NOTE_MAX_LENGTH} 个字以内备注`, String(initialValue || ''));
+  if (next == null) return null;
+  return String(next || '').trim().slice(0, SITE_NOTE_MAX_LENGTH);
 };
 
-const openCustomSkPrompt = record => {
-  const siteCacheKey = String(record?.siteCacheKey || '').trim();
-  if (!siteCacheKey) return;
-  textPromptMode.value = 'sk';
-  textPromptSiteCacheKey.value = siteCacheKey;
-  textPromptValue.value = '';
-  textPromptOpen.value = true;
-};
-
-const openSiteNotePrompt = record => {
-  const siteCacheKey = String(record?.siteCacheKey || '').trim();
-  if (!siteCacheKey) return;
-  textPromptMode.value = 'note';
-  textPromptSiteCacheKey.value = siteCacheKey;
-  textPromptValue.value = String(record?.siteNote || '').trim().slice(0, SITE_NOTE_MAX_LENGTH);
-  textPromptOpen.value = true;
-};
-
-const submitTextPromptModal = async () => {
-  const siteCacheKey = String(textPromptSiteCacheKey.value || '').trim();
-  if (!siteCacheKey) {
-    message.warning('当前节点缺少站点缓存标识');
-    return;
-  }
-
-  if (textPromptMode.value === 'sk') {
-    const raw = String(textPromptValue.value || '').trim();
-    if (!raw) {
-      message.warning('请输入一个或多个 sk');
-      return;
-    }
-    appendCustomKeysToSiteCache(siteCacheKey, raw);
-    syncSiteCacheSnapshot(loadAllSiteCacheRecords(), {
-      importSource: 'site_tree_custom_sk',
-      refreshedAt: Date.now(),
-    });
-    await replaceActiveSiteFromCacheRecord(siteCacheKey, 'site-tree-custom-sk');
-    message.success('自定义 SK 已追加');
-    closeTextPromptModal();
-    return;
-  }
-
-  const nextNote = String(textPromptValue.value || '').trim().slice(0, SITE_NOTE_MAX_LENGTH);
-  updateSiteCacheNote(siteCacheKey, nextNote);
-  syncSiteCacheSnapshot(loadAllSiteCacheRecords(), {
-    importSource: 'site_tree_note',
-    refreshedAt: Date.now(),
-  });
-  await replaceActiveSiteFromCacheRecord(siteCacheKey, 'site-tree-note');
-  message.success('备注已更新');
-  closeTextPromptModal();
+const promptCustomSkInput = () => {
+  const next = window.prompt('请输入一个或多个 sk，支持换行、空格、逗号分隔');
+  if (next == null) return null;
+  return String(next || '').trim();
 };
 
 const getManualTokenKeyFromTreeNode = node => {
@@ -1573,7 +1514,11 @@ const handleTreeSiteRefresh = async node => {
 const handleTreeSiteCustomSk = async node => {
   const siteCacheKey = String(node?.siteCacheKey || '').trim();
   if (!siteCacheKey) return;
-  openCustomSkPrompt(getRecordBySiteCacheKey(siteCacheKey));
+  const raw = promptCustomSkInput();
+  if (!raw) return;
+  appendCustomKeysToSiteCache(siteCacheKey, raw);
+  await replaceActiveSiteFromCacheRecord(siteCacheKey, 'site-tree-custom-sk');
+  message.success('自定义 SK 已追加');
 };
 
 const handleTreeManualTokenDelete = async node => {
@@ -1597,7 +1542,11 @@ const handleTreeSiteToggleDisabled = async node => {
 const handleTreeSiteEditNote = async node => {
   const siteCacheKey = String(node?.siteCacheKey || '').trim();
   if (!siteCacheKey) return;
-  openSiteNotePrompt(getRecordBySiteCacheKey(siteCacheKey));
+  const nextNote = promptSiteNote(node?.siteNote || '');
+  if (nextNote == null) return;
+  updateSiteCacheNote(siteCacheKey, nextNote);
+  await replaceActiveSiteFromCacheRecord(siteCacheKey, 'site-tree-note');
+  message.success('备注已更新');
 };
 
 const handleTreeSiteDelete = async node => {
@@ -1738,9 +1687,6 @@ const completedTasks = ref(0);
 const resultModelFilter = ref('');
 const organizedGroupIndex = ref([]);
 const organizedModelUniverse = ref([]);
-const syncHistoryAvailability = () => {
-  hasHistory.value = hasCachedLastResultsSnapshot();
-};
 
 const ORGANIZED_REFRESH_INTERVAL_MS = 220;
 const organizedSourceResults = ref([]);
@@ -2273,10 +2219,6 @@ const organizedTreeData = computed(() => {
         key: t.id,
         isLeaf: true,
         class: `status-${t.status}`,
-        ttftMs: t.ttftMs,
-        tps: t.tps,
-        latencySeconds: t.responseTime,
-        performancePreviewText: getPerformancePreviewText(t),
         siteName: t.siteName,
         siteUrl: t.siteUrl,
         apiKey: t.apiKey,
@@ -2391,25 +2333,6 @@ const getStatusTooltip = (record) => {
 };
 
 const getPerformanceTooltipLines = (record) => buildPerformanceTooltipLines(record);
-
-const getPerformancePreviewText = (record) => {
-  const metrics = extractPerformanceMetrics(record);
-  const parts = [];
-
-  if (metrics.ttftMs != null) {
-    parts.push(`TTFT ${Math.round(metrics.ttftMs)}ms`);
-  }
-
-  if (metrics.tps != null) {
-    parts.push(`TPS ${metrics.tps.toFixed(2)} tok/s`);
-  }
-
-  if (!parts.length && metrics.latencySeconds != null) {
-    parts.push(`${metrics.latencySeconds.toFixed(2)}s`);
-  }
-
-  return parts.join(' · ');
-};
 
 const formatBalance = (amount) => {
   if (amount == null) return '0.000';
@@ -2589,83 +2512,24 @@ const launchCherryStudio = (node) => {
   }
 };
 
-const CC_SWITCH_APP_OPTIONS = [
-  { value: 'claude', label: 'Claude', hint: 'claude' },
-  { value: 'codex', label: 'Codex', hint: 'codex' },
-  { value: 'gemini', label: 'Gemini', hint: 'gemini' },
-  { value: 'opencode', label: 'OpenCode', hint: 'opencode' },
-  { value: 'openclaw', label: 'OpenClaw', hint: 'openclaw' },
-];
-
-const normalizeCCSwitchAppId = (value) => {
-  const normalized = String(value || '').trim().toLowerCase();
-  return CC_SWITCH_APP_OPTIONS.some(option => option.value === normalized)
-    ? normalized
-    : 'claude';
-};
-
-const buildCCSwitchImportUrl = (node, appId = 'claude') => {
-  const siteName = String(node?.siteName || '站点').trim() || '站点';
-  const params = new URLSearchParams();
-  params.set('resource', 'provider');
-  params.set('app', normalizeCCSwitchAppId(appId));
-  params.set('name', node?.model ? `${siteName} - ${node.model}` : siteName);
-  params.set('homepage', node.siteUrl);
-  params.set('endpoint', node.siteUrl);
-  params.set('apiKey', node.apiKey);
-  params.set('model', node.model || '');
-  return `ccswitch://v1/import?${params.toString()}`;
-};
-
-const chooseCCSwitchTargetApp = () => {
-  return new Promise(resolve => {
-    const selectedApp = ref('claude');
-
-    Modal.confirm({
-      title: '选择 CC-Switch 目标平台',
-      width: 480,
-      centered: true,
-      closable: false,
-      maskClosable: false,
-      okText: '继续导入',
-      cancelText: '取消',
-      content: () => h('div', { class: 'cc-switch-target-dialog' }, [
-        h('p', { class: 'cc-switch-target-dialog-hint' }, '选择后会写入对应的 app 参数。'),
-        h('div', { class: 'cc-switch-target-dialog-select-row' }, [
-          h(Select, {
-            class: 'cc-switch-target-dialog-select',
-            value: selectedApp.value,
-            options: CC_SWITCH_APP_OPTIONS.map(option => ({
-              value: option.value,
-              label: option.label,
-            })),
-            placeholder: '请选择平台',
-            onChange: (value) => {
-              selectedApp.value = normalizeCCSwitchAppId(value);
-            },
-          }),
-        ]),
-      ]),
-      onOk: () => resolve(selectedApp.value),
-      onCancel: () => resolve(null),
-    });
-  });
-};
-
 // ── NEW: 一键拉起 CC-Switch ──
-const launchCCSwitch = async (node) => {
+const launchCCSwitch = (node) => {
   if (!node.apiKey || !node.siteUrl) {
     message.warning('配置信息不完整，无法导出');
     return;
   }
 
-  const appId = await chooseCCSwitchTargetApp();
-  if (!appId) {
-    return;
-  }
+  const params = new URLSearchParams();
+  params.set('resource', 'provider');
+  params.set('app', 'claude'); // 默认映射为 claude 类型
+  params.set('name', `${node.siteName} - ${node.model}`);
+  params.set('homepage', node.siteUrl);
+  params.set('endpoint', node.siteUrl);
+  params.set('apiKey', node.apiKey);
+  params.set('model', node.model);
 
-  const url = buildCCSwitchImportUrl(node, appId);
-  openUrlInSystemBrowser(url);
+  const url = `ccswitch://v1/import?${params.toString()}`;
+  window.open(url, '_blank');
   message.success('正在尝试唤起 CC-Switch...');
 };
 
@@ -2693,16 +2557,15 @@ const resendPayload = async () => {
   await runSingleTest(editingRecord.value, custom);
   
   // Also update history immediately
-  await saveLastResultsSnapshot(testResults.value);
+  saveLastResultsSnapshot();
 };
 
-onMounted(async () => {
+onMounted(() => {
   logClientDiagnostic('batch.lifecycle', 'BatchCheck mounted');
   logClientDiagnostic(
     'batch.lifecycle',
     `PerformHttpRequest typeof=${typeof window?.go?.main?.App?.PerformHttpRequest} PerformHttpRequestRaw typeof=${typeof window?.go?.main?.App?.PerformHttpRequestRaw} AppendClientLog typeof=${typeof window?.go?.main?.App?.AppendClientLog}`
   );
-  await hydrateLastResultsSnapshotCache();
   resetImportExtensionState();
   isDarkMode.value = document.body.classList.contains('dark-mode');
   loadDesktopTokenSourceMode();
@@ -2717,9 +2580,14 @@ onMounted(async () => {
       void probeBackendHealth();
     }, 10000);
   }
-  syncHistoryAvailability();
-  if (typeof window !== 'undefined') {
-    window.addEventListener(HISTORY_SNAPSHOT_SYNC_EVENT, syncHistoryAvailability);
+  const hist = localStorage.getItem('api_check_last_results');
+  if (hist) {
+    try {
+      const parsed = JSON.parse(hist);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        hasHistory.value = true;
+      }
+  } catch(e) {}
   }
   const pendingBatchStart = consumePendingBatchStart();
   const pendingRestoreKeys = consumePendingSiteRestore();
@@ -2773,9 +2641,6 @@ onBeforeUnmount(() => {
   resetImportExtensionState();
   stopFetchKeysProgressPolling();
   stopBridgeImportPolling();
-  if (typeof window !== 'undefined') {
-    window.removeEventListener(HISTORY_SNAPSHOT_SYNC_EVENT, syncHistoryAvailability);
-  }
   activeSiteTreeSession.replaceSites = null;
   activeSiteTreeSession.requestDiscoveryRefresh = null;
   activeSiteTreeSession.syncCacheSnapshot = null;
@@ -2786,23 +2651,32 @@ onBeforeUnmount(() => {
 });
 
 const loadHistory = async () => {
-  try {
-    await maximiseMainWindow();
-    const snapshot = await loadLastResultsSnapshot();
-    if (!Array.isArray(snapshot) || snapshot.length === 0) {
-      message.info('当前没有可恢复的历史记录');
-      hasHistory.value = false;
-      return;
+  const hist = localStorage.getItem('api_check_last_results');
+  if (hist) {
+    try {
+      await maximiseMainWindow();
+      const parsed = JSON.parse(hist);
+      testResults.value = (Array.isArray(parsed) ? parsed : []).map((task, index) => ({
+        ...task,
+        id: String(task?.id || `history_task_${index}`),
+        siteId: String(task?.siteId || '').trim(),
+        siteName: String(task?.siteName || '未命名站点').trim() || '未命名站点',
+        siteUrl: String(task?.siteUrl || '').trim(),
+        apiKey: String(task?.apiKey || '').trim(),
+        modelName: String(task?.modelName || '').trim(),
+        status: String(task?.status || 'pending').trim() || 'pending',
+        statusText: String(task?.statusText || '').trim() || '等待重测',
+        responseTime: String(task?.responseTime || '-').trim() || '-',
+        remark: String(task?.remark || '-').trim() || '-',
+      })).filter(task => task.siteUrl && task.apiKey && task.modelName);
+      organizedSourceResults.value = [...testResults.value];
+      totalTasks.value = testResults.value.length;
+      completedTasks.value = testResults.value.filter(task => !['pending', 'testing'].includes(String(task?.status || ''))).length;
+      step.value = 3;
+      message.success('历史检测结果已恢复');
+    } catch (e) {
+      message.error('解析历史数据失败');
     }
-    testResults.value = snapshot;
-    organizedSourceResults.value = [...testResults.value];
-    totalTasks.value = testResults.value.length;
-    completedTasks.value = testResults.value.filter(task => !['pending', 'testing'].includes(String(task?.status || ''))).length;
-    step.value = 3;
-    hasHistory.value = true;
-    message.success('历史检测结果已恢复');
-  } catch (e) {
-    message.error('解析历史数据失败');
   }
 };
 
@@ -3730,13 +3604,20 @@ const fetchTokensForAccountFromBrowser = async (acc) => {
   };
   // 如果uid是纯数字，加入兼容头（参考all-api-hub的compat headers）
   if (uid && /^\d+$/.test(String(uid))) {
-    headers['one-api-user'] = String(uid);
-    headers['New-API-User'] = String(uid);
-    headers['Veloera-User'] = String(uid);
-    headers['voapi-user'] = String(uid);
-    headers['User-id'] = String(uid);
-    headers['Rix-Api-User'] = String(uid);
-    headers['neo-api-user'] = String(uid);
+    headers['one-api-user'
+    ] = String(uid);
+    headers['New-API-User'
+    ] = String(uid);
+    headers['Veloera-User'
+    ] = String(uid);
+    headers['voapi-user'
+    ] = String(uid);
+    headers['User-id'
+    ] = String(uid);
+    headers['Rix-Api-User'
+    ] = String(uid);
+    headers['neo-api-user'
+    ] = String(uid);
   }
 
   const isMaskedKey = (value) => {
@@ -3767,17 +3648,22 @@ const fetchTokensForAccountFromBrowser = async (acc) => {
 
   for (const endpoint of endpoints) {
     try {
-      const url = `${baseUrl}${endpoint}`;
+      const url = `${baseUrl
+      }${endpoint
+      }`;
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
+      const timeout = setTimeout(() => controller.abort(),
+      10000);
 
-      const response = await fetch(url, {
+      const response = await fetch(url,
+      {
         method: 'GET',
         headers,
         signal: controller.signal,
         credentials: 'include',
         mode: 'cors',
-        referrer: `${baseUrl}/`,
+        referrer: `${baseUrl
+        }/`,
       });
       clearTimeout(timeout);
 
@@ -3793,7 +3679,6 @@ const fetchTokensForAccountFromBrowser = async (acc) => {
         }
         continue;
       }
-
       // 检查Content-Type，CF挡截页也可能是200但返回HTML
       const ct = response.headers.get('content-type') || '';
       if (/html/i.test(ct)) continue;
@@ -3804,7 +3689,6 @@ const fetchTokensForAccountFromBrowser = async (acc) => {
       } catch (e) {
         continue; // 非JSON，跳过
       }
-
       // 解析不同格式的响应
       let items = [];
       if (body && body.data !== undefined) {
@@ -3820,9 +3704,9 @@ const fetchTokensForAccountFromBrowser = async (acc) => {
       const resolvedItems = [];
       for (const t of items) {
         const rawKey = t.key || t.access_token || t.token || t.api_key || t.apikey || (typeof t === 'string' ? t : '');
-        resolvedItems.push({ ...t, key: rawKey || '未知格式Token' });
+        resolvedItems.push({ ...t, key: rawKey || '未知格式Token'
+        });
       }
-
       // 二次处理：掩码 key 尝试补全，避免“提取数量很多但最终可用很少”
       if (resolvedItems.length > 0) {
         const normalizedResolvedItems = [];
@@ -3833,22 +3717,35 @@ const fetchTokensForAccountFromBrowser = async (acc) => {
 
           if (isMaskedKey(rawKey) && t?.id) {
             const secretEndpointCandidates = [
-              { path: `/api/token/${t.id}/key`, method: 'POST' },
-              { path: `/api/token/${t.id}/key`, method: 'GET' },
-              { path: `/api/token/${t.id}`, method: 'GET' },
-              { path: `/api/v1/keys/${t.id}`, method: 'GET' },
+              { path: `/api/token/${t.id
+                }/key`, method: 'POST'
+              },
+              { path: `/api/token/${t.id
+                }/key`, method: 'GET'
+              },
+              { path: `/api/token/${t.id
+                }`, method: 'GET'
+              },
+              { path: `/api/v1/keys/${t.id
+                }`, method: 'GET'
+              },
             ];
             for (const secretEp of secretEndpointCandidates) {
               try {
-                const secretRes = await fetch(`${baseUrl}${secretEp.path}`, {
+                const secretRes = await fetch(`${baseUrl
+                }${secretEp.path
+                }`,
+                {
                   method: secretEp.method,
                   headers: {
                     ...headers,
-                    ...(secretEp.method !== 'GET' ? { 'Content-Type': 'application/json' } : {}),
+                    ...(secretEp.method !== 'GET' ? { 'Content-Type': 'application/json'
+                    } : {}),
                   },
                   credentials: 'include',
                   mode: 'cors',
-                  referrer: `${baseUrl}/`,
+                  referrer: `${baseUrl
+                  }/`,
                 });
                 if (!secretRes.ok) continue;
                 const secretBody = await secretRes.json().catch(() => null);
@@ -3873,17 +3770,24 @@ const fetchTokensForAccountFromBrowser = async (acc) => {
       }
 
       if (resolvedItems && resolvedItems.length > 0) {
-        console.log(`[BrowserFetch] ${site_name} | ${endpoint} => ${resolvedItems.length}个token`);
-        return { id, site_name, site_url, tokens: resolvedItems, endpoint, account_info, _browserFetched: true };
+        console.log(`[BrowserFetch
+        ] ${site_name
+        } | ${endpoint
+        } => ${resolvedItems.length
+        }个token`);
+        return { id, site_name, site_url, tokens: resolvedItems, endpoint, account_info, _browserFetched: true
+        };
       }
     } catch (err) {
       if (err.name === 'AbortError') continue;
       // CORS错误或网络错误，继续
-      console.debug(`[BrowserFetch] ${site_name} | ${endpoint} CORS/网络错误:`, err.message);
+      console.debug(`[BrowserFetch
+      ] ${site_name
+      } | ${endpoint
+      } CORS/网络错误:`, err.message);
       continue;
     }
   }
-
   // 所有浏览器端端点均失败，返回失败标记（由processAccounts fallback到服务端）
   return {
     id,
@@ -3930,37 +3834,40 @@ const extractSecretKeyFromPayloadForBrowser = (payload) => {
 };
 
 const fetchTokensForAccountFromBrowserV2 = async (acc) => {
-  const { id, site_name, site_url, site_type, account_info } = acc;
+  const { id, site_name, site_url, site_type, account_info
+  } = acc;
   const apiKey = String(account_info?.access_token || '').trim();
   const baseUrl = String(site_url || '').replace(/\/+$/, '');
   const uid = String(account_info?.id || '').trim();
 
   if (!apiKey || !baseUrl) {
-    return { id, site_name, site_url, tokens: [], error: '缺少 access_token 或 site_url', account_info };
+    return { id, site_name, site_url, tokens: [], error: '缺少 access_token 或 site_url', account_info
+    };
   }
 
   const endpoints = site_type === 'anyrouter'
     ? [
       '/api/token/?p=0&size=100',
       '/api/token?p=0&size=100',
-    ]
+  ]
     : site_type === 'sub2api'
       ? [
         '/api/v1/keys?page=1&page_size=100',
         '/api/v1/keys?p=0&size=100',
         '/api/token/?p=0&size=100',
         '/api/token?p=0&size=100',
-      ]
+  ]
       : [
         '/api/token/?p=0&size=100',
         '/api/token?p=0&size=100',
         '/api/v1/keys?page=1&page_size=100',
         '/api/v1/keys?p=0&size=100',
-      ];
+  ];
 
   const headers = {
-    Authorization: `Bearer ${apiKey}`,
-    Accept: 'application/json, text/plain, */*',
+    Authorization: `Bearer ${apiKey
+    }`,
+    Accept: 'application/json, text/plain, * /*',
     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
     'X-Requested-With': 'XMLHttpRequest',
   };
@@ -6510,7 +6417,7 @@ const startBatchCheck = async () => {
 
   totalTasks.value = tasksQueue.length;
   completedTasks.value = 0;
-  await saveLastResultsSnapshot(testResults.value);
+  saveLastResultsSnapshot();
   scheduleOrganizedSourceRefresh(true);
   console.log(`[BatchCheck] 开始检测: selectedModelKeys=${selectedModelKeys.length}, queuedTasks=${tasksQueue.length}`);
 
@@ -6545,7 +6452,7 @@ const startBatchCheck = async () => {
     await syncDetectedKeysToLocalStorage({ silent: true });
     message.success('批量检测完成！');
     // Save to history
-    await saveLastResultsSnapshot(testResults.value);
+    saveLastResultsSnapshot();
   }
 };
 
@@ -6851,7 +6758,7 @@ const retestAllFromResults = async () => {
     scheduleOrganizedSourceRefresh(true);
     await syncDetectedKeysToLocalStorage({ silent: true });
     message.success('再次批量检测完成！');
-    await saveLastResultsSnapshot(testResults.value);
+    saveLastResultsSnapshot();
   }
 };
 
@@ -6913,14 +6820,17 @@ const runSingleTest = async (task, customPayload = null) => {
         let snippet = String(data.htmlSnippet).trim();
         if (snippet.startsWith('data:')) {
           snippet = snippet.replace(/^data:\s*/, '').trim();
-        }
+  }
         if (snippet.startsWith('{') || snippet.startsWith('[')) {
-          try { data = JSON.parse(snippet); } catch (e) {}
-        }
+          try { data = JSON.parse(snippet);
+        } catch (e) {}
       }
+    }
 
       const returnedModel = data.model || 'unknown';
-      const msgObj = data.choices && data.choices[0]?.message;
+      const msgObj = data.choices && data.choices[
+      0
+    ]?.message;
       
       // 增强兼容性判定：思维链模型可能使用 reasoning_content
       const hasContent = msgObj && (msgObj.content || msgObj.reasoning_content || msgObj.thinking);
@@ -6933,10 +6843,10 @@ const runSingleTest = async (task, customPayload = null) => {
       if (isReasoning) {
         suffixHtml = ' <span style="color:#52c41a; font-weight:500; font-size:12px;">(thinking)</span>';
         suffixPlain = ' (thinking)';
-      } else if (isStreamAssembled) {
+    } else if (isStreamAssembled) {
         suffixHtml = ' <span style="color:#52c41a; font-weight:500; font-size:12px;">(strict SSE)</span>';
         suffixPlain = ' (strict SSE)';
-      }
+    }
       
       task.modelSuffix = suffixPlain;
       task.displaySuffixHtml = suffixHtml;
@@ -6944,7 +6854,9 @@ const runSingleTest = async (task, customPayload = null) => {
       task.tps = performance.tps;
       
       // 保存原始响应
-      task.fullResponse = JSON.stringify(data, null, 2);
+      task.fullResponse = JSON.stringify(data,
+    null,
+    2);
 
       if (returnedModel.toLowerCase().includes(task.modelName.toLowerCase()) || task.modelName === 'unknown') {
         task.status = 'success';
@@ -6952,59 +6864,71 @@ const runSingleTest = async (task, customPayload = null) => {
         task.remark = hasContent ? (msgObj?.content ? '通过' : '思维链模型通过') : '响应成功结构异常';
         if (!hasContent) {
            task.status = 'warning';
-        }
-      } else {
+      }
+    } else {
         task.status = 'warning';
         if (returnedModel === 'unknown') {
           task.statusText = '模型未知';
           task.remark = hasContent ? '✅ 响应成功但未返回模型标识' : '❌ 响应为空且模型未知';
           if (!hasContent) task.status = 'error';
-        } else {
+      } else {
           task.statusText = '模型重定向';
-          task.remark = `映射由平台处理 -> ${returnedModel}`;
-        }
+          task.remark = `映射由平台处理 -> ${returnedModel
+        }`;
       }
-    } else {
+    }
+  } else {
       let errText = '';
       let rawData = null;
       try {
         const contentType = response.headers.get('content-type') || '';
         if (contentType.includes('application/json')) {
-           rawData = await response.json();
+          rawData = await response.json();
         } else {
-           const text = await response.text();
-           const titleMatch = text.match(/<title>(.*?)<\/title>/i);
-           rawData = { 
-             htmlTitle: titleMatch ? titleMatch[1] : 'HTML Payload',
-             htmlSnippet: text.substring(0, 500).replace(/<[^>]*>/g, ' ').trim()
-           };
+          const text = await response.text();
+          const titleMatch = text.match(/<title>(.*?)<\/title>/i);
+          rawData = {
+            htmlTitle: titleMatch ? titleMatch[1] : 'HTML Payload',
+            htmlSnippet: text.substring(0, 500).replace(/<[^>\n]*>/g, ' ').trim()
+          };
         }
 
         if (rawData.htmlTitle) {
-          errText = `(HTML) ${rawData.htmlTitle}`;
-        } else {
+          errText = `(HTML) ${rawData.htmlTitle
+        }`;
+      } else {
           errText = toReadableError(rawData, '请求失败');
-        }
-        task.fullResponse = rawData.htmlSnippet
-          ? `HTML 内容摘要: ${rawData.htmlSnippet}\n\n完整响应: ${JSON.stringify(rawData, null, 2)}`
-          : JSON.stringify(rawData, null, 2);
-      } catch (e) {
-        errText = `HTTP ${response.status}`;
-        task.fullResponse = `Error: ${errText}`;
       }
+        task.fullResponse = rawData.htmlSnippet
+          ? `HTML 内容摘要: ${rawData.htmlSnippet
+      }\n\n完整响应: ${JSON.stringify(rawData,
+        null,
+        2)
+      }`
+          : JSON.stringify(rawData,
+      null,
+      2);
+    } catch (e) {
+        errText = `HTTP ${response.status
+      }`;
+        task.fullResponse = `Error: ${errText
+      }`;
+    }
       task.status = 'error';
       task.statusText = toStatusTextByError(errText);
-      task.remark = truncateText(errText, 200);
+      task.remark = truncateText(errText,
+    200);
       task.ttftMs = '';
       task.tps = '';
-    }
-  } catch (err) {
+  }
+} catch (err) {
     task.status = 'error';
     task.statusText = toStatusTextByError(err?.message || '');
     task.ttftMs = '';
     task.tps = '';
     if (err.name === 'AbortError') {
-      task.remark = `前端等待超时 (${Math.round(clientTimeoutMs / 1000)}s)`;
+      task.remark = `前端等待超时 (${Math.round(clientTimeoutMs / 1000)
+    }s)`;
       task.fullResponse = JSON.stringify({
         error: 'client_abort',
         message: task.remark,
@@ -7012,9 +6936,12 @@ const runSingleTest = async (task, customPayload = null) => {
         model: modelToTest,
         backendTimeoutMs,
         clientTimeoutMs,
-      }, null, 2);
-    } else {
-      task.remark = truncateText(err.message, 200);
+    },
+    null,
+    2);
+  } else {
+      task.remark = truncateText(err.message,
+    200);
       task.fullResponse = JSON.stringify({
         error: err?.name || 'request_failed',
         message: err?.message || 'unknown_error',
@@ -7022,14 +6949,17 @@ const runSingleTest = async (task, customPayload = null) => {
         model: modelToTest,
         backendTimeoutMs,
         clientTimeoutMs,
-      }, null, 2);
-    }
-  } finally {
+    },
+    null,
+    2);
+  }
+} finally {
     clearTimeout(id);
     const cIdx = cancelTokens.value.indexOf(controller);
-    if (cIdx > -1) cancelTokens.value.splice(cIdx, 1);
+    if (cIdx > -1) cancelTokens.value.splice(cIdx,
+  1);
     scheduleOrganizedSourceRefresh();
-  }
+}
 };
 
 
@@ -7041,7 +6971,7 @@ const getStatusColor = (status) => {
     case 'testing': return 'blue';
     case 'pending': return 'default';
     default: return 'default';
-  }
+}
 };
 
 const copyAllConfigs = () => {
@@ -7049,24 +6979,33 @@ const copyAllConfigs = () => {
   if (validTasks.length === 0) {
     message.warning('没有可用的配置组合！');
     return;
-  }
+}
   
   const siteMap = new Map();
   validTasks.forEach(task => {
-    const key = `${task.siteUrl}|${task.apiKey}`;
+    const key = `${task.siteUrl
+  }|${task.apiKey
+  }`;
     if (!siteMap.has(key)) {
-      siteMap.set(key, { name: task.siteName, url: task.siteUrl, key: task.apiKey, models: [] });
-    }
+      siteMap.set(key,
+    { name: task.siteName, url: task.siteUrl, key: task.apiKey, models: []
+    });
+  }
     siteMap.get(key).models.push(task.modelName);
-  });
+});
   
   const text = Array.from(siteMap.values()).map(s => 
-    `====================\n平台名称: ${s.name}\n接口地址: ${s.url}\nAPI 密钥: ${s.key}\n可用模型: ${s.models.join(',')}\n`
+    `====================\n平台名称: ${s.name
+}\n接口地址: ${s.url
+}\nAPI 密钥: ${s.key
+}\n可用模型: ${s.models.join(',')
+}\n`
   ).join('\n');
 
   navigator.clipboard.writeText(text).then(() => {
-    message.success(`已复制全表 ${siteMap.size} 个站点的有效配置`);
-  });
+    message.success(`已复制全表 ${siteMap.size
+  } 个站点的有效配置`);
+});
 };
 
 const copyOrganizedResults = () => {
@@ -7074,31 +7013,38 @@ const copyOrganizedResults = () => {
   if (tree.length === 0) {
     message.warning('当前视图没有可复制的配置');
     return;
-  }
+}
 
   const text = tree.map(group => {
     const validModels = group.children
       .filter(c => c.class === 'status-success' || c.class === 'status-warning')
-      .map(c => c.title.split(' - ')[0]);
+      .map(c => c.title.split(' - ')[
+    0
+  ]);
     
     if (validModels.length === 0) return null;
 
-    const [siteName, apiKeyTail] = group.key.split('|'); 
+    const [siteName, apiKeyTail
+  ] = group.key.split('|'); 
     // Find the original full task to get the correct site URL
     const originalTask = testResults.value.find(t => t.siteName === siteName && t.apiKey === apiKeyTail);
     const url = originalTask ? originalTask.siteUrl : 'unknown';
 
-    return `====================\n平台名称: ${siteName}\n接口地址: ${url}\nAPI 密钥: ${apiKeyTail}\n可用模型: ${validModels.join(',')}\n`;
-  }).filter(t => t).join('\n');
+    return `====================\n平台名称: ${siteName
+  }\n接口地址: ${url
+  }\nAPI 密钥: ${apiKeyTail
+  }\n可用模型: ${validModels.join(',')
+  }\n`;
+}).filter(t => t).join('\n');
 
   if (!text) {
     message.warning('当前筛选出的站点中没有有效的模型配置');
     return;
-  }
+}
 
   navigator.clipboard.writeText(text).then(() => {
     message.success(`已按当前过滤视图复制配置信息`);
-  });
+});
 };
 
 </script>
@@ -7106,12 +7052,19 @@ const copyOrganizedResults = () => {
 <style scoped>
 /* Header & Navigation Style */
 .loading-status-card {
-  width: min(560px, 92vw);
+  width: min(560px,
+92vw);
   margin-top: 18px;
   padding: 18px 20px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+  background: rgba(255,
+255,
+255,
+0.92);
+  box-shadow: 0 12px 30px rgba(15,
+23,
+42,
+0.08);
 }
 
 .loading-status-title {
@@ -7172,10 +7125,22 @@ const copyOrganizedResults = () => {
   flex-wrap: wrap;
   margin-top: 18px;
   padding: 14px 16px;
-  border: 1px solid rgba(116, 144, 104, 0.16);
+  border: 1px solid rgba(116,
+144,
+104,
+0.16);
   border-radius: 18px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(246, 250, 244, 0.88));
-  box-shadow: 0 14px 34px rgba(90, 117, 79, 0.08);
+  background: linear-gradient(180deg, rgba(255,
+255,
+255,
+0.94), rgba(246,
+250,
+244,
+0.88));
+  box-shadow: 0 14px 34px rgba(90,
+117,
+79,
+0.08);
   backdrop-filter: blur(14px);
 }
 
@@ -7192,9 +7157,18 @@ const copyOrganizedResults = () => {
   min-width: 92px;
   height: 38px;
   border-radius: 12px;
-  border: 1px solid rgba(120, 142, 109, 0.18);
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(120,
+142,
+109,
+0.18);
+  background: rgba(255,
+255,
+255,
+0.92);
+  box-shadow: inset 0 1px 0 rgba(255,
+255,
+255,
+0.72);
   overflow: hidden;
 }
 
@@ -7230,9 +7204,15 @@ const copyOrganizedResults = () => {
 }
 
 .batch-reset-button {
-  border-color: rgba(116, 144, 104, 0.18) !important;
+  border-color: rgba(116,
+144,
+104,
+0.18) !important;
   color: #4a5b46 !important;
-  background: rgba(255, 255, 255, 0.8) !important;
+  background: rgba(255,
+255,
+255,
+0.8) !important;
 }
 
 .batch-reset-button:hover,
@@ -7244,7 +7224,10 @@ const copyOrganizedResults = () => {
   min-width: 132px;
   border: 0 !important;
   background: linear-gradient(135deg, #4f6e49, #7b9a5d) !important;
-  box-shadow: 0 10px 20px rgba(87, 118, 76, 0.2) !important;
+  box-shadow: 0 10px 20px rgba(87,
+118,
+76,
+0.2) !important;
 }
 
 .selection-quick-filters {
@@ -7261,7 +7244,8 @@ const copyOrganizedResults = () => {
 
 .result-topbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-columns: minmax(0,
+1fr) 380px;
   align-items: start;
   gap: 20px;
   margin-bottom: 12px;
@@ -7291,15 +7275,25 @@ const copyOrganizedResults = () => {
 
 .quick-filter-strip {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(132px,
+1fr));
   gap: 0;
   width: 100%;
   max-width: 100%;
-  border: 1px solid rgba(15, 23, 42, 0.12);
+  border: 1px solid rgba(15,
+23,
+42,
+0.12);
   border-radius: 12px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+  background: rgba(255,
+255,
+255,
+0.92);
+  box-shadow: 0 10px 24px rgba(15,
+23,
+42,
+0.06);
 }
 
 .quick-filter-strip > :not(.quick-filter-clear-trigger) {
@@ -7316,8 +7310,14 @@ const copyOrganizedResults = () => {
 .quick-filter-clear-trigger {
   width: 100%;
   border: 0 !important;
-  border-right: 1px solid rgba(15, 23, 42, 0.08) !important;
-  border-bottom: 1px solid rgba(15, 23, 42, 0.08) !important;
+  border-right: 1px solid rgba(15,
+23,
+42,
+0.08) !important;
+  border-bottom: 1px solid rgba(15,
+23,
+42,
+0.08) !important;
   border-radius: 0 !important;
   box-shadow: none !important;
   height: 40px;
@@ -7327,13 +7327,24 @@ const copyOrganizedResults = () => {
 
 .quick-filter-family-trigger:hover,
 .quick-filter-clear-trigger:hover {
-  background: rgba(22, 119, 255, 0.06) !important;
+  background: rgba(22,
+119,
+255,
+0.06) !important;
 }
 
-.quick-filter-clear-trigger.ant-btn[disabled],
-.quick-filter-clear-trigger.ant-btn[disabled]:hover {
-  background: rgba(148, 163, 184, 0.08) !important;
-  color: rgba(148, 163, 184, 0.9) !important;
+.quick-filter-clear-trigger.ant-btn[disabled
+],
+.quick-filter-clear-trigger.ant-btn[disabled
+]:hover {
+  background: rgba(148,
+163,
+184,
+0.08) !important;
+  color: rgba(148,
+163,
+184,
+0.9) !important;
 }
 
 .quick-filter-family-count {
@@ -7349,7 +7360,8 @@ const copyOrganizedResults = () => {
 }
 
 .quick-filter-family-panel {
-  width: min(420px, 56vw);
+  width: min(420px,
+56vw);
   max-width: 420px;
 }
 
@@ -7391,14 +7403,34 @@ const copyOrganizedResults = () => {
   margin-bottom: 6px;
   padding: 20px 16px;
   border-radius: 18px;
-  border: 1px solid rgba(90, 117, 79, 0.1);
+  border: 1px solid rgba(90,
+117,
+79,
+0.1);
   background:
-    radial-gradient(circle at top right, rgba(255, 231, 161, 0.38), transparent 36%),
-    radial-gradient(circle at left center, rgba(204, 228, 184, 0.34), transparent 32%),
-    linear-gradient(145deg, rgba(255, 252, 244, 0.95), rgba(244, 249, 236, 0.9));
-  box-shadow:
-    0 36px 90px rgba(98, 119, 84, 0.12),
-    inset 0 1px 0 rgba(255, 255, 255, 0.84);
+    radial-gradient(circle at top right, rgba(255,
+231,
+161,
+0.38), transparent 36%),
+    radial-gradient(circle at left center, rgba(204,
+228,
+184,
+0.34), transparent 32%),
+    linear-gradient(145deg, rgba(255,
+252,
+244,
+0.95), rgba(244,
+249,
+236,
+0.9));
+  box-shadow: 0 36px 90px rgba(98,
+119,
+84,
+0.12),
+    inset 0 1px 0 rgba(255,
+255,
+255,
+0.84);
 }
 
 .batch-hero-compact {
@@ -7435,8 +7467,14 @@ const copyOrganizedResults = () => {
   justify-content: center;
   padding: 4px 8px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.55);
-  border: 1px solid rgba(90, 117, 79, 0.08);
+  background: rgba(255,
+255,
+255,
+0.55);
+  border: 1px solid rgba(90,
+117,
+79,
+0.08);
   color: #6e7c64;
   font-size: 9px;
   font-weight: 600;
@@ -7461,7 +7499,9 @@ const copyOrganizedResults = () => {
   margin: 0;
   text-align: left;
   color: #31422f;
-  font: 700 clamp(20px, 2.4vw, 30px)/1 Georgia, 'Times New Roman', serif;
+  font: 700 clamp(20px,
+2.4vw,
+30px)/1 Georgia, 'Times New Roman', serif;
   letter-spacing: -0.03em;
 }
 
@@ -7478,12 +7518,21 @@ const copyOrganizedResults = () => {
   gap: 6px;
   padding: 6px 10px;
   border-radius: 999px;
-  border: 1px solid rgba(90, 117, 79, 0.1);
-  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(90,
+117,
+79,
+0.1);
+  background: rgba(255,
+255,
+255,
+0.72);
   color: #405240;
   font-size: 10px;
   cursor: help;
-  box-shadow: 0 10px 22px rgba(98, 119, 84, 0.08);
+  box-shadow: 0 10px 22px rgba(98,
+119,
+84,
+0.08);
 }
 
 .backend-health-dot {
@@ -7491,17 +7540,26 @@ const copyOrganizedResults = () => {
   height: 8px;
   border-radius: 999px;
   background: #faad14;
-  box-shadow: 0 0 0 4px rgba(250, 173, 20, 0.16);
+  box-shadow: 0 0 0 4px rgba(250,
+173,
+20,
+0.16);
 }
 
 .backend-health-ok .backend-health-dot {
   background: #52c41a;
-  box-shadow: 0 0 0 4px rgba(82, 196, 26, 0.16);
+  box-shadow: 0 0 0 4px rgba(82,
+196,
+26,
+0.16);
 }
 
 .backend-health-down .backend-health-dot {
   background: #ff4d4f;
-  box-shadow: 0 0 0 4px rgba(255, 77, 79, 0.16);
+  box-shadow: 0 0 0 4px rgba(255,
+77,
+79,
+0.16);
 }
 
 .backend-health-label {
@@ -7509,7 +7567,8 @@ const copyOrganizedResults = () => {
 }
 
 .batch-wrapper {
-  min-height: calc(var(--vh, 1vh) * 100);
+  min-height: calc(var(--vh,
+1vh) * 100);
   padding: 0;
   overflow: hidden;
 }
@@ -7522,7 +7581,8 @@ const copyOrganizedResults = () => {
 
 .batch-shell {
   width: 100%;
-  min-height: calc(var(--vh, 1vh) * 100);
+  min-height: calc(var(--vh,
+1vh) * 100);
   position: relative;
   isolation: isolate;
   overflow: hidden;
@@ -7535,9 +7595,24 @@ const copyOrganizedResults = () => {
   pointer-events: none;
   z-index: 0;
   background:
-    radial-gradient(circle at 16% 18%, rgba(164, 213, 120, 0.14), transparent 24%),
-    radial-gradient(circle at 84% 14%, rgba(255, 213, 116, 0.14), transparent 22%),
-    linear-gradient(180deg, rgba(8, 18, 12, 0.14) 0%, rgba(8, 20, 13, 0.34) 42%, rgba(6, 16, 10, 0.62) 100%),
+    radial-gradient(circle at 16% 18%, rgba(164,
+213,
+120,
+0.14), transparent 24%),
+    radial-gradient(circle at 84% 14%, rgba(255,
+213,
+116,
+0.14), transparent 22%),
+    linear-gradient(180deg, rgba(8,
+18,
+12,
+0.14) 0%, rgba(8,
+20,
+13,
+0.34) 42%, rgba(6,
+16,
+10,
+0.62) 100%),
     url('/forest-batch-bg-v2.png') center center / cover no-repeat;
   opacity: 0.92;
   animation: none;
@@ -7559,7 +7634,13 @@ const copyOrganizedResults = () => {
   width: 34%;
   height: 44%;
   border-radius: 999px;
-  background: radial-gradient(circle, rgba(210, 255, 232, 0.12) 0%, rgba(210, 255, 232, 0.02) 56%, transparent 74%);
+  background: radial-gradient(circle, rgba(210,
+255,
+232,
+0.12) 0%, rgba(210,
+255,
+232,
+0.02) 56%, transparent 74%);
   filter: blur(12px);
   animation: none;
 }
@@ -7577,12 +7658,31 @@ const copyOrganizedResults = () => {
 .forest-path-glow {
   left: 50%;
   bottom: -12%;
-  width: min(460px, 42vw);
+  width: min(460px,
+42vw);
   height: 42%;
   transform: translateX(-50%);
   background:
-    radial-gradient(ellipse at center bottom, rgba(255, 214, 126, 0.22) 0%, rgba(212, 255, 182, 0.12) 24%, rgba(30, 58, 33, 0) 72%);
-  clip-path: polygon(47% 100%, 53% 100%, 65% 76%, 60% 56%, 67% 33%, 57% 0, 43% 0, 33% 33%, 40% 56%, 35% 76%);
+    radial-gradient(ellipse at center bottom, rgba(255,
+214,
+126,
+0.22) 0%, rgba(212,
+255,
+182,
+0.12) 24%, rgba(30,
+58,
+33,
+0) 72%);
+  clip-path: polygon(47% 100%,
+53% 100%,
+65% 76%,
+60% 56%,
+67% 33%,
+57% 0,
+43% 0,
+33% 33%,
+40% 56%,
+35% 76%);
   filter: blur(8px);
   opacity: 0.9;
 }
@@ -7592,7 +7692,10 @@ const copyOrganizedResults = () => {
   width: 188px;
   height: 122px;
   background: url('/forest-firegrass-sprite-v2.png') left bottom / auto 100% no-repeat;
-  filter: drop-shadow(0 6px 12px rgba(18, 38, 22, 0.2));
+  filter: drop-shadow(0 6px 12px rgba(18,
+38,
+22,
+0.2));
   opacity: 0.98;
   animation: none;
 }
@@ -7605,7 +7708,8 @@ const copyOrganizedResults = () => {
   right: 8px;
   transform: scaleX(-1);
   transform-origin: center bottom;
-  animation-delay: 0s, -2.8s;
+  animation-delay: 0s,
+-2.8s;
 }
 
 .forest-slime {
@@ -7614,16 +7718,46 @@ const copyOrganizedResults = () => {
   height: 22px;
   border-radius: 58% 58% 46% 46%;
   background:
-    radial-gradient(circle at 36% 36%, rgba(255,255,255,0.9) 0 10%, transparent 11%),
-    radial-gradient(circle at 64% 36%, rgba(255,255,255,0.9) 0 10%, transparent 11%),
-    radial-gradient(circle at 40% 40%, rgba(20,34,21,0.86) 0 3%, transparent 4%),
-    radial-gradient(circle at 60% 40%, rgba(20,34,21,0.86) 0 3%, transparent 4%),
-    radial-gradient(circle at 50% 72%, rgba(18,72,42,0.44) 0 14%, transparent 15%),
-    linear-gradient(180deg, rgba(177, 255, 149, 0.98), rgba(70, 177, 88, 0.94));
+    radial-gradient(circle at 36% 36%, rgba(255,
+255,
+255,
+0.9) 0 10%, transparent 11%),
+    radial-gradient(circle at 64% 36%, rgba(255,
+255,
+255,
+0.9) 0 10%, transparent 11%),
+    radial-gradient(circle at 40% 40%, rgba(20,
+34,
+21,
+0.86) 0 3%, transparent 4%),
+    radial-gradient(circle at 60% 40%, rgba(20,
+34,
+21,
+0.86) 0 3%, transparent 4%),
+    radial-gradient(circle at 50% 72%, rgba(18,
+72,
+42,
+0.44) 0 14%, transparent 15%),
+    linear-gradient(180deg, rgba(177,
+255,
+149,
+0.98), rgba(70,
+177,
+88,
+0.94));
   box-shadow:
-    inset 0 2px 0 rgba(255,255,255,0.45),
-    0 10px 16px rgba(14, 38, 18, 0.24),
-    0 0 10px rgba(154, 255, 142, 0.18);
+    inset 0 2px 0 rgba(255,
+255,
+255,
+0.45),
+0 10px 16px rgba(14,
+38,
+18,
+0.24),
+0 0 10px rgba(154,
+255,
+142,
+0.18);
 }
 
 .forest-slime::after {
@@ -7635,7 +7769,10 @@ const copyOrganizedResults = () => {
   height: 7px;
   transform: translateX(-50%);
   border-radius: 999px;
-  background: rgba(28, 48, 30, 0.26);
+  background: rgba(28,
+48,
+30,
+0.26);
   filter: blur(2px);
 }
 
@@ -7663,7 +7800,8 @@ const copyOrganizedResults = () => {
   border-radius: 0;
   box-shadow: none;
   padding: 2px;
-  min-height: calc(var(--vh, 1vh) * 100);
+  min-height: calc(var(--vh,
+1vh) * 100);
   position: relative;
   z-index: 1;
 }
@@ -7680,14 +7818,17 @@ const copyOrganizedResults = () => {
 
 .hero-stage-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.34fr) minmax(220px, 0.58fr);
+  grid-template-columns: minmax(0,
+1.34fr) minmax(220px,
+0.58fr);
   gap: 6px;
   align-items: stretch;
 }
 
 .hero-left-stack {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0,
+1fr);
   gap: 6px;
   align-content: stretch;
   min-height: 0;
@@ -7696,7 +7837,9 @@ const copyOrganizedResults = () => {
 
 .hero-primary-pair {
   display: grid;
-  grid-template-columns: minmax(0, 1.92fr) minmax(220px, 1fr);
+  grid-template-columns: minmax(0,
+1.92fr) minmax(220px,
+1fr);
   gap: 6px;
   align-items: stretch;
 }
@@ -7706,16 +7849,33 @@ const copyOrganizedResults = () => {
   position: relative;
   padding: 9px 10px;
   border-radius: 16px;
-  border: 1px solid rgba(90, 117, 79, 0.08);
-  background: rgba(255, 255, 255, 0.56);
-  box-shadow:
-    0 8px 18px rgba(98, 119, 84, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(90,
+117,
+79,
+0.08);
+  background: rgba(255,
+255,
+255,
+0.56);
+  box-shadow: 0 8px 18px rgba(98,
+119,
+84,
+0.08),
+    inset 0 1px 0 rgba(255,
+255,
+255,
+0.72);
 }
 
 .hero-action-card-primary {
   background:
-    linear-gradient(145deg, rgba(235, 244, 212, 0.96), rgba(222, 236, 196, 0.88));
+    linear-gradient(145deg, rgba(235,
+244,
+212,
+0.96), rgba(222,
+236,
+196,
+0.88));
 }
 
 .hero-action-card-large {
@@ -7727,7 +7887,13 @@ const copyOrganizedResults = () => {
 
 .hero-action-card-secondary {
   background:
-    linear-gradient(145deg, rgba(255, 253, 248, 0.92), rgba(246, 249, 238, 0.86));
+    linear-gradient(145deg, rgba(255,
+253,
+248,
+0.92), rgba(246,
+249,
+238,
+0.86));
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -7736,16 +7902,54 @@ const copyOrganizedResults = () => {
 
 .hero-action-card-bridge {
   background:
-    linear-gradient(112deg, rgba(255, 255, 255, 0.24) 0%, rgba(255, 255, 255, 0.08) 14%, rgba(255, 255, 255, 0) 30%),
-    radial-gradient(circle at 18% 20%, rgba(255, 248, 220, 0.84), transparent 24%),
-    radial-gradient(circle at 84% 18%, rgba(250, 222, 150, 0.34), transparent 22%),
-    linear-gradient(145deg, rgba(249, 228, 166, 0.97), rgba(242, 206, 113, 0.95) 54%, rgba(233, 192, 92, 0.93) 100%);
-  border-color: rgba(194, 151, 52, 0.22);
-  box-shadow:
-    0 10px 24px rgba(179, 138, 34, 0.14),
-    0 0 0 1px rgba(255, 245, 205, 0.44) inset,
-    inset 0 1px 0 rgba(255, 255, 255, 0.74),
-    inset 0 -8px 14px rgba(176, 126, 18, 0.05);
+    linear-gradient(112deg, rgba(255,
+255,
+255,
+0.24) 0%, rgba(255,
+255,
+255,
+0.08) 14%, rgba(255,
+255,
+255,
+0) 30%),
+    radial-gradient(circle at 18% 20%, rgba(255,
+248,
+220,
+0.84), transparent 24%),
+    radial-gradient(circle at 84% 18%, rgba(250,
+222,
+150,
+0.34), transparent 22%),
+    linear-gradient(145deg, rgba(249,
+228,
+166,
+0.97), rgba(242,
+206,
+113,
+0.95) 54%, rgba(233,
+192,
+92,
+0.93) 100%);
+  border-color: rgba(194,
+151,
+52,
+0.22);
+  box-shadow: 0 10px 24px rgba(179,
+138,
+34,
+0.14),
+0 0 0 1px rgba(255,
+245,
+205,
+0.44) inset,
+    inset 0 1px 0 rgba(255,
+255,
+255,
+0.74),
+    inset 0 -8px 14px rgba(176,
+126,
+18,
+0.05);
 }
 
 .hero-action-card-compact {
@@ -7776,7 +7980,10 @@ const copyOrganizedResults = () => {
   line-height: 1;
   font-weight: 800;
   letter-spacing: 0.22em;
-  color: rgba(135, 92, 6, 0.3);
+  color: rgba(135,
+92,
+6,
+0.3);
   pointer-events: none;
   user-select: none;
 }
@@ -7822,7 +8029,10 @@ const copyOrganizedResults = () => {
   border-radius: 999px;
   border: 0 !important;
   background: linear-gradient(135deg, #476847, #6f8f55) !important;
-  box-shadow: 0 8px 16px rgba(87, 118, 76, 0.2) !important;
+  box-shadow: 0 8px 16px rgba(87,
+118,
+76,
+0.2) !important;
 }
 
 .hero-primary-pair .hero-primary-button {
@@ -7834,15 +8044,27 @@ const copyOrganizedResults = () => {
 .hero-secondary-button {
   min-height: 30px;
   border-radius: 999px;
-  border-color: rgba(90, 117, 79, 0.18) !important;
+  border-color: rgba(90,
+117,
+79,
+0.18) !important;
   color: #405240 !important;
-  background: rgba(255, 255, 255, 0.78) !important;
+  background: rgba(255,
+255,
+255,
+0.78) !important;
 }
 
 .hero-bridge-button {
-  border-color: rgba(146, 108, 18, 0.2) !important;
+  border-color: rgba(146,
+108,
+18,
+0.2) !important;
   color: #6d4f0e !important;
-  background: rgba(255, 250, 236, 0.82) !important;
+  background: rgba(255,
+250,
+236,
+0.82) !important;
 }
 
 .hero-upload-card {
@@ -7855,7 +8077,8 @@ const copyOrganizedResults = () => {
 
 .hero-upload-card-right {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0,
+1fr);
   align-self: start;
   min-height: 198px;
   height: auto;
@@ -7868,8 +8091,14 @@ const copyOrganizedResults = () => {
 
 .hero-upload-dragger :deep(.ant-upload.ant-upload-drag) {
   border-radius: 12px;
-  border: 1px dashed rgba(90, 117, 79, 0.24);
-  background: rgba(255, 255, 255, 0.78);
+  border: 1px dashed rgba(90,
+117,
+79,
+0.24);
+  background: rgba(255,
+255,
+255,
+0.78);
   min-height: 96px;
   padding: 10px 8px;
 }
@@ -7885,26 +8114,26 @@ const copyOrganizedResults = () => {
     min-height: 0;
     height: 100%;
     padding: 9px 10px;
-  }
+}
 
   .hero-upload-card-right .hero-upload-copy {
     margin-bottom: 4px;
-  }
+}
 
   .hero-upload-card-right .hero-upload-copy h3 {
     font-size: 13px;
     line-height: 1.12;
-  }
+}
 
   .hero-upload-card-right .hero-upload-copy p {
     font-size: 10px;
     line-height: 1.2;
-  }
+}
 
   .hero-upload-card-right .hero-upload-dragger {
     display: flex;
     min-height: 0;
-  }
+}
 
   .hero-upload-card-right .hero-upload-dragger :deep(.ant-upload.ant-upload-drag) {
     display: flex;
@@ -7914,29 +8143,32 @@ const copyOrganizedResults = () => {
     min-height: 0;
     height: 100%;
     padding: 10px 8px;
-  }
+}
 
   .hero-upload-card-right .hero-upload-dragger :deep(.ant-upload-drag-icon) {
     margin-bottom: 10px;
-  }
+}
 
   .hero-upload-card-right .hero-upload-dragger :deep(.ant-upload-drag-icon .anticon) {
     font-size: 66px;
-  }
+}
 
   .hero-upload-card-right .hero-upload-dragger :deep(.ant-upload-text) {
     font-size: 10px;
     line-height: 1.2;
-  }
+}
 
   .hero-upload-card-right .hero-upload-dragger :deep(.ant-upload-hint) {
     font-size: 9px;
     line-height: 1.14;
-  }
+}
 }
 
 .hero-upload-dragger :deep(.ant-upload.ant-upload-drag:hover) {
-  border-color: rgba(90, 117, 79, 0.42);
+  border-color: rgba(90,
+117,
+79,
+0.42);
 }
 
 .hero-upload-dragger :deep(.ant-upload-text) {
@@ -7957,18 +8189,33 @@ const copyOrganizedResults = () => {
   justify-content: center;
   padding: 28px 0;
   border-radius: 30px;
-  background: rgba(255, 255, 255, 0.62);
-  border: 1px solid rgba(90, 117, 79, 0.08);
+  background: rgba(255,
+255,
+255,
+0.62);
+  border: 1px solid rgba(90,
+117,
+79,
+0.08);
 }
 .tree-wrapper {
-  background: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(90, 117, 79, 0.12);
+  background: rgba(255,
+255,
+255,
+0.72);
+  border: 1px solid rgba(90,
+117,
+79,
+0.12);
   border-radius: 20px;
   padding: 14px;
   margin-bottom: 20px;
   max-height: 420px;
   overflow-y: auto;
-  box-shadow: 0 16px 36px rgba(98, 119, 84, 0.08);
+  box-shadow: 0 16px 36px rgba(98,
+119,
+84,
+0.08);
   contain: layout paint;
 }
 .tree-wrapper :deep(.site-root-summary-node > .ant-tree-switcher),
@@ -7976,18 +8223,32 @@ const copyOrganizedResults = () => {
   display: none;
 }
 .result-container {
-  border: 1px solid rgba(90, 117, 79, 0.12);
+  border: 1px solid rgba(90,
+117,
+79,
+0.12);
   border-radius: 24px;
   padding: 18px;
-  background-color: rgba(255, 255, 255, 0.74);
-  box-shadow: 0 20px 48px rgba(98, 119, 84, 0.08);
+  background-color: rgba(255,
+255,
+255,
+0.74);
+  box-shadow: 0 20px 48px rgba(98,
+119,
+84,
+0.08);
   contain: layout paint;
 }
-
 /* Organized Tree Styles */
 .organized-tree-wrapper {
-  background: rgba(255, 255, 255, 0.68);
-  border: 1px solid rgba(90, 117, 79, 0.12);
+  background: rgba(255,
+255,
+255,
+0.68);
+  border: 1px solid rgba(90,
+117,
+79,
+0.12);
   border-radius: 20px;
   padding: 12px;
   max-height: 500px;
@@ -8011,22 +8272,38 @@ const copyOrganizedResults = () => {
   width: 10px;
   height: 20px;
   border-radius: 70% 0 70% 0;
-  background: linear-gradient(180deg, rgba(170, 202, 127, 0.7), rgba(96, 131, 75, 0.42));
+  background: linear-gradient(180deg, rgba(170,
+202,
+127,
+0.7), rgba(96,
+131,
+75,
+0.42));
   filter: blur(0.2px);
   transform-origin: center bottom;
   animation: none;
 }
 
-.leaf-a { top: 24%; right: 18%; animation-delay: 0s; }
-.leaf-b { top: 42%; right: 8%; width: 9px; height: 18px; animation-delay: 1.4s; }
-.leaf-c { bottom: 28%; left: 9%; width: 10px; height: 20px; animation-delay: 2.1s; }
-.leaf-d { bottom: 18%; right: 28%; width: 8px; height: 14px; animation-delay: 3.2s; }
+.leaf-a { top: 24%; right: 18%; animation-delay: 0s;
+}
+.leaf-b { top: 42%; right: 8%; width: 9px; height: 18px; animation-delay: 1.4s;
+}
+.leaf-c { bottom: 28%; left: 9%; width: 10px; height: 20px; animation-delay: 2.1s;
+}
+.leaf-d { bottom: 18%; right: 28%; width: 8px; height: 14px; animation-delay: 3.2s;
+}
 
 .grass {
   bottom: -10px;
   width: 2px;
   border-radius: 999px;
-  background: linear-gradient(180deg, rgba(121, 157, 96, 0), rgba(121, 157, 96, 0.58));
+  background: linear-gradient(180deg, rgba(121,
+157,
+96,
+0), rgba(121,
+157,
+96,
+0.58));
   transform-origin: bottom center;
   animation: none;
 }
@@ -8063,80 +8340,209 @@ const copyOrganizedResults = () => {
   animation: grassSway 7s ease-in-out infinite;
 }
 
-.grass-a { left: 8%; height: 38px; animation-delay: 0s; }
-.grass-b { left: 11%; height: 30px; animation-delay: 1.2s; }
-.grass-c { right: 12%; height: 34px; animation-delay: 2.4s; }
+.grass-a { left: 8%; height: 38px; animation-delay: 0s;
+}
+.grass-b { left: 11%; height: 30px; animation-delay: 1.2s;
+}
+.grass-c { right: 12%; height: 34px; animation-delay: 2.4s;
+}
 
 @keyframes leafFloat {
-  0%, 100% { transform: translate3d(0, 0, 0) rotate(-8deg); }
-  50% { transform: translate3d(0, -8px, 0) rotate(8deg); }
+0%,
+100% { transform: translate3d(0,
+  0,
+  0) rotate(-8deg);
+}
+  50% { transform: translate3d(0,
+  -8px,
+  0) rotate(8deg);
+}
 }
 
 @keyframes grassSway {
-  0%, 100% { transform: rotate(-7deg) scaleY(1); }
-  50% { transform: rotate(7deg) scaleY(1.04); }
+0%,
+100% { transform: rotate(-7deg) scaleY(1);
+}
+  50% { transform: rotate(7deg) scaleY(1.04);
+}
 }
 
 @keyframes firegrassFrames {
-  from { background-position-x: 0; }
-  to { background-position-x: -1504px; }
+  from { background-position-x: 0;
+}
+  to { background-position-x: -1504px;
+}
 }
 
 @keyframes firegrassDrift {
-  0%, 100% { transform: translate3d(0, 0, 0); }
-  50% { transform: translate3d(0, -2px, 0); }
+0%,
+100% { transform: translate3d(0,
+  0,
+  0);
+}
+  50% { transform: translate3d(0,
+  -2px,
+  0);
+}
 }
 
 @keyframes forestMistDrift {
-  0%, 100% { transform: translate3d(0, 0, 0); opacity: 0.45; }
-  50% { transform: translate3d(18px, -6px, 0); opacity: 0.7; }
+0%,
+100% { transform: translate3d(0,
+  0,
+  0); opacity: 0.45;
+}
+  50% { transform: translate3d(18px,
+  -6px,
+  0); opacity: 0.7;
+}
 }
 
 @keyframes slimeHopA {
-  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
-  20% { transform: translate3d(8px, -3px, 0) scale(1.02, 0.94); }
-  32% { transform: translate3d(22px, -14px, 0) scale(0.96, 1.06); }
-  48% { transform: translate3d(34px, 0, 0) scale(1.02, 0.94); }
-  68% { transform: translate3d(18px, -8px, 0) scale(0.98, 1.02); }
+0%,
+100% { transform: translate3d(0,
+  0,
+  0) scale(1);
+}
+  20% { transform: translate3d(8px,
+  -3px,
+  0) scale(1.02,
+  0.94);
+}
+  32% { transform: translate3d(22px,
+  -14px,
+  0) scale(0.96,
+  1.06);
+}
+  48% { transform: translate3d(34px,
+  0,
+  0) scale(1.02,
+  0.94);
+}
+  68% { transform: translate3d(18px,
+  -8px,
+  0) scale(0.98,
+  1.02);
+}
 }
 
 @keyframes slimeHopB {
-  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
-  18% { transform: translate3d(-6px, -2px, 0) scale(1.03, 0.92); }
-  34% { transform: translate3d(-18px, -10px, 0) scale(0.95, 1.08); }
-  52% { transform: translate3d(-28px, 0, 0) scale(1.02, 0.94); }
-  72% { transform: translate3d(-16px, -6px, 0) scale(0.98, 1.02); }
+0%,
+100% { transform: translate3d(0,
+  0,
+  0) scale(1);
+}
+  18% { transform: translate3d(-6px,
+  -2px,
+  0) scale(1.03,
+  0.92);
+}
+  34% { transform: translate3d(-18px,
+  -10px,
+  0) scale(0.95,
+  1.08);
+}
+  52% { transform: translate3d(-28px,
+  0,
+  0) scale(1.02,
+  0.94);
+}
+  72% { transform: translate3d(-16px,
+  -6px,
+  0) scale(0.98,
+  1.02);
+}
 }
 
 @keyframes slimeHopC {
-  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
-  24% { transform: translate3d(5px, -2px, 0) scale(1.02, 0.94); }
-  38% { transform: translate3d(14px, -8px, 0) scale(0.96, 1.08); }
-  56% { transform: translate3d(22px, 0, 0) scale(1.02, 0.96); }
-  76% { transform: translate3d(12px, -5px, 0) scale(0.98, 1.02); }
+0%,
+100% { transform: translate3d(0,
+  0,
+  0) scale(1);
+}
+  24% { transform: translate3d(5px,
+  -2px,
+  0) scale(1.02,
+  0.94);
+}
+  38% { transform: translate3d(14px,
+  -8px,
+  0) scale(0.96,
+  1.08);
+}
+  56% { transform: translate3d(22px,
+  0,
+  0) scale(1.02,
+  0.96);
+}
+  76% { transform: translate3d(12px,
+  -5px,
+  0) scale(0.98,
+  1.02);
+}
 }
 
 @keyframes forestBackdropShift {
-  0%, 100% { background-position: center center, center center, center center, center center; }
-  50% { background-position: 48% 50%, 52% 50%, center center, 50.8% 49.4%; }
+0%,
+100% { background-position: center center, center center, center center, center center;
+}
+  50% { background-position: 48% 50%,
+  52% 50%, center center,
+  50.8% 49.4%;
+}
 }
 
 :deep(body.dark-mode) .batch-hero {
-  border-color: rgba(160, 189, 144, 0.12);
+  border-color: rgba(160,
+189,
+144,
+0.12);
   background:
-    radial-gradient(circle at top right, rgba(179, 147, 67, 0.24), transparent 34%),
-    radial-gradient(circle at left center, rgba(104, 149, 88, 0.2), transparent 34%),
-    linear-gradient(145deg, rgba(24, 38, 27, 0.95), rgba(35, 53, 39, 0.92));
-  box-shadow:
-    0 34px 90px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    radial-gradient(circle at top right, rgba(179,
+147,
+67,
+0.24), transparent 34%),
+    radial-gradient(circle at left center, rgba(104,
+149,
+88,
+0.2), transparent 34%),
+    linear-gradient(145deg, rgba(24,
+38,
+27,
+0.95), rgba(35,
+53,
+39,
+0.92));
+  box-shadow: 0 34px 90px rgba(0,
+0,
+0,
+0.28),
+    inset 0 1px 0 rgba(255,
+255,
+255,
+0.04);
 }
 
 :deep(body.dark-mode) .batch-forest-scene {
   background:
-    radial-gradient(circle at 18% 18%, rgba(92, 161, 113, 0.14), transparent 24%),
-    radial-gradient(circle at 82% 15%, rgba(255, 206, 104, 0.1), transparent 22%),
-    linear-gradient(180deg, rgba(4, 10, 7, 0.42) 0%, rgba(4, 10, 7, 0.62) 42%, rgba(2, 6, 4, 0.86) 100%),
+    radial-gradient(circle at 18% 18%, rgba(92,
+161,
+113,
+0.14), transparent 24%),
+    radial-gradient(circle at 82% 15%, rgba(255,
+206,
+104,
+0.1), transparent 22%),
+    linear-gradient(180deg, rgba(4,
+10,
+7,
+0.42) 0%, rgba(4,
+10,
+7,
+0.62) 42%, rgba(2,
+6,
+4,
+0.86) 100%),
     url('/forest-batch-bg-v2.png') center center / cover no-repeat;
 }
 
@@ -8162,39 +8568,95 @@ const copyOrganizedResults = () => {
 :deep(body.dark-mode) .tree-wrapper,
 :deep(body.dark-mode) .result-container,
 :deep(body.dark-mode) .organized-tree-wrapper {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(160, 189, 144, 0.12);
+  background: rgba(255,
+255,
+255,
+0.05);
+  border-color: rgba(160,
+189,
+144,
+0.12);
 }
 
 :deep(body.dark-mode) .hero-action-card-primary {
   background:
-    linear-gradient(145deg, rgba(74, 102, 64, 0.44), rgba(53, 76, 48, 0.4));
+    linear-gradient(145deg, rgba(74,
+102,
+64,
+0.44), rgba(53,
+76,
+48,
+0.4));
 }
 
 :deep(body.dark-mode) .hero-action-card-secondary {
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.06), rgba(160, 189, 144, 0.06));
+    linear-gradient(145deg, rgba(255,
+255,
+255,
+0.06), rgba(160,
+189,
+144,
+0.06));
 }
 
 :deep(body.dark-mode) .hero-action-card-bridge {
   background:
-    linear-gradient(112deg, rgba(255, 244, 202, 0.08) 0%, rgba(255, 244, 202, 0.02) 18%, rgba(255, 244, 202, 0) 34%),
-    radial-gradient(circle at 18% 22%, rgba(255, 214, 112, 0.1), transparent 22%),
-    linear-gradient(145deg, rgba(120, 86, 16, 0.88), rgba(154, 109, 25, 0.84));
-  border-color: rgba(232, 197, 111, 0.2);
-  box-shadow:
-    0 10px 22px rgba(0, 0, 0, 0.18),
-    0 0 0 1px rgba(255, 222, 142, 0.06) inset,
-    inset 0 1px 0 rgba(255, 242, 208, 0.05);
+    linear-gradient(112deg, rgba(255,
+244,
+202,
+0.08) 0%, rgba(255,
+244,
+202,
+0.02) 18%, rgba(255,
+244,
+202,
+0) 34%),
+    radial-gradient(circle at 18% 22%, rgba(255,
+214,
+112,
+0.1), transparent 22%),
+    linear-gradient(145deg, rgba(120,
+86,
+16,
+0.88), rgba(154,
+109,
+25,
+0.84));
+  border-color: rgba(232,
+197,
+111,
+0.2);
+  box-shadow: 0 10px 22px rgba(0,
+0,
+0,
+0.18),
+0 0 0 1px rgba(255,
+222,
+142,
+0.06) inset,
+    inset 0 1px 0 rgba(255,
+242,
+208,
+0.05);
 }
 
 :deep(body.dark-mode) .hero-card-watermark {
-  color: rgba(255, 236, 184, 0.28);
+  color: rgba(255,
+236,
+184,
+0.28);
 }
 
 :deep(body.dark-mode) .hero-upload-dragger :deep(.ant-upload.ant-upload-drag) {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(160, 189, 144, 0.2);
+  background: rgba(255,
+255,
+255,
+0.04);
+  border-color: rgba(160,
+189,
+144,
+0.2);
 }
 
 :deep(body.dark-mode) .hero-upload-dragger :deep(.ant-upload-text) {
@@ -8209,9 +8671,12 @@ const copyOrganizedResults = () => {
   font-size: 14px;
 }
 
-.tree-node-green { color: #52c41a; font-weight: bold; }
-.tree-node-orange { color: #faad14; font-weight: bold; }
-.tree-node-grey { color: #999; opacity: 0.7; }
+.tree-node-green { color: #52c41a; font-weight: bold;
+}
+.tree-node-orange { color: #faad14; font-weight: bold;
+}
+.tree-node-grey { color: #999; opacity: 0.7;
+}
 .tree-node-pending-hint {
   display: inline-flex;
   align-items: center;
@@ -8221,46 +8686,35 @@ const copyOrganizedResults = () => {
   font-size: 12px;
 }
 
-.status-success { color: #52c41a; }
-.status-warning { color: #faad14; }
-.status-error { color: #ff4d4f; }
+.status-success { color: #52c41a;
+}
+.status-warning { color: #faad14;
+}
+.status-error { color: #ff4d4f;
+}
 
 :deep(.result-summary-tree .ant-tree-node-content-wrapper) {
   width: 100%;
 }
 
 :deep(.highlighted-row) {
-  background-color: rgba(24, 144, 255, 0.15) !important;
+  background-color: rgba(24,
+144,
+255,
+0.15) !important;
   transition: background-color 0.5s;
 }
 
 :deep(.dark-mode .highlighted-row) {
-  background-color: rgba(24, 144, 255, 0.3) !important;
+  background-color: rgba(24,
+144,
+255,
+0.3) !important;
 }
 .custom-tree-node-wrapper {
   display: flex !important;
   align-items: center;
   width: 100%;
-}
-
-.organized-tree-node-wrapper {
-  gap: 12px;
-}
-
-.organized-tree-node-main {
-  min-width: 0;
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.organized-tree-shortcut-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: 2px;
 }
 
 .tree-provider-node-wrapper {
@@ -8338,8 +8792,14 @@ const copyOrganizedResults = () => {
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  border: 1px solid rgba(217, 119, 6, 0.24);
-  background: rgba(255, 247, 237, 0.92);
+  border: 1px solid rgba(217,
+119,
+6,
+0.24);
+  background: rgba(255,
+247,
+237,
+0.92);
   color: #d97706;
   font-size: 10px;
   line-height: 1;
@@ -8350,74 +8810,16 @@ const copyOrganizedResults = () => {
   cursor: help;
 }
 
-.tree-performance-preview {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(217, 119, 6, 0.18);
-  background: rgba(255, 247, 237, 0.88);
-  color: #d97706;
-  font-size: 12px;
-  line-height: 1.4;
-  white-space: nowrap;
-}
-
-:deep(.dark-mode) .tree-performance-preview {
-  border-color: rgba(250, 173, 20, 0.22);
-  background: rgba(60, 38, 0, 0.42);
-  color: #ffd666;
-}
-
-.tree-performance-preview-text {
-  font-weight: 600;
-}
-
-.cc-switch-target-dialog {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.cc-switch-target-dialog-hint {
-  margin: 0;
-  color: #8c8c8c;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.cc-switch-target-dialog-select-row {
-  display: flex;
-  align-items: center;
-}
-
-.cc-switch-target-dialog-select {
-  width: 100%;
-}
-
-:deep(.cc-switch-target-dialog-select .ant-select-selector) {
-  min-height: 44px;
-  border-radius: 12px !important;
-  align-items: center;
-}
-
-:deep(.cc-switch-target-dialog-select .ant-select-selection-item),
-:deep(.cc-switch-target-dialog-select .ant-select-selection-placeholder) {
-  line-height: 42px;
-}
-
-:deep(.dark-mode) .cc-switch-target-dialog-hint {
-  color: #bfbfbf;
-}
-
 .site-tree-action-btn {
   width: 24px;
   height: 24px;
   padding: 0;
   border: 0;
   border-radius: 999px;
-  background: rgba(22, 119, 255, 0.08);
+  background: rgba(22,
+119,
+255,
+0.08);
   color: #1677ff;
   display: inline-flex;
   align-items: center;
@@ -8426,11 +8828,17 @@ const copyOrganizedResults = () => {
 }
 
 .site-tree-action-btn:hover {
-  background: rgba(22, 119, 255, 0.16);
+  background: rgba(22,
+119,
+255,
+0.16);
 }
 
 .site-tree-action-btn.is-danger {
-  background: rgba(255, 77, 79, 0.08);
+  background: rgba(255,
+77,
+79,
+0.08);
   color: #ff4d4f;
 }
 
@@ -8440,7 +8848,10 @@ const copyOrganizedResults = () => {
   max-width: 120px;
   padding: 0 8px;
   border-radius: 999px;
-  background: rgba(245, 208, 112, 0.2);
+  background: rgba(245,
+208,
+112,
+0.2);
   color: #8a5a00;
   font-size: 11px;
   line-height: 20px;
@@ -8454,7 +8865,10 @@ const copyOrganizedResults = () => {
   align-items: center;
   padding: 0 8px;
   border-radius: 999px;
-  background: rgba(22, 119, 255, 0.12);
+  background: rgba(22,
+119,
+255,
+0.12);
   color: #1677ff;
   font-size: 11px;
   line-height: 20px;
@@ -8467,7 +8881,10 @@ const copyOrganizedResults = () => {
   padding: 0;
   border: 0;
   border-radius: 999px;
-  background: rgba(255, 77, 79, 0.08);
+  background: rgba(255,
+77,
+79,
+0.08);
   color: #ff4d4f;
   display: inline-flex;
   align-items: center;
@@ -8476,7 +8893,10 @@ const copyOrganizedResults = () => {
 }
 
 .site-tree-inline-delete-btn:hover {
-  background: rgba(255, 77, 79, 0.16);
+  background: rgba(255,
+77,
+79,
+0.16);
 }
 
 .tree-site-disabled {
@@ -8486,31 +8906,49 @@ const copyOrganizedResults = () => {
 }
 
 :deep(body.dark-mode) .site-tree-action-btn {
-  background: rgba(172, 199, 151, 0.12);
+  background: rgba(172,
+199,
+151,
+0.12);
   color: #dfead8;
 }
 
 :deep(body.dark-mode) .site-tree-action-btn:hover {
-  background: rgba(172, 199, 151, 0.22);
+  background: rgba(172,
+199,
+151,
+0.22);
 }
 
 :deep(body.dark-mode) .site-tree-action-btn.is-danger {
-  background: rgba(255, 77, 79, 0.16);
+  background: rgba(255,
+77,
+79,
+0.16);
   color: #ffb6b7;
 }
 
 :deep(body.dark-mode) .site-tree-note-badge {
-  background: rgba(245, 208, 112, 0.18);
+  background: rgba(245,
+208,
+112,
+0.18);
   color: #ffd98b;
 }
 
 :deep(body.dark-mode) .site-tree-inline-tag {
-  background: rgba(92, 164, 255, 0.18);
+  background: rgba(92,
+164,
+255,
+0.18);
   color: #a9d0ff;
 }
 
 :deep(body.dark-mode) .site-tree-inline-delete-btn {
-  background: rgba(255, 77, 79, 0.16);
+  background: rgba(255,
+77,
+79,
+0.16);
   color: #ffb6b7;
 }
 
@@ -8521,7 +8959,10 @@ const copyOrganizedResults = () => {
   min-width: 42px;
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(140, 140, 140, 0.14);
+  background: rgba(140,
+140,
+140,
+0.14);
   color: #8c8c8c;
   font-size: 12px;
   cursor: pointer;
@@ -8548,7 +8989,10 @@ const copyOrganizedResults = () => {
   cursor: pointer;
   font-size: 14px;
   filter: grayscale(0.8);
-  transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  transition: all 0.2s cubic-bezier(0.175,
+0.885,
+0.32,
+1.275);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -8560,11 +9004,17 @@ const copyOrganizedResults = () => {
 }
 
 .cherry-icon:hover {
-  text-shadow: 0 0 8px rgba(255, 0, 0, 0.4);
+  text-shadow: 0 0 8px rgba(255,
+0,
+0,
+0.4);
 }
 
 .switch-icon:hover {
-  text-shadow: 0 0 8px rgba(0, 123, 255, 0.4);
+  text-shadow: 0 0 8px rgba(0,
+123,
+255,
+0.4);
 }
 
 .key-sync-strategy-modal {
@@ -8580,13 +9030,20 @@ const copyOrganizedResults = () => {
 
 .key-sync-strategy-option {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0,
+1fr);
   gap: 10px;
   align-items: start;
   padding: 12px 14px;
   border-radius: 14px;
-  background: rgba(245, 249, 242, 0.96);
-  border: 1px solid rgba(137, 165, 126, 0.18);
+  background: rgba(245,
+249,
+242,
+0.96);
+  border: 1px solid rgba(137,
+165,
+126,
+0.18);
 }
 
 .key-sync-strategy-index {
@@ -8610,8 +9067,14 @@ const copyOrganizedResults = () => {
   gap: 18px;
   padding: 18px;
   border-radius: 18px;
-  border: 1px solid rgba(116, 144, 104, 0.16);
-  background: rgba(248, 251, 246, 0.96);
+  border: 1px solid rgba(116,
+144,
+104,
+0.16);
+  background: rgba(248,
+251,
+246,
+0.96);
 }
 
 .portable-settings-copy {
@@ -8643,9 +9106,21 @@ const copyOrganizedResults = () => {
 }
 
 :deep(body.dark-mode) .settings-action-bar {
-  border-color: rgba(154, 191, 142, 0.16);
-  background: linear-gradient(180deg, rgba(22, 28, 22, 0.94), rgba(18, 24, 18, 0.9));
-  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.18);
+  border-color: rgba(154,
+191,
+142,
+0.16);
+  background: linear-gradient(180deg, rgba(22,
+28,
+22,
+0.94), rgba(18,
+24,
+18,
+0.9));
+  box-shadow: 0 16px 34px rgba(0,
+0,
+0,
+0.18);
 }
 
 :deep(body.dark-mode) .batch-settings-label {
@@ -8653,8 +9128,14 @@ const copyOrganizedResults = () => {
 }
 
 :deep(body.dark-mode) .batch-setting-input {
-  border-color: rgba(154, 191, 142, 0.18);
-  background: rgba(28, 35, 27, 0.94);
+  border-color: rgba(154,
+191,
+142,
+0.18);
+  background: rgba(28,
+35,
+27,
+0.94);
 }
 
 :deep(body.dark-mode) .batch-setting-input :deep(.ant-input-number-input) {
@@ -8662,14 +9143,23 @@ const copyOrganizedResults = () => {
 }
 
 :deep(body.dark-mode) .batch-reset-button {
-  border-color: rgba(154, 191, 142, 0.18) !important;
+  border-color: rgba(154,
+191,
+142,
+0.18) !important;
   color: #e4f1df !important;
-  background: rgba(28, 35, 27, 0.94) !important;
+  background: rgba(28,
+35,
+27,
+0.94) !important;
 }
 
 :deep(body.dark-mode) .batch-start-button {
   background: linear-gradient(135deg, #5d8255, #89a864) !important;
-  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.22) !important;
+  box-shadow: 0 10px 20px rgba(0,
+0,
+0,
+0.22) !important;
 }
 
 :deep(body.dark-mode) .key-sync-strategy-summary {
@@ -8677,8 +9167,14 @@ const copyOrganizedResults = () => {
 }
 
 :deep(body.dark-mode) .key-sync-strategy-option {
-  background: rgba(24, 32, 25, 0.92);
-  border-color: rgba(154, 191, 142, 0.2);
+  background: rgba(24,
+32,
+25,
+0.92);
+  border-color: rgba(154,
+191,
+142,
+0.2);
 }
 
 :deep(body.dark-mode) .key-sync-strategy-index {
@@ -8694,8 +9190,14 @@ const copyOrganizedResults = () => {
 }
 
 :deep(body.dark-mode) .portable-settings-card {
-  border-color: rgba(154, 191, 142, 0.18);
-  background: rgba(24, 32, 25, 0.92);
+  border-color: rgba(154,
+191,
+142,
+0.18);
+  background: rgba(24,
+32,
+25,
+0.92);
 }
 
 :deep(body.dark-mode) .portable-settings-title {
@@ -8715,88 +9217,93 @@ const copyOrganizedResults = () => {
 @media (max-width: 620px) {
   .batch-hero {
     padding: 12px 10px;
-  }
+}
 
   .page-title-row {
     gap: 14px;
-  }
+}
 
   .hero-stage-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
+    grid-template-columns: minmax(0,
+  1fr);
+}
 
   .hero-primary-pair {
-    grid-template-columns: minmax(0, 1fr);
-  }
+    grid-template-columns: minmax(0,
+  1fr);
+}
 
   .hero-action-card-large,
   .hero-action-card-compact {
     min-height: unset;
-  }
+}
 
   .forest-firegrass {
     width: 136px;
     height: 88px;
-  }
+}
 
   .hero-primary-button {
     min-width: 0;
     width: 100%;
-  }
+}
 
   .result-topbar {
-    grid-template-columns: minmax(0, 1fr);
-  }
+    grid-template-columns: minmax(0,
+  1fr);
+}
 
   .selection-header-row {
     align-items: flex-start;
-  }
+}
 
   .selection-title,
   .selection-action-group {
     white-space: normal;
-  }
+}
 
   .selection-action-group {
     margin-left: 0;
     justify-content: flex-start;
-  }
+}
 
   .quick-filter-strip {
-    grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
-  }
+    grid-template-columns: repeat(auto-fit, minmax(112px,
+  1fr));
+}
 
   .result-side-controls {
     width: 100%;
     min-width: 0;
-  }
+}
 
   .settings-action-bar {
     padding: 12px 13px;
-  }
+}
 
   .batch-settings {
     width: 100%;
-  }
+}
 
   .batch-setting-input {
-    width: min(100%, 112px);
+    width: min(100%,
+  112px);
     min-width: 0;
     flex: 1 1 112px;
-  }
+}
 
   .actions {
     width: 100%;
     margin-left: 0;
-  }
+}
 
   .batch-reset-button,
   .batch-start-button {
     flex: 1 1 0;
-  }
+}
 
   .portable-settings-actions {
     flex-direction: column;
-  }
+}
 }
 </style>

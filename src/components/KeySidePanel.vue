@@ -54,7 +54,7 @@
           v-if="advancedProxyQueueItems.length > 0"
           ref="panelQueueStripRef"
           class="panel-queue-strip"
-          @pointerdown.stop="beginQueueStripDrag"
+          @pointerdown="beginQueueStripDrag"
           @pointermove="dragQueueStrip"
           @pointerup="endQueueStripDrag"
           @pointercancel="endQueueStripDrag"
@@ -439,10 +439,16 @@ const superMiniWindowDragState = {
 };
 const panelQueueDragState = {
   active: false,
-  armed: false,
   pointerId: -1,
-  startX: 0,
-  startScrollLeft: 0,
+  offsetX: 0,
+  offsetY: 0,
+  startWindowX: 0,
+  startWindowY: 0,
+  lastScreenX: 0,
+  lastScreenY: 0,
+  pendingWindowX: 0,
+  pendingWindowY: 0,
+  rafId: 0,
   moved: false,
 };
 
@@ -520,37 +526,65 @@ function isValidSidebarWindowBounds(bounds) {
   return Boolean(bounds && Number(bounds.width) > 0 && Number(bounds.height) > 0);
 }
 
-async function readSidebarWindowBounds() {
-  try {
-    const backendBounds = await GetPanelWindowBounds().catch(() => null);
-    const normalizedBackendBounds = normalizeSidebarWindowBounds(backendBounds);
-    if (isValidSidebarWindowBounds(normalizedBackendBounds)) {
-      return { bounds: normalizedBackendBounds, source: 'backend' };
-    }
-  } catch {}
-
+async function readSidebarWindowBounds(reason = 'read') {
+  const readLabel = String(reason || 'read');
   try {
     const [size, position] = await Promise.all([
       WindowGetSize().catch(() => null),
       WindowGetPosition().catch(() => null),
     ]);
-    const fallbackBounds = normalizeSidebarWindowBounds({
+    const runtimeBounds = normalizeSidebarWindowBounds({
       width: size?.w,
       height: size?.h,
       x: position?.x,
       y: position?.y,
     });
-    if (isValidSidebarWindowBounds(fallbackBounds)) {
-      return { bounds: fallbackBounds, source: 'runtime' };
+    if (isValidSidebarWindowBounds(runtimeBounds)) {
+      appendPanelClientLog(
+        'panel.super-mini.bounds',
+        `${readLabel} source=runtime bounds=${formatSidebarBounds(runtimeBounds)}`,
+      );
+      return { bounds: runtimeBounds, source: 'runtime' };
     }
-  } catch {}
+    appendPanelClientLog(
+      'panel.super-mini.bounds',
+      `${readLabel} runtime invalid bounds=${formatSidebarBounds(runtimeBounds)}`,
+    );
+  } catch (error) {
+    appendPanelClientLog(
+      'panel.super-mini.bounds',
+      `${readLabel} runtime read failed=${error?.message || String(error)}`,
+    );
+  }
 
+  try {
+    const backendBounds = await GetPanelWindowBounds().catch(() => null);
+    const normalizedBackendBounds = normalizeSidebarWindowBounds(backendBounds);
+    if (isValidSidebarWindowBounds(normalizedBackendBounds)) {
+      appendPanelClientLog(
+        'panel.super-mini.bounds',
+        `${readLabel} source=backend bounds=${formatSidebarBounds(normalizedBackendBounds)}`,
+      );
+      return { bounds: normalizedBackendBounds, source: 'backend' };
+    }
+    appendPanelClientLog(
+      'panel.super-mini.bounds',
+      `${readLabel} backend invalid bounds=${formatSidebarBounds(normalizedBackendBounds)}`,
+    );
+  } catch (error) {
+    appendPanelClientLog(
+      'panel.super-mini.bounds',
+      `${readLabel} backend read failed=${error?.message || String(error)}`,
+    );
+  }
+
+  appendPanelClientLog('panel.super-mini.bounds', `${readLabel} source=none`);
   return { bounds: null, source: 'none' };
 }
 
 async function logSuperMiniWindowSnapshot(stage, token, extra = '') {
   try {
-    const current = await readSidebarWindowBounds();
+    const current = await readSidebarWindowBounds(stage);
     const shellRect = panelShellRef.value?.getBoundingClientRect?.();
     const shellSize = shellRect ? `${Math.ceil(Number(shellRect.width || 0))}x${Math.ceil(Number(shellRect.height || 0))}` : 'null';
     const suffix = String(extra || '').trim();
@@ -568,9 +602,10 @@ async function logSuperMiniWindowSnapshot(stage, token, extra = '') {
 
 async function applySuperMiniWindowMode(enabled) {
   const transitionToken = ++superMiniTransitionToken;
+  const queueScroll = panelQueueStripRef.value?.scrollLeft || 0;
   appendPanelClientLog(
     'panel.super-mini',
-    `toggle request enabled=${Boolean(enabled)} token=${transitionToken} current=${superMiniMode.value} queueScroll=${panelQueueStripRef.value?.scrollLeft || 0}`,
+    `toggle request enabled=${Boolean(enabled)} token=${transitionToken} current=${superMiniMode.value} queueScroll=${queueScroll} restore=${formatSidebarBounds(superMiniRestoreBounds)} currentBounds=${formatSidebarBounds(superMiniWindowBounds)}`,
   );
   if (typeof window === 'undefined') {
     superMiniMode.value = Boolean(enabled);
@@ -581,11 +616,15 @@ async function applySuperMiniWindowMode(enabled) {
   const queueStrip = panelQueueStripRef.value;
   if (enabled && queueStrip) {
     superMiniQueueScrollLeft = queueStrip.scrollLeft || 0;
+    appendPanelClientLog(
+      'panel.super-mini',
+      `queue scroll captured token=${transitionToken} value=${superMiniQueueScrollLeft}`,
+    );
   }
 
   if (enabled) {
     try {
-      const current = await readSidebarWindowBounds();
+      const current = await readSidebarWindowBounds(`capture#${transitionToken}`);
       const restoreBounds = current.bounds;
       if (isValidSidebarWindowBounds(restoreBounds)) {
         superMiniRestoreBounds = restoreBounds;
@@ -1484,60 +1523,155 @@ function syncScrollIndicator() {
   panelScrollRatio.value = maxScrollTop > 0 ? element.scrollTop / maxScrollTop : 0;
 }
 
-function beginQueueStripDrag(event) {
+function flushQueueStripDrag(force = false) {
+  if (!force && !panelQueueDragState.active) return;
+  try {
+    WindowSetPosition(
+      panelQueueDragState.pendingWindowX,
+      panelQueueDragState.pendingWindowY,
+    );
+    if (force) {
+      appendPanelClientLog(
+        'panel.queue.drag',
+        `apply pointer=${panelQueueDragState.pointerId} pos=${panelQueueDragState.pendingWindowX},${panelQueueDragState.pendingWindowY}`,
+      );
+    }
+  } catch (error) {
+    appendPanelClientLog(
+      'panel.queue.drag',
+      `apply failed token=${panelQueueDragState.pointerId} err=${error?.message || String(error)}`,
+    );
+  }
+  panelQueueDragState.rafId = 0;
+}
+
+async function beginQueueStripDrag(event) {
   if (event?.button !== 0) return;
+  if (superMiniMode.value) {
+    appendPanelClientLog(
+      'panel.queue.drag',
+      `ignored pointerdown superMini=${superMiniMode.value} pointer=${Number(event?.pointerId ?? -1)}`,
+    );
+    return;
+  }
   const target = panelQueueStripRef.value;
   if (!target) return;
-  panelQueueDragState.active = false;
-  panelQueueDragState.armed = true;
+  event.preventDefault?.();
+  try {
+    target.setPointerCapture?.(event.pointerId);
+  } catch {}
   panelQueueDragState.pointerId = event.pointerId;
-  panelQueueDragState.startX = event.clientX;
-  panelQueueDragState.startScrollLeft = target.scrollLeft;
+  const [size, position] = await Promise.all([
+    WindowGetSize().catch(() => null),
+    WindowGetPosition().catch(() => null),
+  ]);
+  if (panelQueueDragState.pointerId !== event.pointerId) {
+    appendPanelClientLog(
+      'panel.queue.drag',
+      `aborted pointer=${Number(event?.pointerId ?? -1)} current=${panelQueueDragState.pointerId}`,
+    );
+    try {
+      target.releasePointerCapture?.(event.pointerId);
+    } catch {}
+    return;
+  }
+  const baseBounds = normalizeSidebarWindowBounds({
+    width: size?.w,
+    height: size?.h,
+    x: position?.x,
+    y: position?.y,
+  });
+  if (!isValidSidebarWindowBounds(baseBounds)) {
+    appendPanelClientLog(
+      'panel.queue.drag',
+      `ignored pointerdown invalid bounds pointer=${Number(event?.pointerId ?? -1)} window=${formatSidebarBounds(baseBounds)}`,
+    );
+    try {
+      target.releasePointerCapture?.(event.pointerId);
+    } catch {}
+    panelQueueDragState.pointerId = -1;
+    return;
+  }
+  const screenX = Number.isFinite(Number(event?.screenX)) ? Number(event.screenX) : Number(event?.clientX || 0) + Number(window?.screenX || 0);
+  const screenY = Number.isFinite(Number(event?.screenY)) ? Number(event.screenY) : Number(event?.clientY || 0) + Number(window?.screenY || 0);
+  panelQueueDragState.active = true;
+  panelQueueDragState.pointerId = event.pointerId;
+  panelQueueDragState.offsetX = screenX - Number(baseBounds.x || 0);
+  panelQueueDragState.offsetY = screenY - Number(baseBounds.y || 0);
+  panelQueueDragState.startWindowX = Number(baseBounds.x || 0);
+  panelQueueDragState.startWindowY = Number(baseBounds.y || 0);
+  panelQueueDragState.lastScreenX = screenX;
+  panelQueueDragState.lastScreenY = screenY;
+  panelQueueDragState.pendingWindowX = panelQueueDragState.startWindowX;
+  panelQueueDragState.pendingWindowY = panelQueueDragState.startWindowY;
   panelQueueDragState.moved = false;
   panelQueueDragLogAt = 0;
-  appendPanelClientLog('panel.queue.drag', `arm pointer=${event.pointerId} client=${event.clientX},${event.clientY} scroll=${target.scrollLeft || 0}`);
+  appendPanelClientLog(
+    'panel.queue.drag',
+    `start pointer=${event.pointerId} screen=${screenX},${screenY} window=${panelQueueDragState.startWindowX},${panelQueueDragState.startWindowY} offset=${panelQueueDragState.offsetX},${panelQueueDragState.offsetY}`,
+  );
 }
 
 function dragQueueStrip(event) {
-  if (panelQueueDragState.pointerId !== event.pointerId) return;
-  const target = panelQueueStripRef.value;
-  if (!target) return;
-  const deltaX = event.clientX - panelQueueDragState.startX;
-  if (!panelQueueDragState.active && Math.abs(deltaX) <= 4) {
-    return;
-  }
-  if (!panelQueueDragState.active) {
-    panelQueueDragState.active = true;
-    panelQueueDragState.moved = true;
-    try {
-      target.setPointerCapture?.(event.pointerId);
-    } catch {}
-    appendPanelClientLog('panel.queue.drag', `start pointer=${event.pointerId} client=${event.clientX},${event.clientY} scroll=${target.scrollLeft || 0}`);
-  }
-  if (Math.abs(deltaX) > 3) {
+  if (!panelQueueDragState.active || panelQueueDragState.pointerId !== event.pointerId) return;
+  const screenX = Number.isFinite(Number(event?.screenX)) ? Number(event.screenX) : Number(event?.clientX || 0) + Number(window?.screenX || 0);
+  const screenY = Number.isFinite(Number(event?.screenY)) ? Number(event.screenY) : Number(event?.clientY || 0) + Number(window?.screenY || 0);
+  panelQueueDragState.lastScreenX = screenX;
+  panelQueueDragState.lastScreenY = screenY;
+  const nextX = Math.max(0, Math.round(screenX - panelQueueDragState.offsetX));
+  const nextY = Math.max(0, Math.round(screenY - panelQueueDragState.offsetY));
+  if (nextX !== panelQueueDragState.startWindowX || nextY !== panelQueueDragState.startWindowY) {
     panelQueueDragState.moved = true;
   }
-  target.scrollLeft = panelQueueDragState.startScrollLeft - deltaX;
+  panelQueueDragState.pendingWindowX = nextX;
+  panelQueueDragState.pendingWindowY = nextY;
   const now = Date.now();
   if (!panelQueueDragLogAt || now - panelQueueDragLogAt >= 180) {
     panelQueueDragLogAt = now;
-    appendPanelClientLog('panel.queue.drag', `move pointer=${event.pointerId} client=${event.clientX},${event.clientY} scroll=${target.scrollLeft || 0}`);
+    appendPanelClientLog(
+      'panel.queue.drag',
+      `move pointer=${event.pointerId} screen=${screenX},${screenY} pending=${panelQueueDragState.pendingWindowX},${panelQueueDragState.pendingWindowY}`,
+    );
   }
+  if (panelQueueDragState.rafId) {
+    window.cancelAnimationFrame(panelQueueDragState.rafId);
+    panelQueueDragState.rafId = 0;
+  }
+  panelQueueDragState.rafId = window.requestAnimationFrame(() => {
+    flushQueueStripDrag(true);
+  });
 }
 
 function endQueueStripDrag(event) {
   const target = panelQueueStripRef.value;
+  const wasActive = panelQueueDragState.active && panelQueueDragState.pointerId === event?.pointerId;
   if (target && panelQueueDragState.pointerId === event?.pointerId) {
     try {
       target.releasePointerCapture?.(event.pointerId);
     } catch {}
   }
   panelQueueDragState.active = false;
-  panelQueueDragState.armed = false;
   panelQueueDragState.pointerId = -1;
-  panelQueueDragState.startX = 0;
-  panelQueueDragState.startScrollLeft = 0;
-  appendPanelClientLog('panel.queue.drag', `end pointer=${event?.pointerId ?? -1} moved=${panelQueueDragState.moved} armed=${panelQueueDragState.armed} scroll=${target?.scrollLeft || 0}`);
+  panelQueueDragState.offsetX = 0;
+  panelQueueDragState.offsetY = 0;
+  panelQueueDragState.startWindowX = 0;
+  panelQueueDragState.startWindowY = 0;
+  panelQueueDragState.lastScreenX = 0;
+  panelQueueDragState.lastScreenY = 0;
+  if (panelQueueDragState.rafId) {
+    window.cancelAnimationFrame(panelQueueDragState.rafId);
+    panelQueueDragState.rafId = 0;
+  }
+  if (wasActive) {
+    flushQueueStripDrag(true);
+  }
+  appendPanelClientLog(
+    'panel.queue.drag',
+    `end pointer=${event?.pointerId ?? -1} moved=${panelQueueDragState.moved} pending=${panelQueueDragState.pendingWindowX},${panelQueueDragState.pendingWindowY} last=${panelQueueDragState.lastScreenX},${panelQueueDragState.lastScreenY}`,
+  );
+  panelQueueDragState.pendingWindowX = 0;
+  panelQueueDragState.pendingWindowY = 0;
+  panelQueueDragState.moved = false;
 }
 
 function handlePanelScroll() {
@@ -2264,6 +2398,7 @@ onBeforeUnmount(() => {
   cursor: grab;
   user-select: none;
   touch-action: pan-y;
+  --wails-draggable: no-drag;
 }
 
 .panel-queue-strip::-webkit-scrollbar {
@@ -2278,6 +2413,7 @@ onBeforeUnmount(() => {
   min-width: 100%;
   justify-content: flex-start;
   padding-top: 0;
+  --wails-draggable: no-drag;
 }
 
 .panel-queue-item {
