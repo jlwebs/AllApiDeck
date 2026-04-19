@@ -380,7 +380,6 @@ const ADVANCED_PROXY_DISPATCH_HOLD_MS = 10000;
 const ADVANCED_PROXY_DISPATCH_FADE_MS = 2500;
 const ADVANCED_PROXY_DISPATCH_TICK_MS = 500;
 const SUPER_MINI_SCALE = 1.2;
-const SUPER_MINI_DRAG_SCALE = 1.0;
 const ADVANCED_PROXY_APP_META = {
   claude: { label: 'Claude', className: 'panel-record-avatar-app-claude' },
   codex: { label: 'Codex', className: 'panel-record-avatar-app-codex' },
@@ -419,10 +418,12 @@ let panelQueueDragLogAt = 0;
 const superMiniWindowDragState = {
   active: false,
   pointerId: -1,
-  startX: 0,
-  startY: 0,
+  offsetX: 0,
+  offsetY: 0,
   startWindowX: 0,
   startWindowY: 0,
+  lastScreenX: 0,
+  lastScreenY: 0,
   rafId: 0,
   pendingWindowX: 0,
   pendingWindowY: 0,
@@ -685,19 +686,35 @@ async function beginSuperMiniWindowDrag(event) {
   const target = event.currentTarget;
   if (!target) return;
   event.preventDefault?.();
+  const baseBounds = isValidSidebarWindowBounds(superMiniWindowBounds)
+    ? superMiniWindowBounds
+    : isValidSidebarWindowBounds(superMiniRestoreBounds)
+      ? superMiniRestoreBounds
+      : null;
+  if (!baseBounds) {
+    appendPanelClientLog(
+      'panel.super-mini.drag',
+      `ignored pointerdown missing bounds pointer=${Number(event?.pointerId ?? -1)}`,
+    );
+    return;
+  }
+  const screenX = Number.isFinite(Number(event?.screenX)) ? Number(event.screenX) : Number(event?.clientX || 0) + Number(window?.screenX || 0);
+  const screenY = Number.isFinite(Number(event?.screenY)) ? Number(event.screenY) : Number(event?.clientY || 0) + Number(window?.screenY || 0);
   superMiniWindowDragState.active = true;
   superMiniWindowDragState.pointerId = event.pointerId;
-  superMiniWindowDragState.startX = event.clientX;
-  superMiniWindowDragState.startY = event.clientY;
-  superMiniWindowDragState.startWindowX = Number(superMiniWindowBounds?.x || superMiniRestoreBounds?.x || 0);
-  superMiniWindowDragState.startWindowY = Number(superMiniWindowBounds?.y || superMiniRestoreBounds?.y || 0);
+  superMiniWindowDragState.startWindowX = Number(baseBounds.x || 0);
+  superMiniWindowDragState.startWindowY = Number(baseBounds.y || 0);
+  superMiniWindowDragState.offsetX = screenX - superMiniWindowDragState.startWindowX;
+  superMiniWindowDragState.offsetY = screenY - superMiniWindowDragState.startWindowY;
+  superMiniWindowDragState.lastScreenX = screenX;
+  superMiniWindowDragState.lastScreenY = screenY;
   superMiniWindowDragState.pendingWindowX = superMiniWindowDragState.startWindowX;
   superMiniWindowDragState.pendingWindowY = superMiniWindowDragState.startWindowY;
   superMiniWindowDragState.moved = false;
   superMiniWindowDragLogAt = 0;
   appendPanelClientLog(
     'panel.super-mini.drag',
-    `start pointer=${event.pointerId} client=${event.clientX},${event.clientY} window=${superMiniWindowDragState.startWindowX},${superMiniWindowDragState.startWindowY}`,
+    `start pointer=${event.pointerId} screen=${screenX},${screenY} window=${superMiniWindowDragState.startWindowX},${superMiniWindowDragState.startWindowY} offset=${superMiniWindowDragState.offsetX},${superMiniWindowDragState.offsetY}`,
   );
   try {
     target.setPointerCapture?.(event.pointerId);
@@ -723,19 +740,23 @@ function flushSuperMiniWindowDrag(force = false) {
 
 function dragSuperMiniWindow(event) {
   if (!superMiniWindowDragState.active || superMiniWindowDragState.pointerId !== event.pointerId) return;
-  const deltaX = (event.clientX - superMiniWindowDragState.startX) * SUPER_MINI_DRAG_SCALE;
-  const deltaY = (event.clientY - superMiniWindowDragState.startY) * SUPER_MINI_DRAG_SCALE;
-  if (Math.abs(deltaX) > 0 || Math.abs(deltaY) > 0) {
+  const screenX = Number.isFinite(Number(event?.screenX)) ? Number(event.screenX) : Number(event?.clientX || 0) + Number(window?.screenX || 0);
+  const screenY = Number.isFinite(Number(event?.screenY)) ? Number(event.screenY) : Number(event?.clientY || 0) + Number(window?.screenY || 0);
+  superMiniWindowDragState.lastScreenX = screenX;
+  superMiniWindowDragState.lastScreenY = screenY;
+  const nextX = Math.max(0, Math.round(screenX - superMiniWindowDragState.offsetX));
+  const nextY = Math.max(0, Math.round(screenY - superMiniWindowDragState.offsetY));
+  if (nextX !== superMiniWindowDragState.startWindowX || nextY !== superMiniWindowDragState.startWindowY) {
     superMiniWindowDragState.moved = true;
   }
-  superMiniWindowDragState.pendingWindowX = Math.max(0, Math.round(superMiniWindowDragState.startWindowX + deltaX));
-  superMiniWindowDragState.pendingWindowY = Math.max(0, Math.round(superMiniWindowDragState.startWindowY + deltaY));
+  superMiniWindowDragState.pendingWindowX = nextX;
+  superMiniWindowDragState.pendingWindowY = nextY;
   const now = Date.now();
   if (!superMiniWindowDragLogAt || now - superMiniWindowDragLogAt >= 180) {
     superMiniWindowDragLogAt = now;
     appendPanelClientLog(
       'panel.super-mini.drag',
-      `move pointer=${event.pointerId} client=${event.clientX},${event.clientY} pending=${superMiniWindowDragState.pendingWindowX},${superMiniWindowDragState.pendingWindowY}`,
+      `move pointer=${event.pointerId} screen=${screenX},${screenY} pending=${superMiniWindowDragState.pendingWindowX},${superMiniWindowDragState.pendingWindowY}`,
     );
   }
   if (superMiniWindowDragState.rafId) return;
@@ -774,9 +795,13 @@ function endSuperMiniWindowDrag(event) {
   }
   appendPanelClientLog(
     'panel.super-mini.drag',
-    `end pointer=${event?.pointerId ?? -1} active=${wasActive} moved=${superMiniWindowDragState.moved} final=${superMiniWindowBounds ? formatSidebarBounds(superMiniWindowBounds) : 'null'} current=${formatSidebarBounds(superMiniRestoreBounds)}`,
+    `end pointer=${event?.pointerId ?? -1} active=${wasActive} moved=${superMiniWindowDragState.moved} last=${superMiniWindowDragState.lastScreenX},${superMiniWindowDragState.lastScreenY} final=${superMiniWindowBounds ? formatSidebarBounds(superMiniWindowBounds) : 'null'} current=${formatSidebarBounds(superMiniRestoreBounds)}`,
   );
   superMiniWindowDragState.moved = false;
+  superMiniWindowDragState.offsetX = 0;
+  superMiniWindowDragState.offsetY = 0;
+  superMiniWindowDragState.lastScreenX = 0;
+  superMiniWindowDragState.lastScreenY = 0;
 }
 
 const visibleRecords = computed(() => records.value.filter(record => Number(record?.status || 0) === 1));
