@@ -132,6 +132,10 @@ func (a *App) beforeClose(ctx context.Context) bool {
 		debugLogf("before close allowed: quit requested")
 		return false
 	}
+	if runtime.GOOS == "darwin" {
+		debugLogf("before close allowed on macOS: no tray fallback")
+		return false
+	}
 	if err := a.HideToTray(); err != nil {
 		debugLogf("before close hide to tray failed: %v", err)
 		return false
@@ -160,6 +164,29 @@ func (a *App) PickExtensionImportDirectory() (string, error) {
 		Title:            "选择浏览器档案或扩展存储目录",
 		DefaultDirectory: defaultDir,
 	})
+}
+
+func (a *App) ExportTextFile(content string, defaultFilename string) (string, error) {
+	filePath, err := wruntime.SaveFileDialog(a.ctx, wruntime.SaveDialogOptions{
+		Title:           "导出文件",
+		DefaultFilename: defaultFilename,
+		Filters: []wruntime.FileFilter{
+			{
+				DisplayName: "CSV files (*.csv)",
+				Pattern:     "*.csv",
+			},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(filePath) == "" {
+		return "", nil
+	}
+	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
+		return "", err
+	}
+	return filePath, nil
 }
 
 func (a *App) isPanelMode() bool {
