@@ -30,7 +30,9 @@
         v-if="showAdvancedProxyQueueCard"
         class="panel-queue-card"
         :class="[`panel-queue-card-${advancedProxyQueueTone}`]"
-        title="double click me!"
+        :title="superMiniQueueCardHintText"
+        @mouseenter="beginSuperMiniQueueCardHintHover"
+        @mouseleave="commitSuperMiniQueueCardHintSeen"
         @pointerdown="beginSuperMiniWindowDrag"
         @pointermove="dragSuperMiniWindow"
         @pointerrawupdate="dragSuperMiniWindow"
@@ -52,7 +54,7 @@
           v-if="advancedProxyQueueItems.length > 0"
           ref="panelQueueStripRef"
           class="panel-queue-strip"
-          @pointerdown="beginQueueStripDrag"
+          @pointerdown.stop="beginQueueStripDrag"
           @pointermove="dragQueueStrip"
           @pointerup="endQueueStripDrag"
           @pointercancel="endQueueStripDrag"
@@ -380,6 +382,10 @@ const ADVANCED_PROXY_DISPATCH_HOLD_MS = 10000;
 const ADVANCED_PROXY_DISPATCH_FADE_MS = 2500;
 const ADVANCED_PROXY_DISPATCH_TICK_MS = 500;
 const SUPER_MINI_SCALE = 1.2;
+const SUPER_MINI_QUEUE_CARD_HINT_TEXT = 'double click me!';
+const SUPER_MINI_QUEUE_CARD_HINT_LIMIT = 2;
+const SUPER_MINI_QUEUE_CARD_HINT_MIN_HOVER_MS = 800;
+const SUPER_MINI_QUEUE_CARD_HINT_STORAGE_KEY = 'panel.super-mini.queue-card-hint-seen-count';
 const ADVANCED_PROXY_APP_META = {
   claude: { label: 'Claude', className: 'panel-record-avatar-app-claude' },
   codex: { label: 'Codex', className: 'panel-record-avatar-app-codex' },
@@ -402,6 +408,7 @@ const panelShellRef = ref(null);
 const panelScrollRatio = ref(0);
 const hasScrollableContent = ref(false);
 const superMiniMode = ref(false);
+const superMiniQueueCardHintSeenCount = ref(0);
 const PANEL_PERSIST_DEBOUNCE_MS = 120;
 
 let panelBodyResizeObserver = null;
@@ -410,6 +417,7 @@ let advancedProxyRoutingTimer = null;
 let advancedProxyDispatchTimer = null;
 let lastSidebarRoutingLogAt = 0;
 let superMiniQueueScrollLeft = 0;
+let superMiniQueueCardHintHoverStartedAt = 0;
 let superMiniWindowBounds = null;
 let superMiniRestoreBounds = null;
 let superMiniTransitionToken = 0;
@@ -441,6 +449,48 @@ const panelQueueDragState = {
 function syncSuperMiniBodyClass() {
   if (typeof document === 'undefined') return;
   document.body.classList.toggle('panel-super-mini-mode', superMiniMode.value);
+}
+
+function readSuperMiniQueueCardHintSeenCount() {
+  if (typeof window === 'undefined') return 0;
+  try {
+    const raw = window.localStorage.getItem(SUPER_MINI_QUEUE_CARD_HINT_STORAGE_KEY);
+    const parsed = Number.parseInt(String(raw || '0'), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, SUPER_MINI_QUEUE_CARD_HINT_LIMIT) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function persistSuperMiniQueueCardHintSeenCount(value) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      SUPER_MINI_QUEUE_CARD_HINT_STORAGE_KEY,
+      String(Math.min(Math.max(0, Number(value || 0)), SUPER_MINI_QUEUE_CARD_HINT_LIMIT)),
+    );
+  } catch {}
+}
+
+function beginSuperMiniQueueCardHintHover() {
+  if (superMiniQueueCardHintSeenCount.value >= SUPER_MINI_QUEUE_CARD_HINT_LIMIT) return;
+  superMiniQueueCardHintHoverStartedAt = Date.now();
+}
+
+function commitSuperMiniQueueCardHintSeen() {
+  if (superMiniQueueCardHintSeenCount.value >= SUPER_MINI_QUEUE_CARD_HINT_LIMIT) return;
+  if (!superMiniQueueCardHintHoverStartedAt) return;
+  const elapsed = Date.now() - superMiniQueueCardHintHoverStartedAt;
+  superMiniQueueCardHintHoverStartedAt = 0;
+  if (elapsed < SUPER_MINI_QUEUE_CARD_HINT_MIN_HOVER_MS) return;
+  const current = Math.min(
+    SUPER_MINI_QUEUE_CARD_HINT_LIMIT,
+    Math.max(0, Number(superMiniQueueCardHintSeenCount.value || 0)),
+  );
+  if (current >= SUPER_MINI_QUEUE_CARD_HINT_LIMIT) return;
+  const next = current + 1;
+  superMiniQueueCardHintSeenCount.value = next;
+  persistSuperMiniQueueCardHintSeenCount(next);
 }
 
 function appendPanelClientLog(scope, message) {
@@ -759,8 +809,11 @@ function dragSuperMiniWindow(event) {
       `move pointer=${event.pointerId} screen=${screenX},${screenY} pending=${superMiniWindowDragState.pendingWindowX},${superMiniWindowDragState.pendingWindowY}`,
     );
   }
-  if (superMiniWindowDragState.rafId) return;
-  superMiniWindowDragState.rafId = window.requestAnimationFrame(flushSuperMiniWindowDrag);
+  if (superMiniWindowDragState.rafId) {
+    window.cancelAnimationFrame(superMiniWindowDragState.rafId);
+    superMiniWindowDragState.rafId = 0;
+  }
+  flushSuperMiniWindowDrag(true);
 }
 
 function endSuperMiniWindowDrag(event) {
@@ -1348,6 +1401,10 @@ function getQueueTooltipOverlayStyle(item) {
   };
 }
 
+const superMiniQueueCardHintText = computed(() =>
+  superMiniQueueCardHintSeenCount.value < SUPER_MINI_QUEUE_CARD_HINT_LIMIT ? SUPER_MINI_QUEUE_CARD_HINT_TEXT : '',
+);
+
 function getSiteEmoji(siteName) {
   const text = String(siteName || '').trim().toLowerCase();
   if (!text) return COMPAT_SITE_EMOJI_LIST[0];
@@ -1696,6 +1753,7 @@ onMounted(async () => {
   reloadAdvancedProxyConfigState();
   reloadRecords();
   await reloadAdvancedProxyRoutingState();
+  superMiniQueueCardHintSeenCount.value = readSuperMiniQueueCardHintSeenCount();
   syncSuperMiniBodyClass();
   appendPanelClientLog('panel.lifecycle', 'mount bootstrap complete');
   try {
@@ -1750,6 +1808,7 @@ onBeforeUnmount(() => {
   if (typeof document !== 'undefined') {
     document.body.classList.remove('panel-super-mini-mode');
   }
+  superMiniQueueCardHintHoverStartedAt = 0;
   flushPanelPersist();
   void setPanelInteractionLocked(false);
   panelBodyResizeObserver?.disconnect?.();
