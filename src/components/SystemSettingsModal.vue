@@ -150,6 +150,10 @@ import {
   saveTreeExpandedSetting,
   setOutboundProxyConfig,
 } from '../utils/systemSettings.js';
+import {
+  applyPortableLocalStorageSnapshot,
+  snapshotPortableLocalStorage,
+} from '../utils/portableSnapshot.js';
 
 const props = defineProps({
   open: {
@@ -246,27 +250,6 @@ watch(selectedDesktopLogGroup, groupKey => {
   }
 });
 
-function snapshotPortableLocalStorage() {
-  const snapshot = {};
-  try {
-    for (let index = 0; index < localStorage.length; index += 1) {
-      const key = localStorage.key(index);
-      if (!key) continue;
-      snapshot[key] = localStorage.getItem(key);
-    }
-  } catch {}
-  return snapshot;
-}
-
-function applyPortableLocalStorageSnapshot(snapshot) {
-  try {
-    localStorage.clear();
-    Object.entries(snapshot || {}).forEach(([key, value]) => {
-      localStorage.setItem(key, value == null ? '' : String(value));
-    });
-  } catch {}
-}
-
 function getPortableErrorMessage(error, fallback) {
   if (!error) return fallback;
   if (typeof error === 'string') return error.trim() || fallback;
@@ -287,7 +270,7 @@ async function packagePortableData() {
   }
   portablePacking.value = true;
   try {
-    const result = await packer(JSON.stringify(snapshotPortableLocalStorage()));
+    const result = await packer(JSON.stringify(await snapshotPortableLocalStorage()));
     portableSettingsMeta.value = `封包完成：${result?.backupDir || 'backup'}，localStorage ${Number(result?.localStorageKeyCount || 0)} 项`;
     message.success('已完成本地绿色化封包');
   } catch (error) {
@@ -306,7 +289,7 @@ async function unpackPortableData() {
   portableUnpacking.value = true;
   try {
     const result = await unpacker();
-    applyPortableLocalStorageSnapshot(JSON.parse(String(result?.localStorageJson || '{}')));
+    await applyPortableLocalStorageSnapshot(JSON.parse(String(result?.localStorageJson || '{}')));
     portableSettingsMeta.value = `解包完成：${result?.backupDir || 'backup'}，已恢复 ${Number(result?.localStorageKeyCount || 0)} 项本地数据`;
     message.success('已从 backup 解包恢复本程序数据，页面即将刷新');
     setTimeout(() => window.location.reload(), 600);

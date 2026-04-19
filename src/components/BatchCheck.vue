@@ -763,6 +763,10 @@ import {
   saveLastResultsSnapshot,
 } from '../utils/historySnapshotStore.js';
 import {
+  applyPortableLocalStorageSnapshot,
+  snapshotPortableLocalStorage,
+} from '../utils/portableSnapshot.js';
+import {
   buildRowKey as buildKeyPanelRowKey,
   loadPanelRecords,
   normalizeModels as normalizeKeyPanelModels,
@@ -1024,26 +1028,6 @@ const loadLocalCache = () => {
   }
 };
 
-const snapshotPortableLocalStorage = () => {
-  const snapshot = {};
-  for (let index = 0; index < localStorage.length; index += 1) {
-    const key = localStorage.key(index);
-    if (!key) continue;
-    snapshot[key] = localStorage.getItem(key);
-  }
-  return snapshot;
-};
-
-const applyPortableLocalStorageSnapshot = (snapshot) => {
-  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
-    throw new Error('invalid_localstorage_snapshot');
-  }
-  localStorage.clear();
-  Object.entries(snapshot).forEach(([key, value]) => {
-    localStorage.setItem(key, value == null ? '' : String(value));
-  });
-};
-
 const getPortableErrorMessage = (error, fallback) => {
   if (!error) return fallback;
   if (typeof error === 'string') return error.trim() || fallback;
@@ -1066,7 +1050,7 @@ const packagePortableData = async () => {
   }
   portablePacking.value = true;
   try {
-    const snapshotJson = JSON.stringify(snapshotPortableLocalStorage());
+    const snapshotJson = JSON.stringify(await snapshotPortableLocalStorage());
     const result = await packer(snapshotJson);
     portableSettingsMeta.value = `封包完成：${result?.backupDir || 'backup'}，localStorage ${Number(result?.localStorageKeyCount || 0)} 项`;
     message.success('已完成本地绿色化封包');
@@ -1087,7 +1071,7 @@ const unpackPortableData = async () => {
   try {
     const result = await unpacker();
     const parsedSnapshot = JSON.parse(String(result?.localStorageJson || '{}'));
-    applyPortableLocalStorageSnapshot(parsedSnapshot);
+    await applyPortableLocalStorageSnapshot(parsedSnapshot);
     portableSettingsMeta.value = `解包完成：${result?.backupDir || 'backup'}，已恢复 ${Number(result?.localStorageKeyCount || 0)} 项本地数据`;
     message.success('已从 backup 解包恢复本程序数据，页面即将刷新');
     setTimeout(() => {
