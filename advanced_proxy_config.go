@@ -336,13 +336,8 @@ func sanitizeAdvancedProxyConfig(config AdvancedProxyConfig) AdvancedProxyConfig
 
 func defaultAdvancedProxyHighAvailabilityRPMConfig() HighAvailabilityRPMConfig {
 	return HighAvailabilityRPMConfig{
-		Global: 0,
-		Providers: map[string]*int{
-			"claude":   nil,
-			"codex":    nil,
-			"opencode": nil,
-			"openclaw": nil,
-		},
+		Global:    0,
+		Providers: map[string]*int{},
 	}
 }
 
@@ -366,8 +361,8 @@ func normalizeAdvancedProxyHighAvailabilityRPMConfig(config HighAvailabilityRPMC
 		return normalized
 	}
 	for scope, rawValue := range config.Providers {
-		scope = strings.ToLower(strings.TrimSpace(scope))
-		if scope != "claude" && scope != "codex" && scope != "opencode" && scope != "openclaw" {
+		scope = strings.TrimSpace(scope)
+		if scope == "" || isAdvancedProxyLegacyRPMScope(scope) {
 			continue
 		}
 		if rawValue == nil {
@@ -380,15 +375,36 @@ func normalizeAdvancedProxyHighAvailabilityRPMConfig(config HighAvailabilityRPMC
 	return normalized
 }
 
-func resolveAdvancedProxyHighAvailabilityRPM(config AdvancedProxyConfig, appType string) int {
-	normalizedAppType := normalizeAdvancedProxyRuntimeAppType(appType)
-	if normalizedAppType != advancedProxyGlobalScope {
-		if config.HighAvailability.RPM.Providers != nil {
-			if rawValue, exists := config.HighAvailability.RPM.Providers[normalizedAppType]; exists && rawValue != nil {
-				return clampInt(*rawValue, 0, 1000000)
-			}
+func isAdvancedProxyLegacyRPMScope(scope string) bool {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "claude", "codex", "opencode", "openclaw":
+		return true
+	default:
+		return false
+	}
+}
+
+func providerRPMKey(provider AdvancedProxyProvider) string {
+	if key := strings.TrimSpace(provider.RowKey); key != "" {
+		return key
+	}
+	if key := strings.TrimSpace(provider.ID); key != "" {
+		return key
+	}
+	if key := strings.TrimSpace(provider.BaseURL); key != "" {
+		return key
+	}
+	return ""
+}
+
+func resolveAdvancedProxyHighAvailabilityRPM(config AdvancedProxyConfig, provider AdvancedProxyProvider, appType string) int {
+	providerKey := providerRPMKey(provider)
+	if providerKey != "" && config.HighAvailability.RPM.Providers != nil {
+		if rawValue, exists := config.HighAvailability.RPM.Providers[providerKey]; exists && rawValue != nil {
+			return clampInt(*rawValue, 0, 1000000)
 		}
 	}
+
 	return clampInt(config.HighAvailability.RPM.Global, 0, 1000000)
 }
 

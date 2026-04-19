@@ -150,7 +150,7 @@
               <div class="advanced-proxy-section-head">
                 <div>
                   <h4>请求策略与并发</h4>
-                  <p>分发策略负责挑选请求路径，RPM 在下方单独按 scope 设定。</p>
+                  <p>分发策略负责挑选请求路径，RPM 在下方按供应商单独设定。</p>
                 </div>
               </div>
 
@@ -189,8 +189,8 @@
                   <template #title>
                     <div class="advanced-proxy-tooltip">
                       <span>0 表示不限制。</span>
-                      <span>默认从“全局”读取；选择某个 provider 后会优先使用自己的值。</span>
-                      <span>下拉框包含全局和全部 provider。</span>
+                      <span>默认从“全局”读取；选择某个 provider 后会优先使用该供应商的值。</span>
+                      <span>下拉框包含全局和当前队列中的 provider。</span>
                     </div>
                   </template>
                   <span class="advanced-proxy-inline-label">RPM 设置</span>
@@ -198,9 +198,10 @@
                 <div class="advanced-proxy-rpm-controls">
                   <a-select
                     class="advanced-proxy-rpm-select"
-                    :value="selectedHighAvailabilityRpmScope"
-                    :options="queueScopeOptions"
-                    @change="handleHighAvailabilityRpmScopeChange"
+                    :value="selectedHighAvailabilityRpmProviderKey"
+                    :options="rpmProviderOptions"
+                    popupClassName="advanced-proxy-rpm-dropdown"
+                    @change="handleHighAvailabilityRpmProviderChange"
                   />
                   <a-input-number
                     class="advanced-proxy-rpm-input"
@@ -391,7 +392,7 @@ const loading = ref(false);
 const saving = ref(false);
 const previewOpen = ref(false);
 const selectedQueueScope = ref(ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
-const selectedHighAvailabilityRpmScope = ref(ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
+const selectedHighAvailabilityRpmProviderKey = ref(ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
 const availableRecords = ref([]);
 const breakerStatsMap = ref({});
 const loadedConfigSnapshot = ref(normalizeAdvancedProxyConfig({}));
@@ -426,15 +427,15 @@ const selectedDispatchModeDescription = computed(() =>
 );
 const selectedHighAvailabilityRpmValue = computed(() => {
   const rpm = draft?.highAvailability?.rpm || {};
-  const scope = selectedHighAvailabilityRpmScope.value;
-  if (scope === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
+  const providerKey = selectedHighAvailabilityRpmProviderKey.value;
+  if (providerKey === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
     return Number.isFinite(Number(rpm.global)) ? Number(rpm.global) : 0;
   }
-  const scopedValue = rpm?.providers?.[scope];
-  if (scopedValue == null || scopedValue === '') {
+  const providerValue = rpm?.providers?.[providerKey];
+  if (providerValue == null || providerValue === '') {
     return Number.isFinite(Number(rpm.global)) ? Number(rpm.global) : 0;
   }
-  return Number.isFinite(Number(scopedValue)) ? Number(scopedValue) : 0;
+  return Number.isFinite(Number(providerValue)) ? Number(providerValue) : 0;
 });
 const proxyMasterEnabled = computed(() => enabledAppIds.value.length > 0);
 const selectedQueueLabel = computed(() =>
@@ -452,6 +453,25 @@ const displayedQueueProviders = computed(() =>
     effective: selectedQueueScope.value !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
   })
 );
+const rpmProviderOptions = computed(() => {
+  const options = [{
+    value: ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
+    label: '全局',
+  }];
+
+  displayedQueueProviders.value.forEach((provider, index) => {
+    const key = String(provider?.rowKey || provider?.id || '').trim();
+    if (!key) return;
+    const name = String(provider?.name || provider?.baseUrl || `Provider ${index + 1}`).trim() || `Provider ${index + 1}`;
+    const model = String(provider?.model || '').trim();
+    options.push({
+      value: key,
+      label: `${index + 1}. ${name}${model ? ` · ${model}` : ''}`,
+    });
+  });
+
+  return options;
+});
 const providerCount = computed(() => displayedQueueProviders.value.length);
 const enabledProviderCount = computed(() => displayedQueueProviders.value.filter(provider => provider?.enabled !== false).length);
 const openAIProviderCount = computed(() =>
@@ -564,6 +584,20 @@ const appCards = computed(() =>
   })
 );
 
+watch(
+  rpmProviderOptions,
+  options => {
+    const current = String(selectedHighAvailabilityRpmProviderKey.value || '').trim() || ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
+    if (options.some(option => option.value === current)) {
+      return;
+    }
+    const fallback = options.find(option => option.value !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE)?.value
+      || ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
+    selectedHighAvailabilityRpmProviderKey.value = fallback;
+  },
+  { immediate: true },
+);
+
 function toPlainValue(value) {
   return JSON.parse(JSON.stringify(value ?? {}));
 }
@@ -578,7 +612,7 @@ function overwriteDraft(nextConfig) {
   const normalized = normalizeAdvancedProxyConfig(nextConfig);
   Object.keys(draft).forEach(key => delete draft[key]);
   Object.assign(draft, normalized);
-  selectedHighAvailabilityRpmScope.value = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
+  selectedHighAvailabilityRpmProviderKey.value = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
 }
 
 function ensureQueueSection(config, scope) {
@@ -907,9 +941,10 @@ function normalizeRpmInputValue(value) {
   return Math.floor(parsed);
 }
 
-function handleHighAvailabilityRpmScopeChange(scope) {
-  selectedHighAvailabilityRpmScope.value = ADVANCED_PROXY_QUEUE_SCOPES.some(item => item.id === scope)
-    ? scope
+function handleHighAvailabilityRpmProviderChange(providerKey) {
+  const normalizedProviderKey = String(providerKey || '').trim();
+  selectedHighAvailabilityRpmProviderKey.value = rpmProviderOptions.value.some(option => option.value === normalizedProviderKey)
+    ? normalizedProviderKey
     : ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
 }
 
@@ -922,17 +957,17 @@ function handleHighAvailabilityRpmValueChange(value) {
     if (!next.highAvailability.rpm || typeof next.highAvailability.rpm !== 'object') {
       next.highAvailability.rpm = {
         global: 0,
-        providers: Object.fromEntries(ADVANCED_PROXY_APPS.map(app => [app.id, null])),
+        providers: {},
       };
     }
     if (!next.highAvailability.rpm.providers || typeof next.highAvailability.rpm.providers !== 'object') {
-      next.highAvailability.rpm.providers = Object.fromEntries(ADVANCED_PROXY_APPS.map(app => [app.id, null]));
+      next.highAvailability.rpm.providers = {};
     }
-    if (selectedHighAvailabilityRpmScope.value === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
+    if (selectedHighAvailabilityRpmProviderKey.value === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
       next.highAvailability.rpm.global = rpmValue;
       return;
     }
-    next.highAvailability.rpm.providers[selectedHighAvailabilityRpmScope.value] = rpmValue;
+    next.highAvailability.rpm.providers[selectedHighAvailabilityRpmProviderKey.value] = rpmValue;
   }, '高可用 RPM 设置已更新');
 }
 
@@ -1635,6 +1670,17 @@ function handleCancel() {
 
 .advanced-proxy-rpm-select {
   min-width: 160px;
+  font-size: 14px;
+}
+
+.advanced-proxy-rpm-dropdown {
+  font-size: 14px;
+}
+
+.advanced-proxy-rpm-dropdown :deep(.ant-select-item),
+.advanced-proxy-rpm-dropdown :deep(.ant-select-item-option-content) {
+  font-size: 14px;
+  line-height: 1.35;
 }
 
 .advanced-proxy-rpm-input {

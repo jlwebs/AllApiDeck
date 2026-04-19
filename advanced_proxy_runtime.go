@@ -130,8 +130,8 @@ func providerHealthKey(appType string, provider AdvancedProxyProvider) string {
 	}, "|")
 }
 
-func rpmDispatchHistoryKey(appType string) string {
-	return normalizeAdvancedProxyRuntimeAppType(appType)
+func rpmDispatchHistoryKey(providerKey string) string {
+	return strings.TrimSpace(providerKey)
 }
 
 func providerOutcomeLabel(success bool, timeout bool) string {
@@ -207,15 +207,18 @@ func (r *advancedProxyRuntimeState) Reset(appType string, providerID string) {
 	r.mu.Unlock()
 }
 
-func (r *advancedProxyRuntimeState) recordRPMDispatch(appType string, at time.Time) {
-	normalizedAppType := rpmDispatchHistoryKey(appType)
+func (r *advancedProxyRuntimeState) recordRPMDispatch(providerKey string, at time.Time) {
+	normalizedProviderKey := rpmDispatchHistoryKey(providerKey)
+	if normalizedProviderKey == "" {
+		return
+	}
 	cutoff := at.Add(-60 * time.Second)
 
 	r.mu.Lock()
 	if r.rpmDispatchHistory == nil {
 		r.rpmDispatchHistory = map[string][]time.Time{}
 	}
-	key := rpmDispatchHistoryKey(normalizedAppType)
+	key := rpmDispatchHistoryKey(normalizedProviderKey)
 	history := r.rpmDispatchHistory[key]
 	nextHistory := make([]time.Time, 0, len(history)+1)
 	for _, item := range history {
@@ -228,11 +231,14 @@ func (r *advancedProxyRuntimeState) recordRPMDispatch(appType string, at time.Ti
 	r.mu.Unlock()
 }
 
-func (r *advancedProxyRuntimeState) currentRPMDispatchCountLocked(appType string, now time.Time) int {
+func (r *advancedProxyRuntimeState) currentRPMDispatchCountLocked(providerKey string, now time.Time) int {
 	if r.rpmDispatchHistory == nil {
 		return 0
 	}
-	key := rpmDispatchHistoryKey(appType)
+	key := rpmDispatchHistoryKey(providerKey)
+	if key == "" {
+		return 0
+	}
 	history := r.rpmDispatchHistory[key]
 	if len(history) == 0 {
 		return 0
@@ -390,11 +396,12 @@ func (r *advancedProxyRuntimeState) OrderProvidersForDispatch(config AdvancedPro
 		score     float64
 		baseIndex int
 	}, 0, len(ordered))
-	rpmLimit := resolveAdvancedProxyHighAvailabilityRPM(config, normalizedAppType)
-	rpmDispatchCount := r.currentRPMDispatchCountLocked(normalizedAppType, now)
 	appActiveCount := r.activeCountForAppTypeLocked(normalizedAppType)
 	for index, provider := range ordered {
 		score := float64(index) * 0.0001
+		providerKey := providerRPMKey(provider)
+		rpmLimit := resolveAdvancedProxyHighAvailabilityRPM(config, provider, normalizedAppType)
+		rpmDispatchCount := r.currentRPMDispatchCountLocked(providerKey, now)
 		healthKey := providerHealthKey(normalizedAppType, provider)
 		health := r.providerHealth[healthKey]
 		failureEWMA := 0.0
@@ -531,7 +538,7 @@ func shuffleAdvancedProxyProvidersByScore(scored []struct {
 }
 
 func (r *advancedProxyRuntimeState) MarkDispatch(appType string, provider AdvancedProxyProvider, routeKind string, targetURL string) {
-	r.recordRPMDispatch(appType, time.Now())
+	r.recordRPMDispatch(providerRPMKey(provider), time.Now())
 	r.logRoutePass(appType, provider, routeKind, targetURL)
 	r.setRouteState(appType, provider, routeKind, targetURL, "dispatching")
 	r.setProviderRouteState(appType, provider, routeKind, targetURL, true, false)

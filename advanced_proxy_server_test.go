@@ -661,11 +661,11 @@ func TestRPMDispatchHistoryTracksRecentDispatches(t *testing.T) {
 		APIFormat: "openai_chat",
 	}
 
-	advancedProxyRuntime.recordRPMDispatch("codex", time.Now().Add(-70*time.Second))
-	advancedProxyRuntime.recordRPMDispatch("codex", time.Now())
+	advancedProxyRuntime.recordRPMDispatch(providerRPMKey(provider), time.Now().Add(-70*time.Second))
+	advancedProxyRuntime.recordRPMDispatch(providerRPMKey(provider), time.Now())
 
 	advancedProxyRuntime.mu.Lock()
-	recentCount := advancedProxyRuntime.currentRPMDispatchCountLocked("codex", time.Now())
+	recentCount := advancedProxyRuntime.currentRPMDispatchCountLocked(providerRPMKey(provider), time.Now())
 	advancedProxyRuntime.mu.Unlock()
 	if recentCount != 1 {
 		t.Fatalf("expected one recent RPM dispatch, got %d", recentCount)
@@ -675,8 +675,42 @@ func TestRPMDispatchHistoryTracksRecentDispatches(t *testing.T) {
 
 	advancedProxyRuntime.mu.Lock()
 	defer advancedProxyRuntime.mu.Unlock()
-	recentCount = advancedProxyRuntime.currentRPMDispatchCountLocked("codex", time.Now())
+	recentCount = advancedProxyRuntime.currentRPMDispatchCountLocked(providerRPMKey(provider), time.Now())
 	if recentCount != 2 {
 		t.Fatalf("expected two recent RPM dispatches after mark dispatch, got %d", recentCount)
+	}
+}
+
+func TestAdvancedProxyRPMIgnoresLegacyAppScopes(t *testing.T) {
+	config := defaultAdvancedProxyConfig()
+	config.HighAvailability.RPM = HighAvailabilityRPMConfig{
+		Global: 3,
+		Providers: map[string]*int{
+			"row-rpm": intPtr(9),
+			"codex":   intPtr(7),
+		},
+	}
+
+	normalized := normalizeAdvancedProxyHighAvailabilityRPMConfig(config.HighAvailability.RPM)
+	if _, exists := normalized.Providers["codex"]; exists {
+		t.Fatalf("expected legacy app scope to be stripped, got %#v", normalized.Providers)
+	}
+
+	provider := AdvancedProxyProvider{
+		ID:      "provider-rpm",
+		RowKey:  "row-rpm",
+		BaseURL: "http://127.0.0.1:6",
+	}
+
+	if got := resolveAdvancedProxyHighAvailabilityRPM(config, provider, "codex"); got != 9 {
+		t.Fatalf("expected provider-specific RPM to win, got %d", got)
+	}
+
+	otherProvider := AdvancedProxyProvider{
+		ID:      "provider-other",
+		BaseURL: "http://127.0.0.1:7",
+	}
+	if got := resolveAdvancedProxyHighAvailabilityRPM(config, otherProvider, "codex"); got != 3 {
+		t.Fatalf("expected global RPM fallback, got %d", got)
 	}
 }

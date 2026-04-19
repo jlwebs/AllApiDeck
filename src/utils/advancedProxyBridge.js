@@ -47,7 +47,7 @@ function isPlainObject(value) {
 function getDefaultRpmSection() {
   return {
     global: 0,
-    providers: Object.fromEntries(ADVANCED_PROXY_APPS.map(app => [app.id, null])),
+    providers: {},
   };
 }
 
@@ -194,14 +194,17 @@ function normalizeRpmSection(input) {
   const providers = isPlainObject(next.providers) ? next.providers : {};
   next.global = Math.max(0, Number(next.global || 0));
   next.providers = Object.fromEntries(
-    ADVANCED_PROXY_APPS.map(app => {
-      const rawValue = providers[app.id];
-      if (rawValue == null || rawValue === '') {
-        return [app.id, null];
-      }
-      const parsed = Math.max(0, Number(rawValue));
-      return [app.id, Number.isFinite(parsed) ? parsed : null];
-    }),
+    Object.entries(providers)
+      .map(([key, rawValue]) => {
+        const normalizedKey = String(key || '').trim();
+        if (!normalizedKey || ADVANCED_PROXY_APPS.some(app => app.id === normalizedKey)) return null;
+        if (rawValue == null || rawValue === '') {
+          return [normalizedKey, null];
+        }
+        const parsed = Math.max(0, Number(rawValue));
+        return [normalizedKey, Number.isFinite(parsed) ? parsed : null];
+      })
+      .filter(Boolean),
   );
   return next;
 }
