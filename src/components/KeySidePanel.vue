@@ -30,6 +30,7 @@
         v-if="showAdvancedProxyQueueCard"
         class="panel-queue-card"
         :class="[`panel-queue-card-${advancedProxyQueueTone}`, { 'is-native-drag': !superMiniMode }]"
+        ref="panelQueueCardRef"
         :title="superMiniQueueCardHintText"
         @mouseenter="beginSuperMiniQueueCardHintHover"
         @mouseleave="commitSuperMiniQueueCardHintSeen"
@@ -404,6 +405,7 @@ const advancedProxyDispatchClock = ref(Date.now());
 const activePopoverRowKey = ref('');
 const activeModelDropdownRowKey = ref('');
 const panelBodyRef = ref(null);
+const panelQueueCardRef = ref(null);
 const panelQueueStripRef = ref(null);
 const panelShellRef = ref(null);
 const panelScrollRatio = ref(0);
@@ -558,6 +560,16 @@ function normalizeSuperMiniWindowDeltaX(rawWindowDeltaX) {
   const ultimateK = Number(superMiniWindowDragState.ultimateK);
   if (!Number.isFinite(ultimateK) || Math.abs(ultimateK) < 0.0001) return windowDelta;
   return windowDelta / ultimateK;
+}
+
+function measureSuperMiniContentHeight() {
+  const shellRect = panelShellRef.value?.getBoundingClientRect?.();
+  const cardRect = panelQueueCardRef.value?.getBoundingClientRect?.();
+  if (!shellRect || !cardRect) return null;
+  const top = Number(shellRect.top);
+  const cardBottom = Number(cardRect.bottom);
+  const contentHeight = Math.ceil(cardBottom - top);
+  return Number.isFinite(contentHeight) && contentHeight > 0 ? contentHeight : null;
 }
 
 function collectSuperMiniKSample(kValue, now = Date.now()) {
@@ -811,11 +823,12 @@ async function applySuperMiniWindowMode(enabled) {
     const shellWidth = Math.ceil(Number(shellRect?.width || 0));
     const shellHeight = Math.ceil(Number(shellRect?.height || 0));
     const width = Math.round((shellWidth || 100) * SUPER_MINI_SCALE);
-    const height = Math.round((shellHeight || 100) * SUPER_MINI_SCALE * 0.9);
+    const measuredHeight = measureSuperMiniContentHeight();
+    const height = Math.max(1, Math.round(measuredHeight || shellHeight || 100));
     const cardScale = shellWidth > 0 ? width / shellWidth : SUPER_MINI_SCALE;
     appendPanelClientLog(
       'panel.super-mini',
-      `enable sizing token=${transitionToken} shell=${shellWidth}x${shellHeight} target=${width}x${height} scale=${cardScale.toFixed(4)}`,
+      `enable sizing token=${transitionToken} shell=${shellWidth}x${shellHeight} measured=${measuredHeight ?? 'n/a'} target=${width}x${height} scale=${cardScale.toFixed(4)}`,
     );
     const enableBounds = superMiniRestoreBounds || superMiniWindowBounds;
     const dockState = String(await GetPanelDockState().catch(() => '')).trim();
@@ -829,7 +842,6 @@ async function applySuperMiniWindowMode(enabled) {
       : null;
     if (panelShellRef.value) {
       panelShellRef.value.style.setProperty('--super-mini-card-width', `${width}px`);
-      panelShellRef.value.style.setProperty('--super-mini-card-height', `${height}px`);
       panelShellRef.value.style.setProperty('--super-mini-card-scale', `${cardScale}`);
     }
     try {
@@ -875,7 +887,6 @@ async function applySuperMiniWindowMode(enabled) {
   }
   if (panelShellRef.value) {
     panelShellRef.value.style.removeProperty('--super-mini-card-width');
-    panelShellRef.value.style.removeProperty('--super-mini-card-height');
     panelShellRef.value.style.removeProperty('--super-mini-card-scale');
   }
   superMiniWindowBounds = null;
@@ -2227,10 +2238,11 @@ onBeforeUnmount(() => {
   width: var(--super-mini-card-width, 128px);
   min-width: var(--super-mini-card-width, 128px);
   max-width: var(--super-mini-card-width, 128px);
-  height: var(--super-mini-card-height, auto);
+  height: auto;
   border-radius: calc(14px * var(--super-mini-card-scale, 1));
   display: flex;
   flex-direction: column;
+  align-self: flex-start;
   box-shadow:
     0 18px 36px rgba(19, 24, 19, 0.12),
     inset 0 1px 0 rgba(255, 255, 255, 0.45);
@@ -2243,8 +2255,9 @@ onBeforeUnmount(() => {
 }
 
 .panel-shell.is-super-mini .panel-queue-head {
-  gap: calc(4px * var(--super-mini-card-scale, 1));
-  margin-bottom: 0;
+  gap: 10px;
+  margin-bottom: 2px;
+  min-height: 0;
 }
 
 .panel-shell.is-super-mini .panel-queue-strip,
@@ -2258,66 +2271,63 @@ onBeforeUnmount(() => {
   align-items: flex-start;
   width: 100%;
   max-width: 100%;
-  margin-top: -1px;
+  margin-top: 0;
 }
 
 .panel-shell.is-super-mini .panel-queue-strip-track {
   width: max-content;
   min-width: 0;
-  gap: calc(1px * var(--super-mini-card-scale, 1));
+  gap: clamp(4px, 0.9vw, 8px);
 }
 
 .panel-shell.is-super-mini .panel-queue-item {
-  padding: 0 calc(1px * var(--super-mini-card-scale, 1)) 0;
+  padding: 0 2px 0;
+  gap: 0;
 }
 
 .panel-shell.is-super-mini .panel-queue-item-avatar-wrap,
 .panel-shell.is-super-mini .panel-queue-item-avatar,
 .panel-shell.is-super-mini .panel-queue-item-avatar .panel-record-emoji {
-  width: calc(22px * var(--super-mini-card-scale, 1));
-  height: calc(22px * var(--super-mini-card-scale, 1));
-  border-radius: calc(8px * var(--super-mini-card-scale, 1));
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
 }
 
 .panel-shell.is-super-mini .panel-queue-item-avatar .panel-record-emoji {
-  font-size: calc(11px * var(--super-mini-card-scale, 1));
+  font-size: 15px;
 }
 
 .panel-shell.is-super-mini .panel-queue-item-name {
-  font-size: calc(5px * var(--super-mini-card-scale, 1));
+  font-size: 7px;
 }
 
 .panel-shell.is-super-mini .panel-queue-item-order,
 .panel-shell.is-super-mini .panel-queue-item-star {
-  font-size: calc(5px * var(--super-mini-card-scale, 1));
-  padding: 0 calc(1px * var(--super-mini-card-scale, 1));
+  font-size: 5px;
+  padding: 0 1px;
 }
 
 .panel-shell.is-super-mini .panel-queue-title {
-  font-size: calc(5px * var(--super-mini-card-scale, 1));
-  letter-spacing: calc(0.12em * var(--super-mini-card-scale, 1));
+  font-size: 6px;
+  letter-spacing: 0.18em;
 }
 
 .panel-shell.is-super-mini .panel-queue-signals {
-  gap: calc(3px * var(--super-mini-card-scale, 1));
+  gap: 6px;
 }
 
 .panel-shell.is-super-mini .panel-queue-signal {
-  width: calc(6px * var(--super-mini-card-scale, 1));
-  height: calc(6px * var(--super-mini-card-scale, 1));
+  width: 7px;
+  height: 7px;
 }
 
 .panel-shell.is-super-mini .panel-queue-item-copy {
-  margin-top: calc(-2px * var(--super-mini-card-scale, 1));
-}
-
-.panel-shell.is-super-mini .panel-queue-item {
-  gap: calc(0px * var(--super-mini-card-scale, 1));
+  margin-top: -5px;
 }
 
 .panel-shell.is-super-mini .panel-queue-item-order {
-  top: calc(-1px * var(--super-mini-card-scale, 1));
-  right: calc(-1px * var(--super-mini-card-scale, 1));
+  top: 0;
+  right: 0;
 }
 
 .panel-shell.is-super-mini .panel-queue-item-star {
