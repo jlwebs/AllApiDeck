@@ -66,16 +66,20 @@ type noopTrayController struct{}
 func (noopTrayController) Close() {}
 
 type panelWindowState struct {
-	screenWidth       int
-	screenHeight      int
-	collapsed         bool
-	expandedWidth     int
-	interactionLocked bool
-	preferredX        int
-	hasPreferredX     bool
-	preferredY        int
-	hasPreferredY     bool
-	dockEdge          panelDockEdge
+	screenWidth              int
+	screenHeight             int
+	collapsed                bool
+	expandedWidth            int
+	expandedHeight           int
+	lastExpandedHeight       int
+	interactionLocked        bool
+	superMiniActive          bool
+	superMiniTransitionUntil int64
+	preferredX               int
+	hasPreferredX            bool
+	preferredY               int
+	hasPreferredY            bool
+	dockEdge                 panelDockEdge
 }
 
 type sidebarWindowState struct {
@@ -265,6 +269,10 @@ func (a *App) runPanelAutoController(stopCh <-chan struct{}) {
 			}
 			visible := isNativePanelWindowVisible(hwnd)
 			state := a.getPanelStateSnapshot()
+			if visible && (state.superMiniActive || (state.superMiniTransitionUntil > 0 && time.Now().UnixMilli() < state.superMiniTransitionUntil)) {
+				lastInsideAt = time.Now()
+				continue
+			}
 			currentRect := desktopRect{}
 			if visible {
 				if rect, rectErr := getNativePanelWindowRect(hwnd); rectErr == nil && rect.Width() > 0 && rect.Height() > 0 {
@@ -537,6 +545,15 @@ func (a *App) SetPanelInteractionLocked(locked bool) error {
 	return nil
 }
 
+func (a *App) SetPanelSuperMiniActive(active bool) error {
+	appWindowState.mu.Lock()
+	appWindowState.panel.superMiniActive = active
+	appWindowState.panel.superMiniTransitionUntil = time.Now().Add(450 * time.Millisecond).UnixMilli()
+	appWindowState.mu.Unlock()
+	debugLogf("set panel super mini active: active=%t state=%+v", active, a.getPanelStateSnapshot())
+	return nil
+}
+
 func (a *App) getPanelStateSnapshot() panelWindowState {
 	appWindowState.mu.Lock()
 	defer appWindowState.mu.Unlock()
@@ -562,6 +579,12 @@ func (a *App) captureNativePanelPlacement(workArea desktopRect, rect desktopRect
 	dockEdge := resolveNativePanelDockEdge(int(rect.Left), rect.Width(), workArea)
 	if rect.Width() > 0 {
 		appWindowState.panel.expandedWidth = rect.Width()
+	}
+	if rect.Height() > 0 {
+		appWindowState.panel.expandedHeight = rect.Height()
+		if !appWindowState.panel.superMiniActive {
+			appWindowState.panel.lastExpandedHeight = rect.Height()
+		}
 	}
 	appWindowState.panel.screenWidth = workArea.Width()
 	appWindowState.panel.screenHeight = workArea.Height()
@@ -605,6 +628,11 @@ func (a *App) resolveNativePanelBounds(workArea desktopRect, state panelWindowSt
 	}
 
 	height := panelWindowHeight
+	if state.lastExpandedHeight > 0 {
+		height = state.lastExpandedHeight
+	} else if state.expandedHeight > 0 {
+		height = state.expandedHeight
+	}
 	if maxHeight := workArea.Height() - panelWindowMarginY*2; maxHeight > 0 && height > maxHeight {
 		height = maxInt(420, maxHeight)
 	}
@@ -673,6 +701,10 @@ func (a *App) updatePanelRuntimeState(collapsed bool, workArea desktopRect, boun
 	appWindowState.panel.screenWidth = workArea.Width()
 	appWindowState.panel.screenHeight = workArea.Height()
 	appWindowState.panel.collapsed = collapsed
+	appWindowState.panel.expandedHeight = bounds.Height
+	if bounds.Height > 0 && !appWindowState.panel.superMiniActive {
+		appWindowState.panel.lastExpandedHeight = bounds.Height
+	}
 	appWindowState.panel.preferredX = bounds.X
 	appWindowState.panel.hasPreferredX = dockEdge == panelDockFree
 	appWindowState.panel.preferredY = bounds.Y
@@ -976,15 +1008,17 @@ func (a *App) applyPanelWindowState(screenWidth int, screenHeight int, collapsed
 
 	appWindowState.mu.Lock()
 	appWindowState.panel = panelWindowState{
-		screenWidth:   screenWidth,
-		screenHeight:  screenHeight,
-		collapsed:     collapsed,
-		expandedWidth: expandedWidth,
-		preferredX:    x,
-		hasPreferredX: false,
-		preferredY:    0,
-		hasPreferredY: false,
-		dockEdge:      panelDockRight,
+		screenWidth:        screenWidth,
+		screenHeight:       screenHeight,
+		collapsed:          collapsed,
+		expandedWidth:      expandedWidth,
+		expandedHeight:     height,
+		lastExpandedHeight: height,
+		preferredX:         x,
+		hasPreferredX:      false,
+		preferredY:         0,
+		hasPreferredY:      false,
+		dockEdge:           panelDockRight,
 	}
 	appWindowState.mu.Unlock()
 	debugLogf(
@@ -1041,15 +1075,17 @@ func (a *App) applyManualPanelWindowState(screenWidth int, screenHeight int) err
 
 	appWindowState.mu.Lock()
 	appWindowState.panel = panelWindowState{
-		screenWidth:   maxInt(workArea.Width(), screenWidth),
-		screenHeight:  maxInt(workArea.Height(), screenHeight),
-		collapsed:     false,
-		expandedWidth: width,
-		preferredX:    x,
-		hasPreferredX: hasPreferredX,
-		preferredY:    y,
-		hasPreferredY: true,
-		dockEdge:      dockEdge,
+		screenWidth:        maxInt(workArea.Width(), screenWidth),
+		screenHeight:       maxInt(workArea.Height(), screenHeight),
+		collapsed:          false,
+		expandedWidth:      width,
+		expandedHeight:     height,
+		lastExpandedHeight: height,
+		preferredX:         x,
+		hasPreferredX:      hasPreferredX,
+		preferredY:         y,
+		hasPreferredY:      true,
+		dockEdge:           dockEdge,
 	}
 	appWindowState.mu.Unlock()
 

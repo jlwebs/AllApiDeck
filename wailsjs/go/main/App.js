@@ -206,6 +206,10 @@ export function SetPanelInteractionLocked(arg1) {
   return window['go']['main']['App']['SetPanelInteractionLocked'](arg1);
 }
 
+export function SetPanelSuperMiniActive(arg1) {
+  return window['go']['main']['App']['SetPanelSuperMiniActive'](arg1);
+}
+
 export function ShowMainWindow() {
   return window['go']['main']['App']['ShowMainWindow']();
 }

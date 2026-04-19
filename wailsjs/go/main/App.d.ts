@@ -104,6 +104,8 @@ export function SetPanelExpandedWidth(arg1:number):Promise<void>;
 
 export function SetPanelInteractionLocked(arg1:boolean):Promise<void>;
 
+export function SetPanelSuperMiniActive(arg1:boolean):Promise<void>;
+
 export function ShowMainWindow():Promise<void>;
 
 export function StartBridgeImportSession():Promise<main.BridgeImportSnapshot>;

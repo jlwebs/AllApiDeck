@@ -56,6 +56,7 @@
           ref="panelQueueStripRef"
           class="panel-queue-strip"
           :style="{ '--wails-draggable': superMiniMode ? 'no-drag' : 'drag' }"
+          @wheel="handleQueueStripWheel"
           @pointerdown="beginQueueStripDrag"
           @pointermove="dragQueueStrip"
           @pointerup="endQueueStripDrag"
@@ -326,11 +327,14 @@ import {
   OpenDesktopConfigWindow,
   OpenKeyEditor,
   RequestMainWindowRestore,
+  SetPanelSuperMiniActive,
 } from '../../wailsjs/go/main/App.js';
 import {
   WindowGetPosition,
   WindowGetSize,
   WindowSetPosition,
+  WindowSetMinSize,
+  WindowSetMaxSize,
   WindowSetSize,
 } from '../../wailsjs/runtime/runtime.js';
 import quickSetupIcon from '../assets/action-icons/quick-setup-cute.svg';
@@ -822,15 +826,15 @@ async function applySuperMiniWindowMode(enabled) {
     const shellRect = panelShellRef.value?.getBoundingClientRect?.();
     const shellWidth = Math.ceil(Number(shellRect?.width || 0));
     const shellHeight = Math.ceil(Number(shellRect?.height || 0));
-    const width = Math.round((shellWidth || 100) * SUPER_MINI_SCALE);
+    const enableBounds = superMiniRestoreBounds || superMiniWindowBounds;
+    const width = Math.round(Number(enableBounds?.width || shellWidth || 100)*0.93);
     const measuredHeight = measureSuperMiniContentHeight();
-    const height = Math.max(1, Math.round(measuredHeight || shellHeight || 100));
+    const height = Math.max(1, Math.round((measuredHeight || shellHeight || 100)*1.2 ));
     const cardScale = shellWidth > 0 ? width / shellWidth : SUPER_MINI_SCALE;
     appendPanelClientLog(
       'panel.super-mini',
       `enable sizing token=${transitionToken} shell=${shellWidth}x${shellHeight} measured=${measuredHeight ?? 'n/a'} target=${width}x${height} scale=${cardScale.toFixed(4)}`,
     );
-    const enableBounds = superMiniRestoreBounds || superMiniWindowBounds;
     const dockState = String(await GetPanelDockState().catch(() => '')).trim();
     const enableTargetX = isValidSidebarWindowBounds(enableBounds)
       ? (dockState === 'right'
@@ -845,6 +849,9 @@ async function applySuperMiniWindowMode(enabled) {
       panelShellRef.value.style.setProperty('--super-mini-card-scale', `${cardScale}`);
     }
     try {
+      await SetPanelSuperMiniActive(true).catch(() => {});
+      WindowSetMinSize(0, 0);
+      WindowSetMaxSize(0, 0);
       if (enableTargetX !== null && enableTargetY !== null) {
         WindowSetPosition(enableTargetX, enableTargetY);
         appendPanelClientLog(
@@ -855,7 +862,12 @@ async function applySuperMiniWindowMode(enabled) {
       WindowSetSize(width, height);
       appendPanelClientLog('panel.super-mini', `window size set token=${transitionToken} size=${width}x${height}`);
       await logSuperMiniWindowSnapshot('after resize', transitionToken, `target=${width}x${height}`);
-    } catch {}
+    } catch (error) {
+      appendPanelClientLog(
+        'panel.super-mini',
+        `enable resize failed token=${transitionToken} err=${error?.message || String(error)}`,
+      );
+    }
     return;
   }
 
@@ -882,6 +894,7 @@ async function applySuperMiniWindowMode(enabled) {
     await logSuperMiniWindowSnapshot('after restore', transitionToken, `restored=${formatSidebarBounds(restoreBounds)}`);
   } catch {}
   if (!enabled) {
+    await SetPanelSuperMiniActive(false).catch(() => {});
     superMiniQueueScrollLeft = 0;
     appendPanelClientLog('panel.super-mini', `queue scroll reset token=${transitionToken}`);
   }
@@ -1830,6 +1843,35 @@ function dragQueueStrip(event) {
   });
 }
 
+function handleQueueStripWheel(event) {
+  const target = panelQueueStripRef.value || event?.currentTarget;
+  if (!target) return;
+  const deltaX = Number(event?.deltaX || 0);
+  const deltaY = Number(event?.deltaY || 0);
+  const primaryDelta = Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY;
+  if (!primaryDelta) return;
+
+  const deltaMode = Number(event?.deltaMode || 0);
+  const lineHeight = 16;
+  const pageWidth = Math.max(1, Number(target.clientWidth || 1));
+  let scrollDelta = primaryDelta;
+  if (deltaMode === 1) {
+    scrollDelta *= lineHeight;
+  } else if (deltaMode === 2) {
+    scrollDelta *= pageWidth;
+  }
+
+  const currentScrollLeft = Number(target.scrollLeft || 0);
+  const maxScrollLeft = Math.max(0, Number(target.scrollWidth || 0) - Number(target.clientWidth || 0));
+  if (maxScrollLeft <= 0) return;
+
+  const nextScrollLeft = Math.min(maxScrollLeft, Math.max(0, currentScrollLeft + scrollDelta));
+  if (nextScrollLeft === currentScrollLeft) return;
+
+  event?.preventDefault?.();
+  target.scrollLeft = nextScrollLeft;
+}
+
 function endQueueStripDrag(event) {
   const target = panelQueueStripRef.value;
   const wasActive = panelQueueDragState.active && panelQueueDragState.pointerId === event?.pointerId;
@@ -2179,11 +2221,11 @@ onBeforeUnmount(() => {
 }
 
 .key-side-panel.is-super-mini {
-  width: fit-content;
-  height: fit-content;
+  width: 100%;
+  height: 100%;
   min-height: 0;
   padding: 0;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .panel-shell {
@@ -2211,14 +2253,15 @@ onBeforeUnmount(() => {
 }
 
 .panel-shell.is-super-mini {
-  width: fit-content;
-  height: fit-content;
+  width: 100%;
+  height: 100%;
   padding: 1px;
   gap: 1px;
+  border-radius: 14px;
   background: transparent;
   box-shadow: none;
   backdrop-filter: none;
-  align-items: flex-start;
+  align-items: stretch;
   --super-mini-card-scale: 1;
 }
 
@@ -2235,14 +2278,14 @@ onBeforeUnmount(() => {
   inset: auto;
   z-index: 3;
   margin: 0;
-  width: var(--super-mini-card-width, 128px);
-  min-width: var(--super-mini-card-width, 128px);
-  max-width: var(--super-mini-card-width, 128px);
+  width: 100%;
+  min-width: 0;
+  max-width: none;
   height: auto;
-  border-radius: calc(14px * var(--super-mini-card-scale, 1));
+  border-radius: 14px;
   display: flex;
   flex-direction: column;
-  align-self: flex-start;
+  align-self: stretch;
   box-shadow:
     0 18px 36px rgba(19, 24, 19, 0.12),
     inset 0 1px 0 rgba(255, 255, 255, 0.45);
