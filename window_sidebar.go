@@ -33,7 +33,7 @@ const (
 	panelWindowMarginY     = 20
 	panelEdgeActivateGap   = 2
 	panelRightDockShiftPct = 0
-	panelHideGrace         = 1000 * time.Millisecond
+	panelHideGrace         = 500 * time.Millisecond
 	panelAutoTickInterval  = 60 * time.Millisecond
 	windowMonitorInterval  = 450 * time.Millisecond
 	panelRestoreSignal     = "panel-restore.signal"
@@ -801,6 +801,28 @@ func (a *App) GetPanelDockState() string {
 		dockEdge = panelDockRight
 	}
 	return string(dockEdge)
+}
+
+func (a *App) GetPanelWindowBounds() (sidebarWindowBounds, error) {
+	if !a.isPanelMode() {
+		return sidebarWindowBounds{}, nil
+	}
+
+	hwnd, err := findPanelWindowHandle()
+	if err == nil && hwnd != 0 {
+		if rect, rectErr := getNativePanelWindowRect(hwnd); rectErr == nil && rect.Width() > 0 && rect.Height() > 0 {
+			return sidebarWindowBounds{
+				Width:  rect.Width(),
+				Height: rect.Height(),
+				X:      int(rect.Left),
+				Y:      int(rect.Top),
+			}, nil
+		}
+	}
+
+	state := a.getPanelStateSnapshot()
+	workArea := resolvePanelWorkArea(state.screenWidth, state.screenHeight)
+	return a.resolveNativePanelBounds(workArea, state), nil
 }
 
 func (a *App) applyPanelWindowState(screenWidth int, screenHeight int, collapsed bool) error {
