@@ -49,7 +49,20 @@
               :class="`is-${advancedProxyQueueTitleDisplay.dotTone}`"
               aria-hidden="true"
             ></span>
-            <span class="panel-queue-title-text">{{ advancedProxyQueueTitleDisplay.text }}</span>
+            <span
+              class="panel-queue-title-text"
+              :class="{ 'is-live': Boolean(advancedProxyQueueTitleDisplay.dotTone) }"
+            >
+              <span
+                v-for="(part, index) in advancedProxyQueueTitleDisplay.parts"
+                :key="`${part.tone || 'plain'}-${index}-${part.text}`"
+                class="panel-queue-title-part"
+                :class="[
+                  `is-${part.tone || 'plain'}`,
+                  { 'is-live': Boolean(advancedProxyQueueTitleDisplay.dotTone) },
+                ]"
+              >{{ part.text }}</span>
+            </span>
           </span>
 
           <div class="panel-queue-signals" aria-hidden="true">
@@ -110,7 +123,11 @@
                         {{ item.hitSummaryText }}
                       </div>
                       <div v-if="item.performanceLines.length > 0" class="panel-queue-tooltip-metrics">
-                        <span v-for="line in item.performanceLines" :key="line">{{ line }}</span>
+                        <span
+                          v-for="line in item.performanceLines"
+                          :key="line"
+                          :class="getQueueTooltipMetricClass(line)"
+                        >{{ line }}</span>
                       </div>
                       <span>{{ item.modelLabel }}</span>
                       <span v-if="item.queueScopeText">{{ item.queueScopeText }}</span>
@@ -1547,7 +1564,10 @@ function formatAdvancedProxyQueueLiveModelLabel(modelLabel) {
   const normalizedModelLabel = String(modelLabel || '').trim();
   if (!normalizedModelLabel) return '';
 
-  const upperModelLabel = normalizedModelLabel.toUpperCase();
+  const compactSourceLabel = normalizedModelLabel.includes('/')
+    ? normalizedModelLabel.split('/').map(part => String(part || '').trim()).filter(Boolean).slice(-1)[0] || normalizedModelLabel
+    : normalizedModelLabel;
+  const upperModelLabel = compactSourceLabel.toUpperCase();
   let familyLabel = upperModelLabel.slice(0, 5);
   if (upperModelLabel.includes('CLAUDE')) {
     familyLabel = 'CLAUD';
@@ -1577,19 +1597,20 @@ function buildAdvancedProxyQueueLiveTitle(item) {
     ? `${headerLabel} (${providerName})`
     : headerLabel;
 
-  const segments = [providerLabel];
+  const parts = [{ text: providerLabel, tone: 'plain' }];
   if (compactModelLabel) {
-    segments.push(compactModelLabel);
+    parts.push({ text: compactModelLabel, tone: 'model' });
   }
   if (performanceMetrics.ttftMs != null) {
-    segments.push(`${(performanceMetrics.ttftMs / 1000).toFixed(1)}s`);
+    parts.push({ text: `${(performanceMetrics.ttftMs / 1000).toFixed(1)}s`, tone: 'ttft' });
   }
   if (performanceMetrics.tps != null) {
-    segments.push(`${performanceMetrics.tps.toFixed(1)}t/s`);
+    parts.push({ text: `${performanceMetrics.tps.toFixed(1)}t/s`, tone: 'tps' });
   }
 
   return {
-    text: segments.join(' '),
+    text: parts.map(part => part.text).join(' '),
+    parts,
     dotTone: getAdvancedProxyQueueItemStatusTone(item),
     itemId: String(item?.id || ''),
   };
@@ -1597,23 +1618,34 @@ function buildAdvancedProxyQueueLiveTitle(item) {
 
 function pickAdvancedProxyQueueLiveTitleItem(items) {
   const candidates = Array.isArray(items)
-    ? items.filter(item => item?.dispatchState?.visible)
+    ? items.filter(item =>
+      item?.dispatchState?.visible
+      || item?.hasActiveRoute
+      || item?.hasRecentRoute
+      || item?.hasFailedRoute
+    )
     : [];
   if (candidates.length === 0) return null;
 
   return candidates
     .slice()
     .sort((left, right) => {
+      const leftUpdatedAt = Number(left?.routeUpdatedAtMs || 0);
+      const rightUpdatedAt = Number(right?.routeUpdatedAtMs || 0);
+      if (leftUpdatedAt !== rightUpdatedAt) {
+        return rightUpdatedAt - leftUpdatedAt;
+      }
+
       const leftActive = left?.dispatchState?.active ? 1 : 0;
       const rightActive = right?.dispatchState?.active ? 1 : 0;
       if (leftActive !== rightActive) {
         return rightActive - leftActive;
       }
 
-      const leftUpdatedAt = Number(left?.routeUpdatedAtMs || 0);
-      const rightUpdatedAt = Number(right?.routeUpdatedAtMs || 0);
-      if (leftUpdatedAt !== rightUpdatedAt) {
-        return rightUpdatedAt - leftUpdatedAt;
+      const leftFailed = left?.hasFailedRoute ? 1 : 0;
+      const rightFailed = right?.hasFailedRoute ? 1 : 0;
+      if (leftFailed !== rightFailed) {
+        return rightFailed - leftFailed;
       }
 
       const leftOrder = Number.isFinite(Number(left?.order)) ? Number(left.order) : Number.POSITIVE_INFINITY;
@@ -2020,6 +2052,7 @@ const advancedProxyQueueTitleDisplay = computed(() => {
   }
   return {
     text: advancedProxyQueueTitle.value,
+    parts: [{ text: advancedProxyQueueTitle.value, tone: 'plain' }],
     dotTone: '',
     itemId: '',
   };
@@ -2135,6 +2168,14 @@ function maskApiKeyForTooltip(apiKey) {
   if (!value) return '';
   if (value.length <= 8) return value;
   return `${value.slice(0, 4)}****${value.slice(-4)}`;
+}
+
+function getQueueTooltipMetricClass(line) {
+  const normalizedLine = String(line || '').trim().toLowerCase();
+  if (normalizedLine.startsWith('ttft')) return 'is-ttft';
+  if (normalizedLine.startsWith('tps')) return 'is-tps';
+  if (normalizedLine.startsWith('latency')) return 'is-latency';
+  return '';
 }
 
 const superMiniQueueCardHintText = computed(() =>
@@ -2674,14 +2715,21 @@ onMounted(async () => {
 watch(superMiniMode, async (enabled, previous) => {
   if (enabled === previous) return;
   appendPanelClientLog('panel.super-mini', `mode watch prev=${previous} next=${enabled}`);
+  if (!enabled) {
+    superMiniQueueLiveTitleState.value = null;
+  } else {
+    const nextItem = pickAdvancedProxyQueueLiveTitleItem(advancedProxyQueueItems.value);
+    const nextTitle = buildAdvancedProxyQueueLiveTitle(nextItem);
+    superMiniQueueLiveTitleState.value = nextTitle?.text ? nextTitle : null;
+  }
   await nextTick();
   await logSuperMiniWindowSnapshot('mode watch snapshot', superMiniTransitionToken, `prev=${previous} next=${enabled}`);
 });
 
 watch(
-  [superMiniMode, advancedProxyQueueItems],
-  ([enabled, items]) => {
-    if (!enabled) return;
+  advancedProxyQueueItems,
+  (items) => {
+    if (!superMiniMode.value) return;
     const nextItem = pickAdvancedProxyQueueLiveTitleItem(items);
     if (!nextItem) return;
 
@@ -2699,7 +2747,6 @@ watch(
 
     superMiniQueueLiveTitleState.value = nextTitle;
   },
-  { immediate: true },
 );
 
 watch(visibleRecords, async () => {
@@ -2898,6 +2945,10 @@ onBeforeUnmount(() => {
 
 .panel-shell.is-super-mini .panel-queue-signals {
   gap: 6px;
+}
+
+.panel-shell.is-super-mini .panel-queue-signal-red {
+  display: none;
 }
 
 .panel-shell.is-super-mini .panel-queue-signal {
@@ -3170,9 +3221,37 @@ onBeforeUnmount(() => {
 
 .panel-queue-title-text {
   min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.panel-queue-title-text.is-live {
+  text-transform: none;
+}
+
+.panel-queue-title-part {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-queue-title-part.is-plain,
+.panel-queue-title-part.is-model {
+  color: rgba(33, 49, 32, 0.72);
+}
+
+.panel-queue-title-part.is-ttft {
+  color: #8f6a26;
+}
+
+.panel-queue-title-part.is-tps {
+  color: #2f6f58;
 }
 
 .panel-queue-signals {
@@ -3427,6 +3506,18 @@ onBeforeUnmount(() => {
   color: #f1f5ed;
   font-size: 10px;
   line-height: 1.3;
+}
+
+.panel-queue-tooltip-content .panel-queue-tooltip-metrics span.is-latency {
+  color: #cbd5e1;
+}
+
+.panel-queue-tooltip-content .panel-queue-tooltip-metrics span.is-ttft {
+  color: #f59e0b;
+}
+
+.panel-queue-tooltip-content .panel-queue-tooltip-metrics span.is-tps {
+  color: #34d399;
 }
 
 .panel-queue-tooltip-content strong {

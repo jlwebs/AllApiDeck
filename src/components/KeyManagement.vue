@@ -57,19 +57,45 @@
         <template #extra>
           <a-space wrap>
             <a-checkbox v-model:checked="hideInvalidKeys">隐藏无效密钥</a-checkbox>
-            <a-tooltip :title="batchQuickTestButtonTitle">
-              <a-button
-                type="primary"
-                size="small"
-                class="inventory-batch-quick-test-button"
-                :loading="batchQuickTestRunning"
-                :disabled="batchQuickTestDisabled"
-                @click="runBatchQuickTest"
-              >
-                <ThunderboltOutlined />
-                <span>{{ batchQuickTestRunning ? `批量快测 ${batchQuickTestProgress.completed}/${batchQuickTestProgress.total}` : '批量快测' }}</span>
-              </a-button>
-            </a-tooltip>
+            <a-popover
+              trigger="hover"
+              placement="bottomRight"
+              overlay-class-name="key-management-batch-popover"
+              :getPopupContainer="getSidebarPopupContainer"
+            >
+              <template #content>
+                <div class="import-export-menu">
+                  <button
+                    type="button"
+                    class="import-export-menu-item"
+                    :disabled="batchQuickTestDisabled"
+                    @click="runBatchQuickTest"
+                  >
+                    <ThunderboltOutlined />
+                    <span>{{ batchQuickTestRunning ? `批量快测 ${batchQuickTestProgress.completed}/${batchQuickTestProgress.total}` : '批量快测' }}</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="import-export-menu-item import-export-menu-item-danger"
+                    :disabled="batchDeleteAbnormalDisabled"
+                    @click="confirmDeleteAbnormalRecords"
+                  >
+                    <DeleteOutlined />
+                    <span>批量删除异常密钥</span>
+                  </button>
+                </div>
+              </template>
+              <a-tooltip :title="batchActionButtonTitle">
+                <a-button
+                  type="primary"
+                  size="small"
+                  class="inventory-batch-quick-test-button"
+                  :loading="batchQuickTestRunning"
+                >
+                  <ThunderboltOutlined />
+                </a-button>
+              </a-tooltip>
+            </a-popover>
             <a-tooltip title="手工添加">
               <button type="button" class="inventory-icon-button inventory-icon-button-primary" @click="openManualRecordModal()">
                 <PlusOutlined />
@@ -637,6 +663,7 @@ const displayedRows = computed(() => {
   return sortManagedRecords(filteredRows);
 });
 const healthyKeyCount = computed(() => tableData.value.filter(record => record.status === 1).length);
+const abnormalKeyCount = computed(() => tableData.value.filter(record => Number(record?.status || 0) !== 1).length);
 const syncSummary = computed(() => !syncMeta.value.lastBatchSyncAt ? '导入并批量检测后，会自动把获取到的 sk key 更新到本页。' : `最近一次批量同步写入 ${syncMeta.value.lastBatchSyncCount} 条记录，失败站点 ${syncMeta.value.lastBatchFailedCount} 个。`);
 const currentVisiblePageRows = computed(() => {
   if (isCompactMode.value) return displayedRows.value;
@@ -644,12 +671,22 @@ const currentVisiblePageRows = computed(() => {
   return displayedRows.value.slice(start, start + currentTablePageSize.value);
 });
 const batchQuickTestDisabled = computed(() => batchQuickTestRunning.value || tableData.value.length === 0);
+const batchDeleteAbnormalDisabled = computed(() => batchQuickTestRunning.value || abnormalKeyCount.value === 0);
 const batchQuickTestButtonTitle = computed(() => {
   if (batchQuickTestRunning.value) {
     const currentSite = batchQuickTestProgress.currentSiteName ? `，当前 ${batchQuickTestProgress.currentSiteName}` : '';
     return `正在按页面优先级批量快测 ${batchQuickTestProgress.completed}/${batchQuickTestProgress.total}${currentSite}`;
   }
   return '按页面优先级批量触发“快速测”，只测试每条当前已选择的模型';
+});
+const batchActionButtonTitle = computed(() => {
+  if (batchQuickTestRunning.value) {
+    return batchQuickTestButtonTitle.value;
+  }
+  if (abnormalKeyCount.value > 0) {
+    return `批量操作：可删除 ${abnormalKeyCount.value} 条异常密钥`;
+  }
+  return '批量操作';
 });
 const tablePagination = computed(() => {
   if (isCompactMode.value) return false;
@@ -1565,6 +1602,29 @@ function clearLocalRecords() {
   localStorage.removeItem(MANUAL_STORAGE_KEY);
   localStorage.removeItem(META_STORAGE_KEY);
   message.success('本地密钥库已清空');
+}
+
+function deleteAbnormalRecords() {
+  const abnormalCount = abnormalKeyCount.value;
+  if (abnormalCount <= 0) {
+    message.warning('当前没有异常密钥可删除');
+    return;
+  }
+  tableData.value = tableData.value.filter(record => Number(record?.status || 0) === 1);
+  persistRecords();
+  message.success(`已删除 ${abnormalCount} 条异常密钥`);
+}
+
+function confirmDeleteAbnormalRecords() {
+  if (batchDeleteAbnormalDisabled.value) return;
+  Modal.confirm({
+    title: '确认批量删除异常密钥？',
+    content: `将删除 ${abnormalKeyCount.value} 条状态为“禁用/异常”的记录，正常密钥不会受影响。`,
+    okText: '删除',
+    cancelText: '取消',
+    okButtonProps: { danger: true },
+    onOk: deleteAbnormalRecords,
+  });
 }
 
 function launchCherryStudio(record) {
@@ -2636,6 +2696,8 @@ function persistMeta() {
 .import-export-menu-item:disabled{cursor:not-allowed;opacity:.5;box-shadow:none;transform:none}
 .import-export-menu-item :deep(.anticon),.import-export-menu-item svg{font-size:14px;flex:0 0 auto}
 .import-export-menu-item span{white-space:normal;overflow-wrap:anywhere}
+.import-export-menu-item-danger{background:#fff1f2;color:#be123c}
+.import-export-menu-item-danger:hover:not(:disabled){background:#ffe4e6;color:#be123c}
 .export-actions-cell{display:flex;flex-direction:column;align-items:flex-start;gap:10px;min-width:0}
 .row-actions-stack{display:flex;flex-direction:column;align-items:stretch;gap:8px;width:100%}
 .row-actions-stack :deep(.ant-btn),.row-actions-stack :deep(.ant-popconfirm){width:100%}
@@ -2644,8 +2706,9 @@ function persistMeta() {
 .inventory-icon-button:hover:not(:disabled){transform:translateY(-1px) scale(1.06);filter:saturate(1.08)}
 .inventory-icon-button:disabled{cursor:not-allowed;opacity:.45;transform:none;filter:none;box-shadow:inset 0 0 0 1px rgba(148,163,184,.18)}
 .inventory-icon-button :deep(.anticon),.inventory-icon-button svg{font-size:16px;line-height:1}
-.inventory-batch-quick-test-button{border-radius:999px;padding-inline:14px;border:0;background:linear-gradient(135deg,#476847,#6f8f55);box-shadow:0 10px 24px rgba(87,118,76,.18);display:inline-flex;align-items:center;gap:6px}
+.inventory-batch-quick-test-button{width:34px;height:34px;padding:0;border:0;border-radius:12px;background:linear-gradient(135deg,#476847,#6f8f55);box-shadow:0 10px 24px rgba(87,118,76,.18);display:inline-flex;align-items:center;justify-content:center;color:#fff}
 .inventory-batch-quick-test-button:disabled{opacity:.55}
+.inventory-batch-quick-test-button :deep(.anticon),.inventory-batch-quick-test-button svg{font-size:16px;line-height:1}
 .inventory-icon-button-primary{background:linear-gradient(135deg,#eff6ff,#dbeafe);color:#1d4ed8;box-shadow:0 10px 24px rgba(96,165,250,.18),inset 0 0 0 1px rgba(96,165,250,.22)}
 .inventory-icon-button-danger{background:linear-gradient(135deg,#fff1f2,#ffe4e6);color:#be123c;box-shadow:0 10px 24px rgba(244,63,94,.12),inset 0 0 0 1px rgba(244,63,94,.18)}
 .batch-quick-test-alert{margin-bottom:12px;border-radius:14px}

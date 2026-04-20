@@ -81,14 +81,38 @@
                   :options="queueScopeOptions"
                   @change="handleQueueScopeChange"
                 />
-                <a-button
+                <a-tooltip :title="quickSetupTooltipText">
+                  <a-button
+                    class="advanced-proxy-toolbar-icon-button"
+                    :disabled="!validProviderCandidateCards.length"
+                    @click="handleQuickSelectValidProviders"
+                  >
+                    <template #icon>
+                      <span class="advanced-proxy-toolbar-emoji-icon" aria-hidden="true">💪</span>
+                    </template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip
                   v-if="selectedQueueScope !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE"
-                  :disabled="selectedQueueInheritGlobal"
-                  @click="handleFollowGlobalQueue"
+                  :title="selectedQueueInheritGlobal ? '当前已经在跟随全局队列' : '切换为跟随全局队列'"
                 >
-                  跟随全局
-                </a-button>
-                <a-button @click="reloadContext">刷新记录</a-button>
+                  <a-button
+                    class="advanced-proxy-toolbar-icon-button"
+                    :disabled="selectedQueueInheritGlobal"
+                    @click="handleFollowGlobalQueue"
+                  >
+                    <template #icon>
+                      <CloudSyncOutlined />
+                    </template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip title="刷新记录">
+                  <a-button class="advanced-proxy-toolbar-icon-button" @click="reloadContext">
+                    <template #icon>
+                      <ReloadOutlined />
+                    </template>
+                  </a-button>
+                </a-tooltip>
               </div>
             </div>
 
@@ -330,6 +354,7 @@
 
 <script setup>
 import { computed, reactive, ref, watch } from 'vue';
+import { CloudSyncOutlined, ReloadOutlined } from '@ant-design/icons-vue';
 import { message } from 'ant-design-vue';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
@@ -497,6 +522,11 @@ const queuePanelEmptyText = computed(() =>
       ? '当前应用正在继承全局队列。点任意卡片后会自动分叉出独立队列。'
       : '当前独立队列为空，点击卡片即可加入 Provider。')
 );
+const quickSetupTooltipText = computed(() =>
+  validProviderCandidateCards.value.length
+    ? '一键勾选有效密钥'
+    : '一键勾选有效密钥前，请先完成快速测活'
+);
 const providerSelectionMap = computed(() => {
   const map = new Map();
   displayedQueueProviders.value.forEach((provider, index) => {
@@ -560,6 +590,9 @@ const providerCandidateCards = computed(() => {
       || String(left.siteName || '').localeCompare(String(right.siteName || ''));
   });
 });
+const validProviderCandidateCards = computed(() =>
+  providerCandidateCards.value.filter(item => isValidProviderSourceRecord(item?.sourceRecord))
+);
 
 const appCards = computed(() =>
   ADVANCED_PROXY_APPS.map(app => {
@@ -692,6 +725,12 @@ function buildProviderFromRecord(record, sortIndex) {
     sortIndex,
     sourceType: record.sourceType || 'auto',
   };
+}
+
+function isValidProviderSourceRecord(record) {
+  if (!record?.rowKey || !record?.siteUrl || !record?.apiKey) return false;
+  const quickTestStatus = String(record?.quickTestStatus || '').trim().toLowerCase();
+  return quickTestStatus === 'success' || quickTestStatus === 'warning';
 }
 
 function getEnabledAppIds(source = draft) {
@@ -1072,6 +1111,30 @@ function toggleProviderQueue(item) {
   }, item?.selected ? `${selectedQueueLabel.value} 队列已移出 Provider` : `${selectedQueueLabel.value} 队列已加入 Provider`);
 }
 
+function handleQuickSelectValidProviders() {
+  const validCards = validProviderCandidateCards.value;
+  if (!validCards.length) {
+    message.warning('暂无可一键勾选的有效密钥，请先完成快速测活');
+    return;
+  }
+
+  handleConfigMutation(next => {
+    const scope = selectedQueueScope.value;
+    if (scope !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE && isQueueFollowingGlobal(next, scope)) {
+      ensureQueueSection(next, scope).inheritGlobal = false;
+    }
+
+    replaceQueueProviders(
+      next,
+      scope,
+      validCards
+        .map(item => item?.sourceRecord)
+        .filter(record => isValidProviderSourceRecord(record))
+        .map((record, index) => buildProviderFromRecord(record, index + 1))
+    );
+  }, `${selectedQueueLabel.value} 队列已一键勾选 ${validCards.length} 条有效密钥`);
+}
+
 function getBreakerStatsKey(appId, providerId) {
   return `${String(appId || '').trim().toLowerCase()}:${String(providerId || '').trim()}`;
 }
@@ -1331,6 +1394,29 @@ function handleCancel() {
 
 .advanced-proxy-queue-select {
   min-width: 132px;
+}
+
+.advanced-proxy-toolbar-icon-button {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 12px;
+}
+
+.advanced-proxy-toolbar-icon-button :deep(.ant-btn-icon) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.advanced-proxy-toolbar-emoji-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .advanced-proxy-queue-mode {
