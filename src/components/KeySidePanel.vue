@@ -928,6 +928,11 @@ async function applySuperMiniWindowMode(enabled) {
     'panel.super-mini',
     `restore sizing enabled=${Boolean(enabled)} token=${transitionToken} bounds=${formatSidebarBounds(restoreBounds)}`,
   );
+  if (!enabled) {
+    // Start the backend transition guard before we restore the normal bounds so
+    // the native auto controller does not sample the transient supermini size.
+    await SetPanelSuperMiniActive(false).catch(() => {});
+  }
   try {
     if (restoreBounds) {
       WindowSetSize(
@@ -942,7 +947,6 @@ async function applySuperMiniWindowMode(enabled) {
     await logSuperMiniWindowSnapshot('after restore', transitionToken, `restored=${formatSidebarBounds(restoreBounds)}`);
   } catch {}
   if (!enabled) {
-    await SetPanelSuperMiniActive(false).catch(() => {});
     superMiniQueueScrollLeft = 0;
     appendPanelClientLog('panel.super-mini', `queue scroll reset token=${transitionToken}`);
   }
@@ -2783,7 +2787,7 @@ onBeforeUnmount(() => {
 
 .panel-queue-item-order {
   position: absolute;
-  right: -2px;
+  right: 4px;
   top: 0px;
   z-index: 10;
   padding: 0;
