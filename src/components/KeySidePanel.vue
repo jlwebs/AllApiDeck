@@ -80,6 +80,7 @@
                   overlay-class-name="panel-queue-tooltip"
                   :overlay-style="getQueueTooltipOverlayStyle(item)"
                   :destroy-tooltip-on-hide="true"
+                  @openChange="open => handleSuperMiniQueueTooltipOpenChange(open)"
                 >
                   <template #title>
                     <div class="panel-queue-tooltip-content">
@@ -106,7 +107,11 @@
                     </div>
                   </template>
 
-                  <div class="panel-queue-item-avatar">
+                  <div
+                    class="panel-queue-item-avatar"
+                    @mouseenter="handleSuperMiniQueueTooltipHoverStart"
+                    @mouseleave="handleSuperMiniQueueTooltipHoverEnd"
+                  >
                     <span class="panel-record-emoji">{{ item.avatar }}</span>
                   </div>
                 </a-tooltip>
@@ -388,10 +393,12 @@ const ADVANCED_PROXY_DISPATCH_HOLD_MS = 10000;
 const ADVANCED_PROXY_DISPATCH_FADE_MS = 2500;
 const ADVANCED_PROXY_DISPATCH_TICK_MS = 500;
 const SUPER_MINI_SCALE = 1.2;
+const SUPER_MINI_QUEUE_TOOLTIP_BOTTOM_PADDING = 12;
 const SUPER_MINI_QUEUE_CARD_HINT_TEXT = 'double click me!';
 const SUPER_MINI_QUEUE_CARD_HINT_LIMIT = 2;
 const SUPER_MINI_QUEUE_CARD_HINT_MIN_HOVER_MS = 800;
 const SUPER_MINI_QUEUE_CARD_HINT_STORAGE_KEY = 'panel.super-mini.queue-card-hint-seen-count';
+const SUPER_MINI_TRANSITION_MASK_CLASS = 'panel-super-mini-transitioning';
 const ADVANCED_PROXY_APP_META = {
   claude: { label: 'Claude', className: 'panel-record-avatar-app-claude' },
   codex: { label: 'Codex', className: 'panel-record-avatar-app-codex' },
@@ -426,6 +433,11 @@ let advancedProxyDispatchTimer = null;
 let lastSidebarRoutingLogAt = 0;
 let superMiniQueueScrollLeft = 0;
 let superMiniQueueCardHintHoverStartedAt = 0;
+let superMiniQueueTooltipHovering = false;
+let superMiniQueueTooltipOpen = false;
+let superMiniQueueTooltipSyncTimer = 0;
+let superMiniQueueTooltipRestoreTimer = 0;
+let superMiniQueueTooltipRestoreBounds = null;
 let superMiniWindowBounds = null;
 let superMiniRestoreBounds = null;
 let superMiniEnableAnchorCache = null;
@@ -478,6 +490,11 @@ function syncSuperMiniBodyClass() {
   document.body.classList.toggle('panel-super-mini-mode', superMiniMode.value);
 }
 
+function setSuperMiniTransitionMask(active) {
+  if (typeof document === 'undefined') return;
+  document.body.classList.toggle(SUPER_MINI_TRANSITION_MASK_CLASS, active);
+}
+
 function readSuperMiniQueueCardHintSeenCount() {
   if (typeof window === 'undefined') return 0;
   try {
@@ -518,6 +535,182 @@ function commitSuperMiniQueueCardHintSeen() {
   const next = current + 1;
   superMiniQueueCardHintSeenCount.value = next;
   persistSuperMiniQueueCardHintSeenCount(next);
+}
+
+function clearSuperMiniQueueTooltipRestoreTimer() {
+  if (superMiniQueueTooltipRestoreTimer) {
+    window.clearTimeout(superMiniQueueTooltipRestoreTimer);
+    superMiniQueueTooltipRestoreTimer = 0;
+  }
+}
+
+function clearSuperMiniQueueTooltipSyncTimer() {
+  if (superMiniQueueTooltipSyncTimer) {
+    window.clearInterval(superMiniQueueTooltipSyncTimer);
+    superMiniQueueTooltipSyncTimer = 0;
+  }
+}
+
+function resetSuperMiniQueueTooltipHeightBoostState() {
+  clearSuperMiniQueueTooltipSyncTimer();
+  clearSuperMiniQueueTooltipRestoreTimer();
+  superMiniQueueTooltipHovering = false;
+  superMiniQueueTooltipOpen = false;
+  superMiniQueueTooltipRestoreBounds = null;
+}
+
+function readVisibleSuperMiniQueueTooltipBottom() {
+  if (typeof document === 'undefined') return null;
+  const tooltip = document.querySelector('.panel-queue-tooltip');
+  if (!tooltip) return null;
+  const rect = tooltip.getBoundingClientRect?.();
+  if (!rect || !Number.isFinite(Number(rect.bottom)) || rect.width <= 0 || rect.height <= 0) {
+    return null;
+  }
+  return {
+    bottom: Math.ceil(Number(rect.bottom || 0)),
+    top: Math.ceil(Number(rect.top || 0)),
+    height: Math.ceil(Number(rect.height || 0)),
+    width: Math.ceil(Number(rect.width || 0)),
+  };
+}
+
+async function restoreSuperMiniQueueTooltipHeight(reason = 'restore') {
+  clearSuperMiniQueueTooltipRestoreTimer();
+  const restoreBounds = superMiniQueueTooltipRestoreBounds;
+  superMiniQueueTooltipRestoreBounds = null;
+  if (!isValidSidebarWindowBounds(restoreBounds) || !superMiniMode.value) {
+    return;
+  }
+  try {
+    await WindowSetSize(
+      Math.max(1, Math.round(restoreBounds.width)),
+      Math.max(1, Math.round(restoreBounds.height)),
+    );
+    await WindowSetPosition(
+      Math.round(restoreBounds.x),
+      Math.round(restoreBounds.y),
+    );
+    appendPanelClientLog(
+      'panel.super-mini.tooltip',
+      `restore reason=${reason} bounds=${formatSidebarBounds(restoreBounds)}`,
+    );
+  } catch (error) {
+    appendPanelClientLog(
+      'panel.super-mini.tooltip',
+      `restore failed reason=${reason} err=${error?.message || String(error)}`,
+    );
+  }
+}
+
+function scheduleSuperMiniQueueTooltipHeightRestore(reason = 'leave') {
+  clearSuperMiniQueueTooltipRestoreTimer();
+  superMiniQueueTooltipRestoreTimer = window.setTimeout(() => {
+    superMiniQueueTooltipRestoreTimer = 0;
+    void restoreSuperMiniQueueTooltipHeight(reason);
+  }, 120);
+}
+
+async function syncSuperMiniQueueTooltipHeight(reason = 'hover') {
+  if (!superMiniMode.value || !superMiniQueueTooltipOpen) {
+    return;
+  }
+  try {
+    const current = await readSidebarWindowBounds(`${reason}`);
+    const currentBounds = current.bounds;
+    if (!isValidSidebarWindowBounds(currentBounds)) {
+      appendPanelClientLog(
+        'panel.super-mini.tooltip',
+        `boost skipped reason=${reason} source=${current.source}`,
+      );
+      return;
+    }
+    const shellRect = panelShellRef.value?.getBoundingClientRect?.();
+    const shellTop = Math.ceil(Number(shellRect?.top || 0));
+    const baseContentHeight = measureSuperMiniContentHeight();
+    const tooltipBottom = readVisibleSuperMiniQueueTooltipBottom();
+    if (!tooltipBottom) {
+      appendPanelClientLog(
+        'panel.super-mini.tooltip',
+        `sync skipped reason=${reason} source=${current.source} current=${formatSidebarBounds(currentBounds)} baseContent=${baseContentHeight ?? 'n/a'} tooltip=none`,
+      );
+      return;
+    }
+    if (!isValidSidebarWindowBounds(superMiniQueueTooltipRestoreBounds)) {
+      superMiniQueueTooltipRestoreBounds = {
+        ...currentBounds,
+        width: Math.max(1, Math.round(currentBounds.width)),
+        height: Math.max(1, Math.round(currentBounds.height)),
+      };
+    }
+    const tooltipTargetHeight = Math.max(
+      1,
+      Math.round(Number(tooltipBottom.height || 0) + SUPER_MINI_QUEUE_TOOLTIP_BOTTOM_PADDING),
+    );
+    const targetHeight = Math.max(
+      Math.max(1, Math.round(currentBounds.height)),
+      Math.max(1, Math.round(baseContentHeight || 0)) + tooltipTargetHeight,
+      tooltipTargetHeight,
+    );
+    if (targetHeight > currentBounds.height) {
+      await WindowSetSize(
+        Math.max(1, Math.round(currentBounds.width)),
+        targetHeight,
+      );
+    }
+    appendPanelClientLog(
+      'panel.super-mini.tooltip',
+      `sync reason=${reason} source=${current.source} current=${formatSidebarBounds(currentBounds)} shellTop=${shellTop} baseContent=${baseContentHeight ?? 'n/a'} tooltipBottom=${tooltipBottom.bottom} tooltipHeight=${tooltipBottom.height} tooltipTarget=${tooltipTargetHeight} targetHeight=${targetHeight}`,
+    );
+  } catch (error) {
+    appendPanelClientLog(
+      'panel.super-mini.tooltip',
+      `sync failed reason=${reason} err=${error?.message || String(error)}`,
+    );
+  }
+}
+
+function startSuperMiniQueueTooltipHeightTracking(reason = 'hover') {
+  clearSuperMiniQueueTooltipSyncTimer();
+  if (!superMiniMode.value) return;
+  const run = () => {
+    if (!superMiniMode.value || !superMiniQueueTooltipOpen) {
+      clearSuperMiniQueueTooltipSyncTimer();
+      return;
+    }
+    void syncSuperMiniQueueTooltipHeight(reason);
+  };
+  run();
+  superMiniQueueTooltipSyncTimer = window.setInterval(run, 50);
+}
+
+function handleSuperMiniQueueTooltipHoverStart() {
+  if (!superMiniMode.value) return;
+  superMiniQueueTooltipHovering = true;
+  clearSuperMiniQueueTooltipRestoreTimer();
+  startSuperMiniQueueTooltipHeightTracking('hover-start');
+}
+
+function handleSuperMiniQueueTooltipHoverEnd() {
+  if (!superMiniMode.value) return;
+  superMiniQueueTooltipHovering = false;
+  if (!superMiniQueueTooltipOpen) {
+    scheduleSuperMiniQueueTooltipHeightRestore('hover-end');
+  }
+}
+
+function handleSuperMiniQueueTooltipOpenChange(open) {
+  if (!superMiniMode.value) return;
+  superMiniQueueTooltipOpen = Boolean(open);
+  if (superMiniQueueTooltipOpen) {
+    clearSuperMiniQueueTooltipRestoreTimer();
+    startSuperMiniQueueTooltipHeightTracking('open');
+    return;
+  }
+  clearSuperMiniQueueTooltipSyncTimer();
+  if (!superMiniQueueTooltipHovering) {
+    scheduleSuperMiniQueueTooltipHeightRestore('close');
+  }
 }
 
 function appendPanelClientLog(scope, message) {
@@ -823,143 +1016,155 @@ async function applySuperMiniWindowMode(enabled) {
     return;
   }
 
-  if (!enabled) {
-    resetSuperMiniWindowDragState();
-    resetQueueStripDragState();
-  } else {
-    cacheSuperMiniEnableAnchor('dblclick');
-  }
-  superMiniMode.value = Boolean(enabled);
-  syncSuperMiniBodyClass();
-  appendPanelClientLog('panel.super-mini', `mode applied enabled=${Boolean(enabled)} token=${transitionToken}`);
-  await logSuperMiniWindowSnapshot('mode applied snapshot', transitionToken, `step=${enabled ? 'enable' : 'disable'}`);
+  let transitionMaskApplied = false;
+  const clearTransitionMask = () => {
+    if (!transitionMaskApplied) return;
+    setSuperMiniTransitionMask(false);
+    transitionMaskApplied = false;
+  };
 
-  if (queueStrip) {
-    await nextTick();
-    if (transitionToken !== superMiniTransitionToken) {
-      appendPanelClientLog('panel.super-mini', `queue scroll aborted by newer request token=${transitionToken}`);
-      return;
+  try {
+    if (!enabled) {
+      resetSuperMiniQueueTooltipHeightBoostState();
+      resetSuperMiniWindowDragState();
+      resetQueueStripDragState();
+    } else {
+      cacheSuperMiniEnableAnchor('dblclick');
     }
-    queueStrip.scrollLeft = enabled ? 0 : superMiniQueueScrollLeft;
-    appendPanelClientLog(
-      'panel.super-mini',
-      `queue scroll applied enabled=${Boolean(enabled)} token=${transitionToken} value=${queueStrip.scrollLeft || 0}`,
-    );
-  }
 
-  if (enabled) {
+    setSuperMiniTransitionMask(true);
+    transitionMaskApplied = true;
+
+    superMiniMode.value = Boolean(enabled);
+    syncSuperMiniBodyClass();
+    appendPanelClientLog('panel.super-mini', `mode applied enabled=${Boolean(enabled)} token=${transitionToken}`);
+    await logSuperMiniWindowSnapshot('mode applied snapshot', transitionToken, `step=${enabled ? 'enable' : 'disable'}`);
+
     await nextTick();
     if (transitionToken !== superMiniTransitionToken) {
-      appendPanelClientLog('panel.super-mini', `enable stage aborted after nextTick token=${transitionToken}`);
+      appendPanelClientLog('panel.super-mini', `transition aborted after mode apply token=${transitionToken}`);
       return;
     }
     await new Promise(resolve => window.requestAnimationFrame(() => resolve()));
     if (transitionToken !== superMiniTransitionToken) {
-      appendPanelClientLog('panel.super-mini', `enable stage aborted after raf token=${transitionToken}`);
+      appendPanelClientLog('panel.super-mini', `transition aborted after initial raf token=${transitionToken}`);
       return;
     }
-    const shellRect = panelShellRef.value?.getBoundingClientRect?.();
-    const shellWidth = Math.ceil(Number(shellRect?.width || 0));
-    const shellHeight = Math.ceil(Number(shellRect?.height || 0));
-    const preLayoutOffsetDetails = superMiniEnableAnchorCache || measureSuperMiniWindowAnchorOffset();
-    const enableBounds = superMiniRestoreBounds || superMiniWindowBounds;
-    const width = Math.round(Number(enableBounds?.width || shellWidth || 100)*0.93);
-    const measuredHeight = measureSuperMiniContentHeight();
-    const height = Math.max(1, Math.round((measuredHeight || shellHeight || 100)*1.2 ));
-    const cardScale = shellWidth > 0 ? width / shellWidth : SUPER_MINI_SCALE;
-    appendPanelClientLog(
-      'panel.super-mini',
-      `enable sizing token=${transitionToken} shell=${shellWidth}x${shellHeight} measured=${measuredHeight ?? 'n/a'} preAnchor=${preLayoutOffsetDetails.x}x${preLayoutOffsetDetails.y} preCardRect=${JSON.stringify(preLayoutOffsetDetails.card || null)} target=${width}x${height} scale=${cardScale.toFixed(4)}`,
-    );
-    const dockState = String(await GetPanelDockState().catch(() => '')).trim();
-    const enableTargetX = isValidSidebarWindowBounds(enableBounds)
-      ? (dockState === 'right'
-        ? Math.round(enableBounds.x + enableBounds.width - width)
-        : Math.round(enableBounds.x))
-      : null;
-    const enableTargetY = isValidSidebarWindowBounds(enableBounds)
-      ? Math.round(enableBounds.y)
-      : null;
-    if (panelShellRef.value) {
-      panelShellRef.value.style.setProperty('--super-mini-card-width', `${width}px`);
-      panelShellRef.value.style.setProperty('--super-mini-card-scale', `${cardScale}`);
-    }
-    try {
-      await SetPanelSuperMiniActive(true).catch(() => {});
-      WindowSetMinSize(0, 0);
-      WindowSetMaxSize(0, 0);
-      await WindowSetSize(width, height);
-      await new Promise(resolve => window.requestAnimationFrame(() => resolve()));
-      const settleOffsetDetails = measureSuperMiniWindowAnchorOffset();
-      const adjustedEnableTargetX = enableTargetX !== null
-        ? Math.round(enableTargetX + Number(preLayoutOffsetDetails.x || 0))
-        : null;
-      const adjustedEnableTargetY = enableTargetY !== null
-        ? Math.round(enableTargetY + Number(preLayoutOffsetDetails.y || 0))
-        : null;
+
+    if (queueStrip) {
+      queueStrip.scrollLeft = enabled ? 0 : superMiniQueueScrollLeft;
       appendPanelClientLog(
         'panel.super-mini',
-        `enable settle token=${transitionToken} settleAnchor=${settleOffsetDetails.x}x${settleOffsetDetails.y} settleCardRect=${JSON.stringify(settleOffsetDetails.card || null)} cachedAnchor=${preLayoutOffsetDetails.x}x${preLayoutOffsetDetails.y} rawPos=${enableTargetX},${enableTargetY} finalPos=${adjustedEnableTargetX},${adjustedEnableTargetY}`,
+        `queue scroll applied enabled=${Boolean(enabled)} token=${transitionToken} value=${queueStrip.scrollLeft || 0}`,
       );
-      if (adjustedEnableTargetX !== null && adjustedEnableTargetY !== null) {
-        await WindowSetPosition(adjustedEnableTargetX, adjustedEnableTargetY);
+    }
+
+    if (enabled) {
+      const shellRect = panelShellRef.value?.getBoundingClientRect?.();
+      const shellWidth = Math.ceil(Number(shellRect?.width || 0));
+      const shellHeight = Math.ceil(Number(shellRect?.height || 0));
+      const preLayoutOffsetDetails = superMiniEnableAnchorCache || measureSuperMiniWindowAnchorOffset();
+      const enableBounds = superMiniRestoreBounds || superMiniWindowBounds;
+      const width = Math.round(Number(enableBounds?.width || shellWidth || 100) * 0.93);
+      const measuredHeight = measureSuperMiniContentHeight();
+      const height = Math.max(1, Math.round((measuredHeight || shellHeight || 100) * 1.2));
+      const cardScale = shellWidth > 0 ? width / shellWidth : SUPER_MINI_SCALE;
+      appendPanelClientLog(
+        'panel.super-mini',
+        `enable sizing token=${transitionToken} shell=${shellWidth}x${shellHeight} measured=${measuredHeight ?? 'n/a'} preAnchor=${preLayoutOffsetDetails.x}x${preLayoutOffsetDetails.y} preCardRect=${JSON.stringify(preLayoutOffsetDetails.card || null)} target=${width}x${height} scale=${cardScale.toFixed(4)}`,
+      );
+      const dockState = String(await GetPanelDockState().catch(() => '')).trim();
+      const enableTargetX = isValidSidebarWindowBounds(enableBounds)
+        ? (dockState === 'right'
+          ? Math.round(enableBounds.x + enableBounds.width - width)
+          : Math.round(enableBounds.x))
+        : null;
+      const enableTargetY = isValidSidebarWindowBounds(enableBounds)
+        ? Math.round(enableBounds.y)
+        : null;
+      if (panelShellRef.value) {
+        panelShellRef.value.style.setProperty('--super-mini-card-width', `${width}px`);
+        panelShellRef.value.style.setProperty('--super-mini-card-scale', `${cardScale}`);
+      }
+      try {
+        await SetPanelSuperMiniActive(true).catch(() => {});
+        WindowSetMinSize(0, 0);
+        WindowSetMaxSize(0, 0);
+        await WindowSetSize(width, height);
+        await new Promise(resolve => window.requestAnimationFrame(() => resolve()));
+        const settleOffsetDetails = measureSuperMiniWindowAnchorOffset();
+        const adjustedEnableTargetX = enableTargetX !== null
+          ? Math.round(enableTargetX + Number(preLayoutOffsetDetails.x || 0))
+          : null;
+        const adjustedEnableTargetY = enableTargetY !== null
+          ? Math.round(enableTargetY + Number(preLayoutOffsetDetails.y || 0))
+          : null;
         appendPanelClientLog(
           'panel.super-mini',
-          `enable position set token=${transitionToken} dock=${dockState || 'unknown'} rawPos=${enableTargetX},${enableTargetY} cachedOffset=${preLayoutOffsetDetails.x}x${preLayoutOffsetDetails.y} settleOffset=${settleOffsetDetails.x}x${settleOffsetDetails.y} finalPos=${adjustedEnableTargetX},${adjustedEnableTargetY}`,
+          `enable settle token=${transitionToken} settleAnchor=${settleOffsetDetails.x}x${settleOffsetDetails.y} settleCardRect=${JSON.stringify(settleOffsetDetails.card || null)} cachedAnchor=${preLayoutOffsetDetails.x}x${preLayoutOffsetDetails.y} rawPos=${enableTargetX},${enableTargetY} finalPos=${adjustedEnableTargetX},${adjustedEnableTargetY}`,
+        );
+        if (adjustedEnableTargetX !== null && adjustedEnableTargetY !== null) {
+          await WindowSetPosition(adjustedEnableTargetX, adjustedEnableTargetY);
+          appendPanelClientLog(
+            'panel.super-mini',
+            `enable position set token=${transitionToken} dock=${dockState || 'unknown'} rawPos=${enableTargetX},${enableTargetY} cachedOffset=${preLayoutOffsetDetails.x}x${preLayoutOffsetDetails.y} settleOffset=${settleOffsetDetails.x}x${settleOffsetDetails.y} finalPos=${adjustedEnableTargetX},${adjustedEnableTargetY}`,
+          );
+        }
+        appendPanelClientLog('panel.super-mini', `window size set token=${transitionToken} size=${width}x${height}`);
+        await logSuperMiniWindowSnapshot('after resize', transitionToken, `target=${width}x${height}`);
+      } catch (error) {
+        appendPanelClientLog(
+          'panel.super-mini',
+          `enable resize failed token=${transitionToken} err=${error?.message || String(error)}`,
         );
       }
-      appendPanelClientLog('panel.super-mini', `window size set token=${transitionToken} size=${width}x${height}`);
-      await logSuperMiniWindowSnapshot('after resize', transitionToken, `target=${width}x${height}`);
-    } catch (error) {
-      appendPanelClientLog(
-        'panel.super-mini',
-        `enable resize failed token=${transitionToken} err=${error?.message || String(error)}`,
-      );
+      return;
     }
-    return;
-  }
 
-  const restoreBounds = isValidSidebarWindowBounds(superMiniRestoreBounds)
-    ? superMiniRestoreBounds
-    : isValidSidebarWindowBounds(superMiniWindowBounds)
-      ? superMiniWindowBounds
-      : null;
-  appendPanelClientLog(
-    'panel.super-mini',
-    `restore sizing enabled=${Boolean(enabled)} token=${transitionToken} bounds=${formatSidebarBounds(restoreBounds)}`,
-  );
-  if (!enabled) {
-    // Start the backend transition guard before we restore the normal bounds so
-    // the native auto controller does not sample the transient supermini size.
-    await SetPanelSuperMiniActive(false).catch(() => {});
-  }
-  try {
-    if (restoreBounds) {
-      WindowSetSize(
-        Math.max(1, Math.round(restoreBounds.width)),
-        Math.max(1, Math.round(restoreBounds.height)),
-      );
-      WindowSetPosition(
-        Math.round(restoreBounds.x),
-        Math.round(restoreBounds.y),
-      );
+    const restoreBounds = isValidSidebarWindowBounds(superMiniRestoreBounds)
+      ? superMiniRestoreBounds
+      : isValidSidebarWindowBounds(superMiniWindowBounds)
+        ? superMiniWindowBounds
+        : null;
+    appendPanelClientLog(
+      'panel.super-mini',
+      `restore sizing enabled=${Boolean(enabled)} token=${transitionToken} bounds=${formatSidebarBounds(restoreBounds)}`,
+    );
+    if (!enabled) {
+      // Start the backend transition guard before we restore the normal bounds so
+      // the native auto controller does not sample the transient supermini size.
+      await SetPanelSuperMiniActive(false).catch(() => {});
     }
-    await logSuperMiniWindowSnapshot('after restore', transitionToken, `restored=${formatSidebarBounds(restoreBounds)}`);
-  } catch {}
-  if (!enabled) {
-    superMiniQueueScrollLeft = 0;
-    appendPanelClientLog('panel.super-mini', `queue scroll reset token=${transitionToken}`);
+    try {
+      if (restoreBounds) {
+        WindowSetSize(
+          Math.max(1, Math.round(restoreBounds.width)),
+          Math.max(1, Math.round(restoreBounds.height)),
+        );
+        WindowSetPosition(
+          Math.round(restoreBounds.x),
+          Math.round(restoreBounds.y),
+        );
+      }
+      await logSuperMiniWindowSnapshot('after restore', transitionToken, `restored=${formatSidebarBounds(restoreBounds)}`);
+    } catch {}
+    if (!enabled) {
+      superMiniQueueScrollLeft = 0;
+      appendPanelClientLog('panel.super-mini', `queue scroll reset token=${transitionToken}`);
+    }
+    if (panelShellRef.value) {
+      panelShellRef.value.style.removeProperty('--super-mini-card-width');
+      panelShellRef.value.style.removeProperty('--super-mini-card-scale');
+    }
+    superMiniWindowBounds = null;
+    superMiniRestoreBounds = null;
+    if (!enabled) {
+      superMiniEnableAnchorCache = null;
+    }
+    appendPanelClientLog('panel.super-mini', `transition cleared token=${transitionToken}`);
+  } finally {
+    clearTransitionMask();
   }
-  if (panelShellRef.value) {
-    panelShellRef.value.style.removeProperty('--super-mini-card-width');
-    panelShellRef.value.style.removeProperty('--super-mini-card-scale');
-  }
-  superMiniWindowBounds = null;
-  superMiniRestoreBounds = null;
-  if (!enabled) {
-    superMiniEnableAnchorCache = null;
-  }
-  appendPanelClientLog('panel.super-mini', `transition cleared token=${transitionToken}`);
 }
 
 function toggleSuperMiniMode() {
@@ -2229,6 +2434,7 @@ onBeforeUnmount(() => {
   }
   resetSuperMiniWindowDragState();
   resetQueueStripDragState();
+  resetSuperMiniQueueTooltipHeightBoostState();
   superMiniQueueCardHintHoverStartedAt = 0;
   flushPanelPersist();
   void setPanelInteractionLocked(false);
@@ -2440,6 +2646,14 @@ onBeforeUnmount(() => {
 :global(body.panel-super-mini-mode),
 :global(body.panel-super-mini-mode #app) {
   background: transparent !important;
+}
+
+:global(body.panel-super-mini-transitioning),
+:global(body.panel-super-mini-transitioning #app) {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: none !important;
+  animation: none !important;
 }
 
 .panel-shell::before {
