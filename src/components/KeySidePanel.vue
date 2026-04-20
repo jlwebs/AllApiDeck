@@ -42,7 +42,15 @@
         @dblclick.stop.prevent="toggleSuperMiniMode"
       >
         <div class="panel-queue-head">
-          <span class="panel-queue-title">{{ advancedProxyQueueTitle }}</span>
+          <span class="panel-queue-title">
+            <span
+              v-if="advancedProxyQueueTitleDisplay.dotTone"
+              class="panel-queue-title-dot"
+              :class="`is-${advancedProxyQueueTitleDisplay.dotTone}`"
+              aria-hidden="true"
+            ></span>
+            <span class="panel-queue-title-text">{{ advancedProxyQueueTitleDisplay.text }}</span>
+          </span>
 
           <div class="panel-queue-signals" aria-hidden="true">
             <span class="panel-queue-signal panel-queue-signal-red" :class="{ 'is-active': advancedProxyQueueTone === 'red' }"></span>
@@ -100,6 +108,9 @@
                       </div>
                       <div v-if="item.hitSummaryText" class="panel-queue-tooltip-hit-summary">
                         {{ item.hitSummaryText }}
+                      </div>
+                      <div v-if="item.performanceLines.length > 0" class="panel-queue-tooltip-metrics">
+                        <span v-for="line in item.performanceLines" :key="line">{{ line }}</span>
                       </div>
                       <span>{{ item.modelLabel }}</span>
                       <span v-if="item.queueScopeText">{{ item.queueScopeText }}</span>
@@ -400,6 +411,7 @@ const SUPER_MINI_QUEUE_CARD_HINT_LIMIT = 2;
 const SUPER_MINI_QUEUE_CARD_HINT_MIN_HOVER_MS = 800;
 const SUPER_MINI_QUEUE_CARD_HINT_STORAGE_KEY = 'panel.super-mini.queue-card-hint-seen-count';
 const SUPER_MINI_TRANSITION_MASK_CLASS = 'panel-super-mini-transitioning';
+const DEFAULT_ADVANCED_PROXY_QUEUE_TITLE = 'Proxy Providers';
 const ADVANCED_PROXY_APP_META = {
   claude: { label: 'Claude', className: 'panel-record-avatar-app-claude' },
   codex: { label: 'Codex', className: 'panel-record-avatar-app-codex' },
@@ -425,6 +437,7 @@ const panelScrollRatio = ref(0);
 const hasScrollableContent = ref(false);
 const superMiniMode = ref(false);
 const superMiniQueueCardHintSeenCount = ref(0);
+const superMiniQueueLiveTitleState = ref(null);
 const PANEL_PERSIST_DEBOUNCE_MS = 120;
 
 let panelBodyResizeObserver = null;
@@ -1491,6 +1504,128 @@ function buildAdvancedProxyHitSummaryText(record) {
   return `最近命中：${siteName} ${modelLabel} + Latency ${latencyText} + TTFT ${ttftText} + TPS ${tpsText}`;
 }
 
+function getAdvancedProxyQueueItemStatusTone(item) {
+  const routeStatus = String(item?.routeStatus || '').trim().toLowerCase();
+  if (routeStatus === 'failed') return 'red';
+  return 'green';
+}
+
+function buildAdvancedProxyHitSummaryDisplayText(record) {
+  const siteName = String(record?.siteName || '').trim() || 'Provider';
+  const modelLabel = String(
+    record?.selectedModel ||
+    record?.quickTestModel ||
+    record?.model ||
+    ''
+  ).trim();
+  const performanceMetrics = extractPerformanceMetrics(record || {});
+  const metricSegments = [];
+
+  if (performanceMetrics.latencySeconds != null) {
+    metricSegments.push(`Latency ${performanceMetrics.latencySeconds.toFixed(2)}s`);
+  }
+  if (performanceMetrics.ttftMs != null) {
+    metricSegments.push(`TTFT ${Math.round(performanceMetrics.ttftMs)}ms`);
+  }
+  if (performanceMetrics.tps != null) {
+    metricSegments.push(`TPS ${performanceMetrics.tps.toFixed(2)}`);
+  }
+
+  const summaryLabel = [siteName, modelLabel].filter(Boolean).join(' ');
+  return metricSegments.length > 0
+    ? `最近命中: ${summaryLabel} + ${metricSegments.join(' + ')}`
+    : `最近命中: ${summaryLabel || siteName}`;
+}
+
+function formatAdvancedProxyQueueLiveProviderName(providerName) {
+  const normalizedProviderName = String(providerName || '').trim();
+  if (!normalizedProviderName) return '';
+  return normalizedProviderName.slice(0, 3);
+}
+
+function formatAdvancedProxyQueueLiveModelLabel(modelLabel) {
+  const normalizedModelLabel = String(modelLabel || '').trim();
+  if (!normalizedModelLabel) return '';
+
+  const upperModelLabel = normalizedModelLabel.toUpperCase();
+  let familyLabel = upperModelLabel.slice(0, 5);
+  if (upperModelLabel.includes('CLAUDE')) {
+    familyLabel = 'CLAUD';
+  } else if (upperModelLabel.includes('GPT')) {
+    familyLabel = 'GPT';
+  }
+
+  const versionMatch = upperModelLabel.match(/\d(?:[.-]\d)/);
+  const versionLabel = versionMatch?.[0] || '';
+  return [familyLabel, versionLabel].filter(Boolean).join(' ');
+}
+
+function buildAdvancedProxyQueueLiveTitle(item) {
+  if (!item || typeof item !== 'object') return null;
+
+  const shortSiteName = String(item?.shortSiteName || '').trim();
+  const siteName = String(item?.siteName || '').trim();
+  const providerName = formatAdvancedProxyQueueLiveProviderName(item?.providerName);
+  const modelLabel = String(item?.modelLabel || '').trim();
+  const performanceMetrics = item?.performanceMetrics && typeof item.performanceMetrics === 'object'
+    ? item.performanceMetrics
+    : extractPerformanceMetrics(item);
+  const compactModelLabel = formatAdvancedProxyQueueLiveModelLabel(modelLabel);
+
+  const headerLabel = shortSiteName || siteName || 'Provider';
+  const providerLabel = providerName && providerName !== headerLabel
+    ? `${headerLabel} (${providerName})`
+    : headerLabel;
+
+  const segments = [providerLabel];
+  if (compactModelLabel) {
+    segments.push(compactModelLabel);
+  }
+  if (performanceMetrics.ttftMs != null) {
+    segments.push(`${(performanceMetrics.ttftMs / 1000).toFixed(1)}s`);
+  }
+  if (performanceMetrics.tps != null) {
+    segments.push(`${performanceMetrics.tps.toFixed(1)}t/s`);
+  }
+
+  return {
+    text: segments.join(' '),
+    dotTone: getAdvancedProxyQueueItemStatusTone(item),
+    itemId: String(item?.id || ''),
+  };
+}
+
+function pickAdvancedProxyQueueLiveTitleItem(items) {
+  const candidates = Array.isArray(items)
+    ? items.filter(item => item?.dispatchState?.visible)
+    : [];
+  if (candidates.length === 0) return null;
+
+  return candidates
+    .slice()
+    .sort((left, right) => {
+      const leftActive = left?.dispatchState?.active ? 1 : 0;
+      const rightActive = right?.dispatchState?.active ? 1 : 0;
+      if (leftActive !== rightActive) {
+        return rightActive - leftActive;
+      }
+
+      const leftUpdatedAt = Number(left?.routeUpdatedAtMs || 0);
+      const rightUpdatedAt = Number(right?.routeUpdatedAtMs || 0);
+      if (leftUpdatedAt !== rightUpdatedAt) {
+        return rightUpdatedAt - leftUpdatedAt;
+      }
+
+      const leftOrder = Number.isFinite(Number(left?.order)) ? Number(left.order) : Number.POSITIVE_INFINITY;
+      const rightOrder = Number.isFinite(Number(right?.order)) ? Number(right.order) : Number.POSITIVE_INFINITY;
+      if (leftOrder !== rightOrder) {
+        return leftOrder - rightOrder;
+      }
+
+      return String(left?.id || '').localeCompare(String(right?.id || ''));
+    })[0];
+}
+
 function getAdvancedProxyDispatchVisualState(record) {
   const routeStates = record ? getAdvancedProxyProviderRouteStatesForRecord(record) : [];
   const activeRoute = routeStates.find(item => item.isActive) || null;
@@ -1535,7 +1670,7 @@ function getAdvancedProxyDispatchVisualState(record) {
     fading: !activeRoute && remainingMs <= ADVANCED_PROXY_DISPATCH_FADE_MS,
     opacity,
     labelText: currentRoute.appTypeLabelText || '',
-    summaryText: buildAdvancedProxyHitSummaryText(record),
+    summaryText: buildAdvancedProxyHitSummaryDisplayText(record),
   };
 }
 
@@ -1755,7 +1890,7 @@ const advancedProxyQueueProviders = computed(() =>
   })
 );
 
-const advancedProxyQueueTitle = computed(() => 'Proxy Providers');
+const advancedProxyQueueTitle = computed(() => DEFAULT_ADVANCED_PROXY_QUEUE_TITLE);
 
 const advancedProxyQueueDescription = computed(() => {
   const enabledAppLabels = Object.entries(advancedProxyConfigSnapshot.value?.queues || {})
@@ -1795,20 +1930,27 @@ const advancedProxyQueueTone = computed(() => {
 
 const advancedProxyQueueItems = computed(() => {
   const orderMap = advancedProxyQueueOrderByApiKey.value;
-  const recordMap = new Map(
-    records.value.map(record => [String(record?.apiKey || '').trim(), record])
+  const recordRowKeyMap = new Map(
+    records.value.map(record => [String(record?.rowKey || '').trim(), record]).filter(([key]) => key)
+  );
+  const recordApiKeyMap = new Map(
+    records.value.map(record => [String(record?.apiKey || '').trim(), record]).filter(([key]) => key)
   );
 
   return advancedProxyQueueProviders.value.map((provider, index) => {
     const rowKey = String(provider?.rowKey || provider?.id || '').trim();
     const skKey = String(provider?.apiKey || '').trim();
-    const record = (skKey && recordMap.get(skKey)) || null;
+    const record = (rowKey && recordRowKeyMap.get(rowKey))
+      || (skKey && recordApiKeyMap.get(skKey))
+      || null;
     const appIds = record ? getAdvancedProxyAppsForRecord(record) : [];
     const routeStates = record ? getAdvancedProxyProviderRouteStatesForRecord(record) : [];
     const activeRoute = routeStates.find(item => item.isActive) || null;
     const recentRoute = routeStates.find(item => item.isRecent) || null;
+    const currentRoute = activeRoute || recentRoute || null;
     const failedRoute = routeStates.some(item => item.status === 'failed');
     const siteName = String(record?.siteName || provider?.name || 'Provider').trim() || 'Provider';
+    const shortSiteName = siteName ? siteName.slice(0, 3) : '---';
     const modelLabel = String(
       record?.selectedModel ||
       record?.quickTestModel ||
@@ -1831,6 +1973,9 @@ const advancedProxyQueueItems = computed(() => {
     };
     const dispatchState = getAdvancedProxyDispatchVisualState(dispatchSource);
     const dispatchLabel = dispatchState.labelText || activeRoute?.appTypeLabelText || '';
+    const providerName = String(currentRoute?.providerName || provider?.name || siteName).trim() || siteName;
+    const performanceMetrics = extractPerformanceMetrics(record || provider || {});
+    const performanceLines = buildPerformanceTooltipLines(record || provider || {}).filter(line => !/:\s*-$/.test(line));
     const tooltipLines = [
       siteName,
       modelLabel,
@@ -1842,7 +1987,9 @@ const advancedProxyQueueItems = computed(() => {
     return {
       id: rowKey || `provider-${index}`,
       order,
+      shortSiteName,
       siteName,
+      providerName,
       modelLabel,
       apiKey,
       skKey,
@@ -1854,6 +2001,10 @@ const advancedProxyQueueItems = computed(() => {
       hasFailedRoute: Boolean(failedRoute),
       hasDispatchingRoute: dispatchState.visible,
       dispatchState,
+      routeStatus: String(currentRoute?.status || '').trim().toLowerCase(),
+      routeUpdatedAtMs: Number(currentRoute?.updatedAtMs || 0),
+      performanceMetrics,
+      performanceLines,
       activeRouteLabel: dispatchLabel,
       recentRouteLabel: recentRoute?.appTypeLabelText || '',
       dispatchLabel,
@@ -1861,6 +2012,17 @@ const advancedProxyQueueItems = computed(() => {
       hitSummaryText: dispatchState.summaryText,
     };
   });
+});
+
+const advancedProxyQueueTitleDisplay = computed(() => {
+  if (superMiniMode.value && superMiniQueueLiveTitleState.value?.text) {
+    return superMiniQueueLiveTitleState.value;
+  }
+  return {
+    text: advancedProxyQueueTitle.value,
+    dotTone: '',
+    itemId: '',
+  };
 });
 
 const advancedProxyQueueOrderByApiKey = computed(() => {
@@ -2516,6 +2678,30 @@ watch(superMiniMode, async (enabled, previous) => {
   await logSuperMiniWindowSnapshot('mode watch snapshot', superMiniTransitionToken, `prev=${previous} next=${enabled}`);
 });
 
+watch(
+  [superMiniMode, advancedProxyQueueItems],
+  ([enabled, items]) => {
+    if (!enabled) return;
+    const nextItem = pickAdvancedProxyQueueLiveTitleItem(items);
+    if (!nextItem) return;
+
+    const nextTitle = buildAdvancedProxyQueueLiveTitle(nextItem);
+    if (!nextTitle?.text) return;
+
+    const currentTitle = superMiniQueueLiveTitleState.value;
+    if (
+      currentTitle?.text === nextTitle.text &&
+      currentTitle?.dotTone === nextTitle.dotTone &&
+      currentTitle?.itemId === nextTitle.itemId
+    ) {
+      return;
+    }
+
+    superMiniQueueLiveTitleState.value = nextTitle;
+  },
+  { immediate: true },
+);
+
 watch(visibleRecords, async () => {
   await nextTick();
   syncScrollIndicator();
@@ -2951,12 +3137,42 @@ onBeforeUnmount(() => {
 
 .panel-queue-title {
   margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
   color: rgba(33, 49, 32, 0.4);
   font-size: 6px;
   line-height: 1.1;
   font-weight: 700;
   letter-spacing: 0.18em;
   text-transform: uppercase;
+}
+
+.panel-queue-title-dot {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: rgba(33, 49, 32, 0.28);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+
+.panel-queue-title-dot.is-green {
+  background: #5cc679;
+}
+
+.panel-queue-title-dot.is-red {
+  background: #ef6a6a;
+}
+
+.panel-queue-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .panel-queue-signals {
@@ -3200,6 +3416,17 @@ onBeforeUnmount(() => {
   font-size: 10px;
   line-height: 1.35;
   white-space: pre-wrap;
+}
+
+.panel-queue-tooltip-metrics {
+  display: grid;
+  gap: 2px;
+}
+
+.panel-queue-tooltip-content .panel-queue-tooltip-metrics span {
+  color: #f1f5ed;
+  font-size: 10px;
+  line-height: 1.3;
 }
 
 .panel-queue-tooltip-content strong {
