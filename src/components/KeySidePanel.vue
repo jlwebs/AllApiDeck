@@ -103,7 +103,7 @@
                       <span>{{ item.modelLabel }}</span>
                       <span v-if="item.queueScopeText">{{ item.queueScopeText }}</span>
                       <code v-if="item.endpoint">{{ item.endpoint }}</code>
-                      <code v-if="item.apiKey">{{ item.apiKey }}</code>
+                      <code v-if="item.apiKey">{{ maskApiKeyForTooltip(item.apiKey) }}</code>
                     </div>
                   </template>
 
@@ -1887,6 +1887,13 @@ function getQueueTooltipOverlayStyle(item) {
   return {
     '--panel-queue-tooltip-arrow-left': `${(ratio * 100).toFixed(2)}%`,
   };
+}
+
+function maskApiKeyForTooltip(apiKey) {
+  const value = String(apiKey || '').trim();
+  if (!value) return '';
+  if (value.length <= 8) return value;
+  return `${value.slice(0, 4)}****${value.slice(-4)}`;
 }
 
 const superMiniQueueCardHintText = computed(() =>
