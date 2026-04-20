@@ -77,10 +77,11 @@
                 <a-tooltip
                   v-if="item.hasTooltip"
                   placement="top"
+                  :trigger="superMiniMode ? 'manual' : 'hover'"
                   overlay-class-name="panel-queue-tooltip"
                   :overlay-style="getQueueTooltipOverlayStyle(item)"
                   :destroy-tooltip-on-hide="true"
-                  @openChange="open => handleSuperMiniQueueTooltipOpenChange(open)"
+                  :open="superMiniMode ? (superMiniQueueTooltipOpen && superMiniQueueTooltipActiveItemId === String(item.id)) : undefined"
                 >
                   <template #title>
                     <div class="panel-queue-tooltip-content">
@@ -109,8 +110,8 @@
 
                   <div
                     class="panel-queue-item-avatar"
-                    @mouseenter="handleSuperMiniQueueTooltipHoverStart"
-                    @mouseleave="handleSuperMiniQueueTooltipHoverEnd"
+                    @mouseenter="handleSuperMiniQueueTooltipHoverStart(item.id)"
+                    @mouseleave="handleSuperMiniQueueTooltipHoverEnd(item.id)"
                   >
                     <span class="panel-record-emoji">{{ item.avatar }}</span>
                   </div>
@@ -435,8 +436,12 @@ let superMiniQueueScrollLeft = 0;
 let superMiniQueueCardHintHoverStartedAt = 0;
 let superMiniQueueTooltipHovering = false;
 let superMiniQueueTooltipOpen = false;
+let superMiniQueueTooltipOpenTimer = 0;
 let superMiniQueueTooltipSyncTimer = 0;
 let superMiniQueueTooltipRestoreTimer = 0;
+let superMiniQueueTooltipLeaveTimer = 0;
+let superMiniQueueTooltipHoverTriggerLocked = false;
+let superMiniQueueTooltipActiveItemId = '';
 let superMiniQueueTooltipRestoreBounds = null;
 let superMiniWindowBounds = null;
 let superMiniRestoreBounds = null;
@@ -544,6 +549,20 @@ function clearSuperMiniQueueTooltipRestoreTimer() {
   }
 }
 
+function clearSuperMiniQueueTooltipLeaveTimer() {
+  if (superMiniQueueTooltipLeaveTimer) {
+    window.clearTimeout(superMiniQueueTooltipLeaveTimer);
+    superMiniQueueTooltipLeaveTimer = 0;
+  }
+}
+
+function clearSuperMiniQueueTooltipOpenTimer() {
+  if (superMiniQueueTooltipOpenTimer) {
+    window.clearTimeout(superMiniQueueTooltipOpenTimer);
+    superMiniQueueTooltipOpenTimer = 0;
+  }
+}
+
 function clearSuperMiniQueueTooltipSyncTimer() {
   if (superMiniQueueTooltipSyncTimer) {
     window.clearInterval(superMiniQueueTooltipSyncTimer);
@@ -552,10 +571,14 @@ function clearSuperMiniQueueTooltipSyncTimer() {
 }
 
 function resetSuperMiniQueueTooltipHeightBoostState() {
+  clearSuperMiniQueueTooltipOpenTimer();
   clearSuperMiniQueueTooltipSyncTimer();
   clearSuperMiniQueueTooltipRestoreTimer();
+  clearSuperMiniQueueTooltipLeaveTimer();
   superMiniQueueTooltipHovering = false;
   superMiniQueueTooltipOpen = false;
+  superMiniQueueTooltipHoverTriggerLocked = false;
+  superMiniQueueTooltipActiveItemId = '';
   superMiniQueueTooltipRestoreBounds = null;
 }
 
@@ -576,7 +599,10 @@ function readVisibleSuperMiniQueueTooltipBottom() {
 }
 
 async function restoreSuperMiniQueueTooltipHeight(reason = 'restore') {
+  clearSuperMiniQueueTooltipOpenTimer();
   clearSuperMiniQueueTooltipRestoreTimer();
+  clearSuperMiniQueueTooltipLeaveTimer();
+  superMiniQueueTooltipActiveItemId = '';
   const restoreBounds = superMiniQueueTooltipRestoreBounds;
   superMiniQueueTooltipRestoreBounds = null;
   if (!isValidSidebarWindowBounds(restoreBounds) || !superMiniMode.value) {
@@ -604,6 +630,7 @@ async function restoreSuperMiniQueueTooltipHeight(reason = 'restore') {
     );
   } finally {
     setSuperMiniTransitionMask(false);
+    superMiniQueueTooltipHoverTriggerLocked = false;
   }
 }
 
@@ -613,6 +640,54 @@ function scheduleSuperMiniQueueTooltipHeightRestore(reason = 'leave') {
     superMiniQueueTooltipRestoreTimer = 0;
     void restoreSuperMiniQueueTooltipHeight(reason);
   }, 120);
+}
+
+async function prepareSuperMiniQueueTooltipOpen(reason = 'hover-start') {
+  if (!superMiniMode.value || !superMiniQueueTooltipHovering) return;
+  try {
+    const current = await readSidebarWindowBounds(reason);
+    const currentBounds = current.bounds;
+    if (isValidSidebarWindowBounds(currentBounds)) {
+      if (!isValidSidebarWindowBounds(superMiniQueueTooltipRestoreBounds)) {
+        superMiniQueueTooltipRestoreBounds = {
+          ...currentBounds,
+          width: Math.max(1, Math.round(currentBounds.width)),
+          height: Math.max(1, Math.round(currentBounds.height)),
+        };
+      }
+      setSuperMiniTransitionMask(true);
+      await WindowSetSize(
+        Math.max(1, Math.round(currentBounds.width)),
+        300,
+      );
+      await new Promise(resolve => window.requestAnimationFrame(() => resolve()));
+      appendPanelClientLog(
+        'panel.super-mini.tooltip',
+        `pre-open size reason=${reason} source=${current.source} current=${formatSidebarBounds(currentBounds)} targetHeight=300`,
+      );
+    } else {
+      appendPanelClientLog(
+        'panel.super-mini.tooltip',
+        `pre-open skipped reason=${reason} source=${current.source}`,
+      );
+    }
+  } catch (error) {
+    appendPanelClientLog(
+      'panel.super-mini.tooltip',
+      `pre-open failed reason=${reason} err=${error?.message || String(error)}`,
+    );
+  } finally {
+    setSuperMiniTransitionMask(false);
+  }
+
+  clearSuperMiniQueueTooltipOpenTimer();
+  superMiniQueueTooltipOpenTimer = window.setTimeout(() => {
+    superMiniQueueTooltipOpenTimer = 0;
+    if (!superMiniMode.value || !superMiniQueueTooltipHovering) return;
+    if (!superMiniQueueTooltipActiveItemId) return;
+    superMiniQueueTooltipOpen = true;
+    startSuperMiniQueueTooltipHeightTracking(reason);
+  }, 100);
 }
 
 async function syncSuperMiniQueueTooltipHeight(reason = 'hover') {
@@ -681,44 +756,47 @@ async function syncSuperMiniQueueTooltipHeight(reason = 'hover') {
 function startSuperMiniQueueTooltipHeightTracking(reason = 'hover') {
   clearSuperMiniQueueTooltipSyncTimer();
   if (!superMiniMode.value) return;
-  const run = () => {
+  superMiniQueueTooltipSyncTimer = window.setTimeout(() => {
+    superMiniQueueTooltipSyncTimer = 0;
     if (!superMiniMode.value || !superMiniQueueTooltipOpen) {
-      clearSuperMiniQueueTooltipSyncTimer();
       return;
     }
     void syncSuperMiniQueueTooltipHeight(reason);
-  };
-  run();
-  superMiniQueueTooltipSyncTimer = window.setInterval(run, 50);
+  }, 0);
 }
 
-function handleSuperMiniQueueTooltipHoverStart() {
+function handleSuperMiniQueueTooltipHoverStart(itemId) {
   if (!superMiniMode.value) return;
+  const nextItemId = String(itemId || '');
+  if (!nextItemId) return;
+  clearSuperMiniQueueTooltipLeaveTimer();
+  if (superMiniQueueTooltipHoverTriggerLocked && superMiniQueueTooltipActiveItemId === nextItemId) return;
+  superMiniQueueTooltipActiveItemId = nextItemId;
+  superMiniQueueTooltipHoverTriggerLocked = true;
   superMiniQueueTooltipHovering = true;
+  superMiniQueueTooltipOpen = false;
   clearSuperMiniQueueTooltipRestoreTimer();
-  startSuperMiniQueueTooltipHeightTracking('hover-start');
+  clearSuperMiniQueueTooltipOpenTimer();
+  void prepareSuperMiniQueueTooltipOpen('hover-start');
 }
 
-function handleSuperMiniQueueTooltipHoverEnd() {
+function handleSuperMiniQueueTooltipHoverEnd(itemId) {
   if (!superMiniMode.value) return;
-  superMiniQueueTooltipHovering = false;
-  if (!superMiniQueueTooltipOpen) {
+  const nextItemId = String(itemId || '');
+  if (superMiniQueueTooltipActiveItemId && superMiniQueueTooltipActiveItemId !== nextItemId) return;
+  clearSuperMiniQueueTooltipOpenTimer();
+  clearSuperMiniQueueTooltipLeaveTimer();
+  superMiniQueueTooltipLeaveTimer = window.setTimeout(() => {
+    superMiniQueueTooltipLeaveTimer = 0;
+    if (!superMiniMode.value) return;
+    if (superMiniQueueTooltipActiveItemId !== nextItemId) return;
+    superMiniQueueTooltipHovering = false;
+    superMiniQueueTooltipOpen = false;
+    superMiniQueueTooltipHoverTriggerLocked = false;
+    superMiniQueueTooltipActiveItemId = '';
+    clearSuperMiniQueueTooltipSyncTimer();
     scheduleSuperMiniQueueTooltipHeightRestore('hover-end');
-  }
-}
-
-function handleSuperMiniQueueTooltipOpenChange(open) {
-  if (!superMiniMode.value) return;
-  superMiniQueueTooltipOpen = Boolean(open);
-  if (superMiniQueueTooltipOpen) {
-    clearSuperMiniQueueTooltipRestoreTimer();
-    startSuperMiniQueueTooltipHeightTracking('open');
-    return;
-  }
-  clearSuperMiniQueueTooltipSyncTimer();
-  if (!superMiniQueueTooltipHovering) {
-    scheduleSuperMiniQueueTooltipHeightRestore('close');
-  }
+  }, 160);
 }
 
 function appendPanelClientLog(scope, message) {
@@ -1886,6 +1964,7 @@ function getQueueTooltipOverlayStyle(item) {
   const ratio = total <= 1 ? 0.5 : 0.2 + ((index / Math.max(1, total - 1)) * 0.6);
   return {
     '--panel-queue-tooltip-arrow-left': `${(ratio * 100).toFixed(2)}%`,
+    pointerEvents: superMiniMode.value ? 'none' : 'auto',
   };
 }
 
