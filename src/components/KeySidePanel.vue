@@ -292,7 +292,7 @@
                     :loading="record.modelLoading"
                     :get-popup-container="resolveSelectContainer"
                     popup-class-name="panel-model-dropdown"
-                    :dropdown-match-select-width="214"
+                    :dropdown-match-select-width="true"
                     show-search
                     :filter-option="true"
                     option-filter-prop="label"
@@ -2572,7 +2572,7 @@ async function handleModelSelectDropdown(record, open) {
   }
 }
 
-function changeRecordModel(record, value) {
+async function changeRecordModel(record, value) {
   const nextRecord = hydrateRecordModelSelection(
     {
       ...record,
@@ -2581,6 +2581,9 @@ function changeRecordModel(record, value) {
     contextMap.value,
   );
   updateRecord(nextRecord);
+  activeModelDropdownRowKey.value = '';
+  activePopoverRowKey.value = '';
+  await syncPanelInteractionLock();
 }
 
 async function handleQuickTest(record) {
@@ -4217,23 +4220,25 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  width: min(214px, calc(100vw - 40px));
-  max-width: calc(100vw - 40px);
+  width: 100%;
+  max-width: none;
   min-width: 0;
   box-sizing: border-box;
 }
 
 .panel-popover-title {
+  width: 100%;
   color: #17243a;
   font-size: 13px;
   line-height: 1.2;
   font-weight: 700;
+  text-align: center;
 }
 
 .panel-model-select {
   display: block;
   width: 100%;
-  max-width: 100%;
+  max-width: none;
   min-width: 0;
 }
 
@@ -4258,12 +4263,15 @@ onBeforeUnmount(() => {
 }
 
 :deep(.panel-model-popover) {
-  max-width: calc(100vw - 32px);
+  width: min(234px, calc(100vw - 20px));
+  max-width: calc(100vw - 20px);
 }
 
 :deep(.panel-model-popover .ant-popover-inner) {
-  max-width: calc(100vw - 32px);
+  width: 100%;
+  max-width: calc(100vw - 20px);
   overflow: hidden;
+  box-sizing: border-box;
 }
 
 :deep(.panel-model-popover .ant-select-selector),
@@ -4315,7 +4323,9 @@ onBeforeUnmount(() => {
 }
 
 :deep(.panel-model-popover .ant-popover-inner-content) {
-  padding: 10px 10px 10px 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
 }
 
 @keyframes panel-spin {
