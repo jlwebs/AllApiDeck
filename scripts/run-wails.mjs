@@ -145,6 +145,9 @@ function resolveViteExecutable(rootDir = projectRoot) {
 
 function buildEnv() {
   const env = { ...process.env };
+  const originalHome = env.HOME;
+  const resolvedGopath = env.GOPATH || safeGoEnv('GOPATH') || (originalHome ? path.join(originalHome, 'go') : '');
+  const resolvedGomodcache = env.GOMODCACHE || safeGoEnv('GOMODCACHE') || (resolvedGopath ? path.join(resolvedGopath, 'pkg', 'mod') : '');
   const noisyKeys = [
     'npm_config_electron_mirror',
     'NPM_CONFIG_ELECTRON_MIRROR',
@@ -160,6 +163,12 @@ function buildEnv() {
   });
 
   env.GOPROXY = env.GOPROXY || 'https://goproxy.cn,direct';
+  if (resolvedGopath) {
+    env.GOPATH = resolvedGopath;
+  }
+  if (resolvedGomodcache) {
+    env.GOMODCACHE = resolvedGomodcache;
+  }
 
   const npmrcPath = path.join(projectRoot, '.npmrc.wails');
   if (!fs.existsSync(npmrcPath)) {
