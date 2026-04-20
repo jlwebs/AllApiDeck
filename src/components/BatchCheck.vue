@@ -156,11 +156,13 @@
               <div class="selection-topbar">
                 <div class="selection-header-row">
                   <h3 class="selection-title">请勾选需要测试的网站与模型</h3>
+                  <!--
                   <a-space wrap class="selection-action-group">
                     <a-button @click="selectAllNodes" size="small">全部全选</a-button>
                     <a-button @click="unselectAllNodes" size="small">全部反选</a-button>
                     <a-button @click="selectChatModelsOnly" size="small">仅选主流聊天</a-button>
                   </a-space>
+                  -->
                 </div>
                 <div class="selection-quick-filters">
                   <div class="quick-filter-toolbar">
