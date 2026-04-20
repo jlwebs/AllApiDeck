@@ -394,7 +394,6 @@ const ADVANCED_PROXY_DISPATCH_FADE_MS = 2500;
 const ADVANCED_PROXY_DISPATCH_TICK_MS = 500;
 const SUPER_MINI_SCALE = 1.2;
 const SUPER_MINI_QUEUE_TOOLTIP_BOTTOM_PADDING = 20;
-const SUPER_MINI_QUEUE_TOOLTIP_PRE_RESERVE_HEIGHT = 200;
 const SUPER_MINI_QUEUE_CARD_HINT_TEXT = 'double click me!';
 const SUPER_MINI_QUEUE_CARD_HINT_LIMIT = 2;
 const SUPER_MINI_QUEUE_CARD_HINT_MIN_HOVER_MS = 800;
@@ -648,16 +647,16 @@ async function syncSuperMiniQueueTooltipHeight(reason = 'hover') {
         height: Math.max(1, Math.round(currentBounds.height)),
       };
     }
-    const tooltipTargetHeight = Math.max(
+    const tooltipTargetHeight = Math.max(1, Math.round(Number(tooltipBottom.height || 0)));
+    const baseTargetHeight = Math.max(
       1,
-      Math.round(Number(tooltipBottom.height || 0) + SUPER_MINI_QUEUE_TOOLTIP_BOTTOM_PADDING),
+      Math.round(Number(baseContentHeight || shellRect?.height || currentBounds.height || 100)),
     );
     const targetHeight = Math.max(
-      Math.max(1, Math.round(currentBounds.height)),
-      Math.max(1, Math.round(baseContentHeight || 0)) + tooltipTargetHeight,
-      tooltipTargetHeight,
+      1,
+      baseTargetHeight + tooltipTargetHeight + SUPER_MINI_QUEUE_TOOLTIP_BOTTOM_PADDING,
     );
-    if (targetHeight > currentBounds.height) {
+    if (targetHeight !== currentBounds.height) {
       setSuperMiniTransitionMask(true);
       await WindowSetSize(
         Math.max(1, Math.round(currentBounds.width)),
@@ -679,50 +678,6 @@ async function syncSuperMiniQueueTooltipHeight(reason = 'hover') {
   }
 }
 
-async function preReserveSuperMiniQueueTooltipHeight(reason = 'hover-pre-reserve') {
-  if (!superMiniMode.value || superMiniQueueTooltipOpen) {
-    return;
-  }
-  try {
-    const current = await readSidebarWindowBounds(reason);
-    const currentBounds = current.bounds;
-    if (!isValidSidebarWindowBounds(currentBounds)) {
-      appendPanelClientLog(
-        'panel.super-mini.tooltip',
-        `pre-reserve skipped reason=${reason} source=${current.source}`,
-      );
-      return;
-    }
-    if (!isValidSidebarWindowBounds(superMiniQueueTooltipRestoreBounds)) {
-      superMiniQueueTooltipRestoreBounds = {
-        ...currentBounds,
-        width: Math.max(1, Math.round(currentBounds.width)),
-        height: Math.max(1, Math.round(currentBounds.height)),
-      };
-    }
-    const targetHeight = Math.max(
-      Math.max(1, Math.round(currentBounds.height)),
-      Math.max(1, Math.round(currentBounds.height + SUPER_MINI_QUEUE_TOOLTIP_PRE_RESERVE_HEIGHT)),
-    );
-    if (targetHeight > currentBounds.height) {
-      await WindowSetSize(
-        Math.max(1, Math.round(currentBounds.width)),
-        targetHeight,
-      );
-      await new Promise(resolve => window.requestAnimationFrame(() => resolve()));
-    }
-    appendPanelClientLog(
-      'panel.super-mini.tooltip',
-      `pre-reserve reason=${reason} source=${current.source} current=${formatSidebarBounds(currentBounds)} targetHeight=${targetHeight}`,
-    );
-  } catch (error) {
-    appendPanelClientLog(
-      'panel.super-mini.tooltip',
-      `pre-reserve failed reason=${reason} err=${error?.message || String(error)}`,
-    );
-  }
-}
-
 function startSuperMiniQueueTooltipHeightTracking(reason = 'hover') {
   clearSuperMiniQueueTooltipSyncTimer();
   if (!superMiniMode.value) return;
@@ -741,7 +696,6 @@ function handleSuperMiniQueueTooltipHoverStart() {
   if (!superMiniMode.value) return;
   superMiniQueueTooltipHovering = true;
   clearSuperMiniQueueTooltipRestoreTimer();
-  void preReserveSuperMiniQueueTooltipHeight('hover-start');
   startSuperMiniQueueTooltipHeightTracking('hover-start');
 }
 
