@@ -90,7 +90,6 @@
                   type="primary"
                   size="small"
                   class="inventory-batch-quick-test-button"
-                  :loading="batchQuickTestRunning"
                 >
                   <ThunderboltOutlined />
                 </a-button>
@@ -140,16 +139,6 @@
           </a-space>
         </template>
 
-        <a-alert
-          v-if="batchQuickTestNotice"
-          :type="batchQuickTestNotice.type"
-          show-icon
-          :closable="!batchQuickTestRunning"
-          class="batch-quick-test-alert"
-          :message="batchQuickTestNotice.message"
-          :description="batchQuickTestNotice.description"
-          @close="batchQuickTestNotice = null"
-        />
         <a-empty v-if="displayedRows.length === 0" description="暂无本地密钥记录，可从批量检测自动同步、剪贴板导入或手工添加。" />
         <a-table
           v-else
@@ -586,12 +575,12 @@ const manualModelOptions = ref([]);
 const manualModelLoading = ref(false);
 const manualModelFetchKey = ref('');
 const hideInvalidKeys = ref(true);
+const BATCH_QUICK_TEST_CONCURRENCY = 10;
 const batchQuickTestRunning = ref(false);
-const batchQuickTestNotice = ref(null);
 const batchQuickTestProgress = reactive({
   completed: 0,
   total: 0,
-  currentSiteName: '',
+  active: 0,
 });
 const currentTablePage = ref(1);
 const currentTablePageSize = ref(20);
@@ -674,10 +663,9 @@ const batchQuickTestDisabled = computed(() => batchQuickTestRunning.value || tab
 const batchDeleteAbnormalDisabled = computed(() => batchQuickTestRunning.value || abnormalKeyCount.value === 0);
 const batchQuickTestButtonTitle = computed(() => {
   if (batchQuickTestRunning.value) {
-    const currentSite = batchQuickTestProgress.currentSiteName ? `，当前 ${batchQuickTestProgress.currentSiteName}` : '';
-    return `正在按页面优先级批量快测 ${batchQuickTestProgress.completed}/${batchQuickTestProgress.total}${currentSite}`;
+    return `批量快测进行中：已完成 ${batchQuickTestProgress.completed}/${batchQuickTestProgress.total}，并发 ${BATCH_QUICK_TEST_CONCURRENCY}，运行中 ${batchQuickTestProgress.active}`;
   }
-  return '按页面优先级批量触发“快速测”，只测试每条当前已选择的模型';
+  return `按页面优先级批量触发“快速测”，并发 ${BATCH_QUICK_TEST_CONCURRENCY}，只测试每条当前已选择的模型`;
 });
 const batchActionButtonTitle = computed(() => {
   if (batchQuickTestRunning.value) {
@@ -1138,11 +1126,6 @@ async function runBatchQuickTest() {
 
   const queue = buildBatchQuickTestQueue();
   if (!queue.length) {
-    batchQuickTestNotice.value = {
-      type: 'warning',
-      message: '批量快测未开始：当前没有可处理的密钥记录。',
-      description: '请先同步、导入或取消过滤后再试。',
-    };
     message.warning('当前没有可处理的密钥记录');
     return;
   }
@@ -1150,12 +1133,7 @@ async function runBatchQuickTest() {
   batchQuickTestRunning.value = true;
   batchQuickTestProgress.total = queue.length;
   batchQuickTestProgress.completed = 0;
-  batchQuickTestProgress.currentSiteName = '';
-  batchQuickTestNotice.value = {
-    type: 'info',
-    message: `批量快测进行中：共 ${queue.length} 条，按当前页优先级顺序执行。`,
-    description: '只会测试每条记录当前已选择的模型；未选择模型的记录会被跳过。',
-  };
+  batchQuickTestProgress.active = 0;
 
   const stats = {
     executed: 0,
@@ -1168,60 +1146,71 @@ async function runBatchQuickTest() {
     skippedBusy: 0,
     executedModels: [],
   };
+  let cursor = 0;
 
   try {
-    for (const record of queue) {
-      batchQuickTestProgress.currentSiteName = String(record?.siteName || '').trim();
+    const worker = async () => {
+      while (cursor < queue.length) {
+        const index = cursor;
+        cursor += 1;
+        const record = queue[index];
 
-      if (record.quickTestLoading) {
-        stats.skipped += 1;
-        stats.skippedBusy += 1;
-        batchQuickTestProgress.completed += 1;
-        continue;
+        if (record.quickTestLoading) {
+          stats.skipped += 1;
+          stats.skippedBusy += 1;
+          batchQuickTestProgress.completed += 1;
+          continue;
+        }
+
+        const apiKey = normalizeApiKey(record?.apiKey);
+        const siteUrl = normalizeSiteUrl(record?.siteUrl);
+        const selectedModel = String(record?.selectedModel || '').trim();
+
+        if (!apiKey || !siteUrl) {
+          stats.skipped += 1;
+          stats.skippedInvalidConfig += 1;
+          batchQuickTestProgress.completed += 1;
+          continue;
+        }
+        if (!selectedModel) {
+          stats.skipped += 1;
+          stats.skippedNoModel += 1;
+          batchQuickTestProgress.completed += 1;
+          continue;
+        }
+
+        batchQuickTestProgress.active += 1;
+        try {
+          const result = await runQuickTest(record, {
+            silent: true,
+            fixedModel: selectedModel,
+          });
+
+          stats.executed += 1;
+          stats.executedModels.push(selectedModel);
+          if (result?.status === 'success') stats.success += 1;
+          else if (result?.status === 'warning') stats.warning += 1;
+          else stats.error += 1;
+        } finally {
+          batchQuickTestProgress.active = Math.max(0, batchQuickTestProgress.active - 1);
+          batchQuickTestProgress.completed += 1;
+        }
       }
+    };
 
-      const apiKey = normalizeApiKey(record?.apiKey);
-      const siteUrl = normalizeSiteUrl(record?.siteUrl);
-      const selectedModel = String(record?.selectedModel || '').trim();
-
-      if (!apiKey || !siteUrl) {
-        stats.skipped += 1;
-        stats.skippedInvalidConfig += 1;
-        batchQuickTestProgress.completed += 1;
-        continue;
-      }
-      if (!selectedModel) {
-        stats.skipped += 1;
-        stats.skippedNoModel += 1;
-        batchQuickTestProgress.completed += 1;
-        continue;
-      }
-
-      const result = await runQuickTest(record, {
-        silent: true,
-        fixedModel: selectedModel,
-      });
-
-      stats.executed += 1;
-      if (selectedModel) {
-        stats.executedModels.push(selectedModel);
-      }
-      if (result?.status === 'success') stats.success += 1;
-      else if (result?.status === 'warning') stats.warning += 1;
-      else stats.error += 1;
-
-      batchQuickTestProgress.completed += 1;
-    }
+    await Promise.allSettled(
+      Array.from({ length: Math.min(BATCH_QUICK_TEST_CONCURRENCY, queue.length) }, () => worker())
+    );
   } finally {
-    batchQuickTestProgress.currentSiteName = '';
+    batchQuickTestProgress.active = 0;
     batchQuickTestRunning.value = false;
   }
 
-  batchQuickTestNotice.value = buildBatchQuickTestSummary(stats);
+  const batchQuickTestNotice = buildBatchQuickTestSummary(stats);
   if (stats.error > 0) {
-    message.warning(batchQuickTestNotice.value.message);
+    message.warning(batchQuickTestNotice.message);
   } else {
-    message.success(batchQuickTestNotice.value.message);
+    message.success(batchQuickTestNotice.message);
   }
 }
 
