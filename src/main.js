@@ -7,10 +7,12 @@ import i18n from './i18n';
 import { installClientDiagnostics, logClientDiagnostic } from './utils/clientDiagnostics.js';
 import { installRuntimeFetchBridge } from './utils/runtimeApi.js';
 import { hydrateLastResultsSnapshotCache } from './utils/historySnapshotStore.js';
+import { ensureStartupUpdateStatus } from './utils/appUpdateState.js';
 
 installClientDiagnostics();
 installRuntimeFetchBridge();
 void hydrateLastResultsSnapshotCache();
+void ensureStartupUpdateStatus();
 logClientDiagnostic('bootstrap', 'fetch bridge install called');
 
 const app = createApp(App);

@@ -13,6 +13,18 @@ export const ADVANCED_PROXY_APPS = [
   { id: 'openclaw', label: 'OpenClaw', defaultBasePath: '/advanced-proxy/openclaw/v1', mode: 'openai' },
 ];
 
+export const ADVANCED_PROXY_VERSIONED_DEFAULT_FAILOVER_FIELDS = [
+  'maxRetries',
+  'streamingFirstByteTimeout',
+  'streamingIdleTimeout',
+  'nonStreamingTimeout',
+  'circuitFailureThreshold',
+  'circuitSuccessThreshold',
+  'circuitTimeoutSeconds',
+  'circuitErrorRateThreshold',
+  'circuitMinRequests',
+];
+
 export const ADVANCED_PROXY_QUEUE_SCOPES = [
   { id: ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, label: '全局' },
   ...ADVANCED_PROXY_APPS.map(app => ({ id: app.id, label: app.label })),
@@ -85,15 +97,15 @@ export function createDefaultAdvancedProxyConfig() {
       appType: 'claude',
       enabled: false,
       autoFailoverEnabled: false,
-      maxRetries: 2,
-      streamingFirstByteTimeout: 25,
-      streamingIdleTimeout: 60,
-      nonStreamingTimeout: 90,
-      circuitFailureThreshold: 3,
-      circuitSuccessThreshold: 2,
-      circuitTimeoutSeconds: 45,
-      circuitErrorRateThreshold: 0.6,
-      circuitMinRequests: 3,
+      maxRetries: 1,
+      streamingFirstByteTimeout: 8,
+      streamingIdleTimeout: 12,
+      nonStreamingTimeout: 25,
+      circuitFailureThreshold: 2,
+      circuitSuccessThreshold: 1,
+      circuitTimeoutSeconds: 30,
+      circuitErrorRateThreshold: 0.5,
+      circuitMinRequests: 2,
     },
     highAvailability: {
       enabled: false,
@@ -306,6 +318,33 @@ export function normalizeAdvancedProxyConfig(input) {
 
   next.enabled = ADVANCED_PROXY_APPS.some(app => next?.[app.id]?.enabled === true);
   return next;
+}
+
+export function hasAdvancedProxyVersionedDefaultMismatch(config) {
+  const current = normalizeAdvancedProxyConfig(config || {});
+  const defaults = createDefaultAdvancedProxyConfig();
+  return ADVANCED_PROXY_VERSIONED_DEFAULT_FAILOVER_FIELDS.some((field) => {
+    const currentValue = current?.failover?.[field];
+    const defaultValue = defaults?.failover?.[field];
+    return Number(currentValue) !== Number(defaultValue);
+  });
+}
+
+export function applyAdvancedProxyVersionedDefaultParameters(config) {
+  const current = normalizeAdvancedProxyConfig(config || {});
+  const defaults = createDefaultAdvancedProxyConfig();
+  const nextFailover = {
+    ...current.failover,
+  };
+
+  ADVANCED_PROXY_VERSIONED_DEFAULT_FAILOVER_FIELDS.forEach((field) => {
+    nextFailover[field] = defaults.failover[field];
+  });
+
+  return normalizeAdvancedProxyConfig({
+    ...current,
+    failover: nextFailover,
+  });
 }
 
 function saveLocalSnapshot(config) {

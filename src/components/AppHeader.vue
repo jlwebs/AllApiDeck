@@ -79,7 +79,8 @@
         </button>
       </a-tooltip>
 
-      <button type="button" class="spring-pill spring-pill-ghost" @click="openGitHub">
+      <button type="button" class="spring-pill spring-pill-ghost spring-pill-github" @click="openGitHub">
+        <span v-if="hasAppUpdate" class="spring-pill-update-dot" aria-hidden="true"></span>
         <GithubOutlined />
         <span>GitHub</span>
       </button>
@@ -88,6 +89,7 @@
 </template>
 
 <script setup>
+import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import appLogo from '../assets/logo.png';
 import {
@@ -97,6 +99,7 @@ import {
   KeyOutlined,
   SettingOutlined,
 } from '@ant-design/icons-vue';
+import { ensureStartupUpdateStatus, getAppGithubUrl } from '../utils/appUpdateState.js';
 
 defineEmits(['experimental', 'settings']);
 
@@ -120,6 +123,7 @@ defineProps({
 });
 
 const router = useRouter();
+const hasAppUpdate = ref(false);
 const advancedProxyLabel = '高级代理';
 const advancedProxyTooltip = '开启兼容 OpenAI vendor、Claude、故障转移、错误修正的高级代理功能';
 
@@ -130,8 +134,13 @@ const navigate = path => {
 };
 
 const openGitHub = () => {
-  window.open('https://github.com/jlwebs/AllApiDeck', '_blank', 'noopener');
+  window.open(getAppGithubUrl(), '_blank', 'noopener');
 };
+
+onMounted(async () => {
+  const status = await ensureStartupUpdateStatus();
+  hasAppUpdate.value = Boolean(status?.hasUpdate);
+});
 </script>
 
 <style scoped>
@@ -260,6 +269,23 @@ const openGitHub = () => {
   background: rgba(255, 255, 255, 0.5);
 }
 
+.spring-pill-github {
+  position: relative;
+}
+
+.spring-pill-update-dot {
+  position: absolute;
+  top: 4px;
+  right: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #c9473f;
+  box-shadow:
+    0 0 0 2px rgba(255, 252, 247, 0.95),
+    0 2px 6px rgba(156, 44, 36, 0.22);
+}
+
 .spring-pill-icon-only {
   width: 32px;
   min-width: 32px;
@@ -323,6 +349,12 @@ const openGitHub = () => {
 :deep(body.dark-mode) .spring-pill-active {
   background: linear-gradient(135deg, rgba(96, 127, 88, 0.5), rgba(71, 97, 66, 0.44));
   color: #f7fcf1;
+}
+
+:deep(body.dark-mode) .spring-pill-update-dot {
+  box-shadow:
+    0 0 0 2px rgba(28, 38, 31, 0.96),
+    0 2px 6px rgba(0, 0, 0, 0.28);
 }
 
 :deep(body.dark-mode) .spring-pill:hover {

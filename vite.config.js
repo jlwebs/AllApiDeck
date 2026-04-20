@@ -69,6 +69,37 @@ function decodeProcessOutput(value) {
   return value.toString('utf8');
 }
 
+function readGitOutput(args) {
+  try {
+    return String(
+      execFileSync('git', args, {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+        timeout: 2000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }) || '',
+    ).trim();
+  } catch {
+    return '';
+  }
+}
+
+function resolveAppReleaseTag() {
+  const exactTag = readGitOutput(['describe', '--tags', '--exact-match']);
+  if (exactTag) return exactTag;
+
+  const nearestTag = readGitOutput(['describe', '--tags', '--abbrev=0']);
+  if (nearestTag) return nearestTag;
+
+  return '';
+}
+
+const APP_GITHUB_OWNER = 'jlwebs';
+const APP_GITHUB_REPO = 'AllApiDeck';
+const APP_GITHUB_URL = `https://github.com/${APP_GITHUB_OWNER}/${APP_GITHUB_REPO}`;
+const APP_RELEASE_TAG = resolveAppReleaseTag();
+const APP_RELEASE_VERSION = String(APP_RELEASE_TAG || '').trim().replace(/^v/i, '') || '0.0.0';
+
 function extractExecErrorMessage(err) {
   const stderr = decodeProcessOutput(err?.stderr).trim();
   const stdout = decodeProcessOutput(err?.stdout).trim();
@@ -2042,6 +2073,13 @@ function proxyMiddlewarePlugin() {
 }
 
 export default defineConfig({
+  define: {
+    __APP_GITHUB_OWNER__: JSON.stringify(APP_GITHUB_OWNER),
+    __APP_GITHUB_REPO__: JSON.stringify(APP_GITHUB_REPO),
+    __APP_GITHUB_URL__: JSON.stringify(APP_GITHUB_URL),
+    __APP_RELEASE_TAG__: JSON.stringify(APP_RELEASE_TAG),
+    __APP_RELEASE_VERSION__: JSON.stringify(APP_RELEASE_VERSION),
+  },
   plugins: [
     vue(),
     Components({
