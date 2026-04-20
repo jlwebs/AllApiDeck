@@ -105,34 +105,24 @@
 
             <div class="advanced-proxy-provider-pool">
               <div class="advanced-proxy-provider-panel-grid">
-                <a-tooltip v-for="item in providerCandidateCards" :key="item.id" placement="topLeft">
-                  <template #title>
-                    <div class="advanced-proxy-provider-tooltip">
-                      <strong>{{ item.siteName }}</strong>
-                      <span>{{ item.modelLabel }}</span>
-                      <span v-if="item.skLabel">{{ item.skLabel }}</span>
-                      <code>{{ item.endpoint || '-' }}</code>
-                      <code>{{ item.apiKey || '-' }}</code>
-                    </div>
-                  </template>
-
-                  <button
-                    type="button"
-                    class="advanced-proxy-provider-panel"
-                    :class="{ 'advanced-proxy-provider-panel-active': item.selected }"
-                    @click="toggleProviderQueue(item)"
-                  >
-                    <div class="advanced-proxy-provider-panel-top">
-                      <strong class="advanced-proxy-provider-panel-title">{{ item.siteName }}</strong>
-                      <span v-if="item.queueOrder" class="advanced-proxy-provider-order">P{{ item.queueOrder }}</span>
-                    </div>
-                    <div class="advanced-proxy-provider-panel-model">{{ item.modelLabel }}</div>
-                    <div class="advanced-proxy-provider-panel-meta">
-                      <span v-if="item.skLabel" class="advanced-proxy-provider-chip">{{ item.skLabel }}</span>
-                      <span v-if="item.orphaned" class="advanced-proxy-provider-chip advanced-proxy-provider-chip-muted">已不在密钥管理中</span>
-                    </div>
-                  </button>
-                </a-tooltip>
+                <button
+                  v-for="item in providerCandidateCards"
+                  :key="item.id"
+                  type="button"
+                  class="advanced-proxy-provider-panel"
+                  :class="{ 'advanced-proxy-provider-panel-active': item.selected }"
+                  @click="toggleProviderQueue(item)"
+                >
+                  <div class="advanced-proxy-provider-panel-top">
+                    <strong class="advanced-proxy-provider-panel-title">{{ item.siteName }}</strong>
+                    <span v-if="item.queueOrder" class="advanced-proxy-provider-order">P{{ item.queueOrder }}</span>
+                  </div>
+                  <div class="advanced-proxy-provider-panel-model">{{ item.modelLabel }}</div>
+                  <div class="advanced-proxy-provider-panel-meta">
+                    <span v-if="item.skLabel" class="advanced-proxy-provider-chip">{{ item.skLabel }}</span>
+                    <span v-if="item.orphaned" class="advanced-proxy-provider-chip advanced-proxy-provider-chip-muted">已不在密钥管理中</span>
+                  </div>
+                </button>
               </div>
 
               <div v-if="providerCandidateCards.length && !providerCount" class="advanced-proxy-empty advanced-proxy-empty-compact">
@@ -498,7 +488,7 @@ const queuePanelDescription = computed(() => {
   if (selectedQueueInheritGlobal.value) {
     return `${selectedQueueAppLabel.value} 当前继承全局队列。点击卡片后会自动复制出独立队列，并按点击顺序维护优先级。`;
   }
-  return `${selectedQueueAppLabel.value} 当前使用独立队列，优先级按点击顺序自动更新。详细的 Key 和端点地址放在 tooltip 中。`;
+  return `${selectedQueueAppLabel.value} 当前使用独立队列，优先级按点击顺序自动更新。`;
 });
 const queuePanelEmptyText = computed(() =>
   selectedQueueScope.value === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE
@@ -532,7 +522,9 @@ const providerCandidateCards = computed(() => {
       modelLabel: String(record?.selectedModel || record?.quickTestModel || selectedMeta?.provider?.model || '未设置模型').trim() || '未设置模型',
       endpoint: String(record?.siteUrl || selectedMeta?.provider?.baseUrl || '').trim(),
       apiKey: String(record?.apiKey || selectedMeta?.provider?.apiKey || '').trim(),
-      skLabel: duplicate.count > 1 ? `SK ${duplicate.index}` : '',
+      skLabel: duplicate.count > 1
+        ? formatProviderSkLabel(duplicate.index, String(record?.apiKey || selectedMeta?.provider?.apiKey || '').trim())
+        : '',
       selected: Boolean(selectedMeta),
       queueOrder: selectedMeta?.order || 0,
       orphaned: false,
@@ -600,6 +592,21 @@ watch(
 
 function toPlainValue(value) {
   return JSON.parse(JSON.stringify(value ?? {}));
+}
+
+function maskProviderApiKey(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '';
+  if (normalized.length <= 8) return normalized;
+  return `${normalized.slice(0, 4)}****${normalized.slice(-4)}`;
+}
+
+function formatProviderSkLabel(index, apiKey) {
+  const maskedKey = maskProviderApiKey(apiKey);
+  if (!Number(index)) {
+    return maskedKey ? `SK | ${maskedKey}` : '';
+  }
+  return maskedKey ? `SK ${index} | ${maskedKey}` : `SK ${index}`;
 }
 
 function normalizeForSave(config) {

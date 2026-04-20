@@ -57,6 +57,19 @@
         <template #extra>
           <a-space wrap>
             <a-checkbox v-model:checked="hideInvalidKeys">隐藏无效密钥</a-checkbox>
+            <a-tooltip :title="batchQuickTestButtonTitle">
+              <a-button
+                type="primary"
+                size="small"
+                class="inventory-batch-quick-test-button"
+                :loading="batchQuickTestRunning"
+                :disabled="batchQuickTestDisabled"
+                @click="runBatchQuickTest"
+              >
+                <ThunderboltOutlined />
+                <span>{{ batchQuickTestRunning ? `批量快测 ${batchQuickTestProgress.completed}/${batchQuickTestProgress.total}` : '批量快测' }}</span>
+              </a-button>
+            </a-tooltip>
             <a-tooltip title="手工添加">
               <button type="button" class="inventory-icon-button inventory-icon-button-primary" @click="openManualRecordModal()">
                 <PlusOutlined />
@@ -101,8 +114,28 @@
           </a-space>
         </template>
 
+        <a-alert
+          v-if="batchQuickTestNotice"
+          :type="batchQuickTestNotice.type"
+          show-icon
+          :closable="!batchQuickTestRunning"
+          class="batch-quick-test-alert"
+          :message="batchQuickTestNotice.message"
+          :description="batchQuickTestNotice.description"
+          @close="batchQuickTestNotice = null"
+        />
         <a-empty v-if="displayedRows.length === 0" description="暂无本地密钥记录，可从批量检测自动同步、剪贴板导入或手工添加。" />
-        <a-table v-else :columns="activeColumns" :data-source="displayedRows" :row-key="record => record.rowKey" :pagination="isCompactMode ? false : { pageSize: 20, showSizeChanger: true, pageSizeOptions: ['20', '50', '100'] }" :scroll="isCompactMode ? { x: 650 } : { x: 800 }" size="small" class="compact-key-table">
+        <a-table
+          v-else
+          :columns="activeColumns"
+          :data-source="displayedRows"
+          :row-key="record => record.rowKey"
+          :pagination="tablePagination"
+          :scroll="isCompactMode ? { x: 650 } : { x: 800 }"
+          size="small"
+          class="compact-key-table"
+          @change="handleTableChange"
+        >
           <template #bodyCell="{ column, record }">
             <template v-if="column.dataIndex === 'siteName'">
               <div class="site-cell">
@@ -437,7 +470,7 @@
 </template>
 
 <script setup>
-import { computed, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ClockCircleOutlined, DeleteOutlined, DownloadOutlined, FileTextOutlined, ImportOutlined, MenuFoldOutlined, PlusOutlined, ReloadOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import { ConfigProvider, message, Modal, theme } from 'ant-design-vue';
 import { useRoute } from 'vue-router';
@@ -527,6 +560,15 @@ const manualModelOptions = ref([]);
 const manualModelLoading = ref(false);
 const manualModelFetchKey = ref('');
 const hideInvalidKeys = ref(true);
+const batchQuickTestRunning = ref(false);
+const batchQuickTestNotice = ref(null);
+const batchQuickTestProgress = reactive({
+  completed: 0,
+  total: 0,
+  currentSiteName: '',
+});
+const currentTablePage = ref(1);
+const currentTablePageSize = ref(20);
 const showAppSettingsModal = ref(false);
 const globalTreeExpanded = ref(loadTreeExpandedSetting(true));
 const desktopTokenSourceMode = ref(loadDesktopTokenSourceMode());
@@ -571,6 +613,9 @@ const desktopConfigModelOptions = computed(() => {
     ? options
     : [{ label: currentValue, value: currentValue }, ...options];
 });
+const sortManagedRecords = rows => [...rows].sort(
+  (a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0) || String(a.siteName || '').localeCompare(String(b.siteName || ''))
+);
 const columns = [
   { title: '网站', dataIndex: 'siteName', key: 'siteName', width: 154, sorter: (a, b) => String(a.siteName || '').localeCompare(String(b.siteName || '')) },
   { title: 'API Key', dataIndex: 'apiKey', key: 'apiKey', width: 120, className: 'api-key-column' },
@@ -584,14 +629,38 @@ const activeColumns = computed(() => (isCompactMode.value
   : columns));
 const failedSites = computed(() => allResults.value.filter(result => !Array.isArray(result?.tokens) || result.tokens.length === 0));
 const failedSiteNames = computed(() => failedSites.value.map(site => site?.site_name || site?.id || '未命名站点').join('，'));
+const allSortedRows = computed(() => sortManagedRecords(tableData.value));
 const displayedRows = computed(() => {
   const filteredRows = hideInvalidKeys.value
-    ? tableData.value.filter(record => Number(record?.status || 0) === 1)
-    : tableData.value;
-  return [...filteredRows].sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0) || String(a.siteName || '').localeCompare(String(b.siteName || '')));
+    ? allSortedRows.value.filter(record => Number(record?.status || 0) === 1)
+    : allSortedRows.value;
+  return sortManagedRecords(filteredRows);
 });
 const healthyKeyCount = computed(() => tableData.value.filter(record => record.status === 1).length);
 const syncSummary = computed(() => !syncMeta.value.lastBatchSyncAt ? '导入并批量检测后，会自动把获取到的 sk key 更新到本页。' : `最近一次批量同步写入 ${syncMeta.value.lastBatchSyncCount} 条记录，失败站点 ${syncMeta.value.lastBatchFailedCount} 个。`);
+const currentVisiblePageRows = computed(() => {
+  if (isCompactMode.value) return displayedRows.value;
+  const start = Math.max(0, (currentTablePage.value - 1) * currentTablePageSize.value);
+  return displayedRows.value.slice(start, start + currentTablePageSize.value);
+});
+const batchQuickTestDisabled = computed(() => batchQuickTestRunning.value || tableData.value.length === 0);
+const batchQuickTestButtonTitle = computed(() => {
+  if (batchQuickTestRunning.value) {
+    const currentSite = batchQuickTestProgress.currentSiteName ? `，当前 ${batchQuickTestProgress.currentSiteName}` : '';
+    return `正在按页面优先级批量快测 ${batchQuickTestProgress.completed}/${batchQuickTestProgress.total}${currentSite}`;
+  }
+  return '按页面优先级批量触发“快速测”，只测试每条当前已选择的模型';
+});
+const tablePagination = computed(() => {
+  if (isCompactMode.value) return false;
+  return {
+    current: currentTablePage.value,
+    pageSize: currentTablePageSize.value,
+    showSizeChanger: true,
+    pageSizeOptions: ['20', '50', '100'],
+    total: displayedRows.value.length,
+  };
+});
 
 onMounted(() => {
   void (async () => {
@@ -623,6 +692,18 @@ onBeforeUnmount(() => {
     window.removeEventListener('storage', handleManagedRecordStorageEvent);
   }
 });
+
+watch([displayedRows, currentTablePageSize, isCompactMode], () => {
+  if (isCompactMode.value) {
+    currentTablePage.value = 1;
+    return;
+  }
+  const total = displayedRows.value.length;
+  const maxPage = Math.max(1, Math.ceil(total / currentTablePageSize.value));
+  if (currentTablePage.value > maxPage) {
+    currentTablePage.value = maxPage;
+  }
+}, { immediate: true });
 
 const openSettingsModal = () => {
   showAppSettingsModal.value = true;
@@ -768,6 +849,16 @@ function handleManagedRecordStorageEvent(event) {
   refreshManagedRecordsFromStorage();
 }
 
+function handleTableChange(pagination) {
+  if (isCompactMode.value || !pagination) return;
+  const nextPage = Number(pagination.current || 1);
+  const nextPageSize = Number(pagination.pageSize || currentTablePageSize.value || 20);
+  if (nextPageSize !== currentTablePageSize.value) {
+    currentTablePageSize.value = nextPageSize;
+  }
+  currentTablePage.value = nextPage;
+}
+
 async function exitCompactSidebar() {
   if (!isSidebarBridgeAvailable()) return;
   try {
@@ -906,11 +997,13 @@ function mergeStoredRecords(incomingRows) {
   return mergeBatchHistoryBalances(Array.from(mergedMap.values()));
 }
 
-async function runQuickTest(record) {
+async function runQuickTest(record, options = {}) {
+  const silent = options?.silent === true;
+  const fixedModel = String(options?.fixedModel || '').trim();
   if (record.quickTestLoading) return;
   record.quickTestLoading = true;
   try {
-    const model = await resolveQuickTestModel(record);
+    const model = fixedModel || await resolveQuickTestModel(record);
     const testResult = await executeQuickTest({ apiKey: record.apiKey, siteUrl: record.siteUrl, model });
     record.quickTestStatus = testResult.status;
     record.quickTestLabel = testResult.label;
@@ -922,8 +1015,16 @@ async function runQuickTest(record) {
     record.quickTestTps = testResult.tps || '';
     record.quickTestResponseContent = testResult.responseContent || '';
     persistRecords();
-    const messageMethod = testResult.status === 'success' ? 'success' : testResult.status === 'warning' ? 'warning' : 'error';
-    message[messageMethod](`快测${testResult.label}：${record.siteName} / ${model}${testResult.responseTime ? ` / ${testResult.responseTime}s` : ''}`);
+    if (!silent) {
+      const messageMethod = testResult.status === 'success' ? 'success' : testResult.status === 'warning' ? 'warning' : 'error';
+      message[messageMethod](`快测${testResult.label}：${record.siteName} / ${model}${testResult.responseTime ? ` / ${testResult.responseTime}s` : ''}`);
+    }
+    return {
+      status: testResult.status,
+      label: testResult.label,
+      model,
+      responseTime: testResult.responseTime,
+    };
   } catch (error) {
     console.error(error);
     record.quickTestStatus = 'error';
@@ -938,10 +1039,152 @@ async function runQuickTest(record) {
     record.quickTestRemark = detail;
     record.quickTestResponseContent = detail;
     persistRecords();
-    showQuickTestErrorDialog(detail);
-    message.error(`快速测试失败：${error.message || '未知错误'}`);
+    if (!silent) {
+      showQuickTestErrorDialog(detail);
+      message.error(`快速测试失败：${error.message || '未知错误'}`);
+    }
+    return {
+      status: 'error',
+      label: '失败',
+      model: fixedModel || String(record?.selectedModel || '').trim(),
+      responseTime: '',
+      errorDetail: detail,
+    };
   } finally {
     record.quickTestLoading = false;
+  }
+}
+
+function buildBatchQuickTestQueue() {
+  const queue = [];
+  const queued = new Set();
+  const pushRecords = records => {
+    records.forEach(record => {
+      if (!record?.rowKey || queued.has(record.rowKey)) return;
+      queued.add(record.rowKey);
+      queue.push(record);
+    });
+  };
+
+  const currentPageRows = currentVisiblePageRows.value;
+  pushRecords(currentPageRows.filter(record => Number(record?.status || 0) === 1));
+  pushRecords(currentPageRows.filter(record => Number(record?.status || 0) !== 1));
+
+  const otherVisibleRows = displayedRows.value.filter(record => !queued.has(record.rowKey));
+  pushRecords(otherVisibleRows.filter(record => Number(record?.status || 0) === 1));
+
+  const remainingRows = allSortedRows.value.filter(record => !queued.has(record.rowKey));
+  pushRecords(remainingRows);
+
+  return queue;
+}
+
+function buildBatchQuickTestSummary(stats) {
+  const summaryText = `已执行 ${stats.executed} 条，可用 ${stats.success} 条，告警 ${stats.warning} 条，失败 ${stats.error} 条，跳过 ${stats.skipped} 条。`;
+  const detailParts = [];
+  if (stats.skippedNoModel > 0) detailParts.push(`未选择模型 ${stats.skippedNoModel} 条`);
+  if (stats.skippedInvalidConfig > 0) detailParts.push(`配置不完整 ${stats.skippedInvalidConfig} 条`);
+  if (stats.skippedBusy > 0) detailParts.push(`已在测试中 ${stats.skippedBusy} 条`);
+  if (stats.executedModels.length > 0) {
+    const uniqueModels = Array.from(new Set(stats.executedModels)).slice(0, 8);
+    detailParts.push(`本次模型 ${uniqueModels.join('、')}`);
+  }
+  return {
+    type: stats.error > 0 ? 'warning' : 'success',
+    message: `批量快测完成：${summaryText}`,
+    description: detailParts.join('；') || '已按当前页优先级完成整库快测。',
+  };
+}
+
+async function runBatchQuickTest() {
+  if (batchQuickTestRunning.value) return;
+
+  const queue = buildBatchQuickTestQueue();
+  if (!queue.length) {
+    batchQuickTestNotice.value = {
+      type: 'warning',
+      message: '批量快测未开始：当前没有可处理的密钥记录。',
+      description: '请先同步、导入或取消过滤后再试。',
+    };
+    message.warning('当前没有可处理的密钥记录');
+    return;
+  }
+
+  batchQuickTestRunning.value = true;
+  batchQuickTestProgress.total = queue.length;
+  batchQuickTestProgress.completed = 0;
+  batchQuickTestProgress.currentSiteName = '';
+  batchQuickTestNotice.value = {
+    type: 'info',
+    message: `批量快测进行中：共 ${queue.length} 条，按当前页优先级顺序执行。`,
+    description: '只会测试每条记录当前已选择的模型；未选择模型的记录会被跳过。',
+  };
+
+  const stats = {
+    executed: 0,
+    success: 0,
+    warning: 0,
+    error: 0,
+    skipped: 0,
+    skippedNoModel: 0,
+    skippedInvalidConfig: 0,
+    skippedBusy: 0,
+    executedModels: [],
+  };
+
+  try {
+    for (const record of queue) {
+      batchQuickTestProgress.currentSiteName = String(record?.siteName || '').trim();
+
+      if (record.quickTestLoading) {
+        stats.skipped += 1;
+        stats.skippedBusy += 1;
+        batchQuickTestProgress.completed += 1;
+        continue;
+      }
+
+      const apiKey = normalizeApiKey(record?.apiKey);
+      const siteUrl = normalizeSiteUrl(record?.siteUrl);
+      const selectedModel = String(record?.selectedModel || '').trim();
+
+      if (!apiKey || !siteUrl) {
+        stats.skipped += 1;
+        stats.skippedInvalidConfig += 1;
+        batchQuickTestProgress.completed += 1;
+        continue;
+      }
+      if (!selectedModel) {
+        stats.skipped += 1;
+        stats.skippedNoModel += 1;
+        batchQuickTestProgress.completed += 1;
+        continue;
+      }
+
+      const result = await runQuickTest(record, {
+        silent: true,
+        fixedModel: selectedModel,
+      });
+
+      stats.executed += 1;
+      if (selectedModel) {
+        stats.executedModels.push(selectedModel);
+      }
+      if (result?.status === 'success') stats.success += 1;
+      else if (result?.status === 'warning') stats.warning += 1;
+      else stats.error += 1;
+
+      batchQuickTestProgress.completed += 1;
+    }
+  } finally {
+    batchQuickTestProgress.currentSiteName = '';
+    batchQuickTestRunning.value = false;
+  }
+
+  batchQuickTestNotice.value = buildBatchQuickTestSummary(stats);
+  if (stats.error > 0) {
+    message.warning(batchQuickTestNotice.value.message);
+  } else {
+    message.success(batchQuickTestNotice.value.message);
   }
 }
 
@@ -2401,8 +2644,11 @@ function persistMeta() {
 .inventory-icon-button:hover:not(:disabled){transform:translateY(-1px) scale(1.06);filter:saturate(1.08)}
 .inventory-icon-button:disabled{cursor:not-allowed;opacity:.45;transform:none;filter:none;box-shadow:inset 0 0 0 1px rgba(148,163,184,.18)}
 .inventory-icon-button :deep(.anticon),.inventory-icon-button svg{font-size:16px;line-height:1}
+.inventory-batch-quick-test-button{border-radius:999px;padding-inline:14px;border:0;background:linear-gradient(135deg,#476847,#6f8f55);box-shadow:0 10px 24px rgba(87,118,76,.18);display:inline-flex;align-items:center;gap:6px}
+.inventory-batch-quick-test-button:disabled{opacity:.55}
 .inventory-icon-button-primary{background:linear-gradient(135deg,#eff6ff,#dbeafe);color:#1d4ed8;box-shadow:0 10px 24px rgba(96,165,250,.18),inset 0 0 0 1px rgba(96,165,250,.22)}
 .inventory-icon-button-danger{background:linear-gradient(135deg,#fff1f2,#ffe4e6);color:#be123c;box-shadow:0 10px 24px rgba(244,63,94,.12),inset 0 0 0 1px rgba(244,63,94,.18)}
+.batch-quick-test-alert{margin-bottom:12px;border-radius:14px}
 .export-icon-button{width:32px;height:32px;border:0;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .18s ease, box-shadow .18s ease, filter .18s ease;background:linear-gradient(135deg,#f8fafc,#e2e8f0);box-shadow:inset 0 0 0 1px rgba(148,163,184,.28);flex:0 0 auto}
 .export-icon-button:hover{transform:translateY(-1px) scale(1.06);filter:saturate(1.08)}
 .export-icon-glyph{font-size:16px;line-height:1}
