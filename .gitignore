@@ -20,6 +20,10 @@ build/*
 !build/linux/
 !build/linux/*.desktop
 !build/linux/*.xml
+desktop/build/*
+!desktop/build/linux/
+!desktop/build/linux/*.desktop
+!desktop/build/linux/*.xml
 .npmrc.wails
 .tmp-esbuild.exe
 package.json.md5

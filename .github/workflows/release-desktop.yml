@@ -27,6 +27,9 @@ jobs:
   build:
     name: Build ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
     strategy:
       fail-fast: false
       matrix:
@@ -37,23 +40,23 @@ jobs:
             artifact_name: allapideck-windows-amd64
             release_file: allapideck-windows-amd64.exe
             wails_output: allapideck-windows-amd64.exe
-            upload_path: release-assets/allapideck-windows-amd64.exe
+            upload_path: desktop/release-assets/allapideck-windows-amd64.exe
           - label: macOS DMG
             os: macos-latest
             platform: darwin/universal
             artifact_name: allapideck-macos-universal
             release_file: allapideck-macos-universal.dmg
             wails_output: allapideck-macos-universal
-            upload_path: release-assets/allapideck-macos-universal.dmg
+            upload_path: desktop/release-assets/allapideck-macos-universal.dmg
           - label: Linux tar.gz
             os: ubuntu-24.04
             platform: linux/amd64
             artifact_name: allapideck-linux-amd64
             wails_output: allapideck-linux-amd64
             upload_path: |
-              release-assets/allapideck-linux-amd64.tar.gz
-              release-assets/allapideck-linux-amd64.deb
-              release-assets/allapideck-linux-amd64.AppImage
+              desktop/release-assets/allapideck-linux-amd64.tar.gz
+              desktop/release-assets/allapideck-linux-amd64.deb
+              desktop/release-assets/allapideck-linux-amd64.AppImage
 
     steps:
       - name: Checkout
@@ -64,8 +67,8 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
 
       - name: Setup Node
         uses: actions/setup-node@v4

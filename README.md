@@ -1,6 +1,6 @@
 ﻿<div align="center">
 
-<img src="./assets/appicon.png" alt="All API Deck" width="80">
+<img src="./desktop/assets/appicon.png" alt="All API Deck" width="80">
 
 **All API Deck：批量管理站点账号、模型与密钥的桌面工具**
 
@@ -27,7 +27,7 @@
 
 <p align="center">
   <a href="README.md"><strong>中文</strong></a> |
-  <a href="docs/readme/README.en.md">English</a>
+  <a href="desktop/docs/readme/README.en.md">English</a>
 </p>
 
 </div>
@@ -51,9 +51,9 @@
 
 ## 界面预览
 
-<img src="./docs/images/all-api-deck-home.png" alt="All API Deck 首页预览" width="72%" />
-<img src="./docs/images/all-api-deck-site-management.png" alt="All API Deck 站点管理" width="72%" />
-<img src="./docs/images/all-api-deck-sidebar.png" alt="侧边栏" width="24%" />
+<img src="./desktop/docs/images/all-api-deck-home.png" alt="All API Deck 首页预览" width="72%" />
+<img src="./desktop/docs/images/all-api-deck-site-management.png" alt="All API Deck 站点管理" width="72%" />
+<img src="./desktop/docs/images/all-api-deck-sidebar.png" alt="侧边栏" width="24%" />
 
 ## 主要功能
 
@@ -117,15 +117,15 @@
 
 ```text
 .
-├─ src/                     前端页面与组件
-├─ wailsjs/                 Wails 绑定代码
-├─ build/                   构建输出
-├─ logs/                    运行日志
-├─ scripts/                 开发与构建脚本
-├─ main.go                  Wails 入口
-├─ app.go                   应用生命周期与后端主逻辑
-├─ window_sidebar.go        托盘 / 侧边面板窗口逻辑
-└─ local_api.go             本地接口与请求处理
+├─ desktop/                 桌面端项目主目录
+│  ├─ src/                  前端页面与组件
+│  ├─ wailsjs/              Wails 绑定代码
+│  ├─ build/                桌面构建资源
+│  ├─ scripts/              开发与构建脚本
+│  ├─ main.go               Wails 入口
+│  ├─ app.go                应用生命周期与后端主逻辑
+│  └─ window_sidebar.go     托盘 / 侧边面板窗口逻辑
+└─ .github/workflows/       发布与 CI 配置
 ```
 ## 技术栈
 
@@ -180,7 +180,7 @@ npm run build:desktop
 构建产物默认位于：
 
 ```text
-build/bin/
+desktop/build/bin/
 ```
 
 GitHub Release 当前会附带这些桌面端产物：
