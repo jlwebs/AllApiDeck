@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         All API Deck Local Bridge Import
 // @namespace    http://tampermonkey.net/
-// @version      0.2.6
+// @version      0.2.7
 // @description  当前标签页桥接导入：显式确认后提取站点登录态候选、账号信息与站内 key 列表，并发送到本地 All API Deck 进程。
 // @author       All API Deck
 // @match        http://127.0.0.1/*
@@ -16,7 +16,7 @@
   'use strict';
 
   const receiverBase = 'http://127.0.0.1:8888';
-  const bridgeVersion = '0.2.6';
+  const bridgeVersion = '0.2.7';
   const executionId = `bridge-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
   const phaseLogs = [];
   const nativeFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
@@ -26,6 +26,127 @@
     tokenSnapshots: [],
     responseTraces: [],
   };
+  const HUB_LINUX_HOST = 'hub.linux.do';
+  const HUB_LINUX_GRAPHQL_PATH = '/admin/graphql';
+  const HUB_LINUX_API_KEYS_REFERER_PATH = '/project/api-keys';
+  const HUB_LINUX_ME_QUERY = `
+    query Me {
+      me {
+        id
+        email
+        firstName
+        lastName
+        isOwner
+        scopes
+        preferLanguage
+        avatar
+        roles {
+          name
+        }
+        projects {
+          projectID
+          isOwner
+          scopes
+          roles {
+            name
+          }
+        }
+      }
+    }
+  `;
+  const HUB_LINUX_API_KEYS_QUERY = `
+    query GetApiKeys($first: Int, $after: Cursor, $orderBy: APIKeyOrder, $where: APIKeyWhereInput) {
+      apiKeys(first: $first, after: $after, orderBy: $orderBy, where: $where) {
+        edges {
+          node {
+            id
+            createdAt
+            updatedAt
+            user {
+              id
+              firstName
+              lastName
+            }
+            key
+            name
+            type
+            status
+            scopes
+          }
+          cursor
+        }
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+          startCursor
+          endCursor
+        }
+        totalCount
+      }
+    }
+  `;
+  const HUB_LINUX_API_KEY_DETAIL_QUERY = `
+    query GetApiKey($id: ID!) {
+      apiKey(id: $id) {
+        id
+        key
+        name
+        type
+        status
+        scopes
+        profiles {
+          activeProfile
+          profiles {
+            name
+            channelIDs
+            channelTags
+            modelMappings {
+              requestModel
+              actualModel
+            }
+          }
+        }
+      }
+    }
+  `;
+  const HUB_LINUX_MODELS_QUERY = `
+    query Models($input: QueryModelsInput!) {
+      queryModels(input: $input) {
+        id
+        status
+      }
+    }
+  `;
+  const HUB_LINUX_VISIBLE_CHANNELS_QUERY = `
+    query GetVisibleChannelSummarys($first: Int, $after: Cursor, $orderBy: ChannelOrder, $where: ChannelWhereInput) {
+      channels(first: $first, after: $after, orderBy: $orderBy, where: $where) {
+        edges {
+          node {
+            id
+            name
+            type
+            status
+            orderingWeight
+            tags
+            remark
+            allModelEntries {
+              requestModel
+              actualModel
+              source
+            }
+          }
+          cursor
+        }
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+          startCursor
+          endCursor
+        }
+        totalCount
+      }
+    }
+  `;
 
   const TOKEN_HINT_RE = /(access[_-]?token|auth[_-]?token|id[_-]?token|jwt|token|authorization|bearer|session|sess|login)/i;
   const USER_ID_HINT_RE = /(user[_-]?id|userid|uid|account[_-]?id|member[_-]?id)/i;
@@ -598,6 +719,7 @@
 
   function detectObservedSiteTypeFromPath(pathname) {
     const path = safeString(pathname);
+    if (path.startsWith(HUB_LINUX_GRAPHQL_PATH)) return 'hub_linux_do';
     if (path.startsWith('/api/v1/keys')) return 'sub2api';
     if (path.includes('/api/token')) return '';
     return '';
@@ -834,6 +956,328 @@
     }
   }
 
+  function isHubLinuxDo(rawOrigin = window.location.origin) {
+    const parsed = parseUrlMaybe(rawOrigin);
+    const host = safeString(parsed?.hostname || window.location.hostname).toLowerCase();
+    return host === HUB_LINUX_HOST;
+  }
+
+  function extractHubLinuxGlobalIdTail(value) {
+    const text = safeString(value);
+    if (!text) return '';
+    const segments = text.split('/').map(item => safeString(item)).filter(Boolean);
+    return segments.length ? segments[segments.length - 1] : text;
+  }
+
+  function extractHubLinuxConnectionNodes(connection) {
+    if (Array.isArray(connection)) return connection.filter(Boolean);
+    const edges = Array.isArray(connection?.edges) ? connection.edges : [];
+    if (edges.length > 0) {
+      return edges.map(edge => edge?.node).filter(Boolean);
+    }
+    const nodes = Array.isArray(connection?.nodes) ? connection.nodes : [];
+    if (nodes.length > 0) return nodes.filter(Boolean);
+    const items = Array.isArray(connection?.items) ? connection.items : [];
+    if (items.length > 0) return items.filter(Boolean);
+    return [];
+  }
+
+  function normalizeHubLinuxSiteName(token, index = 0) {
+    const nameCandidate = safeString(
+      token?.site_name ||
+      token?.siteName ||
+      token?.name ||
+      token?.label
+    );
+    if (/^Hub-Linux-/i.test(nameCandidate)) {
+      return nameCandidate;
+    }
+    const keyTail = extractHubLinuxGlobalIdTail(token?.id || token?.key || token?.access_token);
+    const suffix = nameCandidate || keyTail || `APIKey-${index + 1}`;
+    return `Hub-Linux-${suffix}`;
+  }
+
+  function normalizeHubLinuxTokenStatus(status) {
+    return safeString(status).toLowerCase() === 'disabled' ? 2 : 1;
+  }
+
+  function collectHubLinuxMappedModels(mappings) {
+    const models = [];
+    (Array.isArray(mappings) ? mappings : []).forEach(mapping => {
+      if (typeof mapping === 'string') {
+        const value = safeString(mapping);
+        if (value) models.push(value);
+        return;
+      }
+      const requestModel = safeString(mapping?.requestModel || mapping?.request_model);
+      const actualModel = safeString(mapping?.actualModel || mapping?.actual_model);
+      if (requestModel) models.push(requestModel);
+      if (actualModel) models.push(actualModel);
+    });
+    return makeSetArray(models);
+  }
+
+  function buildHubLinuxChannelModelMap(channels) {
+    const map = new Map();
+    extractHubLinuxConnectionNodes(channels).forEach(channel => {
+      const channelId = extractHubLinuxGlobalIdTail(channel?.id);
+      if (!channelId) return;
+      const models = [];
+      (Array.isArray(channel?.allModelEntries) ? channel.allModelEntries : []).forEach(entry => {
+        const requestModel = safeString(entry?.requestModel || entry?.request_model);
+        const actualModel = safeString(entry?.actualModel || entry?.actual_model);
+        if (requestModel) models.push(requestModel);
+        if (actualModel) models.push(actualModel);
+      });
+      map.set(channelId, makeSetArray(models));
+    });
+    return map;
+  }
+
+  function pickHubLinuxProjectId(mePayload) {
+    const projects = Array.isArray(mePayload?.projects) ? mePayload.projects : [];
+    const preferred = projects.find(project => {
+      const scopes = Array.isArray(project?.scopes) ? project.scopes.map(item => safeString(item)) : [];
+      return scopes.includes('read_api_keys');
+    });
+    return safeString(preferred?.projectID || projects[0]?.projectID);
+  }
+
+  function pickHubLinuxActiveProfile(detailPayload) {
+    const root = detailPayload?.profiles && typeof detailPayload.profiles === 'object'
+      ? detailPayload.profiles
+      : {};
+    const profiles = Array.isArray(root?.profiles) ? root.profiles : [];
+    const activeName = safeString(root?.activeProfile);
+    return profiles.find(profile => safeString(profile?.name) === activeName) || profiles[0] || null;
+  }
+
+  function resolveHubLinuxModelsForKey(detailPayload, globalModels, channelModelMap) {
+    const activeProfile = pickHubLinuxActiveProfile(detailPayload);
+    const channelIds = makeSetArray(
+      (Array.isArray(activeProfile?.channelIDs) ? activeProfile.channelIDs : []).map(extractHubLinuxGlobalIdTail)
+    );
+    const channelModels = makeSetArray(
+      channelIds.flatMap(channelId => channelModelMap.get(channelId) || [])
+    );
+    const mappedModels = collectHubLinuxMappedModels(activeProfile?.modelMappings);
+    const models = makeSetArray([
+      ...mappedModels,
+      ...channelModels,
+      ...((mappedModels.length === 0 && channelModels.length === 0) ? globalModels : []),
+    ]);
+    return {
+      channelIds,
+      models,
+    };
+  }
+
+  async function hubLinuxGraphql(origin, accessToken, operationName, query, variables, trace, userId = '') {
+    const url = `${origin}${HUB_LINUX_GRAPHQL_PATH}`;
+    const response = await sameOriginFetch(url, {
+      method: 'POST',
+      headers: {
+        ...buildAuthHeaders(accessToken, userId),
+        'Content-Type': 'application/json',
+        Origin: origin,
+        Referer: `${origin}${HUB_LINUX_API_KEYS_REFERER_PATH}`,
+      },
+      body: JSON.stringify({
+        operationName,
+        query,
+        ...(variables != null ? { variables } : {}),
+      }),
+    }, 9000);
+    if (!response.ok) {
+      const payload = await response.clone().json().catch(() => null);
+      const reason = classifyBridgeFailure(response.status, payload);
+      const messageText = safeString(
+        payload?.errors?.[0]?.message ||
+        payload?.message ||
+        payload?.error ||
+        `HTTP ${response.status}`
+      );
+      if (Array.isArray(trace)) {
+        trace.push(`[HUB_HTTP_${response.status}] ${operationName} ${messageText || reason || 'request_failed'}`);
+      }
+      throw new Error(reason || messageText || `hub.linux.do ${operationName} failed`);
+    }
+    const payload = await response.json().catch(() => null);
+    if (!payload || typeof payload !== 'object') {
+      if (Array.isArray(trace)) trace.push(`[HUB_JSON_FAIL] ${operationName}`);
+      throw new Error(`hub.linux.do ${operationName} returned empty payload`);
+    }
+    const graphqlError = safeString(payload?.errors?.[0]?.message);
+    if (graphqlError) {
+      if (Array.isArray(trace)) trace.push(`[HUB_GQL_ERROR] ${operationName} ${graphqlError}`);
+      throw new Error(graphqlError);
+    }
+    if (Array.isArray(trace)) trace.push(`[HUB_OK] ${operationName}`);
+    return payload;
+  }
+
+  async function probeHubLinuxDoApiKeys(origin, accessToken, selectedUserId) {
+    const trace = [];
+    trace.push(`[HUB_START] origin=${origin}`);
+    const mePayload = await hubLinuxGraphql(origin, accessToken, 'Me', HUB_LINUX_ME_QUERY, undefined, trace, selectedUserId);
+    const me = mePayload?.data?.me || {};
+    const userId = safeString(me?.id || selectedUserId);
+    const projectId = pickHubLinuxProjectId(me);
+    trace.push(`[HUB_ME] userId=${userId || 'n/a'} projectId=${projectId || 'n/a'}`);
+
+    const modelsPayload = await hubLinuxGraphql(origin, accessToken, 'Models', HUB_LINUX_MODELS_QUERY, {
+      input: {
+        statusIn: ['enabled'],
+        includeMapping: true,
+        includePrefix: true,
+      },
+    }, trace, userId);
+    const globalModels = makeSetArray(
+      extractHubLinuxConnectionNodes(modelsPayload?.data?.queryModels)
+        .map(model => safeString(model?.id))
+        .filter(Boolean)
+    );
+    trace.push(`[HUB_MODELS] count=${globalModels.length}`);
+
+    const channelNodes = [];
+    let channelAfter = '';
+    for (let page = 0; page < 8; page += 1) {
+      const variables = {
+        first: 200,
+        ...(channelAfter ? { after: channelAfter } : {}),
+        where: {
+          statusIn: ['enabled', 'disabled'],
+        },
+        orderBy: {
+          field: 'ORDERING_WEIGHT',
+          direction: 'DESC',
+        },
+      };
+      const channelsPayload = await hubLinuxGraphql(origin, accessToken, 'GetVisibleChannelSummarys', HUB_LINUX_VISIBLE_CHANNELS_QUERY, variables, trace, userId);
+      const channelConnection = channelsPayload?.data?.channels;
+      const pageNodes = extractHubLinuxConnectionNodes(channelConnection);
+      channelNodes.push(...pageNodes);
+      const pageInfo = channelConnection?.pageInfo || {};
+      trace.push(`[HUB_CHANNELS_PAGE] index=${page + 1} count=${pageNodes.length} hasNext=${pageInfo?.hasNextPage === true}`);
+      if (pageInfo?.hasNextPage !== true || !safeString(pageInfo?.endCursor)) break;
+      channelAfter = safeString(pageInfo.endCursor);
+    }
+    const channelModelMap = buildHubLinuxChannelModelMap(channelNodes);
+    trace.push(`[HUB_CHANNELS] count=${channelNodes.length}`);
+
+    const apiKeyNodes = [];
+    let after = '';
+    for (let page = 0; page < 10; page += 1) {
+      const variables = {
+        first: 100,
+        ...(after ? { after } : {}),
+        where: {
+          statusIn: ['enabled', 'disabled'],
+          ...(userId ? { userID: userId } : {}),
+          typeNotIn: ['noauth'],
+        },
+        orderBy: {
+          field: 'CREATED_AT',
+          direction: 'DESC',
+        },
+      };
+      const apiKeysPayload = await hubLinuxGraphql(origin, accessToken, 'GetApiKeys', HUB_LINUX_API_KEYS_QUERY, variables, trace, userId);
+      const apiKeys = apiKeysPayload?.data?.apiKeys;
+      const pageNodes = extractHubLinuxConnectionNodes(apiKeys);
+      apiKeyNodes.push(...pageNodes.filter(node => safeString(node?.key)));
+      const pageInfo = apiKeys?.pageInfo || {};
+      trace.push(`[HUB_API_KEYS_PAGE] index=${page + 1} count=${pageNodes.length} hasNext=${pageInfo?.hasNextPage === true}`);
+      if (pageInfo?.hasNextPage !== true || !safeString(pageInfo?.endCursor)) break;
+      after = safeString(pageInfo.endCursor);
+    }
+
+    const tokens = [];
+    for (let index = 0; index < apiKeyNodes.length; index += 1) {
+      const apiKeyNode = apiKeyNodes[index];
+      const apiKeyId = safeString(apiKeyNode?.id);
+      const detailPayload = apiKeyId
+        ? await hubLinuxGraphql(origin, accessToken, 'GetApiKey', HUB_LINUX_API_KEY_DETAIL_QUERY, { id: apiKeyId }, trace, userId)
+        : { data: { apiKey: apiKeyNode } };
+      const detail = detailPayload?.data?.apiKey || apiKeyNode;
+      const key = safeString(detail?.key || apiKeyNode?.key);
+      if (!key) continue;
+      const siteName = normalizeHubLinuxSiteName({
+        id: apiKeyId,
+        name: safeString(detail?.name || apiKeyNode?.name),
+        key,
+      }, index);
+      const resolvedModels = resolveHubLinuxModelsForKey(detail, globalModels, channelModelMap);
+      tokens.push({
+        id: apiKeyId,
+        key,
+        access_token: key,
+        name: siteName,
+        site_name: siteName,
+        source: 'hub.linux.do',
+        status: normalizeHubLinuxTokenStatus(detail?.status || apiKeyNode?.status),
+        token_status: safeString(detail?.status || apiKeyNode?.status),
+        type: safeString(detail?.type || apiKeyNode?.type),
+        scopes: Array.isArray(detail?.scopes) ? detail.scopes : Array.isArray(apiKeyNode?.scopes) ? apiKeyNode.scopes : [],
+        models: resolvedModels.models,
+        channel_ids: resolvedModels.channelIds,
+        project_id: projectId,
+      });
+    }
+
+    trace.push(`[HUB_DONE] tokens=${tokens.length}`);
+    return {
+      ok: tokens.length > 0,
+      endpoint: `${HUB_LINUX_GRAPHQL_PATH}:GetApiKeys`,
+      siteType: 'hub_linux_do',
+      userId,
+      projectId,
+      tokens,
+      trace,
+    };
+  }
+
+  function buildHubLinuxDoSitePayloads(basePayload, hubResult) {
+    const origin = safeString(basePayload?.source_origin || window.location.origin);
+    return (Array.isArray(hubResult?.tokens) ? hubResult.tokens : []).map((token, index) => {
+      const siteName = normalizeHubLinuxSiteName(token, index);
+      return {
+        ...basePayload,
+        title: siteName,
+        captured_at: nowIso(),
+        extracted: {
+          ...(basePayload?.extracted || {}),
+          site_name: siteName,
+          site_url: origin,
+          site_type: 'hub_linux_do',
+          api_base_url: origin,
+          account_info: {},
+          resolved_user_id: '',
+          resolved_access_token: '',
+          tokens: [{
+            ...token,
+            name: siteName,
+            site_name: siteName,
+          }],
+          endpoint: `${HUB_LINUX_GRAPHQL_PATH}:GetApiKeys`,
+          error: '',
+          storage_origin: origin,
+        },
+        diagnostics: {
+          ...(basePayload?.diagnostics || {}),
+          hub_linux_do: {
+            ok: true,
+            endpoint: hubResult?.endpoint || `${HUB_LINUX_GRAPHQL_PATH}:GetApiKeys`,
+            site_type: hubResult?.siteType || 'hub_linux_do',
+            project_id: safeString(hubResult?.projectId),
+            token_count: Array.isArray(hubResult?.tokens) ? hubResult.tokens.length : 0,
+            trace: Array.isArray(hubResult?.trace) ? hubResult.trace : [],
+          },
+        },
+        client_logs: phaseLogs.slice(),
+      };
+    });
+  }
+
   function extractListItems(body) {
     if (Array.isArray(body)) return body;
     if (!body || typeof body !== 'object') return [];
@@ -1022,6 +1466,7 @@
       payload?.data?.user_id,
       payload?.data?.userId,
       payload?.data?.user?.id,
+      payload?.data?.me?.id,
       payload?.data?.user?.uid,
       payload?.user?.id,
       payload?.user?.uid,
@@ -1087,6 +1532,9 @@
     try {
       const parsed = new URL(origin);
       const host = safeString(parsed.hostname).toLowerCase();
+      if (host === HUB_LINUX_HOST) {
+        return 'hub_linux_do';
+      }
       if (host === 'anyrouter.top' || host.endsWith('.anyrouter.top')) {
         return 'anyrouter';
       }
@@ -1140,6 +1588,7 @@
     const endpoint = safeString(extracted?.endpoint);
     const siteType = safeString(extracted?.site_type);
     const tokens = Array.isArray(extracted?.tokens) ? extracted.tokens : [];
+    const sitePayloads = Array.isArray(extracted?.site_payloads) ? extracted.site_payloads : [];
     const extractedError = safeString(extracted?.error);
     const selfProbeOK = diagnostics?.self_probe?.ok === true;
     const tokenProbeOK = diagnostics?.token_probe?.ok === true;
@@ -1150,6 +1599,7 @@
       : '';
 
     const isRelay = Boolean(
+      sitePayloads.length > 0 ||
       tokens.length > 0 ||
       endpoint ||
       siteType ||
@@ -1159,9 +1609,14 @@
       ((extractedError === 'token_expired' || extractedError === 'token_expired_local' || extractedError === 'not_logged_in') && accessToken)
     );
     const shouldSubmit = isRelay && !blockedReason;
+    const hubPrefetchedDetail = sitePayloads.length > 0
+      ? `[Hub-Linux] prefetched ${sitePayloads.length} sites`
+      : '';
 
     let detail = '未发现可复用的中转站特征';
-    if (tokens.length > 0) {
+    if (hubPrefetchedDetail) {
+      detail = hubPrefetchedDetail;
+    } else if (tokens.length > 0) {
       detail = `已预取到 ${tokens.length} 个 key`;
     } else if (endpoint) {
       detail = `发现接口端点 ${endpoint}`;
@@ -1324,6 +1779,51 @@
     const selectedUserId = safeString(next?.extracted?.resolved_user_id || next?.extracted?.account_info?.id);
     const locallyExpiredJwt = accessToken && isJwtExpired(accessToken);
 
+    if (isHubLinuxDo(origin)) {
+      try {
+        logPhase('hub:start', 'start probe hub.linux.do api keys', {
+          origin,
+          accessToken: maskSecret(accessToken),
+        });
+        const hubResult = await probeHubLinuxDoApiKeys(origin, accessToken, selectedUserId);
+        next.extracted.site_type = 'hub_linux_do';
+        next.extracted.endpoint = `${HUB_LINUX_GRAPHQL_PATH}:GetApiKeys`;
+        next.extracted.tokens = Array.isArray(hubResult?.tokens) ? hubResult.tokens : [];
+        next.extracted.site_payloads = buildHubLinuxDoSitePayloads(next, hubResult);
+        next.extracted.resolved_user_id = safeString(hubResult?.userId);
+        next.extracted.account_info.id = safeString(hubResult?.userId);
+        next.extracted.error = hubResult?.ok ? '' : 'hub_linux_do_empty';
+        next.diagnostics.hub_linux_do = {
+          ok: hubResult?.ok === true,
+          endpoint: hubResult?.endpoint || `${HUB_LINUX_GRAPHQL_PATH}:GetApiKeys`,
+          site_type: hubResult?.siteType || 'hub_linux_do',
+          project_id: safeString(hubResult?.projectId),
+          token_count: Array.isArray(hubResult?.tokens) ? hubResult.tokens.length : 0,
+          trace: Array.isArray(hubResult?.trace) ? hubResult.trace : [],
+        };
+        logPhase('hub:done', 'hub.linux.do api keys loaded', {
+          count: Array.isArray(hubResult?.tokens) ? hubResult.tokens.length : 0,
+        });
+        next.client_logs = phaseLogs.slice();
+        return next;
+      } catch (error) {
+        logPhase('hub:error', 'hub.linux.do api keys failed', {
+          error: safeString(error?.message || error),
+        });
+        next.extracted.site_type = 'hub_linux_do';
+        next.extracted.endpoint = `${HUB_LINUX_GRAPHQL_PATH}:GetApiKeys`;
+        next.extracted.tokens = [];
+        next.extracted.site_payloads = [];
+        next.extracted.error = 'hub_linux_do_fetch_failed';
+        next.diagnostics.hub_linux_do = {
+          ok: false,
+          error: safeString(error?.message || error),
+        };
+        next.client_logs = phaseLogs.slice();
+        return next;
+      }
+    }
+
     logPhase('probe:start', '开始同源探测站点账号信息', {
       siteUrl: origin,
       accessToken: maskSecret(accessToken),
@@ -1473,6 +1973,13 @@
 
   function getUsablePrefetchedKeyCount(payload) {
     const extracted = payload?.extracted || {};
+    const sitePayloads = Array.isArray(extracted?.site_payloads) ? extracted.site_payloads : [];
+    if (sitePayloads.length > 0) {
+      return sitePayloads.reduce((sum, sitePayload) => {
+        const tokens = Array.isArray(sitePayload?.extracted?.tokens) ? sitePayload.extracted.tokens : [];
+        return sum + countUsableResolvedTokens(tokens);
+      }, 0);
+    }
     return countUsableResolvedTokens(Array.isArray(extracted?.tokens) ? extracted.tokens : []);
   }
 
@@ -1595,6 +2102,73 @@
     }
 
     bridgePanelSuppressed = false;
+    const sitePayloads = Array.isArray(payload?.extracted?.site_payloads)
+      ? payload.extracted.site_payloads
+      : [];
+    if (sitePayloads.length > 0) {
+      const submitResults = [];
+      let successCount = 0;
+      for (const sitePayload of sitePayloads) {
+        const siteName = safeString(sitePayload?.extracted?.site_name || sitePayload?.title);
+        logPhase('import:site:start', 'submit hub split site', { siteName });
+        const response = await request('POST', `${receiverBase}/bridge/import`, sitePayload);
+        let result = {};
+        try {
+          result = JSON.parse(response.responseText || '{}');
+        } catch {}
+        const ignored = result?.ignored === true || result?.ok === false;
+        if (!ignored) {
+          successCount += 1;
+        }
+        submitResults.push({
+          response,
+          result,
+          siteName,
+          ignored,
+        });
+        logPhase('import:site:ack', 'hub split site submitted', {
+          siteName,
+          status: response.status,
+          ignored,
+          reason: result?.reason || '',
+        });
+        if (safeString(result?.reason) === 'session_inactive') {
+          bridgePanelSuppressed = true;
+          removeBridgePanel();
+          break;
+        }
+      }
+      if (successCount <= 0) {
+        return {
+          payload,
+          relayDecision: {
+            ...relayDecision,
+            shouldSubmit: false,
+            blockedReason: submitResults[0]?.result?.reason || relayDecision.blockedReason || '',
+            detail: mapBridgeIgnoreReasonToDetail(submitResults[0]?.result?.reason, relayDecision.detail),
+          },
+          skipped: true,
+          usableKeyCount,
+          result: {
+            ok: false,
+            siteCount: sitePayloads.length,
+          },
+        };
+      }
+      return {
+        response: submitResults[submitResults.length - 1]?.response,
+        result: {
+          ok: true,
+          siteCount: sitePayloads.length,
+          successCount,
+        },
+        payload,
+        relayDecision,
+        skipped: false,
+        usableKeyCount,
+      };
+    }
+
     const response = await request('POST', `${receiverBase}/bridge/import`, payload);
     let result = {};
     try {

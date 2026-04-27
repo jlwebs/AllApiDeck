@@ -157,7 +157,15 @@
                 <div class="site-top-row">
                   <div class="site-main-block">
                     <div class="site-heading">
-                      <strong class="site-title-text" :style="getSiteTitleStyle(record.siteName)">{{ record.siteName }}</strong>
+                      <button
+                        type="button"
+                        class="site-title-link"
+                        :style="getSiteTitleStyle(record.siteName)"
+                        :disabled="!record.siteUrl"
+                        @click="openRecordSiteUrl(record)"
+                      >
+                        <strong class="site-title-text">{{ record.siteName }}</strong>
+                      </button>
                       <a-tag v-if="isCompactMode" :color="record.status === 1 ? 'green' : 'red'">{{ record.status === 1 ? '正常' : '异常' }}</a-tag>
                     </div>
                     <div class="site-subline">
@@ -495,7 +503,7 @@ import DesktopConfigDiffModal from './DesktopConfigDiffModal.vue';
 import SystemSettingsModal from './SystemSettingsModal.vue';
 import { fetchModelList } from '../utils/api.js';
 import { maskApiKey } from '../utils/normal.js';
-import { apiFetch, isProbablyWailsRuntime } from '../utils/runtimeApi.js';
+import { apiFetch, isProbablyWailsRuntime, openUrlInSystemBrowser } from '../utils/runtimeApi.js';
 import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManagedAppConfigFiles } from '../utils/desktopConfigBridge.js';
 import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS, inferProviderKeyFromSnapshot } from '../utils/desktopConfigTransform.js';
 import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils/balance.js';
@@ -1645,7 +1653,18 @@ function launchCCSwitch(record, targetApp = 'claude') {
   params.set('endpoint', normalizeSiteUrl(record.siteUrl));
   params.set('apiKey', record.apiKey);
   if (record.quickTestModel) params.set('model', record.quickTestModel);
-  window.open(`ccswitch://v1/import?${params.toString()}`, '_blank');
+  const schemaUrl = `ccswitch://v1/import?${params.toString()}`;
+  const platform = String(
+    navigator?.userAgentData?.platform ||
+    navigator?.platform ||
+    navigator?.userAgent ||
+    ''
+  ).toLowerCase();
+  if (platform.includes('mac')) {
+    openUrlInSystemBrowser(schemaUrl);
+  } else {
+    window.open(schemaUrl, '_blank');
+  }
   message.success(`正在尝试唤起 CC Switch (${targetApp})`);
 }
 
@@ -2060,6 +2079,12 @@ function getSiteTitleStyle(siteName) {
     fontSize: `${fontSize}px`,
     lineHeight: '1.08',
   };
+}
+
+function openRecordSiteUrl(record) {
+  const target = String(record?.siteUrl || '').trim();
+  if (!target) return;
+  openUrlInSystemBrowser(target);
 }
 
 function isLikelyChatModel(model) {
@@ -2637,6 +2662,9 @@ function persistMeta() {
 .site-heading{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0}
 .site-subline{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
 .site-title-text{display:block;flex:0 1 auto;min-width:0;overflow:hidden;white-space:nowrap}
+.site-title-link{display:block;flex:0 1 auto;min-width:0;padding:0;border:0;background:transparent;text-align:left;cursor:pointer;color:inherit}
+.site-title-link:hover .site-title-text,.site-title-link:focus-visible .site-title-text{text-decoration:underline}
+.site-title-link:disabled{cursor:default;opacity:1}
 .site-cell{width:100%;position:relative}
 .site-top-row{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:2px;width:100%}
 .site-main-block{min-width:80px;max-width:106px;width:106px;flex:0 0 auto}

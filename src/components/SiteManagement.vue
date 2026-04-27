@@ -275,6 +275,7 @@ import AppHeader from './AppHeader.vue';
 import AdvancedProxyModal from './AdvancedProxyModal.vue';
 import TextPromptModal from './TextPromptModal.vue';
 import SystemSettingsModal from './SystemSettingsModal.vue';
+import { fetchModelList } from '../utils/api.js';
 import { openUrlInSystemBrowser } from '../utils/runtimeApi.js';
 import { loadDesktopTokenSourceMode, loadTreeExpandedSetting } from '../utils/systemSettings.js';
 import { refreshCachedSiteTokens } from '../utils/siteTokenRefresh.js';
@@ -289,6 +290,7 @@ import {
   removeCustomKeyFromSiteCache,
   setSiteCacheDisabled,
   updateSiteCacheNote,
+  updateSiteCacheTreeNodes,
   writePendingBatchStart,
   writePendingSiteRestore,
 } from '../utils/siteCacheStore.js';
@@ -443,6 +445,124 @@ const collectLeafModelNames = nodes => {
   return Array.from(new Set(bucket));
 };
 
+const collectTokenModelMapFromTreeNodes = nodes => {
+  const tokenModelMap = new Map();
+  const walk = list => {
+    (Array.isArray(list) ? list : []).forEach(node => {
+      const tokenKey = extractTokenKeyFromNode(node);
+      if (tokenKey) {
+        const models = collectLeafModelNames(node?.children);
+        if (models.length > 0) tokenModelMap.set(tokenKey, models);
+      }
+      if (Array.isArray(node?.children) && node.children.length > 0) {
+        walk(node.children);
+      }
+    });
+  };
+  walk(nodes);
+  return tokenModelMap;
+};
+
+const normalizeSiteModelList = (values) => {
+  const bucket = [];
+  (Array.isArray(values) ? values : [values]).forEach(value => {
+    if (Array.isArray(value)) {
+      value.forEach(item => {
+        const text = String(item || '').trim();
+        if (text) bucket.push(text);
+      });
+      return;
+    }
+    String(value || '')
+      .split(/[\n,\s，；;]+/)
+      .map(item => item.trim())
+      .filter(Boolean)
+      .forEach(item => bucket.push(item));
+  });
+  return Array.from(new Set(bucket));
+};
+
+const buildTokenModelChildren = (record, tokenKey, siteModels) => (
+  normalizeSiteModelList(siteModels)
+    .map(model => ({
+      title: model,
+      key: `${record.siteCacheKey}|${tokenKey}|${model}`,
+      isLeaf: true,
+    }))
+);
+
+const buildSiteModelPool = (record, tokens = [], cachedNodes = []) => normalizeSiteModelList([
+  collectLeafModelNames(cachedNodes),
+  ...(Array.isArray(tokens) ? tokens.map(token => [
+    ...(Array.isArray(token?.models) ? token.models : []),
+    token?.model,
+    token?.selectedModel,
+    token?.modelsText,
+  ]) : []),
+]);
+
+const buildSiteTokenNodes = (record, mergedTokens = [], tokenModelsByKey = new Map(), fallbackCachedNodes = []) => {
+  const fallbackTokenModels = collectTokenModelMapFromTreeNodes(fallbackCachedNodes);
+  const siteModels = buildSiteModelPool(record, mergedTokens, fallbackCachedNodes);
+  return mergedTokens.map((token, tokenIndex) => {
+    const tokenKey = String(token?.key || token?.access_token || `token-${tokenIndex + 1}`).trim();
+    const tokenName = String(token?.name || `Token ${tokenIndex + 1}`).trim();
+    const sourceLabel = token?._origin === 'manual' ? 'manual' : 'built-in';
+    const statusLabel = Number(token?.status ?? 1) === 1 ? 'ready' : 'error';
+    const tokenModels = normalizeSiteModelList([
+      tokenModelsByKey.get(tokenKey),
+      fallbackTokenModels.get(tokenKey),
+      ...(Array.isArray(token?.models) ? token.models : []),
+      token?.model,
+      token?.selectedModel,
+      token?.modelsText,
+      siteModels,
+    ]);
+    return {
+      key: `token|${record.siteCacheKey}|${tokenKey}|${tokenIndex}`,
+      siteCacheKey: record.siteCacheKey,
+      title: `${tokenName} | ${maskValue(tokenKey)} | ${sourceLabel} | ${statusLabel}`,
+      disableCheckbox: true,
+      selectable: false,
+      isManualToken: token?._origin === 'manual',
+      titleClass: Number(token?.status ?? 1) === 1 ? '' : 'tree-site-disabled',
+      children: buildTokenModelChildren(record, tokenKey, tokenModels),
+    };
+  });
+};
+
+const buildSiteRootNode = (record, displayOrder, children = []) => {
+  const usableKeyCount = children.filter(child => String(child?.key || '').startsWith('token|')).length;
+  const mergedModelNames = collectLeafModelNames(children);
+  const summaryParts = [
+    usableKeyCount > 0 ? `${usableKeyCount} 涓彲鐢?Key` : '',
+    mergedModelNames.length > 0 ? `${mergedModelNames.length} 涓ā鍨?` : '',
+    record.lastSyncedAt || record.updatedAt ? `鍚屾 ${formatTime(record.lastSyncedAt || record.updatedAt)}` : '',
+  ].filter(Boolean);
+  const safeSummaryParts = [
+    usableKeyCount > 0 ? `${usableKeyCount} usable keys` : '',
+    mergedModelNames.length > 0 ? `${mergedModelNames.length} models` : '',
+    record.lastSyncedAt || record.updatedAt ? `synced ${formatTime(record.lastSyncedAt || record.updatedAt)}` : '',
+  ].filter(Boolean);
+  return {
+    key: `site-root|${record.siteCacheKey}`,
+    title: `${displayOrder}. [${record.siteName}]`,
+    providerTitleText: `${displayOrder}. [${record.siteName}]`,
+    providerStatusText: summaryParts.length > 0 ? `- ${summaryParts.join(' / ')}` : '',
+    providerStatusText: safeSummaryParts.length > 0 ? `- ${safeSummaryParts.join(' / ')}` : '',
+    providerSiteUrl: record.siteUrl,
+    siteCacheKey: record.siteCacheKey,
+    siteDisabled: record.disabled === true,
+    siteNote: String(record.note || '').trim(),
+    checkable: true,
+    disableCheckbox: false,
+    selectable: false,
+    titleClass: record.disabled ? 'tree-site-disabled' : '',
+    isSiteRoot: true,
+    children,
+  };
+};
+
 const buildManualTokenNode = (record, displayOrder, token, tokenIndex, siteModels) => {
   const tokenKey = String(token?.key || token?.access_token || `token-${tokenIndex + 1}`).trim();
   if (!tokenKey) return null;
@@ -454,14 +574,7 @@ const buildManualTokenNode = (record, displayOrder, token, tokenIndex, siteModel
     disableCheckbox: true,
     selectable: false,
     isManualToken: true,
-    children: (Array.isArray(siteModels) ? siteModels : [])
-      .map(model => String(model || '').trim())
-      .filter(Boolean)
-      .map(model => ({
-        title: model,
-        key: `${record.siteCacheKey}|${tokenKey}|${model}`,
-        isLeaf: true,
-      })),
+    children: buildTokenModelChildren(record, tokenKey, siteModels),
   };
 };
 
@@ -472,6 +585,7 @@ const buildFallbackTree = (record, displayOrder) => {
     ...remoteTokens.map(token => ({ ...token, _origin: 'remote' })),
     ...customTokens.map(token => ({ ...token, _origin: 'manual' })),
   ];
+  const siteModels = buildSiteModelPool(record, mergedTokens);
   const usableCount = mergedTokens.filter(token => Number(token?.status ?? 1) === 1).length;
   const summaryParts = [
     `${usableCount} 个可用 Key`,
@@ -487,7 +601,8 @@ const buildFallbackTree = (record, displayOrder) => {
     siteCacheKey: record.siteCacheKey,
     siteDisabled: record.disabled === true,
     siteNote: String(record.note || '').trim(),
-    disableCheckbox: true,
+    checkable: true,
+    disableCheckbox: false,
     selectable: false,
     titleClass: record.disabled ? 'tree-site-disabled' : '',
     isSiteRoot: true,
@@ -504,6 +619,7 @@ const buildFallbackTree = (record, displayOrder) => {
         selectable: false,
         isManualToken: token?._origin === 'manual',
         titleClass: Number(token?.status ?? 1) === 1 ? '' : 'tree-site-disabled',
+        children: buildTokenModelChildren(record, tokenKey, siteModels),
       };
     }),
   }];
@@ -516,7 +632,7 @@ const treeData = computed(() => filteredRecords.value.flatMap(record => {
     return buildFallbackTree(record, displayOrder);
   }
   const siteDisplayTitle = `${displayOrder}. [${record.siteName}]`;
-  const siteModels = collectLeafModelNames(cachedNodes);
+  const siteModels = buildSiteModelPool(record, [], cachedNodes);
   const customTokens = Array.isArray(record.customTokens) ? record.customTokens : [];
   return cachedNodes.map(node => {
     if (node?.isSiteRoot) {
@@ -536,8 +652,9 @@ const treeData = computed(() => filteredRecords.value.flatMap(record => {
         providerStatusText: mergedModelNames.length > 0
           ? `- ${usableKeyCount} 个可用 Key / ${mergedModelNames.length} 个模型`
           : (usableKeyCount > 0 ? `- ${usableKeyCount} 个可用 Key` : String(node?.providerStatusText || '').trim()),
+        checkable: true,
         children: mergedChildren,
-        disableCheckbox: true,
+        disableCheckbox: false,
         selectable: false,
         siteCacheKey: record.siteCacheKey,
         siteDisabled: record.disabled === true,
@@ -583,6 +700,51 @@ const maskValue = value => {
   if (!text) return '';
   if (text.length <= 16) return text;
   return `${text.slice(0, 8)}...${text.slice(-6)}`;
+};
+
+const resolveSiteModelApiBaseUrl = record => {
+  const apiBaseUrl = String(record?.apiBaseUrl || record?.api_key || '').trim().replace(/\/+$/, '');
+  if (apiBaseUrl.startsWith('http')) return apiBaseUrl;
+  return String(record?.siteUrl || record?.site_url || apiBaseUrl || '').trim().replace(/\/+$/, '');
+};
+
+const extractModelNamesFromPayload = payload => normalizeSiteModelList(
+  (Array.isArray(payload?.data) ? payload.data : []).map(item => {
+    if (typeof item === 'string') return item;
+    return item?.id || item?.name || item?.model || item?.value || '';
+  })
+);
+
+const refreshSiteTreeModels = async record => {
+  const siteCacheKey = String(record?.siteCacheKey || '').trim();
+  if (!siteCacheKey) return;
+
+  const remoteTokens = Array.isArray(record?.tokens) ? record.tokens : [];
+  const customTokens = Array.isArray(record?.customTokens) ? record.customTokens : [];
+  const mergedTokens = [
+    ...remoteTokens.map(token => ({ ...token, _origin: 'remote' })),
+    ...customTokens.map(token => ({ ...token, _origin: 'manual' })),
+  ];
+  const tokenModelsByKey = new Map();
+  const apiBaseUrl = resolveSiteModelApiBaseUrl(record);
+
+  if (apiBaseUrl) {
+    await Promise.all(mergedTokens.map(async token => {
+      const tokenKey = String(token?.key || token?.access_token || '').trim();
+      if (!tokenKey) return;
+      try {
+        const payload = await fetchModelList(apiBaseUrl, tokenKey);
+        const modelNames = extractModelNamesFromPayload(payload);
+        if (modelNames.length > 0) {
+          tokenModelsByKey.set(tokenKey, modelNames);
+        }
+      } catch {}
+    }));
+  }
+
+  const displayOrder = getStableSiteOrder(record) || getCachedSitePreferredOrder(record) || 0;
+  const nextChildren = buildSiteTokenNodes(record, mergedTokens, tokenModelsByKey, record?.cachedTreeNodes);
+  updateSiteCacheTreeNodes(siteCacheKey, [buildSiteRootNode(record, displayOrder, nextChildren)]);
 };
 
 const isSelectableModelKey = (key) => {
@@ -945,15 +1107,20 @@ const selectChatModelsOnly = () => {
 
 const refreshOne = async record => {
   try {
+    const refreshedAt = Date.now();
     const refreshedSite = await refreshCachedSiteTokens(record);
     mergeExtractedSitesIntoTempCache([refreshedSite], {
       importSource: 'site_cache_refresh',
-      refreshedAt: Date.now(),
+      refreshedAt,
     });
     mergeExtractedSitesIntoCache([refreshedSite], {
       importSource: 'site_cache_refresh',
-      refreshedAt: Date.now(),
+      refreshedAt,
     });
+    const latestRecord = loadAllSiteCacheRecords().find(item => item.siteCacheKey === record.siteCacheKey) || null;
+    if (latestRecord) {
+      await refreshSiteTreeModels(latestRecord);
+    }
     reloadRecords();
     message.success(`已刷新 ${record.siteName}`);
   } catch (error) {
@@ -985,7 +1152,7 @@ const openSiteNotePrompt = record => {
   textPromptOpen.value = true;
 };
 
-const submitTextPromptModal = () => {
+const submitTextPromptModal = async () => {
   const siteCacheKey = String(textPromptSiteCacheKey.value || '').trim();
   if (!siteCacheKey) {
     message.warning('当前节点缺少站点缓存标识');
@@ -999,9 +1166,14 @@ const submitTextPromptModal = () => {
       return;
     }
     appendCustomKeysToSiteCache(siteCacheKey, raw);
+    closeTextPromptModal();
+    reloadRecords();
+    const latestRecord = loadAllSiteCacheRecords().find(item => item.siteCacheKey === siteCacheKey) || null;
+    if (latestRecord) {
+      await refreshSiteTreeModels(latestRecord);
+    }
     reloadRecords();
     message.success('自定义 SK 已追加');
-    closeTextPromptModal();
     return;
   }
 

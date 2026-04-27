@@ -1,6 +1,6 @@
 ﻿<div align="center">
 
-<img src="./assets/appicon.png" alt="All API Deck" width="80">
+<img src="../../assets/appicon.png" alt="All API Deck" width="80">
 
 **Desktop app for batch API checks, key handling, and client switching**
 
@@ -18,7 +18,7 @@ Supports browser-extension import, model discovery, availability checks, and con
 --><a href="https://deepwiki.com/jlwebs/AllApiDeck">
   <img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg">
 </a><!--
---><a href="LICENSE">
+--><a href="../../LICENSE">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-brightgreen?style=flat">
 </a><!--
 --><img alt="Golang" src="https://img.shields.io/badge/Golang-1.24%2B-00ADD8?logo=go&style=flat"><!--
@@ -26,15 +26,15 @@ Supports browser-extension import, model discovery, availability checks, and con
 </p>
 
 <p align="center">
-  <a href="README.md"><strong>中文</strong></a> |
-  <a href="README.en.md">English</a>
+  <a href="../../README.md">中文</a> |
+  <a href="./README.en.md"><strong>English</strong></a>
 </p>
 
 </div>
 ## Preview
 
-<img src="./allapideck.webp" alt="All API Dock Home" width="50%" />
-<img src="./PixPin_2026-04-12_04-03-39.png" alt="Side Panel" width="20%" />
+<img src="../images/repo-preview/allapideck.webp" alt="All API Dock Home" width="50%" />
+<img src="../images/repo-preview/PixPin_2026-04-12_04-03-39.png" alt="Side Panel" width="20%" />
 
 ## Positioning
 
