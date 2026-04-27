@@ -1124,7 +1124,7 @@ import {
 } from '../utils/normal.js';
 import { checkForUpdates } from '../utils/update.js';
 import ModelVerifier from '../utils/verify.js';
-import { toggleTheme } from '../utils/theme.js';
+import { isDarkThemeMode, toggleTheme } from '../utils/theme.js';
 import { createSVGDataURL } from '../utils/svg.js';
 import { announcement, appInfo } from '../utils/info.js';
 import { apiFetch, isProbablyWailsRuntime } from '../utils/runtimeApi.js';
@@ -1286,9 +1286,8 @@ const showAppSettingsModal = ref(false);
 
 // 主题切换方法
 const handleToggleTheme = () => {
-  toggleTheme(isDarkMode);
-  document.body.classList.toggle('dark-mode', isDarkMode.value);
-  document.body.classList.toggle('light-mode', !isDarkMode.value);
+  const nextMode = toggleTheme(isDarkMode);
+  isDarkMode.value = isDarkThemeMode(nextMode);
 };
 
 // 语言切换菜单显示隐藏方法

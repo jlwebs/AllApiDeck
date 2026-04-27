@@ -1,28 +1,26 @@
 import { appInfo, banner } from './info.js';
+import { applyThemeMode, getStoredThemeMode, isDarkThemeMode } from './theme.js';
+
 export function initializeTheme(isDarkMode) {
-  // 初始化主题
-  const savedTheme = localStorage.getItem('api_check_theme');
-  isDarkMode.value = savedTheme === 'dark';
-  document.body.classList.toggle('dark-mode', isDarkMode.value);
-  document.body.classList.toggle('light-mode', !isDarkMode.value);
+  const appliedMode = applyThemeMode(getStoredThemeMode(), { persist: false, dispatch: false });
+  isDarkMode.value = isDarkThemeMode(appliedMode);
 }
 
 export function initializeLanguage(locale, currentLanguage) {
-  // 初始化语言
   const savedLocale = localStorage.getItem('locale');
   if (savedLocale) {
     locale.value = savedLocale;
   } else {
-    locale.value = 'zh'; // 默认语言为中文
+    locale.value = 'zh';
   }
 }
-//打印控制台
+
 export function initConsole() {
-  const message = `hello ? ️`;
+  const message = 'hello';
   console.log(
     `%c  API CHECK v${appInfo.version} %c  ${appInfo.officialUrl} `,
     'color: #fadfa3; background: #030307; padding:5px 0;',
-    'background: #fadfa3; padding:5px 0;'
+    'background: #fadfa3; padding:5px 0;',
   );
   console.log(banner);
   console.log(message + location.href);

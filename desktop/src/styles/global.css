@@ -26,6 +26,20 @@ body.dark-mode {
   --input-border-color: #1e88e5;
 }
 
+body.gaia-dark {
+  background-color: #070d11;
+  background-image:
+    radial-gradient(circle at 12% 14%, rgba(88, 117, 129, 0.18), transparent 22%),
+    radial-gradient(circle at 85% 10%, rgba(142, 109, 78, 0.14), transparent 18%),
+    linear-gradient(180deg, #05090d 0%, #0a1116 38%, #101920 100%);
+  background-attachment: fixed;
+  color: #d9e5e1;
+  --background-color: rgba(8, 14, 18, 0.86);
+  --font-color: #d9e5e1;
+  --input-background-color: #10181d;
+  --input-border-color: #69858e;
+}
+
 body.light-mode {
   background-color: #f8f8f8;
   color: #000000;
@@ -60,6 +74,16 @@ a {
   --button-background-color: #4caf50;
   --button-hover-background-color: #388e3c;
   --button-text-color: #ffffff;
+}
+
+.gaia-dark {
+  --background-color: #070d11;
+  --font-color: #d9e5e1;
+  --input-background-color: #10181d;
+  --input-border-color: #69858e;
+  --button-background-color: #48616b;
+  --button-hover-background-color: #344a53;
+  --button-text-color: #f3f7f6;
 }
 
 .light-mode {

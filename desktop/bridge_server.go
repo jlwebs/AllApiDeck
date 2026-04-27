@@ -25,7 +25,7 @@ var embeddedBridgeUserScript string
 const (
 	bridgeServerHost               = "127.0.0.1"
 	bridgeServerPort               = 8888
-	bridgeServerVersion            = "0.2.4"
+	bridgeServerVersion            = "0.2.9"
 	bridgeScriptManagerExtensionID = "gcalenpjmijncebpfijmoaglllgpjagf"
 	bridgeScriptManagerInstallURL  = "https://chrome.google.com/webstore/detail/tampermonkey/gcalenpjmijncebpfijmoaglllgpjagf"
 )
@@ -1329,16 +1329,34 @@ func (a *App) handleBridgeUserScript(writer http.ResponseWriter, request *http.R
 		return
 	}
 
-	raw := strings.TrimSpace(embeddedBridgeUserScript)
+	raw := ""
+	source := "embedded"
+	if diskPath, err := resolveBridgeUserScriptPath(); err == nil && strings.TrimSpace(diskPath) != "" {
+		if fileRaw, readErr := os.ReadFile(diskPath); readErr == nil {
+			candidate := strings.TrimSpace(string(fileRaw))
+			if candidate != "" {
+				raw = candidate
+				source = "disk"
+			} else {
+				appendBridgeImportLogf("[SCRIPT_WARN] source=disk path=%s err=empty_disk_script", diskPath)
+			}
+		} else {
+			appendBridgeImportLogf("[SCRIPT_WARN] source=disk path=%s err=%v", diskPath, readErr)
+		}
+	}
+
 	if raw == "" {
-		appendBridgeImportLogf("[SCRIPT_FAIL] source=embedded err=empty_embedded_script")
-		http.Error(writer, "embedded bridge script not found", http.StatusInternalServerError)
+		raw = strings.TrimSpace(embeddedBridgeUserScript)
+	}
+	if raw == "" {
+		appendBridgeImportLogf("[SCRIPT_FAIL] source=%s err=empty_script", source)
+		http.Error(writer, "bridge script not found", http.StatusInternalServerError)
 		return
 	}
 
 	writer.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
-	appendBridgeImportLogf("[SCRIPT_OK] source=embedded bytes=%d", len(raw))
+	appendBridgeImportLogf("[SCRIPT_OK] source=%s bytes=%d", source, len(raw))
 	_, _ = writer.Write([]byte(raw))
 }
 
@@ -1548,19 +1566,26 @@ func normalizeBridgeImportRecord(envelope map[string]any, index int) BridgeImpor
 }
 
 func buildBridgeImportRecordDedupKey(record BridgeImportRecord) string {
+	title := strings.TrimSpace(strings.ToLower(record.Title))
+	siteType := strings.TrimSpace(strings.ToLower(record.SiteType))
 	sourceURL := strings.TrimSpace(strings.ToLower(record.SourceURL))
 	sourceURL = strings.TrimRight(sourceURL, "/")
+	if siteType == "hub_linux_do" && sourceURL != "" && title != "" {
+		return "url-title:" + sourceURL + "|" + title
+	}
 	if sourceURL != "" {
 		return "url:" + sourceURL
 	}
 
 	sourceOrigin := strings.TrimSpace(strings.ToLower(record.SourceOrigin))
 	sourceOrigin = strings.TrimRight(sourceOrigin, "/")
+	if siteType == "hub_linux_do" && sourceOrigin != "" && title != "" {
+		return "origin-title:" + sourceOrigin + "|" + title
+	}
 	if sourceOrigin != "" {
 		return "origin:" + sourceOrigin
 	}
 
-	title := strings.TrimSpace(strings.ToLower(record.Title))
 	if title != "" {
 		return "title:" + title
 	}

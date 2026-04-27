@@ -36,6 +36,7 @@ const (
 func main() {
 	enableProcessDPIAwareness()
 	mode, recordKey, panelStart := resolveLaunchContext(os.Args[1:])
+	applyMacActivationPolicy(mode)
 	app := NewApp(mode, recordKey, panelStart)
 
 	err := wails.Run(buildAppOptions(app, mode))

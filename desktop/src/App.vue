@@ -7,8 +7,8 @@
 </template>
 
 <script>
-import { onMounted, ref } from 'vue';
-import { Modal } from 'ant-design-vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { Modal, theme as antTheme } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import { GetLaunchMode } from '../wailsjs/go/main/App.js';
@@ -20,6 +20,12 @@ import {
   setAdvancedProxyConfig,
 } from './utils/advancedProxyBridge.js';
 import { installSidebarRoutingDiagnostics } from './utils/clientDiagnostics.js';
+import {
+  applyThemeMode,
+  getStoredThemeMode,
+  isDarkThemeMode,
+  THEME_MODE_CHANGE_EVENT,
+} from './utils/theme.js';
 
 export default {
   name: 'App',
@@ -27,10 +33,20 @@ export default {
     const { t } = useI18n();
     const router = useRouter();
     const appReady = ref(false);
-    const theme = ref({
-      primaryColor: '#1890ff',
-    });
+    const themeMode = ref(getStoredThemeMode());
+    const theme = computed(() => ({
+      algorithm: isDarkThemeMode(themeMode.value) ? antTheme.darkAlgorithm : antTheme.defaultAlgorithm,
+      token: themeMode.value === 'gaia-dark'
+        ? {
+          colorPrimary: '#69858e',
+          colorInfo: '#69858e',
+          colorSuccess: '#5f7b78',
+          colorWarning: '#a57d5a',
+        }
+        : {},
+    }));
     const ADVANCED_PROXY_DEFAULT_PROMPT_STORAGE_KEY = 'batch_api_check_advanced_proxy_defaults_prompt_seen_version_v1';
+    let themeModeListener = null;
 
     const markAdvancedProxyDefaultPromptSeen = (version) => {
       try {
@@ -78,6 +94,14 @@ export default {
     };
 
     onMounted(async () => {
+      themeMode.value = applyThemeMode(getStoredThemeMode(), { persist: false, dispatch: false });
+      themeModeListener = event => {
+        const nextMode = String(event?.detail?.mode || '').trim();
+        if (!nextMode) return;
+        themeMode.value = nextMode;
+      };
+      window.addEventListener(THEME_MODE_CHANGE_EVENT, themeModeListener);
+
       let mode = '';
       try {
         mode = await GetLaunchMode();
@@ -99,6 +123,13 @@ export default {
       }
     });
 
+    onBeforeUnmount(() => {
+      if (themeModeListener) {
+        window.removeEventListener(THEME_MODE_CHANGE_EVENT, themeModeListener);
+        themeModeListener = null;
+      }
+    });
+
     return {
       appReady,
       theme,
@@ -114,5 +145,25 @@ export default {
 .app-shell {
   min-height: 100vh;
   min-width: 0;
+  position: relative;
+  isolation: isolate;
+}
+
+.app-shell > * {
+  position: relative;
+  z-index: 1;
+}
+
+body.gaia-dark .app-shell::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 14% 12%, rgba(104, 134, 146, 0.16), transparent 24%),
+    radial-gradient(circle at 88% 10%, rgba(146, 110, 76, 0.12), transparent 18%),
+    repeating-linear-gradient(120deg, rgba(255, 255, 255, 0.028) 0 1px, transparent 1px 150px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), rgba(255, 255, 255, 0));
 }
 </style>

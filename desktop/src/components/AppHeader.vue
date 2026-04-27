@@ -1,5 +1,5 @@
 <template>
-  <header class="spring-header">
+  <header class="spring-header" :class="{ 'spring-header-gaia': isDarkMode }">
     <button type="button" class="spring-brand" @click="navigate('/')">
       <span class="spring-brand-mark">
         <img :src="appLogo" alt="" class="spring-brand-icon" />
@@ -153,6 +153,8 @@ onMounted(async () => {
   margin-bottom: 8px;
   padding: 8px 10px;
   border-radius: 18px;
+  position: relative;
+  overflow: hidden;
   border: 1px solid rgba(77, 104, 73, 0.12);
   background:
     linear-gradient(135deg, rgba(255, 251, 242, 0.94), rgba(239, 246, 228, 0.84)),
@@ -366,6 +368,66 @@ onMounted(async () => {
   color: rgba(198, 218, 187, 0.72);
 }
 
+:deep(body.gaia-dark) .spring-header {
+  border-color: rgba(101, 129, 138, 0.2);
+  background:
+    linear-gradient(135deg, rgba(8, 15, 19, 0.98), rgba(16, 26, 32, 0.94)),
+    rgba(8, 14, 18, 0.92);
+  box-shadow:
+    0 16px 36px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(180, 214, 226, 0.04);
+}
+
+:deep(body.gaia-dark) .spring-header::after {
+  content: '';
+  position: absolute;
+  inset: auto 14px 0 14px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(161, 190, 198, 0.28), rgba(164, 125, 88, 0.2), transparent);
+  pointer-events: none;
+}
+
+:deep(body.gaia-dark) .spring-brand-mark {
+  background: linear-gradient(160deg, #243841, #15242b);
+  color: #eef6f4;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+}
+
+:deep(body.gaia-dark) .spring-brand-title,
+:deep(body.gaia-dark) .spring-pill {
+  color: #dde9e7;
+}
+
+:deep(body.gaia-dark) .spring-pill {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015));
+  border-color: rgba(101, 129, 138, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+:deep(body.gaia-dark) .spring-pill-active {
+  background: linear-gradient(135deg, rgba(58, 83, 93, 0.88), rgba(36, 53, 61, 0.78));
+  border-color: rgba(127, 160, 171, 0.28);
+  color: #f4faf8;
+  box-shadow:
+    0 10px 22px rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 rgba(180, 214, 226, 0.06);
+}
+
+:deep(body.gaia-dark) .spring-pill:hover {
+  background: rgba(88, 116, 126, 0.18);
+  color: #f4faf8;
+}
+
+:deep(body.gaia-dark) .spring-flow-arrow {
+  color: rgba(137, 159, 168, 0.72);
+}
+
+:deep(body.gaia-dark) .spring-pill-update-dot {
+  box-shadow:
+    0 0 0 2px rgba(11, 18, 23, 0.96),
+    0 3px 8px rgba(0, 0, 0, 0.3);
+}
+
 @media (max-width: 620px) {
   .spring-header {
     align-items: flex-start;
@@ -375,5 +437,65 @@ onMounted(async () => {
   .spring-toolbar {
     justify-content: flex-start;
   }
+}
+
+.spring-header-gaia {
+  border-color: rgba(101, 129, 138, 0.2);
+  background:
+    linear-gradient(135deg, rgba(8, 15, 19, 0.98), rgba(16, 26, 32, 0.94)),
+    rgba(8, 14, 18, 0.92);
+  box-shadow:
+    0 16px 36px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(180, 214, 226, 0.04);
+}
+
+.spring-header-gaia::after {
+  content: '';
+  position: absolute;
+  inset: auto 14px 0 14px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(161, 190, 198, 0.28), rgba(164, 125, 88, 0.2), transparent);
+  pointer-events: none;
+}
+
+.spring-header-gaia .spring-brand-mark {
+  background: linear-gradient(160deg, #243841, #15242b);
+  color: #eef6f4;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+}
+
+.spring-header-gaia .spring-brand-title,
+.spring-header-gaia .spring-pill {
+  color: #dde9e7;
+}
+
+.spring-header-gaia .spring-pill {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015));
+  border-color: rgba(101, 129, 138, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.spring-header-gaia .spring-pill-active {
+  background: linear-gradient(135deg, rgba(58, 83, 93, 0.88), rgba(36, 53, 61, 0.78));
+  border-color: rgba(127, 160, 171, 0.28);
+  color: #f4faf8;
+  box-shadow:
+    0 10px 22px rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 rgba(180, 214, 226, 0.06);
+}
+
+.spring-header-gaia .spring-pill:hover {
+  background: rgba(88, 116, 126, 0.18);
+  color: #f4faf8;
+}
+
+.spring-header-gaia .spring-flow-arrow {
+  color: rgba(137, 159, 168, 0.72);
+}
+
+.spring-header-gaia .spring-pill-update-dot {
+  box-shadow:
+    0 0 0 2px rgba(11, 18, 23, 0.96),
+    0 3px 8px rgba(0, 0, 0, 0.3);
 }
 </style>

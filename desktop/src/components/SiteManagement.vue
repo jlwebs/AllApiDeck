@@ -1,6 +1,6 @@
 <template>
   <ConfigProvider :theme="configProviderTheme">
-    <div class="wrapper batch-wrapper">
+    <div class="wrapper batch-wrapper" :class="{ 'site-wrapper-gaia': isDarkMode }">
       <div class="batch-shell">
         <div class="batch-forest-scene" aria-hidden="true">
           <div class="forest-mist forest-mist-left"></div>
@@ -40,7 +40,7 @@
                     <div class="page-title-block">
                       <h1 class="page-title">站点管理</h1>
                       <p class="page-subtitle">
-                        用户态 Token 与账号内密钥，树形浏览并按站点就地维护。
+                         
                       </p>
                     </div>
                   </div>
@@ -279,6 +279,7 @@ import { fetchModelList } from '../utils/api.js';
 import { openUrlInSystemBrowser } from '../utils/runtimeApi.js';
 import { loadDesktopTokenSourceMode, loadTreeExpandedSetting } from '../utils/systemSettings.js';
 import { refreshCachedSiteTokens } from '../utils/siteTokenRefresh.js';
+import { getAppliedThemeMode, isDarkThemeMode, THEME_MODE_CHANGE_EVENT } from '../utils/theme.js';
 import {
   SITE_CACHE_SYNC_EVENT,
   appendCustomKeysToSiteCache,
@@ -321,6 +322,10 @@ const stableSiteOrderMap = new Map();
 const configProviderTheme = computed(() => ({
   algorithm: isDarkMode.value ? theme.darkAlgorithm : theme.defaultAlgorithm,
 }));
+
+const syncThemeState = () => {
+  isDarkMode.value = isDarkThemeMode(getAppliedThemeMode());
+};
 
 const disabledCount = computed(() => records.value.filter(item => item.disabled).length);
 const customTokenCount = computed(() => records.value.reduce((sum, item) => sum + (item.customTokens?.length || 0), 0));
@@ -1311,17 +1316,19 @@ watch(treeData, () => {
 });
 
 onMounted(() => {
-  isDarkMode.value = document.body.classList.contains('dark-mode');
+  syncThemeState();
   reloadRecords();
   const pendingBatchStart = consumePendingBatchStart();
   if (pendingBatchStart) {
     batchConcurrency.value = Number(pendingBatchStart?.batchConcurrency || batchConcurrency.value || 25);
     modelTimeout.value = Number(pendingBatchStart?.modelTimeout || modelTimeout.value || 15);
   }
+  window.addEventListener(THEME_MODE_CHANGE_EVENT, syncThemeState);
   window.addEventListener(SITE_CACHE_SYNC_EVENT, handleSync);
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener(THEME_MODE_CHANGE_EVENT, syncThemeState);
   window.removeEventListener(SITE_CACHE_SYNC_EVENT, handleSync);
 });
 </script>
@@ -2130,6 +2137,77 @@ onBeforeUnmount(() => {
   color: #ffb6b7;
 }
 
+:deep(body.gaia-dark) .batch-hero {
+  border-color: rgba(101, 129, 138, 0.16);
+  background:
+    radial-gradient(circle at top right, rgba(139, 107, 75, 0.14), transparent 34%),
+    radial-gradient(circle at left center, rgba(76, 106, 117, 0.18), transparent 34%),
+    linear-gradient(145deg, rgba(9, 18, 23, 0.96), rgba(16, 29, 35, 0.94));
+  box-shadow:
+    0 34px 90px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(180, 214, 225, 0.04);
+}
+
+:deep(body.gaia-dark) .batch-forest-scene {
+  background:
+    linear-gradient(180deg, rgba(6, 12, 16, 0.12) 0%, rgba(6, 12, 16, 0.3) 42%, rgba(5, 10, 14, 0.52) 100%);
+}
+
+:deep(body.gaia-dark) .page-title,
+:deep(body.gaia-dark) .selection-title {
+  color: #e7f1ef;
+}
+
+:deep(body.gaia-dark) .page-subtitle,
+:deep(body.gaia-dark) .batch-hero-tag {
+  color: #afc4bf;
+}
+
+:deep(body.gaia-dark) .batch-hero-tag,
+:deep(body.gaia-dark) .tree-wrapper {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)),
+    rgba(8, 14, 18, 0.7);
+  border-color: rgba(101, 129, 138, 0.14);
+  box-shadow:
+    0 18px 40px rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 rgba(181, 214, 225, 0.03);
+}
+
+:deep(body.gaia-dark) .selection-action-group :deep(.ant-btn) {
+  border-color: rgba(101, 129, 138, 0.18);
+  background: rgba(10, 18, 22, 0.92);
+  color: #e7f1ef;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.18);
+}
+
+:deep(body.gaia-dark) .selection-action-group :deep(.ant-btn:hover),
+:deep(body.gaia-dark) .selection-action-group :deep(.ant-btn:focus-visible) {
+  border-color: rgba(122, 155, 166, 0.3);
+  background: rgba(16, 28, 34, 0.98);
+  color: #f4faf8;
+}
+
+:deep(body.gaia-dark) .settings-action-bar {
+  border-color: rgba(101, 129, 138, 0.16);
+  background: linear-gradient(180deg, rgba(12, 20, 25, 0.96), rgba(9, 16, 20, 0.92));
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.22);
+}
+
+:deep(body.gaia-dark) .forest-mist,
+:deep(body.gaia-dark) .forest-path-glow,
+:deep(body.gaia-dark) .forest-firegrass,
+:deep(body.gaia-dark) .forest-slime,
+:deep(body.gaia-dark) .batch-hero-motion {
+  display: none;
+}
+
+:deep(body.gaia-dark) .batch-page-content {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.016), rgba(255, 255, 255, 0)),
+    repeating-linear-gradient(120deg, rgba(149, 180, 189, 0.028) 0 1px, transparent 1px 160px);
+}
+
 @media (max-width: 620px) {
   .batch-hero {
     padding: 12px 10px;
@@ -2152,5 +2230,75 @@ onBeforeUnmount(() => {
     margin-left: 0;
     justify-content: flex-start;
   }
+}
+
+.site-wrapper-gaia .batch-hero {
+  border-color: rgba(101, 129, 138, 0.16);
+  background:
+    radial-gradient(circle at top right, rgba(139, 107, 75, 0.14), transparent 34%),
+    radial-gradient(circle at left center, rgba(76, 106, 117, 0.18), transparent 34%),
+    linear-gradient(145deg, rgba(9, 18, 23, 0.96), rgba(16, 29, 35, 0.94));
+  box-shadow:
+    0 34px 90px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(180, 214, 225, 0.04);
+}
+
+.site-wrapper-gaia .batch-forest-scene {
+  background: linear-gradient(180deg, rgba(6, 12, 16, 0.12) 0%, rgba(6, 12, 16, 0.3) 42%, rgba(5, 10, 14, 0.52) 100%);
+}
+
+.site-wrapper-gaia .page-title,
+.site-wrapper-gaia .selection-title {
+  color: #e7f1ef;
+}
+
+.site-wrapper-gaia .page-subtitle,
+.site-wrapper-gaia .batch-hero-tag {
+  color: #afc4bf;
+}
+
+.site-wrapper-gaia .batch-hero-tag,
+.site-wrapper-gaia .tree-wrapper {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)),
+    rgba(8, 14, 18, 0.7);
+  border-color: rgba(101, 129, 138, 0.14);
+  box-shadow:
+    0 18px 40px rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 rgba(181, 214, 225, 0.03);
+}
+
+.site-wrapper-gaia .selection-action-group :deep(.ant-btn) {
+  border-color: rgba(101, 129, 138, 0.18);
+  background: rgba(10, 18, 22, 0.92);
+  color: #e7f1ef;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.18);
+}
+
+.site-wrapper-gaia .selection-action-group :deep(.ant-btn:hover),
+.site-wrapper-gaia .selection-action-group :deep(.ant-btn:focus-visible) {
+  border-color: rgba(122, 155, 166, 0.3);
+  background: rgba(16, 28, 34, 0.98);
+  color: #f4faf8;
+}
+
+.site-wrapper-gaia .settings-action-bar {
+  border-color: rgba(101, 129, 138, 0.16);
+  background: linear-gradient(180deg, rgba(12, 20, 25, 0.96), rgba(9, 16, 20, 0.92));
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.22);
+}
+
+.site-wrapper-gaia .forest-mist,
+.site-wrapper-gaia .forest-path-glow,
+.site-wrapper-gaia .forest-firegrass,
+.site-wrapper-gaia .forest-slime,
+.site-wrapper-gaia .batch-hero-motion {
+  display: none;
+}
+
+.site-wrapper-gaia .batch-page-content {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.016), rgba(255, 255, 255, 0)),
+    repeating-linear-gradient(120deg, rgba(149, 180, 189, 0.028) 0 1px, transparent 1px 160px);
 }
 </style>

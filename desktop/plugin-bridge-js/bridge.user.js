@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         All API Deck Local Bridge Import
 // @namespace    http://tampermonkey.net/
-// @version      0.2.7
+// @version      0.2.9
 // @description  当前标签页桥接导入：显式确认后提取站点登录态候选、账号信息与站内 key 列表，并发送到本地 All API Deck 进程。
 // @author       All API Deck
 // @match        http://127.0.0.1/*
@@ -16,13 +16,14 @@
   'use strict';
 
   const receiverBase = 'http://127.0.0.1:8888';
-  const bridgeVersion = '0.2.7';
+  const bridgeVersion = '0.2.9';
   const executionId = `bridge-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
   const phaseLogs = [];
   const nativeFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
   const observedBridgeState = {
     authCandidates: [],
     userIdCandidates: [],
+    projectIdCandidates: [],
     tokenSnapshots: [],
     responseTraces: [],
   };
@@ -87,22 +88,49 @@
   `;
   const HUB_LINUX_API_KEY_DETAIL_QUERY = `
     query GetApiKey($id: ID!) {
-      apiKey(id: $id) {
-        id
-        key
-        name
-        type
-        status
-        scopes
-        profiles {
-          activeProfile
+      node(id: $id) {
+        ... on APIKey {
+          id
+          createdAt
+          updatedAt
+          user {
+            id
+            firstName
+            lastName
+          }
+          key
+          name
+          type
+          status
+          scopes
           profiles {
-            name
-            channelIDs
-            channelTags
-            modelMappings {
-              requestModel
-              actualModel
+            activeProfile
+            profiles {
+              name
+              channelIDs
+              channelTags
+              channelTagsMatchMode
+              modelIDs
+              loadBalanceStrategy
+              modelMappings {
+                from
+                to
+              }
+              quota {
+                requests
+                totalTokens
+                cost
+                period {
+                  type
+                  pastDuration {
+                    value
+                    unit
+                  }
+                  calendarDuration {
+                    unit
+                  }
+                }
+              }
             }
           }
         }
@@ -704,6 +732,28 @@
     }, 24);
   }
 
+  function isLikelyHubLinuxProjectIdCandidate(value) {
+    const text = safeString(value);
+    return /^gid:\/\/axonhub\/Project\/\d+$/i.test(text);
+  }
+
+  function recordObservedProjectId(value, meta = {}) {
+    const text = safeString(value);
+    if (!isLikelyHubLinuxProjectIdCandidate(text)) return;
+    pushLimited(observedBridgeState.projectIdCandidates, {
+      source: safeString(meta?.source || 'observed-project'),
+      storage: 'runtime',
+      keyName: safeString(meta?.keyName || 'x-project-id'),
+      path: safeString(meta?.path || ''),
+      value: text,
+    }, 24);
+    logPhase('hub:project-observed', 'observed hub project id', {
+      source: safeString(meta?.source || 'observed-project'),
+      path: safeString(meta?.path || ''),
+      projectId: text,
+    });
+  }
+
   function recordObservedAuthToken(token, meta = {}) {
     const text = safeString(token);
     if (!isLikelyTokenCandidate(text)) return;
@@ -823,10 +873,21 @@
             headersObject['user-id'] ||
             headersObject['New-API-User']
           );
+          const projectId = safeString(
+            headersObject['X-Project-ID'] ||
+            headersObject['x-project-id']
+          );
           if (compatUid) {
             recordObservedUserId(compatUid, {
               source: 'observed-fetch-headers',
               keyName: 'user_id',
+              path: parsedUrl.pathname + parsedUrl.search,
+            });
+          }
+          if (projectId) {
+            recordObservedProjectId(projectId, {
+              source: 'observed-fetch-headers',
+              keyName: 'x-project-id',
               path: parsedUrl.pathname + parsedUrl.search,
             });
           }
@@ -880,10 +941,21 @@
             meta.headers['user-id'] ||
             meta.headers['New-API-User']
           );
+          const projectId = safeString(
+            meta.headers['X-Project-ID'] ||
+            meta.headers['x-project-id']
+          );
           if (compatUid) {
             recordObservedUserId(compatUid, {
               source: 'observed-xhr-headers',
               keyName: 'user_id',
+              path: parsedUrl.pathname + parsedUrl.search,
+            });
+          }
+          if (projectId) {
+            recordObservedProjectId(projectId, {
+              source: 'observed-xhr-headers',
+              keyName: 'x-project-id',
               path: parsedUrl.pathname + parsedUrl.search,
             });
           }
@@ -916,7 +988,7 @@
     };
   }
 
-  function buildAuthHeaders(accessToken, uid) {
+  function buildAuthHeaders(accessToken, uid, projectId = '') {
     const headers = {
       Accept: 'application/json, text/plain, */*',
       'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
@@ -927,6 +999,10 @@
     const normalizedToken = safeString(accessToken);
     if (normalizedToken) {
       headers.Authorization = /^Bearer\s+/i.test(normalizedToken) ? normalizedToken : `Bearer ${normalizedToken}`;
+    }
+    const normalizedProjectId = safeString(projectId);
+    if (normalizedProjectId) {
+      headers['X-Project-ID'] = normalizedProjectId;
     }
     return {
       ...headers,
@@ -1009,8 +1085,8 @@
         if (value) models.push(value);
         return;
       }
-      const requestModel = safeString(mapping?.requestModel || mapping?.request_model);
-      const actualModel = safeString(mapping?.actualModel || mapping?.actual_model);
+      const requestModel = safeString(mapping?.requestModel || mapping?.request_model || mapping?.from);
+      const actualModel = safeString(mapping?.actualModel || mapping?.actual_model || mapping?.to);
       if (requestModel) models.push(requestModel);
       if (actualModel) models.push(actualModel);
     });
@@ -1043,6 +1119,11 @@
     return safeString(preferred?.projectID || projects[0]?.projectID);
   }
 
+  function pickObservedHubLinuxProjectId() {
+    const latest = [...observedBridgeState.projectIdCandidates].reverse().find(item => isLikelyHubLinuxProjectIdCandidate(item?.value));
+    return safeString(latest?.value);
+  }
+
   function pickHubLinuxActiveProfile(detailPayload) {
     const root = detailPayload?.profiles && typeof detailPayload.profiles === 'object'
       ? detailPayload.profiles
@@ -1072,16 +1153,28 @@
     };
   }
 
-  async function hubLinuxGraphql(origin, accessToken, operationName, query, variables, trace, userId = '') {
+  async function hubLinuxGraphql(origin, accessToken, operationName, query, variables, trace, userId = '', projectId = '') {
     const url = `${origin}${HUB_LINUX_GRAPHQL_PATH}`;
+    const normalizedProjectId = safeString(projectId);
+    const headers = {
+      ...buildAuthHeaders(accessToken, userId, normalizedProjectId),
+      'Content-Type': 'application/json',
+      Origin: origin,
+      Referer: `${origin}${HUB_LINUX_API_KEYS_REFERER_PATH}`,
+    };
+    logPhase('hub:gql:start', `hub graphql ${operationName}`, {
+      origin,
+      userId: safeString(userId) || 'n/a',
+      projectId: normalizedProjectId || 'n/a',
+      accessToken: maskSecret(accessToken),
+      referer: `${origin}${HUB_LINUX_API_KEYS_REFERER_PATH}`,
+      variables: previewText(JSON.stringify(variables || {}), 220) || '{}',
+      hasAuthorization: Boolean(headers.Authorization),
+      hasProjectHeader: Boolean(headers['X-Project-ID']),
+    });
     const response = await sameOriginFetch(url, {
       method: 'POST',
-      headers: {
-        ...buildAuthHeaders(accessToken, userId),
-        'Content-Type': 'application/json',
-        Origin: origin,
-        Referer: `${origin}${HUB_LINUX_API_KEYS_REFERER_PATH}`,
-      },
+      headers,
       body: JSON.stringify({
         operationName,
         query,
@@ -1089,29 +1182,52 @@
       }),
     }, 9000);
     if (!response.ok) {
-      const payload = await response.clone().json().catch(() => null);
+      const responseText = await response.clone().text().catch(() => '');
+      const payload = safeJsonParse(responseText);
       const reason = classifyBridgeFailure(response.status, payload);
       const messageText = safeString(
         payload?.errors?.[0]?.message ||
         payload?.message ||
         payload?.error ||
+        payload?.detail ||
         `HTTP ${response.status}`
       );
+      logPhase('hub:gql:http-error', `hub graphql ${operationName} failed`, {
+        status: response.status,
+        reason: reason || 'n/a',
+        message: messageText || 'n/a',
+        projectId: normalizedProjectId || 'n/a',
+        responsePreview: previewText(responseText, 260),
+      });
       if (Array.isArray(trace)) {
         trace.push(`[HUB_HTTP_${response.status}] ${operationName} ${messageText || reason || 'request_failed'}`);
       }
       throw new Error(reason || messageText || `hub.linux.do ${operationName} failed`);
     }
-    const payload = await response.json().catch(() => null);
+    const responseText = await response.text().catch(() => '');
+    const payload = safeJsonParse(responseText);
     if (!payload || typeof payload !== 'object') {
+      logPhase('hub:gql:json-error', `hub graphql ${operationName} returned non-json`, {
+        projectId: normalizedProjectId || 'n/a',
+        responsePreview: previewText(responseText, 260),
+      });
       if (Array.isArray(trace)) trace.push(`[HUB_JSON_FAIL] ${operationName}`);
       throw new Error(`hub.linux.do ${operationName} returned empty payload`);
     }
     const graphqlError = safeString(payload?.errors?.[0]?.message);
     if (graphqlError) {
+      logPhase('hub:gql:error', `hub graphql ${operationName} graphql error`, {
+        projectId: normalizedProjectId || 'n/a',
+        error: graphqlError,
+        responsePreview: previewText(responseText, 260),
+      });
       if (Array.isArray(trace)) trace.push(`[HUB_GQL_ERROR] ${operationName} ${graphqlError}`);
       throw new Error(graphqlError);
     }
+    logPhase('hub:gql:done', `hub graphql ${operationName} ok`, {
+      projectId: normalizedProjectId || 'n/a',
+      responsePreview: previewText(responseText, 180),
+    });
     if (Array.isArray(trace)) trace.push(`[HUB_OK] ${operationName}`);
     return payload;
   }
@@ -1119,10 +1235,16 @@
   async function probeHubLinuxDoApiKeys(origin, accessToken, selectedUserId) {
     const trace = [];
     trace.push(`[HUB_START] origin=${origin}`);
-    const mePayload = await hubLinuxGraphql(origin, accessToken, 'Me', HUB_LINUX_ME_QUERY, undefined, trace, selectedUserId);
+    const seededProjectId = pickObservedHubLinuxProjectId() || 'gid://axonhub/Project/1';
+    trace.push(`[HUB_PROJECT_SEED] ${seededProjectId}`);
+    logPhase('hub:project-seed', 'seed hub project id', {
+      projectId: seededProjectId,
+      observedCount: observedBridgeState.projectIdCandidates.length,
+    });
+    const mePayload = await hubLinuxGraphql(origin, accessToken, 'Me', HUB_LINUX_ME_QUERY, undefined, trace, selectedUserId, seededProjectId);
     const me = mePayload?.data?.me || {};
     const userId = safeString(me?.id || selectedUserId);
-    const projectId = pickHubLinuxProjectId(me);
+    const projectId = pickHubLinuxProjectId(me) || seededProjectId;
     trace.push(`[HUB_ME] userId=${userId || 'n/a'} projectId=${projectId || 'n/a'}`);
 
     const modelsPayload = await hubLinuxGraphql(origin, accessToken, 'Models', HUB_LINUX_MODELS_QUERY, {
@@ -1131,7 +1253,7 @@
         includeMapping: true,
         includePrefix: true,
       },
-    }, trace, userId);
+    }, trace, userId, projectId);
     const globalModels = makeSetArray(
       extractHubLinuxConnectionNodes(modelsPayload?.data?.queryModels)
         .map(model => safeString(model?.id))
@@ -1153,7 +1275,7 @@
           direction: 'DESC',
         },
       };
-      const channelsPayload = await hubLinuxGraphql(origin, accessToken, 'GetVisibleChannelSummarys', HUB_LINUX_VISIBLE_CHANNELS_QUERY, variables, trace, userId);
+      const channelsPayload = await hubLinuxGraphql(origin, accessToken, 'GetVisibleChannelSummarys', HUB_LINUX_VISIBLE_CHANNELS_QUERY, variables, trace, userId, projectId);
       const channelConnection = channelsPayload?.data?.channels;
       const pageNodes = extractHubLinuxConnectionNodes(channelConnection);
       channelNodes.push(...pageNodes);
@@ -1181,7 +1303,7 @@
           direction: 'DESC',
         },
       };
-      const apiKeysPayload = await hubLinuxGraphql(origin, accessToken, 'GetApiKeys', HUB_LINUX_API_KEYS_QUERY, variables, trace, userId);
+      const apiKeysPayload = await hubLinuxGraphql(origin, accessToken, 'GetApiKeys', HUB_LINUX_API_KEYS_QUERY, variables, trace, userId, projectId);
       const apiKeys = apiKeysPayload?.data?.apiKeys;
       const pageNodes = extractHubLinuxConnectionNodes(apiKeys);
       apiKeyNodes.push(...pageNodes.filter(node => safeString(node?.key)));
@@ -1196,9 +1318,9 @@
       const apiKeyNode = apiKeyNodes[index];
       const apiKeyId = safeString(apiKeyNode?.id);
       const detailPayload = apiKeyId
-        ? await hubLinuxGraphql(origin, accessToken, 'GetApiKey', HUB_LINUX_API_KEY_DETAIL_QUERY, { id: apiKeyId }, trace, userId)
-        : { data: { apiKey: apiKeyNode } };
-      const detail = detailPayload?.data?.apiKey || apiKeyNode;
+        ? await hubLinuxGraphql(origin, accessToken, 'GetApiKey', HUB_LINUX_API_KEY_DETAIL_QUERY, { id: apiKeyId }, trace, userId, projectId)
+        : { data: { node: apiKeyNode } };
+      const detail = detailPayload?.data?.node || apiKeyNode;
       const key = safeString(detail?.key || apiKeyNode?.key);
       if (!key) continue;
       const siteName = normalizeHubLinuxSiteName({
@@ -1751,6 +1873,11 @@
           path: item.path,
           preview: item.preview,
         })),
+        observed_project_id_candidates: observedBridgeState.projectIdCandidates.map(item => ({
+          source: item.source,
+          path: item.path,
+          value: item.value,
+        })),
         observed_token_snapshots: observedBridgeState.tokenSnapshots.map(item => ({
           source: item.source,
           endpoint: item.endpoint,
@@ -1784,6 +1911,8 @@
         logPhase('hub:start', 'start probe hub.linux.do api keys', {
           origin,
           accessToken: maskSecret(accessToken),
+          userId: selectedUserId || 'n/a',
+          observedProjectId: pickObservedHubLinuxProjectId() || 'n/a',
         });
         const hubResult = await probeHubLinuxDoApiKeys(origin, accessToken, selectedUserId);
         next.extracted.site_type = 'hub_linux_do';

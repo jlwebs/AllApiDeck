@@ -5,6 +5,7 @@
     :footer="null"
     width="860px"
     :destroy-on-close="false"
+    wrap-class-name="bridge-import-wizard-modal-wrap"
     @cancel="$emit('cancel')"
   >
     <div class="bridge-wizard">
@@ -18,7 +19,10 @@
         </div>
         <div class="bridge-step-actions">
           <a-button type="primary" :loading="openingInstall" @click="$emit('open-install')">打开脚本发布页</a-button>
-          <a-tag :color="installOpened ? 'success' : 'default'">
+          <a-tag
+            :color="installOpened ? 'success' : 'default'"
+            class="bridge-install-status-tag"
+          >
             {{ installOpened ? '发布页已打开' : '等待打开发布页' }}
           </a-tag>
         </div>
@@ -266,7 +270,172 @@ function recordStatusColor(record) {
 :deep(body.dark-mode) .bridge-log-head{color:#eef5e6}
 :deep(body.dark-mode) .bridge-record-chip{background:rgba(255,255,255,.05);border-color:rgba(160,189,144,.14)}
 :deep(body.dark-mode) .bridge-record-title{color:#eef5e6}
+:deep(body.dark-mode) .bridge-import-wizard-modal-wrap .ant-tag.ant-tag-default,
+:deep(body.dark-mode) .bridge-import-wizard-modal-wrap .bridge-log-head .ant-tag.ant-tag-default{
+  background:rgba(255,255,255,.08);
+  border-color:rgba(160,189,144,.18);
+  color:#dbe7d7 !important;
+}
+:deep(.bridge-import-wizard-modal-wrap) .bridge-step-actions .ant-btn{
+  border-color:rgba(154,191,142,.18);
+  background:rgba(22,28,22,.94);
+  color:#e4f1df;
+  box-shadow:0 10px 20px rgba(0,0,0,.18);
+}
+:deep(.bridge-import-wizard-modal-wrap) .bridge-step-actions .ant-btn:hover,
+:deep(.bridge-import-wizard-modal-wrap) .bridge-step-actions .ant-btn:focus-visible{
+  border-color:rgba(154,191,142,.34);
+  background:rgba(30,38,29,.98);
+  color:#f1f8ec;
+  box-shadow:0 12px 26px rgba(0,0,0,.22);
+}
+:deep(.bridge-import-wizard-modal-wrap) .bridge-step-actions .ant-btn.ant-btn-primary{
+  border-color:rgba(112,148,96,.88);
+  background:linear-gradient(135deg,#58764f,#6a895e);
+  color:#f3f8ef;
+}
+:deep(.bridge-import-wizard-modal-wrap) .bridge-step-actions .ant-btn.ant-btn-primary:hover,
+:deep(.bridge-import-wizard-modal-wrap) .bridge-step-actions .ant-btn.ant-btn-primary:focus-visible{
+  border-color:rgba(135,176,116,.96);
+  background:linear-gradient(135deg,#64865a,#759867);
+  color:#fbfdf9;
+}
+:deep(.bridge-import-wizard-modal-wrap) .bridge-step-actions .ant-btn.ant-btn-primary[disabled],
+:deep(.bridge-import-wizard-modal-wrap) .bridge-step-actions .ant-btn.ant-btn-primary:disabled,
+:deep(.bridge-import-wizard-modal-wrap) .bridge-step-actions .ant-btn.ant-btn-primary.ant-btn-disabled{
+  border-color:rgba(123,145,113,.18) !important;
+  background:rgba(38,46,38,.88) !important;
+  color:rgba(228,241,223,.42) !important;
+  box-shadow:none !important;
+}
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn,
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn.ant-btn-primary,
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn.css-dev-only-do-not-override-1am763r,
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn.css-dev-only-do-not-override-1am763r.ant-btn-primary{
+  border-color:rgba(88,118,128,.34) !important;
+  background:linear-gradient(180deg,rgba(21,31,37,.96),rgba(15,23,28,.96)) !important;
+  color:#dbe9e7 !important;
+  box-shadow:0 12px 24px rgba(0,0,0,.26) !important;
+}
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn:hover,
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn:focus-visible,
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn.ant-btn-primary:hover,
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn.ant-btn-primary:focus-visible{
+  border-color:rgba(111,151,164,.46) !important;
+  background:linear-gradient(180deg,rgba(28,40,47,.98),rgba(19,29,35,.98)) !important;
+  color:#edf6f5 !important;
+}
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn[disabled],
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn:disabled,
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn.ant-btn-disabled,
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn.ant-btn-primary[disabled],
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn.ant-btn-primary:disabled,
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn.ant-btn-primary.ant-btn-disabled,
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn.css-dev-only-do-not-override-1am763r[disabled],
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn.css-dev-only-do-not-override-1am763r:disabled,
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn.css-dev-only-do-not-override-1am763r.ant-btn-disabled{
+  border-color:rgba(78,102,111,.22) !important;
+  background:linear-gradient(180deg,rgba(24,32,37,.94),rgba(18,24,28,.94)) !important;
+  color:rgba(208,223,220,.38) !important;
+  opacity:1 !important;
+  box-shadow:none !important;
+}
+:deep(body.gaia-dark) :where(.bridge-import-wizard-modal-wrap) :where(.css-dev-only-do-not-override-1am763r).ant-btn-primary:disabled{
+  border-color:rgba(78,102,111,.22) !important;
+  color:rgba(208,223,220,.38) !important;
+  background:#1f2a30 !important;
+  background-color:#1f2a30 !important;
+  background-image:none !important;
+  box-shadow:none !important;
+}
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .ant-tag.ant-tag-default,
+:deep(body.gaia-dark) .bridge-import-wizard-modal-wrap .bridge-log-head .ant-tag.ant-tag-default{
+  background:rgba(255,255,255,.08);
+  border-color:rgba(95,128,138,.24);
+  color:#d7e6e4 !important;
+}
 @media (max-width: 760px){
   .bridge-record-chip{grid-template-columns:1fr;justify-items:start}
+}
+</style>
+
+<style>
+body.gaia-dark .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn.ant-btn-primary:disabled,
+body.gaia-dark .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn.ant-btn-primary.ant-btn-disabled,
+body.gaia-dark .bridge-import-wizard-modal-wrap .bridge-step-actions .ant-btn.ant-btn-primary[disabled],
+body.gaia-dark .bridge-import-wizard-modal-wrap .bridge-step-actions .css-dev-only-do-not-override-1am763r.ant-btn-primary:disabled,
+body.gaia-dark .bridge-import-wizard-modal-wrap .bridge-step-actions .css-dev-only-do-not-override-1am763r.ant-btn-primary.ant-btn-disabled,
+body.gaia-dark .bridge-import-wizard-modal-wrap .bridge-step-actions .css-dev-only-do-not-override-1am763r.ant-btn-primary[disabled] {
+  background: #1f2a30 !important;
+  background-color: #1f2a30 !important;
+  background-image: none !important;
+  border-color: rgba(78, 102, 111, 0.22) !important;
+  color: rgba(208, 223, 220, 0.38) !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+}
+
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag.ant-tag-default,
+body.gaia-dark .bridge-import-wizard-modal-wrap .bridge-log-head .ant-tag.ant-tag-default {
+  background: rgba(24, 32, 37, 0.92) !important;
+  background-color: rgba(24, 32, 37, 0.92) !important;
+  border-color: rgba(95, 128, 138, 0.24) !important;
+  color: #d7e6e4 !important;
+  box-shadow: none !important;
+}
+
+body.gaia-dark .bridge-import-wizard-modal-wrap .bridge-install-status-tag.ant-tag.ant-tag-default {
+  background: rgba(24, 32, 37, 0.92) !important;
+  background-color: rgba(24, 32, 37, 0.92) !important;
+  border-color: rgba(95, 128, 138, 0.24) !important;
+  color: #d7e6e4 !important;
+  box-shadow: none !important;
+}
+
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-blue,
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-geekblue,
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-cyan,
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-purple,
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-processing,
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-success,
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-error,
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-gold,
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-red {
+  background: rgba(24, 32, 37, 0.92) !important;
+  background-color: rgba(24, 32, 37, 0.92) !important;
+  box-shadow: none !important;
+}
+
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-blue,
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-processing {
+  border-color: rgba(94, 137, 169, 0.42) !important;
+  color: #8fc0e6 !important;
+}
+
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-geekblue,
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-purple {
+  border-color: rgba(116, 127, 189, 0.42) !important;
+  color: #aab6f2 !important;
+}
+
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-cyan {
+  border-color: rgba(92, 155, 155, 0.42) !important;
+  color: #8fd9d1 !important;
+}
+
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-success {
+  border-color: rgba(92, 150, 110, 0.4) !important;
+  color: #9fd6ad !important;
+}
+
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-error,
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-red {
+  border-color: rgba(155, 96, 96, 0.4) !important;
+  color: #e1a0a0 !important;
+}
+
+body.gaia-dark .bridge-import-wizard-modal-wrap .ant-tag-gold {
+  border-color: rgba(169, 141, 84, 0.4) !important;
+  color: #e3c98e !important;
 }
 </style>

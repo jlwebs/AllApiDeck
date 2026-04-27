@@ -1,7 +1,21 @@
 ﻿<template>
   <ConfigProvider :theme="configProviderTheme">
-    <div class="key-management" :class="{ 'key-management-compact': isCompactMode }">
-      <AppHeader v-if="!isCompactMode" current-page="keys" :is-dark-mode="isDarkMode" @experimental="showExperimentalFeatures = true" @settings="openSettingsModal" />
+    <div class="wrapper batch-wrapper key-management-wrapper" :class="{ 'site-wrapper-gaia key-management-wrapper-gaia': isDarkMode }">
+      <div class="batch-shell key-management-shell">
+        <div class="batch-forest-scene" aria-hidden="true">
+          <div class="forest-mist forest-mist-left"></div>
+          <div class="forest-mist forest-mist-right"></div>
+          <div class="forest-path-glow"></div>
+          <div class="forest-firegrass firegrass-left"></div>
+          <div class="forest-firegrass firegrass-right"></div>
+          <div class="forest-slime slime-a"></div>
+          <div class="forest-slime slime-b"></div>
+          <div class="forest-slime slime-c"></div>
+        </div>
+        <div class="page-content batch-page-content key-management-page-content">
+          <div class="container batch-page-container key-management-page-container">
+            <div class="key-management" :class="{ 'key-management-compact': isCompactMode, 'key-management-gaia': isDarkMode }">
+              <AppHeader v-if="!isCompactMode" current-page="keys" :is-dark-mode="isDarkMode" @experimental="showExperimentalFeatures = true" @settings="openSettingsModal" />
 
       <template v-if="!isCompactMode">
 
@@ -480,14 +494,18 @@
         </div>
       </a-modal>
 
-      <DesktopConfigDiffModal :open="desktopConfigDiffOpen" :preview="desktopConfigPreview" @cancel="desktopConfigDiffOpen = false" @confirm="applyDesktopConfigPreview" />
-      <SystemSettingsModal
-        v-model:open="showAppSettingsModal"
-        v-model:tree-expanded="globalTreeExpanded"
-        v-model:desktop-token-source-mode="desktopTokenSourceMode"
-        :app-name="'All API Deck'"
-      />
-      <AdvancedProxyModal v-model:open="showExperimentalFeatures" />
+              <DesktopConfigDiffModal :open="desktopConfigDiffOpen" :preview="desktopConfigPreview" @cancel="desktopConfigDiffOpen = false" @confirm="applyDesktopConfigPreview" />
+              <SystemSettingsModal
+                v-model:open="showAppSettingsModal"
+                v-model:tree-expanded="globalTreeExpanded"
+                v-model:desktop-token-source-mode="desktopTokenSourceMode"
+                :app-name="'All API Deck'"
+              />
+              <AdvancedProxyModal v-model:open="showExperimentalFeatures" />
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </ConfigProvider>
 </template>
@@ -508,6 +526,8 @@ import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManaged
 import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS, inferProviderKeyFromSnapshot } from '../utils/desktopConfigTransform.js';
 import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils/balance.js';
 import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
+import { normalizeCCSwitchEndpoint } from '../utils/ccSwitch.js';
+import { getAppliedThemeMode, isDarkThemeMode, THEME_MODE_CHANGE_EVENT } from '../utils/theme.js';
 import { exitSidebarMode, isManualSidebarBridgeAvailable, isSidebarBridgeAvailable, openManualSidebarPanel } from '../utils/windowMode.js';
 import { loadDesktopTokenSourceMode, loadTreeExpandedSetting } from '../utils/systemSettings.js';
 import { buildPerformanceTooltipLines, derivePerformanceMetricsFromResponse, hasPerformanceMetrics } from '../utils/performanceMetrics.js';
@@ -614,6 +634,10 @@ const configProviderTheme = computed(() => ({
   algorithm: isDarkMode.value ? theme.darkAlgorithm : theme.defaultAlgorithm,
 }));
 
+function syncThemeState() {
+  isDarkMode.value = isDarkThemeMode(getAppliedThemeMode());
+}
+
 function getSidebarPopupContainer(triggerNode) {
   return triggerNode?.ownerDocument?.body || document.body;
 }
@@ -698,14 +722,14 @@ const tablePagination = computed(() => {
 onMounted(() => {
   void (async () => {
     await hydrateLastResultsSnapshotCache();
-    if (!document.body.classList.contains('dark-mode') && !document.body.classList.contains('light-mode')) document.body.classList.add('light-mode');
-    isDarkMode.value = document.body.classList.contains('dark-mode');
+    syncThemeState();
     refreshManualSidebarBridgeReady();
     if (!manualSidebarBridgeReady.value && typeof window !== 'undefined') {
       manualSidebarBridgeProbeTimer = window.setInterval(refreshManualSidebarBridgeReady, 250);
     }
     refreshManagedRecordsFromStorage();
     if (typeof window !== 'undefined') {
+      window.addEventListener(THEME_MODE_CHANGE_EVENT, syncThemeState);
       window.addEventListener(KEY_MANAGEMENT_SYNC_EVENT, handleManagedRecordSyncEvent);
       window.addEventListener(HISTORY_SNAPSHOT_SYNC_EVENT, handleManagedRecordSyncEvent);
       window.addEventListener('storage', handleManagedRecordStorageEvent);
@@ -720,6 +744,7 @@ onBeforeUnmount(() => {
     manualSidebarBridgeProbeTimer = null;
   }
   if (typeof window !== 'undefined') {
+    window.removeEventListener(THEME_MODE_CHANGE_EVENT, syncThemeState);
     window.removeEventListener(KEY_MANAGEMENT_SYNC_EVENT, handleManagedRecordSyncEvent);
     window.removeEventListener(HISTORY_SNAPSHOT_SYNC_EVENT, handleManagedRecordSyncEvent);
     window.removeEventListener('storage', handleManagedRecordStorageEvent);
@@ -1650,7 +1675,7 @@ function launchCCSwitch(record, targetApp = 'claude') {
   params.set('app', targetApp);
   params.set('name', `${record.siteName}${record.quickTestModel ? ` - ${record.quickTestModel}` : ''}`);
   params.set('homepage', normalizeSiteUrl(record.siteUrl));
-  params.set('endpoint', normalizeSiteUrl(record.siteUrl));
+  params.set('endpoint', normalizeCCSwitchEndpoint(record.siteUrl, targetApp));
   params.set('apiKey', record.apiKey);
   if (record.quickTestModel) params.set('model', record.quickTestModel);
   const schemaUrl = `ccswitch://v1/import?${params.toString()}`;
@@ -2635,16 +2660,39 @@ function persistMeta() {
 </script>
 
 <style scoped>
-.key-management{width:100%;padding:0 8px 0;display:flex;flex-direction:column;gap:16px;position:relative;overflow:hidden;border-radius:0 0 28px 28px;background:radial-gradient(circle at 14% 16%,rgba(196,226,163,.18),transparent 22%),radial-gradient(circle at 84% 12%,rgba(255,214,126,.18),transparent 18%),linear-gradient(180deg,rgba(8,18,12,.12) 0%,rgba(8,18,12,.28) 45%,rgba(8,18,12,.5) 100%),url('/forest-batch-bg-v2.png') center center/cover no-repeat;box-shadow:0 26px 56px rgba(76,92,64,.16),inset 0 1px 0 rgba(255,255,255,.42)}
-.key-management-compact{padding:12px;gap:12px;min-height:100vh;background:linear-gradient(180deg,#f8fafc,#eef2ff)}
+.batch-wrapper.key-management-wrapper{min-height:calc(var(--vh,1vh) * 100);padding:0;overflow:hidden}
+.batch-shell.key-management-shell{width:100%;min-height:calc(var(--vh,1vh) * 100);position:relative;isolation:isolate;overflow:hidden}
+.batch-page-content.key-management-page-content{background:transparent;border-radius:0;box-shadow:none;padding:2px;min-height:calc(var(--vh,1vh) * 100);position:relative;z-index:1}
+.batch-page-container.key-management-page-container{max-width:100% !important;padding:8px 8px 0 !important;margin:0 auto !important;min-height:calc(var(--vh,1vh) * 100 - 4px);display:flex}
+.batch-forest-scene{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0;background:radial-gradient(circle at 16% 18%,rgba(164,213,120,.14),transparent 24%),radial-gradient(circle at 84% 14%,rgba(255,213,116,.14),transparent 22%),linear-gradient(180deg,rgba(8,18,12,.14) 0%,rgba(8,20,13,.34) 42%,rgba(6,16,10,.62) 100%),url('/forest-batch-bg-v2.png') center center/cover no-repeat;opacity:.92}
+.forest-mist,.forest-path-glow,.forest-firegrass,.forest-slime{position:absolute}
+.forest-mist{top:8%;width:34%;height:44%;border-radius:999px;background:radial-gradient(circle,rgba(210,255,232,.12) 0%,rgba(210,255,232,.02) 56%,transparent 74%);filter:blur(12px)}
+.forest-mist-left{left:-10%}
+.forest-mist-right{right:-8%;top:12%}
+.forest-path-glow{left:50%;bottom:-12%;width:min(460px,42vw);height:42%;transform:translateX(-50%);background:radial-gradient(ellipse at center bottom,rgba(255,214,126,.22) 0%,rgba(212,255,182,.12) 24%,rgba(30,58,33,0) 72%);clip-path:polygon(47% 100%,53% 100%,65% 76%,60% 56%,67% 33%,57% 0,43% 0,33% 33%,40% 56%,35% 76%);filter:blur(8px);opacity:.9}
+.forest-firegrass{bottom:-4px;width:188px;height:122px;background:url('/forest-firegrass-sprite-v2.png') left bottom/auto 100% no-repeat;filter:drop-shadow(0 6px 12px rgba(18,38,22,.2));opacity:.98}
+.firegrass-left{left:8px}
+.firegrass-right{right:8px;transform:scaleX(-1);transform-origin:center bottom}
+.forest-slime{bottom:26px;width:26px;height:22px;border-radius:58% 58% 46% 46%;background:radial-gradient(circle at 36% 36%,rgba(255,255,255,.9) 0 10%,transparent 11%),radial-gradient(circle at 64% 36%,rgba(255,255,255,.9) 0 10%,transparent 11%),radial-gradient(circle at 40% 40%,rgba(20,34,21,.86) 0 3%,transparent 4%),radial-gradient(circle at 60% 40%,rgba(20,34,21,.86) 0 3%,transparent 4%),radial-gradient(circle at 50% 72%,rgba(18,72,42,.44) 0 14%,transparent 15%),linear-gradient(180deg,rgba(177,255,149,.98),rgba(70,177,88,.94));box-shadow:inset 0 2px 0 rgba(255,255,255,.45),0 10px 16px rgba(14,38,18,.24),0 0 10px rgba(154,255,142,.18)}
+.slime-a{left:44%}
+.slime-b{left:51%;width:20px;height:17px}
+.slime-c{left:57%;width:18px;height:15px}
+.key-management{width:100%;padding:0;min-height:100%;display:flex;flex:1 1 auto;flex-direction:column;gap:6px;position:relative;overflow:visible;border-radius:0;background:transparent;box-shadow:none}
+.key-management-compact{padding:12px;gap:12px;min-height:100%;background:linear-gradient(180deg,#f8fafc,#eef2ff)}
 .key-management>*{position:relative;z-index:1}
 .compact-sidebar-summary{display:flex;flex-direction:column;gap:10px}
 .compact-sidebar-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .compact-sidebar-alert{margin:0}
 .sync-card,.inventory-card{width:100%}
-.sync-card :deep(.ant-card-body){padding:12px 24px}
+.inventory-card{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;overflow:hidden;border:0 !important;border-radius:0 !important;background:linear-gradient(180deg,rgba(228,233,226,.96),rgba(214,220,212,.92)) !important;box-shadow:none !important}
+.inventory-card :deep(.ant-card-head),.inventory-card :deep(.ant-card-body){background:transparent}
+.inventory-card :deep(.ant-card-head){border-bottom-color:rgba(114,132,103,.08)}
+.inventory-card :deep(.ant-card-body){display:flex;flex:1 1 auto;flex-direction:column;min-height:0}
+.inventory-card :deep(.ant-empty){margin-block:auto}
+.sync-card{position:relative;overflow:hidden;border-radius:18px}
+.sync-card :deep(.ant-card-body){padding:10px 12px}
 .sync-toolbar,.sync-meta,.quick-test-cell,.site-cell,.time-cell{display:flex;gap:12px;flex-wrap:wrap}
-.sync-toolbar{display:grid;grid-template-columns:max-content max-content minmax(240px,1fr) auto;align-items:center;column-gap:14px;row-gap:6px}
+.sync-toolbar{display:grid;grid-template-columns:max-content max-content minmax(240px,1fr) auto;align-items:center;column-gap:14px;row-gap:4px}
 .sync-meta,.site-cell,.time-cell,.quick-test-cell{flex-direction:column;gap:3px}
 .sync-toolbar{margin-bottom:0}
 .sync-meta{display:grid;grid-template-columns:repeat(2,max-content);align-items:center;gap:4px 14px}
@@ -2653,12 +2701,12 @@ function persistMeta() {
 .sync-meta-time-row{grid-column:1 / -1}
 .sync-summary-slot{min-width:0;display:flex;justify-content:flex-start}
 .sync-panel-trigger-slot{display:flex;align-items:center;justify-content:flex-end}
-.sync-panel-trigger-button{width:28px;height:28px;border-radius:999px;border:2px solid rgba(227,85,43,.92);background:transparent;color:#d9480f;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background-color .18s ease}
+.sync-panel-trigger-button{width:34px;height:34px;border-radius:999px;border:1px solid rgba(90,117,79,.18);background:rgba(255,255,255,.54);color:#55684d;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background-color .18s ease,color .18s ease}
 .sync-panel-trigger-button .anticon{font-size:11px}
-.sync-panel-trigger-button:hover:not(:disabled){transform:translateY(-1px);background:rgba(255,255,255,.35);box-shadow:0 8px 18px rgba(217,72,15,.14)}
+.sync-panel-trigger-button:hover:not(:disabled){transform:translateY(-1px);background:rgba(255,255,255,.82);border-color:rgba(96,128,84,.3);color:#30412f;box-shadow:0 10px 24px rgba(90,117,79,.12)}
 .sync-panel-trigger-button:disabled{opacity:.45;cursor:default}
-.sync-title-wrap{display:flex;align-items:center;padding-right:14px;margin-right:2px;border-right:1px solid rgba(90,117,79,.18);min-height:28px}
-.sync-title-text{font:700 18px/1.1 Georgia,'Times New Roman',serif;color:#2d432f;white-space:nowrap}
+.sync-title-wrap{display:flex;align-items:center;padding-right:16px;margin-right:2px;border-right:1px solid rgba(90,117,79,.14);min-height:42px}
+.sync-title-text{font:700 clamp(18px,2vw,24px)/1 Georgia,'Times New Roman',serif;color:#31422f;letter-spacing:-.03em;white-space:nowrap}
 .site-heading{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0}
 .site-subline{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
 .site-title-text{display:block;flex:0 1 auto;min-width:0;overflow:hidden;white-space:nowrap}
@@ -2682,13 +2730,13 @@ function persistMeta() {
 .site-balance-unit{color:#6b7280;font-size:11px}
 .site-balance-refresh-icon{font-size:14px}
 .site-balance-refresh-icon-spinning{animation:spin 1s linear infinite}
-.sync-meta,.subtle-text{color:#64748b;font-size:11px}
+.sync-meta,.subtle-text{color:#72806c;font-size:11px}
 .time-cell{width:120px;min-width:120px}
 .time-cell span{display:block;line-height:1.2}
 .sync-loading{margin-top:6px;display:flex;align-items:center;gap:8px}
 .sync-alert{margin-top:6px}
 .sync-feedback{margin-top:6px;display:flex;align-items:flex-start;gap:6px;flex-wrap:wrap}
-.sync-card :deep(.ant-alert){padding:6px 10px;border-radius:12px}
+.sync-card :deep(.ant-alert){padding:6px 10px;border-radius:999px;border-color:rgba(90,117,79,.14);background:rgba(255,255,255,.52)}
 .sync-card :deep(.ant-alert-message){font-size:11px;line-height:1.25}
 .sync-card :deep(.sync-alert-inline.ant-alert){margin:0;display:inline-flex;width:fit-content;max-width:100%;align-items:center}
 .sync-card :deep(.sync-alert-inline.ant-alert .ant-alert-content){min-width:0}
@@ -2911,12 +2959,27 @@ function persistMeta() {
 .key-management .desktop-panel-title,.key-management .desktop-app-name,.key-management .site-title-text{font-family:Georgia,'Times New Roman',serif;color:#2d432f}
 .key-management .quick-test-button{border-radius:999px;background:linear-gradient(135deg,#476847,#6f8f55);border:0;box-shadow:0 8px 16px rgba(87,118,76,.18)}
 .key-management :deep(.ant-btn-default),.key-management :deep(.ant-btn-primary),.key-management :deep(.ant-select-selector),.key-management :deep(.ant-input),.key-management :deep(.ant-input-password),.key-management :deep(.ant-input-affix-wrapper){border-radius:12px}
+.key-management .inventory-card{width:100%;margin:0;flex:1 1 auto;border:0 !important;border-radius:0 !important;background:linear-gradient(180deg,rgba(228,233,226,.96),rgba(214,220,212,.92)) !important;box-shadow:none !important;backdrop-filter:none !important}
+.key-management .inventory-card :deep(.ant-card-head){background:linear-gradient(180deg,rgba(228,233,226,.96),rgba(221,227,218,.94)) !important}
+.key-management .inventory-card :deep(.ant-card-body){background:transparent}
+.key-management .inventory-card :deep(.ant-card-head){border-bottom-color:rgba(114,132,103,.08)}
+.key-management-gaia .inventory-card,.key-management-wrapper-gaia .inventory-card{background:linear-gradient(180deg,rgba(10,18,22,.96),rgba(8,14,18,.92)) !important;box-shadow:none !important}
+.key-management-gaia .inventory-card :deep(.ant-card-head),.key-management-wrapper-gaia .inventory-card :deep(.ant-card-head){background:linear-gradient(180deg,rgba(14,24,29,.98),rgba(10,18,22,.96)) !important;border-bottom-color:rgba(101,129,138,.16)}
 .key-management .sync-card :deep(.ant-card-head){display:none}
-.key-management .sync-card :deep(.ant-card-body){padding:12px 24px}
+.key-management .sync-card{border-radius:18px;border:1px solid rgba(90,117,79,.1);background:radial-gradient(circle at 84% 14%,rgba(255,214,126,.18),transparent 26%),radial-gradient(circle at 18% 18%,rgba(196,226,163,.16),transparent 24%),linear-gradient(180deg,rgba(255,251,242,.94),rgba(243,246,235,.9));box-shadow:0 22px 52px rgba(87,107,73,.1),inset 0 1px 0 rgba(255,255,255,.78)}
+.key-management .sync-card :deep(.ant-card-body){padding:10px 12px}
+.key-management .sync-card::before{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(90deg,rgba(255,255,255,.22),transparent 32%,transparent 72%,rgba(255,255,255,.1));opacity:.8}
+:deep(body.dark-mode) .key-management .sync-card{border-color:rgba(160,189,144,.12);background:radial-gradient(circle at 84% 14%,rgba(179,147,67,.18),transparent 26%),radial-gradient(circle at 18% 18%,rgba(104,149,88,.16),transparent 24%),linear-gradient(145deg,rgba(24,38,27,.95),rgba(35,53,39,.92));box-shadow:0 24px 54px rgba(0,0,0,.26),inset 0 1px 0 rgba(255,255,255,.04)}
+:deep(body.dark-mode) .key-management .sync-title-wrap{border-right-color:rgba(160,189,144,.16)}
+:deep(body.dark-mode) .key-management .sync-title-text{color:#eef5e6}
+:deep(body.dark-mode) .key-management .sync-meta,:deep(body.dark-mode) .key-management .subtle-text{color:#b8c8b2}
+:deep(body.dark-mode) .key-management .sync-card :deep(.ant-alert){border-color:rgba(160,189,144,.14);background:rgba(255,255,255,.05)}
 :deep(body.dark-mode) .key-management .sync-panel-trigger-button{border-color:rgba(255,148,77,.9);color:#ffb36b;background:rgba(255,255,255,.03)}
 :deep(body.dark-mode) .key-management .sync-panel-trigger-button:hover:not(:disabled){background:rgba(255,179,107,.1);box-shadow:0 10px 22px rgba(0,0,0,.2)}
-:deep(body.dark-mode) .key-management{background:radial-gradient(circle at 14% 16%,rgba(102,164,110,.18),transparent 22%),radial-gradient(circle at 84% 12%,rgba(255,194,96,.14),transparent 18%),linear-gradient(180deg,rgba(5,12,8,.42) 0%,rgba(5,12,8,.62) 45%,rgba(4,8,6,.82) 100%),url('/forest-batch-bg-v2.png') center center/cover no-repeat;box-shadow:0 28px 60px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.04)}
+:deep(body.dark-mode) .batch-forest-scene{background:radial-gradient(circle at 16% 18%,rgba(164,213,120,.14),transparent 24%),radial-gradient(circle at 84% 14%,rgba(255,213,116,.14),transparent 22%),linear-gradient(180deg,rgba(5,12,8,.42) 0%,rgba(5,12,8,.62) 45%,rgba(4,8,6,.82) 100%),url('/forest-batch-bg-v2.png') center center/cover no-repeat}
 :deep(body.dark-mode) .key-management :deep(.ant-card){background:rgba(255,255,255,.06);border-color:rgba(160,189,144,.14);box-shadow:0 18px 42px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.04)}
+:deep(body.dark-mode) .key-management .inventory-card{background:linear-gradient(180deg,rgba(18,26,20,.96),rgba(14,20,16,.92)) !important;box-shadow:none !important}
+:deep(body.dark-mode) .key-management .inventory-card :deep(.ant-card-head){border-bottom-color:rgba(160,189,144,.14)}
 :deep(body.dark-mode) .key-management :deep(.ant-card-head-title),:deep(body.dark-mode) .key-management .desktop-panel-title,:deep(body.dark-mode) .key-management .desktop-app-name,:deep(body.dark-mode) .key-management .site-title-text{color:#edf5e6}
 :deep(body.dark-mode) .key-management :deep(.ant-card-extra),:deep(body.dark-mode) .key-management .sync-meta,:deep(body.dark-mode) .key-management .subtle-text,:deep(body.dark-mode) .key-management .api-endpoint-text,:deep(body.dark-mode) .key-management .desktop-panel-hint,:deep(body.dark-mode) .key-management .desktop-field-hint{color:#b6c7b1}
 :deep(body.dark-mode) .key-management :deep(.ant-table-thead > tr > th){background:rgba(255,255,255,.08);color:#edf5e6}
@@ -2926,6 +2989,19 @@ function persistMeta() {
 :deep(body.dark-mode) .portable-settings-title{color:#ecf8e7}
 :deep(body.dark-mode) .portable-settings-desc,:deep(body.dark-mode) .portable-settings-hint,:deep(body.dark-mode) .portable-settings-meta{color:#b8cbb1}
 :deep(body.dark-mode) .portable-settings-warning{color:#ffcb8a}
+:deep(body.gaia-dark) .key-management .sync-panel-trigger-button{border-color:rgba(105,154,145,.92);color:#9ed4c8;background:rgba(255,255,255,.03)}
+:deep(body.gaia-dark) .key-management .sync-panel-trigger-button:hover:not(:disabled){background:rgba(108,166,153,.12);box-shadow:0 10px 22px rgba(0,0,0,.24)}
+:deep(body.gaia-dark) .batch-forest-scene{background:linear-gradient(180deg,rgba(6,12,16,.12) 0%,rgba(6,12,16,.3) 42%,rgba(5,10,14,.52) 100%)}
+:deep(body.gaia-dark) .key-management :deep(.ant-card){background:linear-gradient(180deg,rgba(255,255,255,.034),rgba(255,255,255,.012)),rgba(8,14,18,.7);border-color:rgba(101,129,138,.16);box-shadow:0 20px 46px rgba(0,0,0,.24),inset 0 1px 0 rgba(181,214,225,.035)}
+:deep(body.gaia-dark) .key-management .inventory-card{background:linear-gradient(180deg,rgba(10,18,22,.96),rgba(8,14,18,.92)) !important;box-shadow:none !important}
+:deep(body.gaia-dark) .key-management .inventory-card :deep(.ant-card-head){border-bottom-color:rgba(101,129,138,.16)}
+:deep(body.gaia-dark) .key-management :deep(.ant-card-head-title),:deep(body.gaia-dark) .key-management .desktop-panel-title,:deep(body.gaia-dark) .key-management .desktop-app-name,:deep(body.gaia-dark) .key-management .site-title-text{color:#e8f3ef}
+:deep(body.gaia-dark) .key-management :deep(.ant-card-extra),:deep(body.gaia-dark) .key-management .sync-meta,:deep(body.gaia-dark) .key-management .subtle-text,:deep(body.gaia-dark) .key-management .api-endpoint-text,:deep(body.gaia-dark) .key-management .desktop-panel-hint,:deep(body.gaia-dark) .key-management .desktop-field-hint{color:#abc1bb}
+:deep(body.gaia-dark) .key-management :deep(.ant-table-thead > tr > th){background:rgba(255,255,255,.07);color:#e8f3ef}
+:deep(body.gaia-dark) .key-management :deep(.ant-table-tbody > tr > td){background:rgba(255,255,255,.025)}
+:deep(body.gaia-dark) .key-management .desktop-app-panel,:deep(body.gaia-dark) .key-management .desktop-form-panel{background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(79,102,112,.05))}
+:deep(body.gaia-dark) .key-management .quick-test-button{background:linear-gradient(135deg,#405965,#243740);box-shadow:0 10px 18px rgba(0,0,0,.22)}
+:deep(body.gaia-dark) .key-management-compact{background:linear-gradient(180deg,#0a1116,#111c22)}
 .key-management-compact :deep(.ant-card-head){padding-inline:12px;min-height:52px}
 .key-management-compact :deep(.ant-card-head-title){font-size:15px}
 .key-management-compact :deep(.ant-card-body){padding:12px}
@@ -2943,6 +3019,22 @@ function persistMeta() {
 .key-management-compact .record-model-select :deep(.ant-select-selector){min-height:26px;padding-inline:8px !important}
 .key-management-compact .record-model-select :deep(.ant-select-selection-item),
 .key-management-compact .record-model-select :deep(.ant-select-selection-placeholder){font-size:11px;line-height:24px}
-@media (max-width:900px){.key-management{padding:0 8px 0}.desktop-config-layout{grid-template-columns:1fr}.desktop-app-grid{grid-template-columns:repeat(4,minmax(0,1fr));overflow:auto}.config-grid{grid-template-columns:1fr}}
+@media (max-width:900px){.key-management-page-container{padding:8px 8px 0 !important}.desktop-config-layout{grid-template-columns:1fr}.desktop-app-grid{grid-template-columns:repeat(4,minmax(0,1fr));overflow:auto}.config-grid{grid-template-columns:1fr}}
+.key-management-gaia{background:transparent;box-shadow:none}
+.key-management-gaia :deep(.ant-card){background:linear-gradient(180deg,rgba(255,255,255,.034),rgba(255,255,255,.012)),rgba(8,14,18,.7);border-color:rgba(101,129,138,.16);box-shadow:0 20px 46px rgba(0,0,0,.24),inset 0 1px 0 rgba(181,214,225,.035)}
+.key-management-gaia :deep(.ant-card-head-title),.key-management-gaia .desktop-panel-title,.key-management-gaia .desktop-app-name,.key-management-gaia .site-title-text{color:#e8f3ef}
+.key-management-gaia :deep(.ant-card-extra),.key-management-gaia .sync-meta,.key-management-gaia .subtle-text,.key-management-gaia .api-endpoint-text,.key-management-gaia .desktop-panel-hint,.key-management-gaia .desktop-field-hint{color:#abc1bb}
+.key-management-gaia :deep(.ant-table-thead > tr > th){background:rgba(255,255,255,.07);color:#e8f3ef}
+.key-management-gaia :deep(.ant-table-tbody > tr > td){background:rgba(255,255,255,.025)}
+.key-management-gaia .desktop-app-panel,.key-management-gaia .desktop-form-panel{background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(79,102,112,.05))}
+.key-management-gaia .quick-test-button{background:linear-gradient(135deg,#405965,#243740);box-shadow:0 10px 18px rgba(0,0,0,.22)}
+.key-management-gaia .sync-card{border-color:rgba(101,129,138,.16);background:radial-gradient(circle at 84% 14%,rgba(139,107,75,.14),transparent 26%),radial-gradient(circle at 18% 18%,rgba(76,106,117,.16),transparent 24%),linear-gradient(145deg,rgba(9,18,23,.96),rgba(16,29,35,.94));box-shadow:0 24px 54px rgba(0,0,0,.28),inset 0 1px 0 rgba(180,214,225,.04)}
+.key-management-gaia .sync-title-wrap{border-right-color:rgba(101,129,138,.16)}
+.key-management-gaia .sync-title-text{color:#e7f1ef}
+.key-management-gaia .sync-meta,.key-management-gaia .subtle-text{color:#a9bcbd}
+.key-management-gaia .sync-card :deep(.ant-alert){border-color:rgba(101,129,138,.16);background:rgba(8,14,18,.34)}
+.key-management-gaia .sync-panel-trigger-button{border-color:rgba(101,129,138,.2);background:rgba(255,255,255,.05);color:#dce8e7}
+.key-management-gaia .sync-panel-trigger-button:hover:not(:disabled){background:rgba(88,116,126,.18);border-color:rgba(122,155,166,.3);color:#f4faf8;box-shadow:0 10px 24px rgba(0,0,0,.24)}
+.key-management-gaia.key-management-compact{background:linear-gradient(180deg,#0a1116,#111c22)}
 </style>
 

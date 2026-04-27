@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <a-modal
     :open="open"
     title="系统设置"
@@ -9,41 +9,33 @@
     @cancel="emit('update:open', false)"
   >
     <a-tabs>
-      <a-tab-pane key="1" tab="本地绿色化">
-        <div class="portable-settings-card">
-          <div class="portable-settings-copy">
-            <div class="portable-settings-title">本地绿色化</div>
-            <div class="portable-settings-desc">封包是将本应用数据绿色化到程序目录 `backup`，解包是从 `backup` 解包恢复本程序所有数据。</div>
-            <div class="portable-settings-hint">当前会处理运行时目录数据与前端 localStorage 快照。为保证当前窗口状态一致，解包完成后会自动刷新页面。</div>
-            <div v-if="portableSettingsMeta" class="portable-settings-meta">{{ portableSettingsMeta }}</div>
-            <div v-if="!isWailsRuntime" class="portable-settings-warning">该功能仅在桌面端 EXE / Wails 环境可用。</div>
-          </div>
-          <div class="portable-settings-actions">
-            <a-button type="primary" size="large" :loading="portablePacking" :disabled="!isWailsRuntime || portableUnpacking" @click="packagePortableData">
-              封包
-            </a-button>
-            <a-button size="large" :loading="portableUnpacking" :disabled="!isWailsRuntime || portablePacking" @click="unpackPortableData">
-              解包
-            </a-button>
-          </div>
-        </div>
-      </a-tab-pane>
-      <a-tab-pane key="2" tab="常规设置">
+      <a-tab-pane key="general" tab="常规设置">
         <div class="settings-tab-content">
-          <p><b>桌面端提取方式</b></p>
-          <a-space direction="vertical" style="width: 100%; margin-bottom: 16px;">
-            <a-radio-group :value="desktopTokenSourceMode" :disabled="!isWailsRuntime" @change="handleDesktopTokenSourceModeChange">
-              <a-radio value="profile_file">Profile 文件</a-radio>
-              <a-radio value="cdp_restart">CDP 重开模式</a-radio>
-            </a-radio-group>
-            <div class="settings-muted-text">
-              <div>Profile 文件模式：从本机 Chrome 默认 Profile 的本地存储文件读取登录态，例如 auth_token、auth_user、refresh_token，再直接请求站点 Token 列表。不主动拉起受控浏览器。</div>
-              <div>CDP 重开模式：检测失败站点后，打开或重启 Chrome/Edge 受控浏览器，附着到 CDP 会话，在真实浏览器上下文里读取登录态并轮询抓取 Token。会使用 shadow / remote debugging 这套流程。</div>
-              <div>桌面端会严格按所选模式执行，不自动切换到另一种模式。</div>
-              <div v-if="!isWailsRuntime">该设置仅在桌面端 EXE 生效，浏览器模式仍走前端直连。</div>
-              <div v-else-if="desktopTokenSourceMode === 'profile_file' && !effectiveChromeProfileAuthAvailable">当前桌面端尚未暴露 Profile 文件提取接口，无法使用该模式。</div>
-            </div>
-          </a-space>
+          <p><b>界面主题</b></p>
+          <div class="theme-mode-grid">
+            <button
+              v-for="option in themeModeOptions"
+              :key="option.value"
+              type="button"
+              class="theme-mode-card"
+              :class="[`theme-mode-card-${option.value}`, { 'is-active': themeMode === option.value }]"
+              @click="handleThemeModeSelection(option.value)"
+            >
+              <span class="theme-mode-swatches" aria-hidden="true">
+                <span class="theme-mode-swatch theme-mode-swatch-a"></span>
+                <span class="theme-mode-swatch theme-mode-swatch-b"></span>
+                <span class="theme-mode-swatch theme-mode-swatch-c"></span>
+              </span>
+              <span class="theme-mode-copy">
+                <strong>{{ option.label }}</strong>
+                <small>{{ option.description }}</small>
+              </span>
+            </button>
+          </div>
+          <div class="settings-muted-text theme-mode-hint">
+            <div>同一套主题会同步应用到批量检测、站点管理、密钥管理。</div>
+            <div>`盖亚暗黑` 在现有深色底座上进一步压低明度，并把高光收敛到岩层青苔色系。</div>
+          </div>
 
           <p><b>代理模式</b></p>
           <a-space direction="vertical" style="width: 100%; margin-bottom: 16px;">
@@ -67,6 +59,21 @@
             </div>
           </a-space>
 
+          <p><b>桌面端提取方式</b></p>
+          <a-space direction="vertical" style="width: 100%; margin-bottom: 16px;">
+            <a-radio-group :value="desktopTokenSourceMode" :disabled="!isWailsRuntime" @change="handleDesktopTokenSourceModeChange">
+              <a-radio value="profile_file">Profile 文件</a-radio>
+              <a-radio value="cdp_restart">CDP 重开模式</a-radio>
+            </a-radio-group>
+            <div class="settings-muted-text">
+              <div>Profile 文件模式：从本机 Chrome 默认 Profile 的本地存储文件读取登录态，例如 auth_token、auth_user、refresh_token，再直接请求站点 Token 列表。不主动拉起受控浏览器。</div>
+              <div>CDP 重开模式：检测失败站点后，打开或重启 Chrome/Edge 受控浏览器，附着到 CDP 会话，在真实浏览器上下文里读取登录态并轮询抓取 Token。会使用 shadow / remote debugging 这套流程。</div>
+              <div>桌面端会严格按所选模式执行，不自动切换到另一种模式。</div>
+              <div v-if="!isWailsRuntime">该设置仅在桌面端 EXE 生效，浏览器模式仍走前端直连。</div>
+              <div v-else-if="desktopTokenSourceMode === 'profile_file' && !effectiveChromeProfileAuthAvailable">当前桌面端尚未暴露 Profile 文件提取接口，无法使用该模式。</div>
+            </div>
+          </a-space>
+
           <p><b>界面选项</b></p>
           <a-space direction="vertical" style="width: 100%;">
             <div class="settings-switch-row">
@@ -80,7 +87,26 @@
           </div>
         </div>
       </a-tab-pane>
-      <a-tab-pane key="3" tab="日志">
+      <a-tab-pane key="portable" tab="本地绿色化">
+        <div class="portable-settings-card">
+          <div class="portable-settings-copy">
+            <div class="portable-settings-title">本地绿色化</div>
+            <div class="portable-settings-desc">封包是将本应用数据绿色化到程序目录 `backup`，解包是从 `backup` 解包恢复本程序所有数据。</div>
+            <div class="portable-settings-hint">当前会处理运行时目录数据与前端 localStorage 快照。为保证当前窗口状态一致，解包完成后会自动刷新页面。</div>
+            <div v-if="portableSettingsMeta" class="portable-settings-meta">{{ portableSettingsMeta }}</div>
+            <div v-if="!isWailsRuntime" class="portable-settings-warning">该功能仅在桌面端 EXE / Wails 环境可用。</div>
+          </div>
+          <div class="portable-settings-actions">
+            <a-button type="primary" size="large" :loading="portablePacking" :disabled="!isWailsRuntime || portableUnpacking" @click="packagePortableData">
+              封包
+            </a-button>
+            <a-button size="large" :loading="portableUnpacking" :disabled="!isWailsRuntime || portablePacking" @click="unpackPortableData">
+              解包
+            </a-button>
+          </div>
+        </div>
+      </a-tab-pane>
+      <a-tab-pane key="logs" tab="日志">
         <div class="settings-tab-content">
           <div class="settings-log-head">
             <div class="settings-log-title">运行日志</div>
@@ -154,6 +180,11 @@ import {
   applyPortableLocalStorageSnapshot,
   snapshotPortableLocalStorage,
 } from '../utils/portableSnapshot.js';
+import {
+  applyThemeMode,
+  getStoredThemeMode,
+  THEME_MODE_OPTIONS,
+} from '../utils/theme.js';
 
 const props = defineProps({
   open: {
@@ -199,6 +230,8 @@ const desktopLogFiles = ref([]);
 const selectedDesktopLogGroup = ref('');
 const selectedDesktopLogPath = ref('');
 const selectedDesktopLogContent = ref('');
+const themeMode = ref(getStoredThemeMode());
+const themeModeOptions = THEME_MODE_OPTIONS;
 
 const isDesktopLogAvailable = computed(() => isDesktopLogBridgeAvailable());
 
@@ -231,6 +264,7 @@ const appLabel = computed(() => props.appVersion
 
 watch(() => props.open, open => {
   if (!open) return;
+  themeMode.value = getStoredThemeMode();
   void loadProxyDraft();
   if (isWailsRuntime) {
     void loadDesktopLogs();
@@ -308,6 +342,11 @@ function handleDesktopTokenSourceModeChange(event) {
 function handleTreeExpandedChange(checked) {
   const nextValue = saveTreeExpandedSetting(Boolean(checked));
   emit('update:treeExpanded', nextValue);
+}
+
+function handleThemeModeSelection(nextMode) {
+  themeMode.value = applyThemeMode(nextMode);
+  message.success('界面主题已切换');
 }
 
 async function loadProxyDraft() {
@@ -457,6 +496,81 @@ async function loadDesktopLogs() {
   width: 100%;
 }
 
+.theme-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.theme-mode-card {
+  border: 1px solid rgba(88, 112, 84, 0.12);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 248, 240, 0.92));
+  border-radius: 16px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.theme-mode-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(88, 112, 84, 0.2);
+  box-shadow: 0 10px 20px rgba(38, 51, 35, 0.08);
+}
+
+.theme-mode-card.is-active {
+  border-color: rgba(86, 122, 104, 0.45);
+  box-shadow:
+    0 12px 24px rgba(33, 48, 40, 0.1),
+    inset 0 0 0 1px rgba(126, 171, 148, 0.18);
+}
+
+.theme-mode-swatches {
+  display: flex;
+  gap: 6px;
+}
+
+.theme-mode-swatch {
+  flex: 1 1 0;
+  height: 22px;
+  border-radius: 999px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.theme-mode-card-light .theme-mode-swatch-a { background: #f7ead1; }
+.theme-mode-card-light .theme-mode-swatch-b { background: #dce8c4; }
+.theme-mode-card-light .theme-mode-swatch-c { background: #ffffff; }
+.theme-mode-card-gaia-dark .theme-mode-swatch-a { background: #0c1419; }
+.theme-mode-card-gaia-dark .theme-mode-swatch-b { background: #39525e; }
+.theme-mode-card-gaia-dark .theme-mode-swatch-c { background: #7b614b; }
+
+.theme-mode-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.theme-mode-copy strong {
+  font-size: 13px;
+  color: #243229;
+}
+
+.theme-mode-copy small {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #627064;
+}
+
+.theme-mode-hint {
+  margin-bottom: 16px;
+}
+
 .portable-settings-card {
   display: grid;
   gap: 18px;
@@ -513,8 +627,86 @@ async function loadDesktopLogs() {
   color: #ffcb8a;
 }
 
+:deep(body.dark-mode) .theme-mode-card {
+  border-color: rgba(154, 191, 142, 0.14);
+  background: linear-gradient(180deg, rgba(30, 39, 31, 0.96), rgba(20, 27, 22, 0.92));
+}
+
+:deep(body.dark-mode) .theme-mode-card:hover {
+  border-color: rgba(154, 191, 142, 0.24);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2);
+}
+
+:deep(body.dark-mode) .theme-mode-card.is-active {
+  border-color: rgba(160, 198, 149, 0.34);
+  box-shadow:
+    0 14px 28px rgba(0, 0, 0, 0.24),
+    inset 0 0 0 1px rgba(174, 212, 163, 0.12);
+}
+
+:deep(body.dark-mode) .theme-mode-copy strong {
+  color: #ebf5e5;
+}
+
+:deep(body.dark-mode) .theme-mode-copy small {
+  color: #b7c7b1;
+}
+
+:deep(body.gaia-dark) .theme-mode-card {
+  border-color: rgba(101, 129, 138, 0.18);
+  background:
+    radial-gradient(circle at 88% 12%, rgba(138, 108, 76, 0.14), transparent 22%),
+    linear-gradient(180deg, rgba(12, 21, 26, 0.98), rgba(8, 14, 18, 0.94));
+}
+
+:deep(body.gaia-dark) .theme-mode-card:hover {
+  border-color: rgba(118, 151, 162, 0.28);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.28);
+}
+
+:deep(body.gaia-dark) .theme-mode-card.is-active {
+  border-color: rgba(118, 151, 162, 0.42);
+  box-shadow:
+    0 14px 28px rgba(0, 0, 0, 0.3),
+    inset 0 0 0 1px rgba(126, 164, 176, 0.12);
+}
+
+:deep(body.gaia-dark) .theme-mode-copy strong {
+  color: #e6f1ef;
+}
+
+:deep(body.gaia-dark) .theme-mode-copy small,
+:deep(body.gaia-dark) .theme-mode-hint {
+  color: #9eb2b3;
+}
+
+:deep(body.gaia-dark) .portable-settings-card {
+  border-color: rgba(101, 129, 138, 0.18);
+  background:
+    radial-gradient(circle at 84% 14%, rgba(133, 103, 73, 0.12), transparent 24%),
+    rgba(10, 18, 22, 0.92);
+}
+
+:deep(body.gaia-dark) .portable-settings-title {
+  color: #e6f1ef;
+}
+
+:deep(body.gaia-dark) .portable-settings-desc,
+:deep(body.gaia-dark) .portable-settings-hint,
+:deep(body.gaia-dark) .portable-settings-meta {
+  color: #a7bbbc;
+}
+
+:deep(body.gaia-dark) .portable-settings-warning {
+  color: #d7b088;
+}
+
 @media (max-width: 720px) {
   .proxy-custom-row {
+    grid-template-columns: 1fr;
+  }
+
+  .theme-mode-grid {
     grid-template-columns: 1fr;
   }
 
