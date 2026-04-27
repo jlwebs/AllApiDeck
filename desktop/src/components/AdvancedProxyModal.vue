@@ -1620,6 +1620,7 @@ function handleCancel() {
 
 .advanced-proxy-summary-card span,
 .advanced-proxy-summary-card small {
+  color: #5f6f5a;
   font-size: 11px;
   line-height: 1.35;
 }
@@ -1803,6 +1804,7 @@ function handleCancel() {
 .advanced-proxy-inline-label {
   flex: 1;
   min-width: 0;
+  color: #22311c;
 }
 
 .advanced-proxy-inline-label,
@@ -1868,10 +1870,12 @@ function handleCancel() {
 
 .advanced-proxy-section :deep(.ant-select-single .ant-select-selector .ant-select-selection-item),
 .advanced-proxy-section :deep(.ant-select-single .ant-select-selector .ant-select-selection-placeholder) {
+  color: #22311c;
   line-height: 26px;
 }
 
 .advanced-proxy-section :deep(.ant-input-number-input) {
+  color: #22311c;
   height: 26px;
 }
 

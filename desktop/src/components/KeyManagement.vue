@@ -34,14 +34,14 @@
           </div>
           <div class="sync-panel-trigger-slot">
             <a-tooltip
-              title="打开 Mini Bar 侧栏"
+              title="进入挂件悬窗模式"
               placement="topRight"
               overlay-class-name="key-management-mini-bar-tooltip"
               :getPopupContainer="getSidebarPopupContainer"
             >
               <button
                 type="button"
-                class="sync-panel-trigger-button"
+                class="sync-panel-trigger-button sync-panel-trigger-button-fiery"
                 :disabled="openingManualSidebar"
                 @click="openManualMiniBar"
               >
@@ -934,7 +934,7 @@ async function openManualMiniBar() {
     await openManualSidebarPanel();
   } catch (error) {
     console.error(error);
-    message.error(`打开 Mini Bar 失败：${error?.message || '未知错误'}`);
+    message.error(`进入挂件悬窗模式失败：${error?.message || '未知错误'}`);
   } finally {
     openingManualSidebar.value = false;
   }
@@ -2701,10 +2701,17 @@ function persistMeta() {
 .sync-meta-time-row{grid-column:1 / -1}
 .sync-summary-slot{min-width:0;display:flex;justify-content:flex-start}
 .sync-panel-trigger-slot{display:flex;align-items:center;justify-content:flex-end}
-.sync-panel-trigger-button{width:34px;height:34px;border-radius:999px;border:1px solid rgba(90,117,79,.18);background:rgba(255,255,255,.54);color:#55684d;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background-color .18s ease,color .18s ease}
+.sync-panel-trigger-button{position:relative;isolation:isolate;overflow:visible;width:34px;height:34px;border-radius:999px;border:1px solid rgba(90,117,79,.18);background:rgba(255,255,255,.54);color:#55684d;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background-color .18s ease,color .18s ease}
 .sync-panel-trigger-button .anticon{font-size:11px}
 .sync-panel-trigger-button:hover:not(:disabled){transform:translateY(-1px);background:rgba(255,255,255,.82);border-color:rgba(96,128,84,.3);color:#30412f;box-shadow:0 10px 24px rgba(90,117,79,.12)}
 .sync-panel-trigger-button:disabled{opacity:.45;cursor:default}
+.sync-panel-trigger-button-fiery::before,
+.sync-panel-trigger-button-fiery::after{content:"";position:absolute;pointer-events:none;border-radius:999px}
+.sync-panel-trigger-button-fiery::before{inset:2px;z-index:0;padding:2px;background:conic-gradient(from 0deg,transparent 0deg 22deg,rgba(255,215,94,.98) 40deg 92deg,transparent 118deg 160deg,rgba(255,189,46,.98) 188deg 242deg,transparent 268deg 318deg,rgba(255,170,0,.94) 334deg 360deg);box-shadow:inset 0 0 6px rgba(255,185,42,.26),0 0 6px rgba(255,191,68,.16);animation:sync-trigger-orbit 1.8s linear infinite;-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
+.sync-panel-trigger-button-fiery::after{inset:4px;z-index:0;border:1px solid rgba(255,196,72,.78);box-shadow:0 0 0 1px rgba(255,212,125,.12),inset 0 0 6px rgba(255,170,0,.18);animation:sync-trigger-pulse 1.15s ease-in-out infinite alternate}
+.sync-panel-trigger-button-fiery .anticon{position:relative;z-index:1}
+.sync-panel-trigger-button-fiery:disabled::before,
+.sync-panel-trigger-button-fiery:disabled::after{animation:none;opacity:.42}
 .sync-title-wrap{display:flex;align-items:center;padding-right:16px;margin-right:2px;border-right:1px solid rgba(90,117,79,.14);min-height:42px}
 .sync-title-text{font:700 clamp(18px,2vw,24px)/1 Georgia,'Times New Roman',serif;color:#31422f;letter-spacing:-.03em;white-space:nowrap}
 .site-heading{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0}
@@ -3036,5 +3043,7 @@ function persistMeta() {
 .key-management-gaia .sync-panel-trigger-button{border-color:rgba(101,129,138,.2);background:rgba(255,255,255,.05);color:#dce8e7}
 .key-management-gaia .sync-panel-trigger-button:hover:not(:disabled){background:rgba(88,116,126,.18);border-color:rgba(122,155,166,.3);color:#f4faf8;box-shadow:0 10px 24px rgba(0,0,0,.24)}
 .key-management-gaia.key-management-compact{background:linear-gradient(180deg,#0a1116,#111c22)}
+@keyframes sync-trigger-orbit{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes sync-trigger-pulse{0%{transform:scale(.98);filter:saturate(1)}100%{transform:scale(1.05);filter:saturate(1.16)}}
 </style>
 

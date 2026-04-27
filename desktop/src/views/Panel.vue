@@ -11,7 +11,8 @@ import KeySidePanel from '../components/KeySidePanel.vue';
 <style scoped>
 :global(html),
 :global(body),
-:global(#app) {
+:global(#app),
+:global(.app-shell) {
   background: transparent;
   height: 100%;
   width: 100%;
@@ -19,6 +20,18 @@ import KeySidePanel from '../components/KeySidePanel.vue';
   min-height: 100%;
   margin: 0;
   overflow: hidden;
+}
+
+:global(body.light-mode),
+:global(body.dark-mode),
+:global(body.gaia-dark) {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+:global(body.gaia-dark .app-shell::before) {
+  display: none !important;
 }
 
 .panel-view {
