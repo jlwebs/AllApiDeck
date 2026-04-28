@@ -54,6 +54,10 @@ export function GetAdvancedProxyRoutingSnapshot() {
   return window['go']['main']['App']['GetAdvancedProxyRoutingSnapshot']();
 }
 
+export function GetAppUpdateDownloadSnapshot() {
+  return window['go']['main']['App']['GetAppUpdateDownloadSnapshot']();
+}
+
 export function GetBridgeImportSnapshot() {
   return window['go']['main']['App']['GetBridgeImportSnapshot']();
 }
@@ -68,6 +72,10 @@ export function GetCircuitBreakerStats(arg1, arg2) {
 
 export function GetFailoverQueue(arg1) {
   return window['go']['main']['App']['GetFailoverQueue'](arg1);
+}
+
+export function GetLatestAppReleaseInfo() {
+  return window['go']['main']['App']['GetLatestAppReleaseInfo']();
 }
 
 export function GetLaunchMode() {
@@ -128,6 +136,10 @@ export function OpenDesktopConfigWindow(arg1) {
 
 export function OpenDesktopProfileAssist(arg1) {
   return window['go']['main']['App']['OpenDesktopProfileAssist'](arg1);
+}
+
+export function OpenDownloadedAppUpdate() {
+  return window['go']['main']['App']['OpenDownloadedAppUpdate']();
 }
 
 export function OpenKeyEditor(arg1) {
@@ -216,6 +228,10 @@ export function ShowMainWindow() {
 
 export function StartBridgeImportSession() {
   return window['go']['main']['App']['StartBridgeImportSession']();
+}
+
+export function StartLatestAppReleaseDownload() {
+  return window['go']['main']['App']['StartLatestAppReleaseDownload']();
 }
 
 export function ToggleSidebarMode() {

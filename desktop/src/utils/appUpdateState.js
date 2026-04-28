@@ -13,6 +13,7 @@ const APP_RELEASE_VERSION = normalizeVersion(
 );
 
 let startupUpdateCheckPromise = null;
+let startupLatestReleasePayload = null;
 let startupUpdateStatus = buildUpdateStatus({
   checked: false,
   hasUpdate: false,
@@ -71,12 +72,20 @@ export function getAppGithubUrl() {
   return APP_GITHUB_URL;
 }
 
+export function getCurrentAppTag() {
+  return String(APP_RELEASE_TAG || '').trim();
+}
+
 export function getCurrentAppVersion() {
   return APP_RELEASE_VERSION;
 }
 
 export function getStartupUpdateStatus() {
   return startupUpdateStatus;
+}
+
+export function getStartupLatestReleasePayload() {
+  return startupLatestReleasePayload;
 }
 
 export async function ensureStartupUpdateStatus() {
@@ -103,6 +112,7 @@ export async function ensureStartupUpdateStatus() {
       }
 
       const payload = await response.json();
+      startupLatestReleasePayload = payload && typeof payload === 'object' ? payload : null;
       const latestTag = String(payload?.tag_name || '').trim();
       const latestVersion = normalizeVersion(latestTag);
       const hasUpdate = canCompareVersion && isNewerVersion(latestVersion, APP_RELEASE_VERSION);
@@ -120,6 +130,7 @@ export async function ensureStartupUpdateStatus() {
       );
       return startupUpdateStatus;
     } catch (error) {
+      startupLatestReleasePayload = null;
       startupUpdateStatus = buildUpdateStatus({
         checked: true,
         hasUpdate: false,

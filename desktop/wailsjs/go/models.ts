@@ -427,6 +427,102 @@ export namespace main {
 	}
 	
 	
+	export class AppUpdateAsset {
+	    name: string;
+	    browserDownloadUrl: string;
+	    size: number;
+	    contentType: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AppUpdateAsset(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.browserDownloadUrl = source["browserDownloadUrl"];
+	        this.size = source["size"];
+	        this.contentType = source["contentType"];
+	    }
+	}
+	export class AppUpdateDownloadSnapshot {
+	    active: boolean;
+	    stage: string;
+	    latestTag: string;
+	    fileName: string;
+	    downloadUrl: string;
+	    savedPath: string;
+	    totalBytes: number;
+	    receivedBytes: number;
+	    percent: number;
+	    message: string;
+	    error: string;
+	    startedAt: number;
+	    updatedAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new AppUpdateDownloadSnapshot(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.active = source["active"];
+	        this.stage = source["stage"];
+	        this.latestTag = source["latestTag"];
+	        this.fileName = source["fileName"];
+	        this.downloadUrl = source["downloadUrl"];
+	        this.savedPath = source["savedPath"];
+	        this.totalBytes = source["totalBytes"];
+	        this.receivedBytes = source["receivedBytes"];
+	        this.percent = source["percent"];
+	        this.message = source["message"];
+	        this.error = source["error"];
+	        this.startedAt = source["startedAt"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
+	export class AppUpdateReleaseInfo {
+	    latestTag: string;
+	    latestVersion: string;
+	    htmlUrl: string;
+	    body: string;
+	    targetOs: string;
+	    targetArch: string;
+	    asset?: AppUpdateAsset;
+	
+	    static createFrom(source: any = {}) {
+	        return new AppUpdateReleaseInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.latestTag = source["latestTag"];
+	        this.latestVersion = source["latestVersion"];
+	        this.htmlUrl = source["htmlUrl"];
+	        this.body = source["body"];
+	        this.targetOs = source["targetOs"];
+	        this.targetArch = source["targetArch"];
+	        this.asset = this.convertValues(source["asset"], AppUpdateAsset);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class BridgeImportRecord {
 	    id: string;
 	    receivedAt: string;

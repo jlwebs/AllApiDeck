@@ -28,6 +28,8 @@ export function GetAdvancedProxyConfigFilePath():Promise<string>;
 
 export function GetAdvancedProxyRoutingSnapshot():Promise<main.AdvancedProxyRoutingSnapshot>;
 
+export function GetAppUpdateDownloadSnapshot():Promise<main.AppUpdateDownloadSnapshot>;
+
 export function GetBridgeImportSnapshot():Promise<main.BridgeImportSnapshot>;
 
 export function GetChromeProfileExtractProgress():Promise<main.fetchKeysProgressSnapshot>;
@@ -35,6 +37,8 @@ export function GetChromeProfileExtractProgress():Promise<main.fetchKeysProgress
 export function GetCircuitBreakerStats(arg1:string,arg2:string):Promise<main.CircuitBreakerStats>;
 
 export function GetFailoverQueue(arg1:string):Promise<Array<main.FailoverQueueItem>>;
+
+export function GetLatestAppReleaseInfo():Promise<main.AppUpdateReleaseInfo>;
 
 export function GetLaunchMode():Promise<string>;
 
@@ -65,6 +69,8 @@ export function OpenBridgeScriptInstallPage():Promise<void>;
 export function OpenDesktopConfigWindow(arg1:string):Promise<void>;
 
 export function OpenDesktopProfileAssist(arg1:Array<main.desktopProfileAssistOpenRequest>):Promise<Record<string, any>>;
+
+export function OpenDownloadedAppUpdate():Promise<void>;
 
 export function OpenKeyEditor(arg1:string):Promise<void>;
 
@@ -109,6 +115,8 @@ export function SetPanelSuperMiniActive(arg1:boolean):Promise<void>;
 export function ShowMainWindow():Promise<void>;
 
 export function StartBridgeImportSession():Promise<main.BridgeImportSnapshot>;
+
+export function StartLatestAppReleaseDownload():Promise<main.AppUpdateDownloadSnapshot>;
 
 export function ToggleSidebarMode():Promise<void>;
 

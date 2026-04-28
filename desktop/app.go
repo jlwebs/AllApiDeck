@@ -53,6 +53,9 @@ type App struct {
 
 	mainWindowGraceUntil atomic.Int64
 	mainWindowSeenNormal atomic.Bool
+
+	updateDownloadMu sync.Mutex
+	updateDownload   AppUpdateDownloadSnapshot
 }
 
 func NewApp(mode launchMode, recordKey string, panelStart panelStartMode) *App {
