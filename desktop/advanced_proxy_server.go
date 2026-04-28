@@ -103,10 +103,19 @@ func formatAdvancedProxyFailure(appType string, routeKind string, provider Advan
 	return strings.Join(parts, " | ") + " | " + message
 }
 
+func firstNonEmptyExact(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func openAIMessageContentToText(value any) string {
 	switch typed := value.(type) {
 	case string:
-		return strings.TrimSpace(typed)
+		return typed
 	case []any:
 		parts := make([]string, 0, len(typed))
 		for _, raw := range typed {
@@ -114,10 +123,10 @@ func openAIMessageContentToText(value any) string {
 			if !ok {
 				continue
 			}
-			text := firstNonEmpty(
-				strings.TrimSpace(toStringValue(contentMap["text"])),
-				strings.TrimSpace(toStringValue(contentMap["content"])),
-				strings.TrimSpace(toStringValue(contentMap["refusal"])),
+			text := firstNonEmptyExact(
+				toStringValue(contentMap["text"]),
+				toStringValue(contentMap["content"]),
+				toStringValue(contentMap["refusal"]),
 			)
 			if text != "" {
 				parts = append(parts, text)
@@ -253,7 +262,7 @@ func openAIChatToAnthropic(response map[string]any, fallbackModel string, includ
 
 func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) map[string]any {
 	contentBlocks := make([]map[string]any, 0, 2)
-	if outputText := strings.TrimSpace(toStringValue(response["output_text"])); outputText != "" {
+	if outputText := toStringValue(response["output_text"]); outputText != "" {
 		contentBlocks = append(contentBlocks, map[string]any{"type": "text", "text": outputText})
 	}
 	if outputs, ok := response["output"].([]any); ok {
@@ -273,12 +282,12 @@ func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) m
 						contentType := strings.TrimSpace(toStringValue(contentMap["type"]))
 						switch contentType {
 						case "output_text", "text":
-							text := strings.TrimSpace(toStringValue(contentMap["text"]))
+							text := toStringValue(contentMap["text"])
 							if text != "" {
 								contentBlocks = append(contentBlocks, map[string]any{"type": "text", "text": text})
 							}
 						case "refusal":
-							text := strings.TrimSpace(toStringValue(contentMap["refusal"]))
+							text := toStringValue(contentMap["refusal"])
 							if text != "" {
 								contentBlocks = append(contentBlocks, map[string]any{"type": "text", "text": text})
 							}
@@ -645,10 +654,10 @@ func writeAnthropicSSEFromOpenAIChatStream(writer http.ResponseWriter, streamBod
 		}
 
 		if includeThinking {
-			thinkingText := firstNonEmpty(
-				strings.TrimSpace(toStringValue(delta["reasoning_content"])),
-				strings.TrimSpace(toStringValue(delta["thinking"])),
-				strings.TrimSpace(toStringValue(delta["reasoning"])),
+			thinkingText := firstNonEmptyExact(
+				toStringValue(delta["reasoning_content"]),
+				toStringValue(delta["thinking"]),
+				toStringValue(delta["reasoning"]),
 			)
 			if thinkingText != "" {
 				ensureContentBlock("thinking", map[string]any{
@@ -666,7 +675,7 @@ func writeAnthropicSSEFromOpenAIChatStream(writer http.ResponseWriter, streamBod
 			}
 		}
 
-		if text := strings.TrimSpace(toStringValue(delta["content"])); text != "" {
+		if text := toStringValue(delta["content"]); text != "" {
 			ensureContentBlock("text", map[string]any{
 				"type": "text",
 				"text": "",
@@ -1098,7 +1107,7 @@ func writeAnthropicSSE(writer http.ResponseWriter, response map[string]any) {
 				"index": index,
 				"delta": map[string]any{
 					"type":     "thinking_delta",
-					"thinking": strings.TrimSpace(toStringValue(blockMap["thinking"])),
+					"thinking": toStringValue(blockMap["thinking"]),
 				},
 			})
 			writeEvent("content_block_stop", map[string]any{
@@ -1119,7 +1128,7 @@ func writeAnthropicSSE(writer http.ResponseWriter, response map[string]any) {
 				"index": index,
 				"delta": map[string]any{
 					"type": "text_delta",
-					"text": strings.TrimSpace(toStringValue(blockMap["text"])),
+					"text": toStringValue(blockMap["text"]),
 				},
 			})
 			writeEvent("content_block_stop", map[string]any{

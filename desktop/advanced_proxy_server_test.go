@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -83,6 +84,32 @@ func TestOpenAIChatToAnthropicIncludesThinkingWhenRequested(t *testing.T) {
 	second := content[1]
 	if first["type"] != "thinking" || second["type"] != "text" {
 		t.Fatalf("unexpected content blocks: %#v", content)
+	}
+}
+
+func TestOpenAIResponsesToAnthropicPreservesWhitespaceOnlyTextSegments(t *testing.T) {
+	response := map[string]any{
+		"id":    "resp_456",
+		"model": "gpt-5.4",
+		"output": []any{
+			map[string]any{
+				"type": "message",
+				"content": []any{
+					map[string]any{"type": "text", "text": "line1"},
+					map[string]any{"type": "text", "text": "\n"},
+					map[string]any{"type": "text", "text": "line2"},
+				},
+			},
+		},
+	}
+
+	result := openAIResponsesToAnthropic(response, "gpt-5.4")
+	content := contentBlocksOf(t, result["content"])
+	if len(content) != 3 {
+		t.Fatalf("expected 3 text blocks, got %#v", content)
+	}
+	if content[1]["type"] != "text" || content[1]["text"] != "\n" {
+		t.Fatalf("expected newline text block to be preserved, got %#v", content[1])
 	}
 }
 
@@ -241,6 +268,56 @@ func TestForwardClaudeRequestViaProviderUpdatesRoutingSnapshotForOpenAIChatStrea
 	}
 	if state.TargetURL != server.URL+"/v1/chat/completions" {
 		t.Fatalf("unexpected target url: %#v", state)
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIChatStreamPreservesNewlineDeltas(t *testing.T) {
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`data: {"id":"chatcmpl-test","choices":[{"delta":{"content":"line1"}}]}`,
+		"",
+		`data: {"choices":[{"delta":{"content":"\n"}}]}`,
+		"",
+		`data: {"choices":[{"delta":{"content":"line2"}}]}`,
+		"",
+		`data: [DONE]`,
+		"",
+	}, "\n")))
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIChatStream(recorder, streamBody, "gpt-5.4", false)
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"text":"line1"`) {
+		t.Fatalf("expected first text delta, got %q", body)
+	}
+	if strings.Count(body, `"type":"content_block_delta"`) != 3 {
+		t.Fatalf("expected 3 content deltas including newline chunk, got %q", body)
+	}
+	if !strings.Contains(body, `"text":"line2"`) {
+		t.Fatalf("expected second text delta, got %q", body)
+	}
+}
+
+func TestWriteAnthropicSSEPreservesWhitespaceOnlyTextBlocks(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSE(recorder, map[string]any{
+		"id":    "msg_test",
+		"model": "gpt-5.4",
+		"content": []any{
+			map[string]any{"type": "text", "text": "line1"},
+			map[string]any{"type": "text", "text": "\n"},
+			map[string]any{"type": "text", "text": "line2"},
+		},
+		"stop_reason": "end_turn",
+		"usage": map[string]any{
+			"input_tokens":  1,
+			"output_tokens": 2,
+		},
+	})
+
+	body := recorder.Body.String()
+	if strings.Count(body, `"type":"content_block_delta"`) != 3 {
+		t.Fatalf("expected 3 content deltas including newline-only block, got %q", body)
 	}
 }
 
