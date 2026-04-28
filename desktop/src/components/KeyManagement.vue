@@ -160,7 +160,8 @@
           :data-source="displayedRows"
           :row-key="record => record.rowKey"
           :pagination="tablePagination"
-          :scroll="isCompactMode ? { x: 650 } : { x: 800 }"
+          :scroll="isCompactMode ? { x: 560 } : undefined"
+          :custom-row="getManagedRecordRowProps"
           size="small"
           class="compact-key-table"
           @change="handleTableChange"
@@ -315,20 +316,35 @@
                 </div>
               </div>
             </template>
-            <template v-else-if="column.dataIndex === 'updatedAt'">
-              <div class="time-cell"><span>{{ formatDateTime(record.updatedAt) }}</span><span class="subtle-text">{{ record.quickTestAt ? `快测 ${formatDateTime(record.quickTestAt)}` : '暂无快测记录' }}</span></div>
-            </template>
-            <template v-else-if="column.dataIndex === 'rowActions'">
-              <div class="row-actions-stack">
-                <a-button size="small" @click="openManualRecordModal(record)">编辑</a-button>
-                <a-popconfirm title="确认删除这条记录？" ok-text="删除" cancel-text="取消" @confirm="deleteRecord(record)">
-                  <a-button size="small" danger>删除</a-button>
-                </a-popconfirm>
-              </div>
-            </template>
           </template>
         </a-table>
       </a-card>
+
+      <div
+        v-if="rowContextMenu.open && rowContextMenu.record"
+        class="key-row-context-menu"
+        :class="{ 'key-row-context-menu-dark': isDarkMode }"
+        :style="{ left: `${rowContextMenu.x}px`, top: `${rowContextMenu.y}px` }"
+      >
+        <button type="button" class="import-export-menu-item key-row-context-action" @click="handleRowContextEdit">
+          编辑密钥
+        </button>
+        <button
+          type="button"
+          class="import-export-menu-item import-export-menu-item-danger key-row-context-action"
+          @click="handleRowContextDelete"
+        >
+          删除记录
+        </button>
+        <div class="key-row-action-info">
+          <span class="key-row-action-label">最近同步</span>
+          <span class="key-row-action-value">{{ formatDateTime(rowContextMenu.record.updatedAt) }}</span>
+        </div>
+        <div class="key-row-action-info">
+          <span class="key-row-action-label">最近快测</span>
+          <span class="key-row-action-value">{{ rowContextMenu.record.quickTestAt ? formatDateTime(rowContextMenu.record.quickTestAt) : '暂无快测记录' }}</span>
+        </div>
+      </div>
 
       <a-modal
         v-model:open="manualRecordModalOpen"
@@ -636,6 +652,12 @@ const openingManualSidebar = ref(false);
 const manualSidebarBridgeReady = ref(false);
 let manualSidebarBridgeProbeTimer = null;
 const isCompactMode = computed(() => route.query?.compact === '1');
+const rowContextMenu = reactive({
+  open: false,
+  x: 0,
+  y: 0,
+  record: null,
+});
 const PERSIST_DEBOUNCE_MS = 240;
 let persistRecordsTimer = null;
 let lastPersistedRecordsSnapshot = '';
@@ -651,6 +673,70 @@ function syncThemeState() {
 
 function getSidebarPopupContainer(triggerNode) {
   return triggerNode?.ownerDocument?.body || document.body;
+}
+
+function closeRowContextMenu() {
+  rowContextMenu.open = false;
+  rowContextMenu.record = null;
+}
+
+function openRowContextMenu(record, event) {
+  if (!record || !event) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 0;
+  const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 0;
+  const menuWidth = 264;
+  const menuHeight = 238;
+  const edgePadding = 12;
+  rowContextMenu.record = record;
+  rowContextMenu.x = viewportWidth > 0
+    ? Math.max(edgePadding, Math.min(event.clientX, viewportWidth - menuWidth - edgePadding))
+    : event.clientX;
+  rowContextMenu.y = viewportHeight > 0
+    ? Math.max(edgePadding, Math.min(event.clientY, viewportHeight - menuHeight - edgePadding))
+    : event.clientY;
+  rowContextMenu.open = true;
+}
+
+function getManagedRecordRowProps(record) {
+  return {
+    onContextmenu: event => openRowContextMenu(record, event),
+  };
+}
+
+function handleGlobalRowContextMenuDismiss(event) {
+  if (!rowContextMenu.open) return;
+  const target = event?.target;
+  if (target?.closest?.('.key-row-context-menu')) return;
+  closeRowContextMenu();
+}
+
+function handleGlobalRowContextEscape(event) {
+  if (event?.key === 'Escape') {
+    closeRowContextMenu();
+  }
+}
+
+function handleRowContextEdit() {
+  const record = rowContextMenu.record;
+  closeRowContextMenu();
+  if (record) {
+    openManualRecordModal(record);
+  }
+}
+
+function handleRowContextDelete() {
+  const record = rowContextMenu.record;
+  closeRowContextMenu();
+  if (!record) return;
+  Modal.confirm({
+    title: '确认删除这条记录？',
+    okText: '删除',
+    cancelText: '取消',
+    okButtonProps: { danger: true },
+    onOk: () => deleteRecord(record),
+  });
 }
 
 const refreshManualSidebarBridgeReady = () => {
@@ -675,15 +761,13 @@ const sortManagedRecords = rows => [...rows].sort(
   (a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0) || String(a.siteName || '').localeCompare(String(b.siteName || ''))
 );
 const columns = [
-  { title: '网站', dataIndex: 'siteName', key: 'siteName', width: 154, sorter: (a, b) => String(a.siteName || '').localeCompare(String(b.siteName || '')) },
-  { title: 'API Key', dataIndex: 'apiKey', key: 'apiKey', width: 120, className: 'api-key-column' },
-  { title: '状态', dataIndex: 'status', key: 'status', width: 56, sorter: (a, b) => Number(a.status || 0) - Number(b.status || 0) },
-  { title: '专属导出', dataIndex: 'exportActions', key: 'exportActions', width: 116 },
-  { title: '操作', dataIndex: 'rowActions', key: 'rowActions', width: 56 },
-  { title: '最近同步', dataIndex: 'updatedAt', key: 'updatedAt', width: 138, sorter: (a, b) => Number(a.updatedAt || 0) - Number(b.updatedAt || 0), defaultSortOrder: 'descend' },
+  { title: '网站', dataIndex: 'siteName', key: 'siteName', width: 142, sorter: (a, b) => String(a.siteName || '').localeCompare(String(b.siteName || '')) },
+  { title: 'API Key', dataIndex: 'apiKey', key: 'apiKey', className: 'api-key-column' },
+  { title: '状态', dataIndex: 'status', key: 'status', width: 72, sorter: (a, b) => Number(a.status || 0) - Number(b.status || 0) },
+  { title: '专属导出', dataIndex: 'exportActions', key: 'exportActions', width: 136 },
 ];
 const activeColumns = computed(() => (isCompactMode.value
-  ? columns.filter(column => ['siteName', 'exportActions', 'rowActions'].includes(column.dataIndex))
+  ? columns.filter(column => ['siteName', 'exportActions'].includes(column.dataIndex))
   : columns));
 const failedSites = computed(() => allResults.value.filter(result => !Array.isArray(result?.tokens) || result.tokens.length === 0));
 const failedSiteNames = computed(() => failedSites.value.map(site => site?.site_name || site?.id || '未命名站点').join('，'));
@@ -731,6 +815,13 @@ const tablePagination = computed(() => {
 });
 
 onMounted(() => {
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pointerdown', handleGlobalRowContextMenuDismiss, true);
+    window.addEventListener('resize', closeRowContextMenu);
+    window.addEventListener('scroll', closeRowContextMenu, true);
+    window.addEventListener('keydown', handleGlobalRowContextEscape);
+    window.addEventListener('contextmenu', handleGlobalRowContextMenuDismiss, true);
+  }
   void (async () => {
     await hydrateLastResultsSnapshotCache();
     syncThemeState();
@@ -750,6 +841,13 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   flushPersistRecords();
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('pointerdown', handleGlobalRowContextMenuDismiss, true);
+    window.removeEventListener('resize', closeRowContextMenu);
+    window.removeEventListener('scroll', closeRowContextMenu, true);
+    window.removeEventListener('keydown', handleGlobalRowContextEscape);
+    window.removeEventListener('contextmenu', handleGlobalRowContextMenuDismiss, true);
+  }
   if (manualSidebarBridgeProbeTimer) {
     clearInterval(manualSidebarBridgeProbeTimer);
     manualSidebarBridgeProbeTimer = null;
@@ -2760,8 +2858,8 @@ function persistMeta() {
 .sync-card :deep(.sync-alert-inline.ant-alert .ant-alert-content){min-width:0}
 .sync-card :deep(.sync-alert-warning.ant-alert){margin:0;flex:1 1 360px;min-width:min(100%,360px)}
 .cell-copy-text{max-width:240px;display:inline-block}
-.api-combined-cell{display:flex;flex-direction:column;gap:2px;min-width:0}
-.api-model-row{margin-top:8px;min-width:0;width:120%;max-width:none}
+.api-combined-cell{display:flex;flex-direction:column;gap:2px;min-width:0;width:100%}
+.api-model-row{margin-top:8px;min-width:0;width:100%;max-width:100%}
 .api-endpoint-text{font-size:12px;color:#64748b;line-height:1.1;margin-top:-1px}
 .models-text{display:block;width:100%;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .record-model-select{width:100%;min-width:0}
@@ -2784,7 +2882,19 @@ function persistMeta() {
 .export-actions-cell{display:flex;flex-direction:column;align-items:flex-start;gap:10px;min-width:0}
 .row-actions-stack{display:flex;flex-direction:column;align-items:stretch;gap:8px;width:100%}
 .row-actions-stack :deep(.ant-btn),.row-actions-stack :deep(.ant-popconfirm){width:100%}
-.inline-export-actions{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;min-width:max-content}
+.inline-export-actions{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0}
+.key-row-context-menu{position:fixed;z-index:1200;display:flex;flex-direction:column;gap:10px;width:224px;padding:10px;border-radius:18px;background:rgba(255,255,255,.96);box-shadow:0 18px 48px rgba(15,23,42,.24);backdrop-filter:blur(14px)}
+.key-row-context-menu-dark{background:rgba(25,25,25,.96);box-shadow:0 18px 48px rgba(0,0,0,.4)}
+.key-row-context-menu-dark .import-export-menu-item{background:rgba(255,255,255,.08);color:#f8fafc}
+.key-row-context-menu-dark .import-export-menu-item:hover:not(:disabled){background:rgba(96,165,250,.2);color:#dbeafe}
+.key-row-context-menu-dark .import-export-menu-item-danger{background:rgba(190,24,93,.16);color:#fda4af}
+.key-row-context-menu-dark .import-export-menu-item-danger:hover:not(:disabled){background:rgba(190,24,93,.24);color:#fecdd3}
+.key-row-context-action{width:100%;padding:8px 12px;font-size:13px;line-height:1.35;border-radius:16px}
+.key-row-action-info{display:flex;flex-direction:column;gap:2px;padding:2px 4px}
+.key-row-action-label{font-size:10px;line-height:1.2;color:#64748b}
+.key-row-action-value{font-size:11px;line-height:1.35;color:#0f172a;word-break:break-word}
+.key-row-context-menu-dark .key-row-action-label{color:#94a3b8}
+.key-row-context-menu-dark .key-row-action-value{color:#e2e8f0}
 .inventory-icon-button{width:34px;height:34px;border:0;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .18s ease, box-shadow .18s ease, filter .18s ease, opacity .18s ease;background:linear-gradient(135deg,#f8fafc,#e2e8f0);box-shadow:inset 0 0 0 1px rgba(148,163,184,.28);flex:0 0 auto;color:#0f172a}
 .inventory-icon-button:hover:not(:disabled){transform:translateY(-1px) scale(1.06);filter:saturate(1.08)}
 .inventory-icon-button:disabled{cursor:not-allowed;opacity:.45;transform:none;filter:none;box-shadow:inset 0 0 0 1px rgba(148,163,184,.18)}
