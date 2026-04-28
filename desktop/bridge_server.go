@@ -25,7 +25,7 @@ var embeddedBridgeUserScript string
 const (
 	bridgeServerHost               = "127.0.0.1"
 	bridgeServerPort               = 8888
-	bridgeServerVersion            = "0.2.9"
+	bridgeServerVersion            = "0.2.11"
 	bridgeScriptManagerExtensionID = "gcalenpjmijncebpfijmoaglllgpjagf"
 	bridgeScriptManagerInstallURL  = "https://chrome.google.com/webstore/detail/tampermonkey/gcalenpjmijncebpfijmoaglllgpjagf"
 )

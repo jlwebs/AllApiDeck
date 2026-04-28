@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         All API Deck Local Bridge Import
 // @namespace    http://tampermonkey.net/
-// @version      0.2.9
+// @version      0.2.11
 // @description  当前标签页桥接导入：显式确认后提取站点登录态候选、账号信息与站内 key 列表，并发送到本地 All API Deck 进程。
 // @author       All API Deck
 // @match        http://127.0.0.1/*
@@ -9,15 +9,16 @@
 // @match        https://*/*
 // @grant        GM_xmlhttpRequest
 // @connect      127.0.0.1
-// @run-at       document-start
+// @run-at       document-idle
 // ==/UserScript==
 
 (function () {
   'use strict';
 
   const receiverBase = 'http://127.0.0.1:8888';
-  const bridgeVersion = '0.2.9';
+  const bridgeVersion = '0.2.11';
   const executionId = `bridge-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const SECURITY_VERIFICATION_MARKER = '正在进行安全验证';
   const phaseLogs = [];
   const nativeFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
   const observedBridgeState = {
@@ -409,6 +410,86 @@
     } catch {
       return null;
     }
+  }
+
+  function isFramedBridgeContext() {
+    try {
+      return window.top !== window.self;
+    } catch {
+      return true;
+    }
+  }
+
+  function readBridgePageTextSample() {
+    try {
+      const parts = [
+        document.title || '',
+        document.body?.innerText || '',
+        document.documentElement?.innerText || document.documentElement?.textContent || '',
+      ];
+      return parts
+        .map(item => String(item || ''))
+        .filter(Boolean)
+        .join('\n')
+        .slice(0, 20000);
+    } catch {
+      return String(document.title || '');
+    }
+  }
+
+  function isSecurityVerificationPage() {
+    return readBridgePageTextSample().includes(SECURITY_VERIFICATION_MARKER);
+  }
+
+  async function waitForSecurityVerificationGate(timeoutMs = 1600) {
+    if (isSecurityVerificationPage()) {
+      return true;
+    }
+    if (document.readyState === 'interactive' || document.readyState === 'complete') {
+      return isSecurityVerificationPage();
+    }
+
+    return new Promise(resolve => {
+      let settled = false;
+      let timer = null;
+      let observer = null;
+
+      const finish = (detected) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        if (observer) observer.disconnect();
+        window.removeEventListener('DOMContentLoaded', inspectAndFinish);
+        window.removeEventListener('load', inspectAndFinish);
+        resolve(Boolean(detected));
+      };
+
+      const inspectAndFinish = () => {
+        if (isSecurityVerificationPage()) {
+          finish(true);
+        } else if (document.readyState === 'interactive' || document.readyState === 'complete') {
+          finish(false);
+        }
+      };
+
+      if (document.documentElement && typeof MutationObserver !== 'undefined') {
+        observer = new MutationObserver(() => {
+          if (isSecurityVerificationPage()) {
+            finish(true);
+          }
+        });
+        observer.observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        });
+      }
+
+      timer = setTimeout(() => finish(isSecurityVerificationPage()), timeoutMs);
+      window.addEventListener('DOMContentLoaded', inspectAndFinish, { once: true });
+      window.addEventListener('load', inspectAndFinish, { once: true });
+      inspectAndFinish();
+    });
   }
 
   function decodeBase64UrlSegment(segment) {
@@ -910,6 +991,7 @@
           method: safeString(method || 'GET').toUpperCase(),
           url: safeString(url),
           headers: {},
+          async: async !== false,
         };
         return originalOpen.call(this, method, url, async, user, password);
       };
@@ -924,7 +1006,10 @@
       };
 
       XMLHttpRequest.prototype.send = function patchedSend(body) {
-        const meta = this.__allApiDeckBridgeMeta || { method: 'GET', url: '', headers: {} };
+        const meta = this.__allApiDeckBridgeMeta || { method: 'GET', url: '', headers: {}, async: true };
+        if (meta.async === false) {
+          return originalSend.call(this, body);
+        }
         const parsedUrl = parseUrlMaybe(meta.url);
         if (parsedUrl && parsedUrl.origin === window.location.origin) {
           const bearerToken = extractBearerTokenFromHeaders(meta.headers);
@@ -2347,6 +2432,14 @@
       console.info('[AllApiDeck Bridge] skip self bridge page.');
       return;
     }
+    if (isFramedBridgeContext()) {
+      console.info('[AllApiDeck Bridge] skip framed page.');
+      return;
+    }
+    if (await waitForSecurityVerificationGate()) {
+      console.info(`[AllApiDeck Bridge] skip security verification page: ${SECURITY_VERIFICATION_MARKER}`);
+      return;
+    }
 
     bridgePanelSuppressed = true;
     updateBridgePanel({
@@ -2357,8 +2450,13 @@
       tone: 'pending',
       detail: '正在等待页面稳定并检查本地桥接会话',
     });
-    installRuntimeObservers();
     await waitForPageSettle();
+    if (isSecurityVerificationPage()) {
+      bridgePanelSuppressed = true;
+      removeBridgePanel();
+      console.info(`[AllApiDeck Bridge] abort after settle on security verification page: ${SECURITY_VERIFICATION_MARKER}`);
+      return;
+    }
 
     logPhase('boot', 'bridge script injected', {
       executionId,
@@ -2381,6 +2479,7 @@
       return;
     }
 
+    installRuntimeObservers();
     bridgePanelSuppressed = false;
     updateBridgePanel({
       busy: true,
