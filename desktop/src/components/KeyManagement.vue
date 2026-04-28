@@ -153,7 +153,135 @@
           </a-space>
         </template>
 
-        <a-empty v-if="displayedRows.length === 0" description="暂无本地密钥记录，可从批量检测自动同步、剪贴板导入或手工添加。" />
+        <div class="key-group-strip">
+          <div class="key-group-tabs" role="tablist" aria-label="密钥分组">
+            <button
+              type="button"
+              class="key-group-tab"
+              :class="{ 'key-group-tab-active': activeKeyGroupId === ALL_KEYS_GROUP_ID }"
+              @click="setActiveKeyGroup(ALL_KEYS_GROUP_ID)"
+            >
+              全部密钥
+              <span class="key-group-tab-count">{{ allSortedRows.length }}</span>
+            </button>
+            <button
+              v-for="group in keyGroups"
+              :key="group.id"
+              type="button"
+              class="key-group-tab"
+              :class="{ 'key-group-tab-active': activeKeyGroupId === group.id }"
+              @click="setActiveKeyGroup(group.id)"
+            >
+              {{ group.name }}
+              <span class="key-group-tab-count">{{ getGroupRecordCount(group.id) }}</span>
+            </button>
+            <button type="button" class="key-group-tab key-group-tab-create" @click.stop="toggleQuickGroupPopover">
+              <PlusOutlined />
+              <span>快捷分组</span>
+            </button>
+          </div>
+        </div>
+
+        <teleport to="body">
+          <div v-if="quickGroupPopoverOpen" class="key-quick-group-overlay" @click="closeQuickGroupPopover">
+            <div class="key-quick-group-floating-panel" :class="{ 'key-quick-group-floating-panel-gaia': isDarkMode }" @click.stop>
+              <div class="key-quick-group-composer">
+                <div class="key-quick-group-input-row">
+                  <a-input
+                    v-model:value="createKeyGroupDraftName"
+                    size="small"
+                    :maxlength="32"
+                    placeholder="输入组名；不选快捷项也可直接创建空组"
+                    @input="handleQuickGroupDraftNameInput"
+                    @pressEnter="submitQuickGroupComposer"
+                  />
+                  <a-button type="primary" size="small" class="key-quick-group-create-button" @click="submitQuickGroupComposer">
+                    创建
+                  </a-button>
+                </div>
+              </div>
+              <div class="quick-filter-toolbar key-quick-filter-toolbar">
+                <div class="quick-filter-strip key-quick-filter-strip" v-if="quickGroupFilters.length">
+                  <a-popover
+                    v-for="family in quickGroupFilters"
+                    :key="family.key"
+                    trigger="hover"
+                    placement="bottomLeft"
+                    overlay-class-name="quick-filter-family-popover"
+                    :getPopupContainer="getQuickGroupPopupContainer"
+                    :z-index="1600"
+                  >
+                    <template #content>
+                      <div class="quick-filter-family-panel">
+                        <div class="quick-filter-family-panel-title">{{ family.label }}</div>
+                        <div class="quick-filter-option-list">
+                          <a-button
+                            v-for="option in family.options"
+                            :key="option.key"
+                            size="small"
+                            :type="activeQuickGroupFilters.includes(option.key) ? 'primary' : 'default'"
+                            @click="toggleQuickGroupFilter(option.key)"
+                          >
+                            {{ option.label }}
+                          </a-button>
+                          <a-button
+                            size="small"
+                            class="quick-filter-family-select-all"
+                            @click="selectQuickGroupFilterFamily(family)"
+                          >
+                            {{ isQuickGroupFilterFamilyFullySelected(family) ? '取消' : '全选' }}
+                          </a-button>
+                        </div>
+                      </div>
+                    </template>
+                    <a-button
+                      class="quick-filter-family-trigger"
+                      :type="isQuickGroupFilterFamilyActive(family) ? 'primary' : 'default'"
+                      @click="selectQuickGroupFilterFamily(family)"
+                    >
+                      {{ family.label }}
+                      <span v-if="getQuickGroupFilterFamilyActiveCount(family)" class="quick-filter-family-count">
+                        {{ getQuickGroupFilterFamilyActiveCount(family) }}
+                      </span>
+                    </a-button>
+                  </a-popover>
+                  <a-button
+                    class="quick-filter-clear-trigger"
+                    @click="clearQuickGroupFilters"
+                    :disabled="!activeQuickGroupFilters.length"
+                  >
+                    清空
+                  </a-button>
+                </div>
+                <div v-else class="quick-filter-empty-inline">暂无可用快捷分组</div>
+              </div>
+              <div v-if="activeQuickGroupSummary" class="quick-filter-summary key-quick-group-summary">{{ activeQuickGroupSummary }}</div>
+              <div v-if="activeQuickGroupFilters.length" class="key-quick-group-preview">
+                <div class="key-quick-group-preview-head">
+                  <span class="key-quick-group-preview-title">命中密钥</span>
+                  <span class="key-quick-group-preview-count">{{ quickGroupMatchedRecords.length }} 条</span>
+                </div>
+                <div v-if="quickGroupMatchedRecords.length" class="key-quick-group-preview-list">
+                  <div
+                    v-for="item in quickGroupMatchedRecords"
+                    :key="item.rowKey"
+                    class="key-quick-group-preview-item"
+                  >
+                    <div class="key-quick-group-preview-main">
+                      <span class="key-quick-group-preview-site">{{ item.siteName }}</span>
+                      <span class="key-quick-group-preview-token">{{ item.tokenName }}</span>
+                      <span class="key-quick-group-preview-key">{{ item.maskedApiKey }}</span>
+                    </div>
+                    <div class="key-quick-group-preview-models">{{ item.matchedModels.join(' / ') }}</div>
+                  </div>
+                </div>
+                <div v-else class="key-quick-group-preview-empty">当前快捷项未命中任何密钥</div>
+              </div>
+            </div>
+          </div>
+        </teleport>
+
+        <a-empty v-if="displayedRows.length === 0" :description="keyManagementEmptyDescription" />
         <a-table
           v-else
           :columns="activeColumns"
@@ -162,6 +290,7 @@
           :pagination="tablePagination"
           :scroll="isCompactMode ? { x: 560 } : undefined"
           :custom-row="getManagedRecordRowProps"
+          :show-sorter-tooltip="false"
           size="small"
           class="compact-key-table"
           @change="handleTableChange"
@@ -221,7 +350,7 @@
                       size="small"
                       class="record-model-select api-model-select"
                       popup-class-name="record-model-dropdown"
-                      :value="record.selectedModel || undefined"
+                      :value="getRecordSelectedModelValue(record) || undefined"
                       :options="getRecordModelOptions(record)"
                       :loading="record.modelLoading"
                       :filter-option="true"
@@ -240,7 +369,7 @@
                   size="small"
                   class="record-model-select"
                   popup-class-name="record-model-dropdown"
-                  :value="record.selectedModel || undefined"
+                  :value="getRecordSelectedModelValue(record) || undefined"
                   :options="getRecordModelOptions(record)"
                   :loading="record.modelLoading"
                   :filter-option="true"
@@ -325,6 +454,7 @@
         class="key-row-context-menu"
         :class="{ 'key-row-context-menu-dark': isDarkMode }"
         :style="{ left: `${rowContextMenu.x}px`, top: `${rowContextMenu.y}px` }"
+        @mouseleave="closeRowContextGroupSubmenu"
       >
         <button type="button" class="import-export-menu-item key-row-context-action" @click="handleRowContextEdit">
           编辑密钥
@@ -336,15 +466,66 @@
         >
           删除记录
         </button>
+        <button
+          type="button"
+          class="import-export-menu-item key-row-context-action key-row-context-submenu-trigger"
+          :class="{ 'key-row-context-submenu-trigger-active': rowContextMenu.groupSubmenuOpen }"
+          @mouseenter="openRowContextGroupSubmenu"
+        >
+          <span>分配到分组</span>
+          <span class="key-row-context-submenu-arrow">›</span>
+        </button>
+
+        <div
+          v-if="rowContextMenu.groupSubmenuOpen"
+          class="key-row-context-submenu"
+          :class="{ 'key-row-context-submenu-dark': isDarkMode }"
+          @mouseenter="openRowContextGroupSubmenu"
+        >
+          <div class="key-row-group-heading">
+            <span class="key-row-action-label">分组</span>
+            <button type="button" class="key-row-group-create-button" @click="openCreateKeyGroupModalFromContext">
+              <PlusOutlined />
+            </button>
+          </div>
+          <div v-if="keyGroups.length" class="key-row-group-list">
+            <button
+              v-for="group in keyGroups"
+              :key="group.id"
+              type="button"
+              class="key-row-group-chip"
+              :class="{ 'key-row-group-chip-active': isRecordInGroup(rowContextMenu.record, group.id) }"
+              @click="toggleRecordGroupMembership(rowContextMenu.record, group.id)"
+            >
+              <span class="key-row-group-chip-mark">{{ isRecordInGroup(rowContextMenu.record, group.id) ? '✓' : '' }}</span>
+              <span class="key-row-group-chip-name">{{ group.name }}</span>
+            </button>
+          </div>
+          <div v-else class="key-row-action-empty">暂无自定义分组</div>
+        </div>
         <div class="key-row-action-info">
           <span class="key-row-action-label">最近同步</span>
           <span class="key-row-action-value">{{ formatDateTime(rowContextMenu.record.updatedAt) }}</span>
         </div>
-        <div class="key-row-action-info">
-          <span class="key-row-action-label">最近快测</span>
-          <span class="key-row-action-value">{{ rowContextMenu.record.quickTestAt ? formatDateTime(rowContextMenu.record.quickTestAt) : '暂无快测记录' }}</span>
-        </div>
       </div>
+
+      <a-modal
+        v-model:open="createKeyGroupModalOpen"
+        title="新建密钥分组"
+        ok-text="创建"
+        cancel-text="取消"
+        :confirm-loading="createKeyGroupSaving"
+        @ok="submitCreateKeyGroup"
+        @cancel="closeCreateKeyGroupModal"
+      >
+        <a-input
+          v-model:value="createKeyGroupDraftName"
+          :maxlength="18"
+          show-count
+          placeholder="例如：默认 / 极速 / 链式代理"
+          @pressEnter="submitCreateKeyGroup"
+        />
+      </a-modal>
 
       <a-modal
         v-model:open="manualRecordModalOpen"
@@ -576,10 +757,12 @@ import ccSwitchIcon from '../assets/action-icons/cc-switch.png';
 const STORAGE_KEY = 'api_check_key_management_records_v1';
 const MANUAL_STORAGE_KEY = 'api_check_key_management_manual_records_v1';
 const META_STORAGE_KEY = 'api_check_key_management_meta_v1';
+const KEY_GROUPS_STORAGE_KEY = 'api_check_key_management_groups_v1';
 const LAST_RESULTS_STORAGE_KEY = HISTORY_SNAPSHOT_INDEX_KEY;
 const KEY_MANAGEMENT_SYNC_EVENT = 'batch-api-check:key-management-sync';
 const DEFAULT_TEST_TIMEOUT_MS = 20000;
 const CC_SWITCH_TARGET_APPS = ['claude', 'codex', 'gemini', 'opencode', 'openclaw'];
+const ALL_KEYS_GROUP_ID = '__all_keys__';
 const DESKTOP_APP_ICONS = {
   claude: claudeAppIcon,
   codex: codexAppIcon,
@@ -652,11 +835,20 @@ const openingManualSidebar = ref(false);
 const manualSidebarBridgeReady = ref(false);
 let manualSidebarBridgeProbeTimer = null;
 const isCompactMode = computed(() => route.query?.compact === '1');
+const keyGroups = ref(loadStoredKeyGroups());
+const activeKeyGroupId = ref(ALL_KEYS_GROUP_ID);
+const activeQuickGroupFilters = ref([]);
+const quickGroupPopoverOpen = ref(false);
+const quickGroupDraftNameMode = ref('auto');
+const createKeyGroupModalOpen = ref(false);
+const createKeyGroupSaving = ref(false);
+const createKeyGroupDraftName = ref('');
 const rowContextMenu = reactive({
   open: false,
   x: 0,
   y: 0,
   record: null,
+  groupSubmenuOpen: false,
 });
 const PERSIST_DEBOUNCE_MS = 240;
 let persistRecordsTimer = null;
@@ -675,9 +867,342 @@ function getSidebarPopupContainer(triggerNode) {
   return triggerNode?.ownerDocument?.body || document.body;
 }
 
+function getQuickGroupPopupContainer(triggerNode) {
+  return triggerNode?.closest?.('.key-quick-group-floating-panel') || triggerNode?.ownerDocument?.body || document.body;
+}
+
+function buildKeyGroupId() {
+  return `group::${Date.now()}::${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function normalizeRecordGroupIds(value) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.map(item => String(item || '').trim()).filter(Boolean)));
+}
+
+function normalizeGroupSelectedModels(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([groupId, model]) => [String(groupId || '').trim(), String(model || '').trim()])
+      .filter(([groupId, model]) => groupId && model)
+  );
+}
+
+function getScopedGroupId(groupId = activeKeyGroupId.value) {
+  const normalized = String(groupId || '').trim();
+  if (!normalized || normalized === ALL_KEYS_GROUP_ID) return '';
+  return normalized;
+}
+
+function getRecordSelectedModelValue(record, groupId = activeKeyGroupId.value) {
+  const scopedGroupId = getScopedGroupId(groupId);
+  const groupSelectedModels = normalizeGroupSelectedModels(record?.groupSelectedModels);
+  const groupModel = scopedGroupId ? String(groupSelectedModels?.[scopedGroupId] || '').trim() : '';
+  if (groupModel) return groupModel;
+  return String(record?.selectedModel || '').trim();
+}
+
+function setRecordSelectedModelValue(record, value, groupId = activeKeyGroupId.value) {
+  const normalizedValue = normalizeModels([value])[0] || '';
+  const scopedGroupId = getScopedGroupId(groupId);
+  if (!scopedGroupId) {
+    record.selectedModel = normalizedValue;
+    return normalizedValue;
+  }
+  const nextGroupSelectedModels = normalizeGroupSelectedModels(record?.groupSelectedModels);
+  if (normalizedValue) nextGroupSelectedModels[scopedGroupId] = normalizedValue;
+  else delete nextGroupSelectedModels[scopedGroupId];
+  record.groupSelectedModels = nextGroupSelectedModels;
+  return normalizedValue;
+}
+
+function pickScopedModelForGroup(record, modelsSet, groupId = '') {
+  const availableModels = buildMergedModelList(record);
+  const scopedSelectedModel = getRecordSelectedModelValue(record, groupId);
+  if (scopedSelectedModel && modelsSet.has(scopedSelectedModel)) return scopedSelectedModel;
+  const globalSelectedModel = String(record?.selectedModel || '').trim();
+  if (globalSelectedModel && modelsSet.has(globalSelectedModel)) return globalSelectedModel;
+  const matchedModels = availableModels.filter(model => modelsSet.has(model));
+  return pickPreferredModel(matchedModels) || matchedModels[0] || '';
+}
+
+function loadStoredKeyGroups() {
+  try {
+    const raw = localStorage.getItem(KEY_GROUPS_STORAGE_KEY);
+    const parsed = JSON.parse(raw || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map(item => ({
+        id: String(item?.id || '').trim(),
+        name: String(item?.name || '').trim(),
+        createdAt: Number(item?.createdAt || Date.now()),
+      }))
+      .filter(item => item.id && item.name);
+  } catch (error) {
+    console.error(error);
+    return [];
+  }
+}
+
+function persistKeyGroups() {
+  localStorage.setItem(KEY_GROUPS_STORAGE_KEY, JSON.stringify(keyGroups.value));
+}
+
+function normalizeQuickFilterName(name) {
+  const normalized = String(name || '').trim();
+  if (!normalized) return '';
+  const withoutVendor = normalized.includes('/') ? normalized.split('/').pop() : normalized;
+  return String(withoutVendor || '').trim();
+}
+
+function extractQuickFilterCategory(name) {
+  const normalized = normalizeQuickFilterName(name);
+  if (!normalized) return '';
+  const match = normalized.match(/gpt|[a-zA-Z]{3,}/i);
+  return match ? match[0].toLowerCase() : '';
+}
+
+function extractQuickFilterVersion(name) {
+  const normalized = normalizeQuickFilterName(name);
+  if (!normalized) return '';
+  const match = normalized.match(/\d+(?:\.\d+)?/);
+  return match ? match[0] : '';
+}
+
+function buildQuickFilterOptionLabel(category, version, sampleName) {
+  if (version) return `${category}-${version}`;
+  return normalizeQuickFilterName(sampleName || category);
+}
+
+function getGroupRecordCount(groupId) {
+  if (!groupId) return 0;
+  return allSortedRows.value.filter(record => normalizeRecordGroupIds(record?.groupIds).includes(groupId)).length;
+}
+
+function resetQuickGroupComposer() {
+  activeQuickGroupFilters.value = [];
+  createKeyGroupDraftName.value = '';
+  quickGroupDraftNameMode.value = 'auto';
+}
+
+function handleQuickGroupPopoverOpenChange(open) {
+  quickGroupPopoverOpen.value = Boolean(open);
+  if (open) {
+    resetQuickGroupComposer();
+  }
+}
+
+function openQuickGroupPopover() {
+  if (quickGroupPopoverOpen.value) return;
+  quickGroupPopoverOpen.value = true;
+  resetQuickGroupComposer();
+}
+
+function closeQuickGroupPopover() {
+  quickGroupPopoverOpen.value = false;
+}
+
+function toggleQuickGroupPopover() {
+  if (quickGroupPopoverOpen.value) {
+    closeQuickGroupPopover();
+    return;
+  }
+  openQuickGroupPopover();
+}
+
+function handleQuickGroupDraftNameInput() {
+  quickGroupDraftNameMode.value = 'manual';
+}
+
+function setActiveKeyGroup(groupId) {
+  activeKeyGroupId.value = groupId || ALL_KEYS_GROUP_ID;
+  currentTablePage.value = 1;
+}
+
+function openCreateKeyGroupModal() {
+  createKeyGroupDraftName.value = '';
+  createKeyGroupModalOpen.value = true;
+}
+
+function openCreateKeyGroupModalFromContext() {
+  openCreateKeyGroupModal();
+}
+
+function closeCreateKeyGroupModal() {
+  createKeyGroupModalOpen.value = false;
+  createKeyGroupDraftName.value = '';
+}
+
+async function submitCreateKeyGroup() {
+  const name = String(createKeyGroupDraftName.value || '').trim();
+  if (!name) {
+    message.warning('请先输入分组名称');
+    return;
+  }
+  if (name === '全部密钥') {
+    message.warning('该名称已被默认分组占用');
+    return;
+  }
+  if (keyGroups.value.some(group => group.name === name)) {
+    message.warning('分组名称已存在');
+    return;
+  }
+  createKeyGroupSaving.value = true;
+  try {
+    const newGroup = {
+      id: buildKeyGroupId(),
+      name,
+      createdAt: Date.now(),
+    };
+    keyGroups.value = [...keyGroups.value, newGroup];
+    persistKeyGroups();
+    activeKeyGroupId.value = newGroup.id;
+    closeCreateKeyGroupModal();
+    message.success(`已创建分组：${name}`);
+  } finally {
+    createKeyGroupSaving.value = false;
+  }
+}
+
+function isRecordInGroup(record, groupId) {
+  return normalizeRecordGroupIds(record?.groupIds).includes(groupId);
+}
+
+function toggleRecordGroupMembership(record, groupId) {
+  if (!record || !groupId) return;
+  const current = normalizeRecordGroupIds(record.groupIds);
+  record.groupIds = current.includes(groupId)
+    ? current.filter(id => id !== groupId)
+    : [...current, groupId];
+  persistRecords();
+}
+
+function isQuickGroupFilterFamilyFullySelected(family) {
+  return family.options.length > 0 && family.options.every(option => activeQuickGroupFilters.value.includes(option.key));
+}
+
+function isQuickGroupFilterFamilyActive(family) {
+  return family.options.some(option => activeQuickGroupFilters.value.includes(option.key));
+}
+
+function getQuickGroupFilterFamilyActiveCount(family) {
+  return family.options.filter(option => activeQuickGroupFilters.value.includes(option.key)).length;
+}
+
+function getQuickGroupModelsFromOptionKeys(optionKeys) {
+  const selectedModels = new Set();
+  quickGroupFilters.value.forEach(family => {
+    family.options.forEach(option => {
+      if (!optionKeys.includes(option.key)) return;
+      option.models.forEach(model => selectedModels.add(model));
+    });
+  });
+  return selectedModels;
+}
+
+function getQuickGroupLabelsFromOptionKeys(optionKeys) {
+  const labels = [];
+  quickGroupFilters.value.forEach(family => {
+    family.options.forEach(option => {
+      if (optionKeys.includes(option.key)) labels.push(option.label);
+    });
+  });
+  return labels;
+}
+
+function syncQuickGroupDraftNameFromFilters() {
+  if (quickGroupDraftNameMode.value !== 'auto') return;
+  createKeyGroupDraftName.value = getQuickGroupLabelsFromOptionKeys(activeQuickGroupFilters.value).join('+');
+}
+
+function applyQuickGroupPresetSelection(optionKeys) {
+  const normalized = Array.from(new Set((Array.isArray(optionKeys) ? optionKeys : []).filter(Boolean)));
+  activeQuickGroupFilters.value = normalized;
+  syncQuickGroupDraftNameFromFilters();
+}
+
+function submitQuickGroupComposer() {
+  const normalized = Array.from(new Set(activeQuickGroupFilters.value.filter(Boolean)));
+  const inferredName = getQuickGroupLabelsFromOptionKeys(normalized).join('+');
+  const groupName = String(createKeyGroupDraftName.value || '').trim() || inferredName;
+  if (!groupName) {
+    message.warning('请先输入组名，或选择下方快捷项');
+    return;
+  }
+
+  const modelsSet = getQuickGroupModelsFromOptionKeys(normalized);
+  let targetGroup = keyGroups.value.find(group => group.name === groupName) || null;
+  if (!targetGroup) {
+    targetGroup = {
+      id: buildKeyGroupId(),
+      name: groupName,
+      createdAt: Date.now(),
+    };
+    keyGroups.value = [...keyGroups.value, targetGroup];
+    persistKeyGroups();
+  }
+
+  let changedCount = 0;
+  if (modelsSet.size > 0) {
+    tableData.value.forEach(record => {
+      const recordModels = buildMergedModelList(record);
+      const matched = recordModels.some(model => modelsSet.has(model));
+      if (!matched) return;
+      const current = normalizeRecordGroupIds(record.groupIds);
+      const nextSelectedModel = pickScopedModelForGroup(record, modelsSet, targetGroup.id);
+      let changed = false;
+      if (!current.includes(targetGroup.id)) {
+        record.groupIds = [...current, targetGroup.id];
+        changed = true;
+      }
+      if (nextSelectedModel) {
+        const currentScopedModel = getRecordSelectedModelValue(record, targetGroup.id);
+        if (currentScopedModel !== nextSelectedModel) {
+          setRecordSelectedModelValue(record, nextSelectedModel, targetGroup.id);
+          changed = true;
+        }
+      }
+      if (changed) changedCount += 1;
+    });
+  }
+  if (changedCount > 0) {
+    persistRecords();
+  }
+  activeKeyGroupId.value = targetGroup.id;
+  currentTablePage.value = 1;
+  quickGroupPopoverOpen.value = false;
+  message.success(modelsSet.size > 0 ? `已创建快捷分组：${groupName}` : `已创建空分组：${groupName}`);
+}
+
+function toggleQuickGroupFilter(optionKey) {
+  const current = new Set(activeQuickGroupFilters.value);
+  if (current.has(optionKey)) current.delete(optionKey);
+  else current.add(optionKey);
+  applyQuickGroupPresetSelection(Array.from(current));
+}
+
+function clearQuickGroupFilters() {
+  activeQuickGroupFilters.value = [];
+  if (quickGroupDraftNameMode.value === 'auto') {
+    createKeyGroupDraftName.value = '';
+  }
+}
+
+function selectQuickGroupFilterFamily(family) {
+  const current = new Set(activeQuickGroupFilters.value);
+  if (isQuickGroupFilterFamilyFullySelected(family)) {
+    family.options.forEach(option => current.delete(option.key));
+  } else {
+    family.options.forEach(option => current.add(option.key));
+  }
+  applyQuickGroupPresetSelection(Array.from(current));
+}
+
 function closeRowContextMenu() {
   rowContextMenu.open = false;
   rowContextMenu.record = null;
+  rowContextMenu.groupSubmenuOpen = false;
 }
 
 function openRowContextMenu(record, event) {
@@ -687,9 +1212,10 @@ function openRowContextMenu(record, event) {
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 0;
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 0;
   const menuWidth = 264;
-  const menuHeight = 238;
+  const menuHeight = Math.min(440, 226 + Math.max(0, keyGroups.value.length - 1) * 36);
   const edgePadding = 12;
   rowContextMenu.record = record;
+  rowContextMenu.groupSubmenuOpen = false;
   rowContextMenu.x = viewportWidth > 0
     ? Math.max(edgePadding, Math.min(event.clientX, viewportWidth - menuWidth - edgePadding))
     : event.clientX;
@@ -700,7 +1226,13 @@ function openRowContextMenu(record, event) {
 }
 
 function getManagedRecordRowProps(record) {
+  const isContextTarget = Boolean(
+    rowContextMenu.open &&
+    rowContextMenu.record &&
+    String(rowContextMenu.record?.rowKey || '').trim() === String(record?.rowKey || '').trim()
+  );
   return {
+    class: isContextTarget ? 'key-row-context-target' : '',
     onContextmenu: event => openRowContextMenu(record, event),
   };
 }
@@ -708,12 +1240,21 @@ function getManagedRecordRowProps(record) {
 function handleGlobalRowContextMenuDismiss(event) {
   if (!rowContextMenu.open) return;
   const target = event?.target;
-  if (target?.closest?.('.key-row-context-menu')) return;
+  if (target?.closest?.('.key-row-context-menu') || target?.closest?.('.key-row-context-submenu')) return;
   closeRowContextMenu();
+}
+
+function openRowContextGroupSubmenu() {
+  rowContextMenu.groupSubmenuOpen = true;
+}
+
+function closeRowContextGroupSubmenu() {
+  rowContextMenu.groupSubmenuOpen = false;
 }
 
 function handleGlobalRowContextEscape(event) {
   if (event?.key === 'Escape') {
+    if (createKeyGroupModalOpen.value) return;
     closeRowContextMenu();
   }
 }
@@ -776,7 +1317,119 @@ const displayedRows = computed(() => {
   const filteredRows = hideInvalidKeys.value
     ? allSortedRows.value.filter(record => Number(record?.status || 0) === 1)
     : allSortedRows.value;
-  return sortManagedRecords(filteredRows);
+  const groupedRows = activeKeyGroupId.value === ALL_KEYS_GROUP_ID
+    ? filteredRows
+    : filteredRows.filter(record => normalizeRecordGroupIds(record?.groupIds).includes(activeKeyGroupId.value));
+  return sortManagedRecords(groupedRows);
+});
+const keyManagementEmptyDescription = computed(() => {
+  if (allSortedRows.value.length === 0) {
+    return '暂无本地密钥记录，可从批量检测自动同步、剪贴板导入或手工添加。';
+  }
+  if (activeKeyGroupId.value !== ALL_KEYS_GROUP_ID) {
+    return '当前分组暂无密钥。';
+  }
+  if (hideInvalidKeys.value) {
+    return '当前筛选条件下暂无可见密钥。';
+  }
+  return '暂无可显示的密钥记录。';
+});
+const quickGroupSourceModels = computed(() => Array.from(new Set(
+  allSortedRows.value
+    .flatMap(record => buildMergedModelList(record))
+    .map(model => String(model || '').trim())
+    .filter(Boolean)
+)));
+const quickGroupFilters = computed(() => {
+  const models = quickGroupSourceModels.value;
+  const familyMap = new Map();
+
+  models.forEach(model => {
+    const category = extractQuickFilterCategory(model);
+    if (!category) return;
+    const version = extractQuickFilterVersion(model);
+    const familyKey = category;
+    const optionKey = `${familyKey}:${version || normalizeQuickFilterName(model).toLowerCase()}`;
+    if (!familyMap.has(familyKey)) {
+      familyMap.set(familyKey, {
+        key: familyKey,
+        label: familyKey.toUpperCase(),
+        category: familyKey,
+        optionsMap: new Map(),
+      });
+    }
+    const family = familyMap.get(familyKey);
+    if (!family.optionsMap.has(optionKey)) {
+      family.optionsMap.set(optionKey, {
+        key: optionKey,
+        label: buildQuickFilterOptionLabel(familyKey, version, model),
+        version,
+        models: [],
+      });
+    }
+    family.optionsMap.get(optionKey).models.push(model);
+  });
+
+  const regularFamilies = [];
+  const rareOptions = [];
+  familyMap.forEach(family => {
+    const options = Array.from(family.optionsMap.values()).sort((a, b) => {
+      const versionDiff = (parseFloat(b.version) || 0) - (parseFloat(a.version) || 0);
+      if (versionDiff !== 0) return versionDiff;
+      return a.label.localeCompare(b.label);
+    });
+    const nextFamily = {
+      key: family.key,
+      label: family.label,
+      category: family.category,
+      options,
+    };
+    if (options.length <= 1) {
+      rareOptions.push(...options);
+      return;
+    }
+    regularFamilies.push(nextFamily);
+  });
+
+  regularFamilies.sort((a, b) => a.label.localeCompare(b.label));
+  if (rareOptions.length) {
+    regularFamilies.push({
+      key: 'mixed',
+      label: 'MIXED',
+      category: 'mixed',
+      options: rareOptions.sort((a, b) => a.label.localeCompare(b.label)),
+    });
+  }
+  return regularFamilies;
+});
+const activeQuickGroupSummary = computed(() => {
+  const labels = [];
+  quickGroupFilters.value.forEach(family => {
+    family.options.forEach(option => {
+      if (activeQuickGroupFilters.value.includes(option.key)) labels.push(option.label);
+    });
+  });
+  if (labels.length === 0) return '';
+  if (labels.length <= 3) return `已按 ${labels.join(' + ')} 快速分组`;
+  return `已按 ${labels.slice(0, 3).join(' + ')} +${labels.length - 3} 项快速分组`;
+});
+const activeQuickGroupModelSet = computed(() => getQuickGroupModelsFromOptionKeys(activeQuickGroupFilters.value));
+const quickGroupMatchedRecords = computed(() => {
+  const modelSet = activeQuickGroupModelSet.value;
+  if (!modelSet.size) return [];
+  return allSortedRows.value
+    .map(record => {
+      const matchedModels = Array.from(new Set(buildMergedModelList(record).filter(model => modelSet.has(model))));
+      if (!matchedModels.length) return null;
+      return {
+        rowKey: record.rowKey,
+        siteName: String(record.siteName || '未命名站点').trim() || '未命名站点',
+        tokenName: String(record.tokenName || '').trim() || '未命名 Token',
+        maskedApiKey: maskApiKey(record.apiKey),
+        matchedModels: matchedModels.slice(0, 3),
+      };
+    })
+    .filter(Boolean);
 });
 const healthyKeyCount = computed(() => tableData.value.filter(record => record.status === 1).length);
 const abnormalKeyCount = computed(() => tableData.value.filter(record => Number(record?.status || 0) !== 1).length);
@@ -1213,7 +1866,7 @@ async function runQuickTest(record, options = {}) {
     return {
       status: 'error',
       label: '失败',
-      model: fixedModel || String(record?.selectedModel || '').trim(),
+      model: fixedModel || getRecordSelectedModelValue(record),
       responseTime: '',
       errorDetail: detail,
     };
@@ -1306,7 +1959,7 @@ async function runBatchQuickTest() {
 
         const apiKey = normalizeApiKey(record?.apiKey);
         const siteUrl = normalizeSiteUrl(record?.siteUrl);
-        const selectedModel = String(record?.selectedModel || '').trim();
+        const selectedModel = getRecordSelectedModelValue(record);
 
         if (!apiKey || !siteUrl) {
           stats.skipped += 1;
@@ -1357,17 +2010,17 @@ async function runBatchQuickTest() {
 }
 
 async function resolveQuickTestModel(record) {
-  const selectedModel = String(record?.selectedModel || '').trim();
+  const selectedModel = getRecordSelectedModelValue(record);
   if (selectedModel) return selectedModel;
   const historyPreferred = getBatchHistoryContext(record)?.preferredModel || '';
   if (historyPreferred) {
-    record.selectedModel = historyPreferred;
+    setRecordSelectedModelValue(record, historyPreferred);
     persistRecords();
     return historyPreferred;
   }
   const fromRecord = pickPreferredModel(record.modelsList);
   if (fromRecord) {
-    record.selectedModel = fromRecord;
+    setRecordSelectedModelValue(record, fromRecord);
     persistRecords();
     return fromRecord;
   }
@@ -1379,7 +2032,7 @@ async function resolveQuickTestModel(record) {
   if (!preferred) throw new Error('没有找到适合快速对话测试的模型');
   record.modelsList = normalizedCandidates;
   record.modelsText = normalizedCandidates.join(', ');
-  record.selectedModel = preferred;
+  setRecordSelectedModelValue(record, preferred);
   persistRecords();
   return preferred;
 }
@@ -1495,6 +2148,7 @@ async function importFromClipboardPackage() {
         modelsList,
         modelsText: modelsList.join(', ') || '未提供模型信息',
         selectedModel: String(rawRecord.selectedModel || '').trim(),
+        groupSelectedModels: normalizeGroupSelectedModels(rawRecord.groupSelectedModels),
         status: Number(rawRecord.status || 1),
         quickTestStatus: rawRecord.quickTestStatus || '',
         quickTestLabel: rawRecord.quickTestLabel || '',
@@ -2145,6 +2799,7 @@ function createRecordFromDraft(draft, existingRecord = null) {
     modelsList,
     modelsText: modelsList.length ? modelsList.join(', ') : '未提供模型信息',
     selectedModel: modelsList[0] || '',
+    groupSelectedModels: normalizeGroupSelectedModels(existingRecord?.groupSelectedModels),
     status: Number(draft.status || 1),
     createdAt: existingRecord?.createdAt || now,
     updatedAt: now,
@@ -2157,6 +2812,7 @@ function createRecordFromDraft(draft, existingRecord = null) {
     quickTestTtftMs: existingRecord?.quickTestTtftMs || '',
     quickTestTps: existingRecord?.quickTestTps || '',
     quickTestResponseContent: existingRecord?.quickTestResponseContent || '',
+    groupIds: normalizeRecordGroupIds(existingRecord?.groupIds || draft.groupIds),
     quickTestLoading: false,
   };
 }
@@ -2349,6 +3005,7 @@ function loadStoredRecords() {
       modelsList: normalizeModels(record.modelsList || record.modelsText),
       modelsText: record.modelsText || '未提供模型信息',
       selectedModel: String(record.selectedModel || '').trim(),
+      groupSelectedModels: normalizeGroupSelectedModels(record.groupSelectedModels),
       quickTestStatus: record.quickTestStatus || '',
       quickTestLabel: record.quickTestLabel || '',
       quickTestModel: record.quickTestModel || '',
@@ -2358,6 +3015,7 @@ function loadStoredRecords() {
       quickTestTtftMs: record.quickTestTtftMs || '',
       quickTestTps: record.quickTestTps || '',
       quickTestResponseContent: record.quickTestResponseContent || '',
+      groupIds: normalizeRecordGroupIds(record.groupIds),
       balanceLabel: record.balanceLabel || '',
       balanceUpdatedAt: record.balanceUpdatedAt || null,
       balanceError: record.balanceError || '',
@@ -2378,6 +3036,7 @@ function loadStoredRecords() {
       modelsList: normalizeModels(record.modelsList || record.modelsText),
       modelsText: record.modelsText || '未提供模型信息',
       selectedModel: String(record.selectedModel || '').trim(),
+      groupSelectedModels: normalizeGroupSelectedModels(record.groupSelectedModels),
       quickTestStatus: record.quickTestStatus || '',
       quickTestLabel: record.quickTestLabel || '',
       quickTestModel: record.quickTestModel || '',
@@ -2387,6 +3046,7 @@ function loadStoredRecords() {
       quickTestTtftMs: record.quickTestTtftMs || '',
       quickTestTps: record.quickTestTps || '',
       quickTestResponseContent: record.quickTestResponseContent || '',
+      groupIds: normalizeRecordGroupIds(record.groupIds),
       balanceLabel: record.balanceLabel || '',
       balanceUpdatedAt: record.balanceUpdatedAt || null,
       balanceError: record.balanceError || '',
@@ -2573,6 +3233,7 @@ function buildMergedModelList(record, context = getBatchHistoryContext(record)) 
   return normalizeModels([
     ...getContextModelNames(context),
     ...(Array.isArray(record?.modelsList) ? record.modelsList : []),
+    ...Object.values(normalizeGroupSelectedModels(record?.groupSelectedModels)),
     record?.selectedModel || '',
     record?.quickTestModel || '',
   ]);
@@ -2591,6 +3252,7 @@ function hydrateRecordModelSelection(record) {
     modelsList,
     modelsText: modelsList.join(', ') || '未提供模型信息',
     selectedModel: nextSelectedModel,
+    groupSelectedModels: normalizeGroupSelectedModels(record?.groupSelectedModels),
     modelLoading: false,
   };
 }
@@ -2600,8 +3262,9 @@ function getRecordRenderMeta(record) {
   const baseModels = Array.isArray(record?.modelsList) ? record.modelsList : normalizeModels(record?.modelsText);
   const signature = [
     record?.rowKey || '',
+    getScopedGroupId(),
     Number(context?.updatedAt || 0),
-    String(record?.selectedModel || '').trim(),
+    getRecordSelectedModelValue(record),
     String(record?.quickTestModel || '').trim(),
     baseModels.join('|'),
   ].join('::');
@@ -2613,7 +3276,7 @@ function getRecordRenderMeta(record) {
 
   const modelsList = buildMergedModelList(record, context);
   const taskMap = new Map((Array.isArray(context?.tasks) ? context.tasks : []).map(task => [task.modelName, task]));
-  const selectedModel = String(record?.selectedModel || '').trim();
+  const selectedModel = getRecordSelectedModelValue(record);
   const selectedTask = selectedModel ? (taskMap.get(selectedModel) || null) : null;
   const summary = buildHistoryTaskSummary(selectedTask);
   const value = {
@@ -2657,6 +3320,9 @@ async function loadRecordModelOptions(record, force = false) {
       ...getContextModelNames(context),
       ...normalizedCandidates,
       ...(Array.isArray(record.modelsList) ? record.modelsList : []),
+      ...Object.values(normalizeGroupSelectedModels(record?.groupSelectedModels)),
+      record?.selectedModel || '',
+      record?.quickTestModel || '',
     ]);
     if (!mergedModels.length) {
       throw new Error('没有获取到可用模型');
@@ -2664,8 +3330,9 @@ async function loadRecordModelOptions(record, force = false) {
     record.modelsList = mergedModels;
     record.modelsText = mergedModels.join(', ');
     record.modelFetchKey = currentFetchKey;
-    if (!record.selectedModel || !mergedModels.includes(record.selectedModel)) {
-      record.selectedModel = context?.preferredModel || pickPreferredModel(mergedModels) || mergedModels[0] || '';
+    const currentSelectedModel = getRecordSelectedModelValue(record);
+    if (!currentSelectedModel || !mergedModels.includes(currentSelectedModel)) {
+      setRecordSelectedModelValue(record, context?.preferredModel || pickPreferredModel(mergedModels) || mergedModels[0] || '');
     }
     persistRecords();
   } catch (error) {
@@ -2683,7 +3350,7 @@ async function handleRecordModelDropdownVisibleChange(record, open) {
 
 function handleRecordModelSelectionChange(record, value) {
   const normalizedValue = normalizeModels([value])[0] || '';
-  record.selectedModel = normalizedValue;
+  setRecordSelectedModelValue(record, normalizedValue);
   if (normalizedValue && !normalizeModels(record.modelsList).includes(normalizedValue)) {
     record.modelsList = normalizeModels([...(record.modelsList || []), normalizedValue]);
     record.modelsText = record.modelsList.join(', ');
@@ -2729,6 +3396,8 @@ function createPersistRecordsSnapshot() {
       modelsList: normalizeModels(record.modelsList || record.modelsText),
       selectedModel: String(record.selectedModel || '').trim(),
       quickTestResponseContent: record.quickTestResponseContent || '',
+      groupIds: normalizeRecordGroupIds(record.groupIds),
+      groupSelectedModels: normalizeGroupSelectedModels(record.groupSelectedModels),
       rowKey: record.rowKey || (record.sourceType === 'manual' ? buildManualRowKey() : buildRowKey(record.siteUrl, record.apiKey)),
     };
     if (normalizedRecord.sourceType === 'manual') manualRecords.push(normalizedRecord);
@@ -2795,9 +3464,70 @@ function persistMeta() {
 .sync-card,.inventory-card{width:100%}
 .inventory-card{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;overflow:hidden;border:0 !important;border-radius:0 !important;background:linear-gradient(180deg,rgba(228,233,226,.96),rgba(214,220,212,.92)) !important;box-shadow:none !important}
 .inventory-card :deep(.ant-card-head),.inventory-card :deep(.ant-card-body){background:transparent}
-.inventory-card :deep(.ant-card-head){border-bottom-color:rgba(114,132,103,.08)}
-.inventory-card :deep(.ant-card-body){display:flex;flex:1 1 auto;flex-direction:column;min-height:0}
+.inventory-card :deep(.ant-card-head){border-bottom-color:rgba(114,132,103,.08);min-height:54px;padding:0 12px 0 0}
+.inventory-card :deep(.ant-card-head-title){padding:10px 0 8px}
+.inventory-card :deep(.ant-card-extra){padding:8px 0 8px}
+.inventory-card :deep(.ant-card-body){display:flex;flex:1 1 auto;flex-direction:column;min-height:0;padding:4px 12px 4px}
 .inventory-card :deep(.ant-empty){margin-block:auto}
+.key-group-strip{margin:0 0 1px}
+.key-group-tabs{display:flex;align-items:center;gap:2px;min-width:0;overflow-x:auto;overflow-y:hidden;padding-bottom:0;scrollbar-width:none}
+.key-group-tabs::-webkit-scrollbar{display:none}
+.key-group-tab{height:28px;padding:0 10px;border:1px solid rgba(124,142,112,.18);border-radius:10px;background:linear-gradient(180deg,rgba(255,255,255,.9),rgba(241,245,239,.9));color:#314437;display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;font-size:11px;font-weight:500;line-height:1;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background .18s ease}
+.key-group-tab:hover{transform:translateY(-1px);border-color:rgba(91,125,88,.28);box-shadow:0 10px 24px rgba(72,102,70,.1)}
+.key-group-tab-active{border-color:rgba(106,144,88,.42);background:linear-gradient(180deg,#ffffff,#edf5df);box-shadow:0 12px 26px rgba(117,156,90,.16),inset 0 0 0 1px rgba(171,205,132,.25);color:#203226}
+.key-group-tab-count{min-width:14px;padding:1px 5px;border-radius:999px;background:rgba(69,102,59,.1);color:inherit;font-size:10px;font-weight:600;line-height:1.05}
+.key-group-tab-create{padding-inline:10px;color:#466846}
+.key-group-tab-create :deep(.anticon),.key-group-tab-create svg{font-size:11px}
+.key-management-gaia .key-group-tab{border-color:rgba(122,151,125,.18);background:linear-gradient(180deg,rgba(34,40,34,.94),rgba(26,31,27,.96));color:#d8e5d4}
+.key-management-gaia .key-group-tab:hover{border-color:rgba(138,176,131,.32);box-shadow:0 12px 28px rgba(0,0,0,.24)}
+.key-management-gaia .key-group-tab-active{border-color:rgba(157,208,128,.36);background:linear-gradient(180deg,rgba(58,78,45,.98),rgba(40,56,34,.98));color:#f1f7ea;box-shadow:0 14px 30px rgba(0,0,0,.26),inset 0 0 0 1px rgba(186,228,149,.16)}
+.key-management-gaia .key-group-tab-count{background:rgba(220,242,194,.12)}
+.key-quick-group-overlay{position:fixed;inset:0;z-index:1400;background:transparent}
+.key-quick-group-floating-panel{position:fixed;top:18vh;left:50%;transform:translateX(-50%);width:min(960px,78vw);max-width:min(960px,78vw);padding:16px 18px 18px;border-radius:22px;background:rgba(255,255,255,.98);box-shadow:0 24px 64px rgba(15,23,42,.18),0 10px 28px rgba(15,23,42,.1)}
+.key-quick-group-floating-panel-gaia{background:linear-gradient(180deg,rgba(28,35,30,.98),rgba(22,27,24,.98));box-shadow:0 28px 72px rgba(0,0,0,.42),0 12px 32px rgba(0,0,0,.26)}
+.key-quick-group-composer{display:grid;gap:8px;margin-bottom:10px}
+.key-quick-group-input-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
+.key-quick-group-create-button{height:30px;padding:0 14px;border-radius:10px}
+.key-quick-group-summary{margin-top:-2px}
+.key-quick-filter-toolbar{width:min(640px,48vw)}
+.key-quick-filter-strip{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));align-items:stretch}
+.quick-filter-toolbar{display:flex;align-items:flex-start;flex-direction:column;gap:10px;min-height:32px;min-width:0;width:100%}
+.quick-filter-strip{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;width:100%;max-width:100%;padding:4px;border:1px solid rgba(15,23,42,.12);border-radius:12px;overflow:visible;background:rgba(255,255,255,.92);box-shadow:0 10px 24px rgba(15,23,42,.06)}
+.quick-filter-strip>:not(.quick-filter-clear-trigger){min-width:0}
+.quick-filter-empty-inline{color:#94a3b8;font-size:13px;padding:6px 0}
+.quick-filter-family-trigger,.quick-filter-clear-trigger{width:100%;min-width:0;border:0 !important;border-radius:10px !important;box-shadow:none !important;height:34px;justify-content:center;padding:0 10px !important}
+.quick-filter-family-trigger:hover,.quick-filter-clear-trigger:hover{background:rgba(22,119,255,.06) !important}
+.quick-filter-clear-trigger.ant-btn[disabled],.quick-filter-clear-trigger.ant-btn[disabled]:hover{background:rgba(148,163,184,.08) !important;color:rgba(148,163,184,.9) !important}
+.quick-filter-family-count{margin-left:6px;font-size:11px;opacity:.75}
+.quick-filter-summary{color:#64748b;font-size:12px;line-height:1.5}
+.quick-filter-family-panel{width:min(420px,56vw);max-width:420px}
+.quick-filter-family-panel-title{margin-bottom:8px;font-size:13px;font-weight:700;color:#334155}
+.quick-filter-option-list{display:flex;flex-wrap:wrap;gap:8px}
+.quick-filter-family-select-all{border:2px solid #8b5e3c !important;color:#8b5e3c !important;background:#fffaf4 !important;box-shadow:none !important;font-weight:600}
+:deep(.quick-filter-family-popover){z-index:1505 !important}
+:deep(.quick-filter-family-popover .ant-popover-inner){position:relative;z-index:1505}
+.key-quick-group-preview{display:grid;gap:8px;margin-top:10px;padding:10px 12px;border:1px solid rgba(15,23,42,.08);border-radius:12px;background:linear-gradient(180deg,rgba(248,250,252,.95),rgba(241,245,249,.92))}
+.key-quick-group-preview-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.key-quick-group-preview-title{font-size:12px;font-weight:700;color:#334155}
+.key-quick-group-preview-count{font-size:11px;color:#64748b}
+.key-quick-group-preview-list{display:grid;gap:6px;max-height:180px;overflow:auto;padding-right:2px}
+.key-quick-group-preview-item{display:grid;gap:3px;padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.82);box-shadow:inset 0 0 0 1px rgba(148,163,184,.14)}
+.key-quick-group-preview-main{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}
+.key-quick-group-preview-site{font-size:12px;font-weight:700;color:#203226}
+.key-quick-group-preview-token,.key-quick-group-preview-key{font-size:11px;color:#64748b}
+.key-quick-group-preview-models{font-size:11px;color:#47664a;line-height:1.4;word-break:break-all}
+.key-quick-group-preview-empty{font-size:11px;color:#94a3b8}
+.key-management-gaia .quick-filter-strip{border-color:rgba(122,151,125,.18);background:rgba(25,31,27,.92);box-shadow:0 12px 28px rgba(0,0,0,.24)}
+.key-management-gaia .quick-filter-family-trigger,.key-management-gaia .quick-filter-clear-trigger{background:rgba(255,255,255,.06) !important;color:#d8e5d4 !important}
+.key-management-gaia .quick-filter-family-trigger:hover,.key-management-gaia .quick-filter-clear-trigger:hover{background:rgba(186,228,149,.1) !important}
+.key-management-gaia .quick-filter-clear-trigger.ant-btn[disabled],.key-management-gaia .quick-filter-clear-trigger.ant-btn[disabled]:hover{background:rgba(255,255,255,.04) !important;color:rgba(216,229,212,.42) !important}
+.key-management-gaia .key-quick-group-preview{border-color:rgba(122,151,125,.16);background:linear-gradient(180deg,rgba(28,35,30,.94),rgba(22,27,24,.96))}
+.key-management-gaia .key-quick-group-preview-title{color:#e2e8f0}
+.key-management-gaia .key-quick-group-preview-count,.key-management-gaia .key-quick-group-preview-token,.key-management-gaia .key-quick-group-preview-key{color:#9fb0a4}
+.key-management-gaia .key-quick-group-preview-item{background:rgba(255,255,255,.04);box-shadow:inset 0 0 0 1px rgba(122,151,125,.14)}
+.key-management-gaia .key-quick-group-preview-site{color:#f1f7ea}
+.key-management-gaia .key-quick-group-preview-models{color:#c4d7c0}
+.key-management-gaia .key-quick-group-preview-empty{color:#8aa08c}
 .sync-card{position:relative;overflow:hidden;border-radius:18px}
 .sync-card :deep(.ant-card-body){padding:10px 12px}
 .sync-toolbar,.sync-meta,.quick-test-cell,.site-cell,.time-cell{display:flex;gap:12px;flex-wrap:wrap}
@@ -2884,17 +3614,45 @@ function persistMeta() {
 .row-actions-stack :deep(.ant-btn),.row-actions-stack :deep(.ant-popconfirm){width:100%}
 .inline-export-actions{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0}
 .key-row-context-menu{position:fixed;z-index:1200;display:flex;flex-direction:column;gap:10px;width:224px;padding:10px;border-radius:18px;background:rgba(255,255,255,.96);box-shadow:0 18px 48px rgba(15,23,42,.24);backdrop-filter:blur(14px)}
+.key-row-context-submenu{position:absolute;left:calc(100% - 6px);top:118px;z-index:2;display:flex;flex-direction:column;gap:8px;width:196px;padding:10px;border-radius:16px;background:rgba(255,255,255,.98);box-shadow:0 18px 48px rgba(15,23,42,.2);backdrop-filter:blur(14px)}
+.key-management :deep(.compact-key-table .ant-table-tbody > tr.key-row-context-target > td){background:rgba(15,23,42,.085) !important;transition:background .16s ease}
+.key-management :deep(.compact-key-table .ant-table-tbody > tr.key-row-context-target:hover > td){background:rgba(15,23,42,.11) !important}
 .key-row-context-menu-dark{background:rgba(25,25,25,.96);box-shadow:0 18px 48px rgba(0,0,0,.4)}
+.key-row-context-submenu-dark{background:rgba(25,25,25,.98);box-shadow:0 18px 48px rgba(0,0,0,.4)}
 .key-row-context-menu-dark .import-export-menu-item{background:rgba(255,255,255,.08);color:#f8fafc}
 .key-row-context-menu-dark .import-export-menu-item:hover:not(:disabled){background:rgba(96,165,250,.2);color:#dbeafe}
 .key-row-context-menu-dark .import-export-menu-item-danger{background:rgba(190,24,93,.16);color:#fda4af}
 .key-row-context-menu-dark .import-export-menu-item-danger:hover:not(:disabled){background:rgba(190,24,93,.24);color:#fecdd3}
 .key-row-context-action{width:100%;padding:8px 12px;font-size:13px;line-height:1.35;border-radius:16px}
+.key-row-context-submenu-trigger{display:flex;align-items:center;justify-content:space-between}
+.key-row-context-submenu-trigger-active{background:#edf5df;color:#203226}
+.key-row-context-submenu-arrow{font-size:16px;line-height:1;opacity:.72}
+.key-row-group-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 4px}
+.key-row-group-create-button{width:24px;height:24px;border:0;border-radius:999px;background:rgba(69,102,59,.08);color:#45663b;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.key-row-group-create-button:hover{background:rgba(69,102,59,.14)}
+.key-row-group-list{display:flex;flex-direction:column;gap:6px;max-height:160px;overflow:auto;padding-right:2px}
+.key-row-group-chip{border:1px solid rgba(124,142,112,.16);border-radius:12px;background:rgba(248,250,252,.78);color:#203226;display:flex;align-items:center;gap:8px;padding:7px 10px;text-align:left;cursor:pointer;transition:border-color .18s ease,background .18s ease}
+.key-row-group-chip:hover{border-color:rgba(103,141,91,.28);background:rgba(240,246,236,.95)}
+.key-row-group-chip-active{border-color:rgba(117,156,90,.36);background:rgba(230,242,219,.96)}
+.key-row-group-chip-mark{width:14px;display:inline-flex;justify-content:center;color:#3e6c3f;font-size:12px;font-weight:700;line-height:1}
+.key-row-group-chip-name{font-size:12px;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.key-row-action-empty{padding:0 4px;color:#64748b;font-size:11px;line-height:1.35}
 .key-row-action-info{display:flex;flex-direction:column;gap:2px;padding:2px 4px}
 .key-row-action-label{font-size:10px;line-height:1.2;color:#64748b}
 .key-row-action-value{font-size:11px;line-height:1.35;color:#0f172a;word-break:break-word}
 .key-row-context-menu-dark .key-row-action-label{color:#94a3b8}
 .key-row-context-menu-dark .key-row-action-value{color:#e2e8f0}
+.key-row-context-menu-dark .key-row-context-submenu-trigger-active{background:rgba(186,228,149,.12);color:#e2e8f0}
+.key-row-context-submenu-dark .key-row-action-label{color:#94a3b8}
+.key-row-context-submenu-dark .key-row-action-empty{color:#94a3b8}
+.key-row-context-menu-dark .key-row-group-create-button{background:rgba(220,242,194,.08);color:#d8e5d4}
+.key-row-context-menu-dark .key-row-group-create-button:hover{background:rgba(220,242,194,.14)}
+.key-row-context-submenu-dark .key-row-group-create-button{background:rgba(220,242,194,.08);color:#d8e5d4}
+.key-row-context-submenu-dark .key-row-group-create-button:hover{background:rgba(220,242,194,.14)}
+.key-row-context-submenu-dark .key-row-group-chip{border-color:rgba(122,151,125,.18);background:rgba(255,255,255,.06);color:#e2e8f0}
+.key-row-context-submenu-dark .key-row-group-chip:hover{border-color:rgba(157,208,128,.28);background:rgba(186,228,149,.08)}
+.key-row-context-submenu-dark .key-row-group-chip-active{border-color:rgba(157,208,128,.34);background:rgba(186,228,149,.12)}
+.key-row-context-submenu-dark .key-row-group-chip-mark{color:#cfe8bb}
 .inventory-icon-button{width:34px;height:34px;border:0;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .18s ease, box-shadow .18s ease, filter .18s ease, opacity .18s ease;background:linear-gradient(135deg,#f8fafc,#e2e8f0);box-shadow:inset 0 0 0 1px rgba(148,163,184,.28);flex:0 0 auto;color:#0f172a}
 .inventory-icon-button:hover:not(:disabled){transform:translateY(-1px) scale(1.06);filter:saturate(1.08)}
 .inventory-icon-button:disabled{cursor:not-allowed;opacity:.45;transform:none;filter:none;box-shadow:inset 0 0 0 1px rgba(148,163,184,.18)}
@@ -3165,6 +3923,8 @@ function persistMeta() {
 .key-management-gaia .quick-test-button{background:linear-gradient(135deg,#405965,#243740);box-shadow:0 10px 18px rgba(0,0,0,.22)}
 .key-management-gaia .sync-card{border-color:rgba(101,129,138,.16);background:radial-gradient(circle at 84% 14%,rgba(139,107,75,.14),transparent 26%),radial-gradient(circle at 18% 18%,rgba(76,106,117,.16),transparent 24%),linear-gradient(145deg,rgba(9,18,23,.96),rgba(16,29,35,.94));box-shadow:0 24px 54px rgba(0,0,0,.28),inset 0 1px 0 rgba(180,214,225,.04)}
 .key-management-gaia .sync-title-wrap{border-right-color:rgba(101,129,138,.16)}
+.key-management-gaia :deep(.compact-key-table .ant-table-tbody > tr.key-row-context-target > td){background:rgba(186,228,149,.14) !important}
+.key-management-gaia :deep(.compact-key-table .ant-table-tbody > tr.key-row-context-target:hover > td){background:rgba(186,228,149,.18) !important}
 .key-management-gaia .sync-title-text{color:#e7f1ef}
 .key-management-gaia .sync-meta,.key-management-gaia .subtle-text{color:#a9bcbd}
 .key-management-gaia .sync-card :deep(.ant-alert){border-color:rgba(101,129,138,.16);background:rgba(8,14,18,.34)}

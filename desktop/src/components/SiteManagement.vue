@@ -65,7 +65,7 @@
                         :class="{ 'is-active': siteBridgeSilentMode }"
                         @click="toggleSilentBridgeImportMode"
                       >
-                        <ApiOutlined />
+                        <TagsOutlined />
                         <span v-if="siteBridgeSilentMode" class="site-bridge-toggle-dot" aria-hidden="true"></span>
                       </button>
                     </a-tooltip>
@@ -308,7 +308,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ConfigProvider, message, theme } from 'ant-design-vue';
 import {
-  ApiOutlined,
+  TagsOutlined,
   ReloadOutlined,
   LockOutlined,
   StopOutlined,
