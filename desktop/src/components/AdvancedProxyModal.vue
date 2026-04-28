@@ -4,6 +4,7 @@
     title="高级代理功能"
     :width="modalWidth"
     :footer="null"
+    centered
     wrap-class-name="advanced-proxy-modal-wrap"
     @cancel="handleCancel"
   >
