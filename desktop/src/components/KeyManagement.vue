@@ -143,13 +143,25 @@
                 </button>
               </a-tooltip>
             </a-popover>
-            <a-tooltip v-if="!isCompactMode" title="清空本地库">
-              <a-popconfirm title="确认清空本地密钥库？" ok-text="清空" cancel-text="取消" @confirm="clearLocalRecords">
-                <button type="button" class="inventory-icon-button inventory-icon-button-danger" :disabled="tableData.length === 0">
-                  <DeleteOutlined />
-                </button>
-              </a-popconfirm>
-            </a-tooltip>
+            <a-popconfirm
+              v-if="!isCompactMode"
+              title="确认清空本地密钥库？"
+              ok-text="清空"
+              cancel-text="取消"
+              placement="bottomRight"
+              :getPopupContainer="getSidebarPopupContainer"
+              @confirm="clearLocalRecords"
+            >
+              <button
+                type="button"
+                class="inventory-icon-button inventory-icon-button-danger"
+                :disabled="tableData.length === 0"
+                title="清空本地库"
+                aria-label="清空本地库"
+              >
+                <DeleteOutlined />
+              </button>
+            </a-popconfirm>
           </a-space>
         </template>
 
@@ -171,6 +183,7 @@
               class="key-group-tab"
               :class="{ 'key-group-tab-active': activeKeyGroupId === group.id }"
               @click="setActiveKeyGroup(group.id)"
+              @contextmenu="event => openKeyGroupContextMenu(group, event)"
             >
               {{ group.name }}
               <span class="key-group-tab-count">{{ getGroupRecordCount(group.id) }}</span>
@@ -278,6 +291,20 @@
                 <div v-else class="key-quick-group-preview-empty">当前快捷项未命中任何密钥</div>
               </div>
             </div>
+          </div>
+        </teleport>
+
+        <teleport to="body">
+          <div
+            v-if="keyGroupContextMenu.open && keyGroupContextMenu.group"
+            class="key-group-context-menu"
+            :class="{ 'key-group-context-menu-dark': isDarkMode }"
+            :style="{ left: `${keyGroupContextMenu.x}px`, top: `${keyGroupContextMenu.y}px` }"
+          >
+            <button type="button" class="import-export-menu-item key-group-context-action import-export-menu-item-danger" @click="handleKeyGroupContextDelete">
+              <DeleteOutlined />
+              <span>删除该组</span>
+            </button>
           </div>
         </teleport>
 
@@ -850,6 +877,12 @@ const rowContextMenu = reactive({
   record: null,
   groupSubmenuOpen: false,
 });
+const keyGroupContextMenu = reactive({
+  open: false,
+  x: 0,
+  y: 0,
+  group: null,
+});
 const PERSIST_DEBOUNCE_MS = 240;
 let persistRecordsTimer = null;
 let lastPersistedRecordsSnapshot = '';
@@ -1009,6 +1042,72 @@ function toggleQuickGroupPopover() {
     return;
   }
   openQuickGroupPopover();
+}
+
+function closeKeyGroupContextMenu() {
+  keyGroupContextMenu.open = false;
+  keyGroupContextMenu.group = null;
+}
+
+function closeAllContextMenus() {
+  closeRowContextMenu();
+  closeKeyGroupContextMenu();
+}
+
+function openKeyGroupContextMenu(group, event) {
+  if (!group?.id || !event) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 0;
+  const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 0;
+  const menuWidth = 208;
+  const menuHeight = 62;
+  const edgePadding = 12;
+  const triggerRect = event.currentTarget?.getBoundingClientRect?.() || null;
+  const anchorX = triggerRect ? triggerRect.left : event.clientX;
+  const anchorY = triggerRect ? (triggerRect.bottom + 6) : event.clientY;
+  keyGroupContextMenu.group = group;
+  keyGroupContextMenu.x = viewportWidth > 0
+    ? Math.max(edgePadding, Math.min(anchorX, viewportWidth - menuWidth - edgePadding))
+    : anchorX;
+  keyGroupContextMenu.y = viewportHeight > 0
+    ? Math.max(edgePadding, Math.min(anchorY, viewportHeight - menuHeight - edgePadding))
+    : anchorY;
+  keyGroupContextMenu.open = true;
+}
+
+function deleteKeyGroup(groupId) {
+  if (!groupId) return;
+  keyGroups.value = keyGroups.value.filter(group => group.id !== groupId);
+  if (activeKeyGroupId.value === groupId) {
+    activeKeyGroupId.value = ALL_KEYS_GROUP_ID;
+    currentTablePage.value = 1;
+  }
+  tableData.value.forEach(record => {
+    record.groupIds = normalizeRecordGroupIds(record.groupIds).filter(id => id !== groupId);
+    const nextGroupSelectedModels = normalizeGroupSelectedModels(record.groupSelectedModels);
+    delete nextGroupSelectedModels[groupId];
+    record.groupSelectedModels = nextGroupSelectedModels;
+  });
+  persistKeyGroups();
+  persistRecords();
+}
+
+function handleKeyGroupContextDelete() {
+  const group = keyGroupContextMenu.group;
+  closeKeyGroupContextMenu();
+  if (!group?.id) return;
+  Modal.confirm({
+    title: `确认删除分组「${group.name}」？`,
+    content: '将移除该分组下的成员关系，并清空该分组的独立模型选择。',
+    okText: '删除',
+    cancelText: '取消',
+    okButtonProps: { danger: true },
+    onOk: () => {
+      deleteKeyGroup(group.id);
+      message.success(`已删除分组：${group.name}`);
+    },
+  });
 }
 
 function handleQuickGroupDraftNameInput() {
@@ -1238,10 +1337,15 @@ function getManagedRecordRowProps(record) {
 }
 
 function handleGlobalRowContextMenuDismiss(event) {
-  if (!rowContextMenu.open) return;
   const target = event?.target;
-  if (target?.closest?.('.key-row-context-menu') || target?.closest?.('.key-row-context-submenu')) return;
-  closeRowContextMenu();
+  if (rowContextMenu.open) {
+    if (target?.closest?.('.key-row-context-menu') || target?.closest?.('.key-row-context-submenu')) return;
+    closeRowContextMenu();
+  }
+  if (keyGroupContextMenu.open) {
+    if (target?.closest?.('.key-group-context-menu')) return;
+    closeKeyGroupContextMenu();
+  }
 }
 
 function openRowContextGroupSubmenu() {
@@ -1255,7 +1359,7 @@ function closeRowContextGroupSubmenu() {
 function handleGlobalRowContextEscape(event) {
   if (event?.key === 'Escape') {
     if (createKeyGroupModalOpen.value) return;
-    closeRowContextMenu();
+    closeAllContextMenus();
   }
 }
 
@@ -1470,8 +1574,8 @@ const tablePagination = computed(() => {
 onMounted(() => {
   if (typeof window !== 'undefined') {
     window.addEventListener('pointerdown', handleGlobalRowContextMenuDismiss, true);
-    window.addEventListener('resize', closeRowContextMenu);
-    window.addEventListener('scroll', closeRowContextMenu, true);
+    window.addEventListener('resize', closeAllContextMenus);
+    window.addEventListener('scroll', closeAllContextMenus, true);
     window.addEventListener('keydown', handleGlobalRowContextEscape);
     window.addEventListener('contextmenu', handleGlobalRowContextMenuDismiss, true);
   }
@@ -1496,8 +1600,8 @@ onBeforeUnmount(() => {
   flushPersistRecords();
   if (typeof window !== 'undefined') {
     window.removeEventListener('pointerdown', handleGlobalRowContextMenuDismiss, true);
-    window.removeEventListener('resize', closeRowContextMenu);
-    window.removeEventListener('scroll', closeRowContextMenu, true);
+    window.removeEventListener('resize', closeAllContextMenus);
+    window.removeEventListener('scroll', closeAllContextMenus, true);
     window.removeEventListener('keydown', handleGlobalRowContextEscape);
     window.removeEventListener('contextmenu', handleGlobalRowContextMenuDismiss, true);
   }
@@ -3482,6 +3586,13 @@ function persistMeta() {
 .key-management-gaia .key-group-tab:hover{border-color:rgba(138,176,131,.32);box-shadow:0 12px 28px rgba(0,0,0,.24)}
 .key-management-gaia .key-group-tab-active{border-color:rgba(157,208,128,.36);background:linear-gradient(180deg,rgba(58,78,45,.98),rgba(40,56,34,.98));color:#f1f7ea;box-shadow:0 14px 30px rgba(0,0,0,.26),inset 0 0 0 1px rgba(186,228,149,.16)}
 .key-management-gaia .key-group-tab-count{background:rgba(220,242,194,.12)}
+.key-group-context-menu{position:fixed;z-index:1405;display:flex;flex-direction:column;gap:8px;width:208px;padding:10px;border-radius:18px;background:rgba(255,255,255,.96);box-shadow:0 18px 48px rgba(15,23,42,.24);backdrop-filter:blur(14px)}
+.key-group-context-action{width:100%;padding:8px 12px;font-size:13px;line-height:1.35;border-radius:16px}
+.key-group-context-menu-dark{background:rgba(25,25,25,.96);box-shadow:0 18px 48px rgba(0,0,0,.4)}
+.key-group-context-menu-dark .import-export-menu-item{background:rgba(255,255,255,.08);color:#f8fafc}
+.key-group-context-menu-dark .import-export-menu-item:hover:not(:disabled){background:rgba(96,165,250,.2);color:#dbeafe}
+.key-group-context-menu-dark .import-export-menu-item-danger{background:rgba(190,24,93,.16);color:#fda4af}
+.key-group-context-menu-dark .import-export-menu-item-danger:hover:not(:disabled){background:rgba(190,24,93,.24);color:#fecdd3}
 .key-quick-group-overlay{position:fixed;inset:0;z-index:1400;background:transparent}
 .key-quick-group-floating-panel{position:fixed;top:18vh;left:50%;transform:translateX(-50%);width:min(960px,78vw);max-width:min(960px,78vw);padding:16px 18px 18px;border-radius:22px;background:rgba(255,255,255,.98);box-shadow:0 24px 64px rgba(15,23,42,.18),0 10px 28px rgba(15,23,42,.1)}
 .key-quick-group-floating-panel-gaia{background:linear-gradient(180deg,rgba(28,35,30,.98),rgba(22,27,24,.98));box-shadow:0 28px 72px rgba(0,0,0,.42),0 12px 32px rgba(0,0,0,.26)}
