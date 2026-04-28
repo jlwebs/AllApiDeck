@@ -36,6 +36,7 @@ declare module 'vue' {
     AMenuItem: typeof import('ant-design-vue/es')['MenuItem']
     AModal: typeof import('ant-design-vue/es')['Modal']
     APagination: typeof import('ant-design-vue/es')['Pagination']
+    ApiOutlined: typeof import('@ant-design/icons-vue')['ApiOutlined']
     APopconfirm: typeof import('ant-design-vue/es')['Popconfirm']
     APopover: typeof import('ant-design-vue/es')['Popover']
     AppHeader: typeof import('./src/components/AppHeader.vue')['default']
