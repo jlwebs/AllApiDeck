@@ -414,9 +414,20 @@
         </div>
       </a-modal>
 
-      <a-modal v-model:open="desktopConfigModalOpen" title="专属一键配置" :confirm-loading="desktopConfigLoading" ok-text="生成变更预览" cancel-text="取消" width="1120px" @ok="generateDesktopConfigPreview">
+      <a-modal v-model:open="desktopConfigModalOpen" title="专属一键配置" :confirm-loading="desktopConfigLoading" :footer="null" width="1120px">
         <div v-if="desktopConfigTargetRecord" class="desktop-config-modal">
-          <a-alert type="info" show-icon class="desktop-config-alert" :message="`${desktopConfigTargetRecord.siteName} | ${desktopConfigTargetRecord.siteUrl}`" :description="`将读取本机应用配置，生成变更预览，确认后才会真正写入。`" />
+          <div class="desktop-config-hero">
+            <div class="desktop-config-alert">
+              <div class="desktop-config-alert-icon" aria-hidden="true">i</div>
+              <div class="desktop-config-alert-copy">
+                <div class="desktop-config-alert-title">{{ `${desktopConfigTargetRecord.siteName} | ${desktopConfigTargetRecord.siteUrl}` }}</div>
+                <div class="desktop-config-alert-desc">将读取本机应用配置，生成变更预览，确认后才会真正写入。</div>
+              </div>
+            </div>
+            <div class="desktop-config-hero-actions">
+              <a-button type="primary" :loading="desktopConfigLoading" @click="generateDesktopConfigPreview">生成变更预览</a-button>
+            </div>
+          </div>
           <div class="desktop-config-layout">
             <section class="desktop-app-panel">
               <div class="desktop-panel-title">目标应用</div>
@@ -2816,7 +2827,14 @@ function persistMeta() {
 .compact-key-table :deep(.ant-table-tbody > tr > td.api-key-column){overflow:visible;position:relative;z-index:2}
 .compact-key-table :deep(.ant-table-tbody > tr > td:first-child){overflow:visible;position:relative;z-index:3}
 .desktop-config-modal{display:flex;flex-direction:column;gap:16px}
-.desktop-config-alert{margin-bottom:4px}
+.desktop-config-hero{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:0;margin-bottom:4px;padding:16px 18px;border-radius:22px;border:1px solid #8ec5ff;background:linear-gradient(180deg,#dcebfb,#d8eafc);box-shadow:inset 0 1px 0 rgba(255,255,255,.55)}
+.desktop-config-alert{min-width:0;display:flex;align-items:center;gap:16px;padding-right:18px}
+.desktop-config-alert-icon{width:48px;height:48px;flex:0 0 48px;border-radius:999px;border:4px solid #2473ea;color:#2473ea;display:inline-flex;align-items:center;justify-content:center;font-size:31px;font-weight:500;line-height:1;font-family:Georgia,'Times New Roman',serif;background:rgba(255,255,255,.32)}
+.desktop-config-alert-copy{min-width:0;display:grid;gap:6px}
+.desktop-config-alert-title{color:#1f2937;font-size:18px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.desktop-config-alert-desc{color:#24313f;font-size:13px;line-height:1.4}
+.desktop-config-hero-actions{display:flex;align-items:center;justify-content:flex-end;flex:0 0 auto}
+.desktop-config-hero-actions :deep(.ant-btn){height:42px;padding:0 18px;border-radius:16px;font-size:15px}
 .desktop-config-layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:20px;align-items:start}
 .desktop-app-panel,.desktop-form-panel{border-radius:24px;background:linear-gradient(180deg,#f8fafc,#eef2ff);padding:18px}
 .desktop-panel-title{font-size:16px;font-weight:700;color:#0f172a}
@@ -3026,7 +3044,7 @@ function persistMeta() {
 .key-management-compact .record-model-select :deep(.ant-select-selector){min-height:26px;padding-inline:8px !important}
 .key-management-compact .record-model-select :deep(.ant-select-selection-item),
 .key-management-compact .record-model-select :deep(.ant-select-selection-placeholder){font-size:11px;line-height:24px}
-@media (max-width:900px){.key-management-page-container{padding:8px 8px 0 !important}.desktop-config-layout{grid-template-columns:1fr}.desktop-app-grid{grid-template-columns:repeat(4,minmax(0,1fr));overflow:auto}.config-grid{grid-template-columns:1fr}}
+@media (max-width:900px){.key-management-page-container{padding:8px 8px 0 !important}.desktop-config-hero{grid-template-columns:minmax(0,1fr) auto;padding:14px 16px}.desktop-config-alert{gap:12px;padding-right:12px}.desktop-config-alert-icon{width:42px;height:42px;flex-basis:42px;font-size:27px;border-width:3px}.desktop-config-alert-title{font-size:16px}.desktop-config-alert-desc{font-size:12px}.desktop-config-hero-actions{justify-content:flex-end}.desktop-config-hero-actions :deep(.ant-btn){height:40px;padding:0 16px;border-radius:15px;font-size:14px}.desktop-config-layout{grid-template-columns:1fr}.desktop-app-grid{grid-template-columns:repeat(4,minmax(0,1fr));overflow:auto}.config-grid{grid-template-columns:1fr}}
 .key-management-gaia{background:transparent;box-shadow:none}
 .key-management-gaia :deep(.ant-card){background:linear-gradient(180deg,rgba(255,255,255,.034),rgba(255,255,255,.012)),rgba(8,14,18,.7);border-color:rgba(101,129,138,.16);box-shadow:0 20px 46px rgba(0,0,0,.24),inset 0 1px 0 rgba(181,214,225,.035)}
 .key-management-gaia :deep(.ant-card-head-title),.key-management-gaia .desktop-panel-title,.key-management-gaia .desktop-app-name,.key-management-gaia .site-title-text{color:#e8f3ef}
