@@ -97,6 +97,15 @@
                     <DeleteOutlined />
                     <span>批量删除异常密钥</span>
                   </button>
+                  <button
+                    type="button"
+                    class="import-export-menu-item import-export-menu-item-danger"
+                    :disabled="batchDeleteQuickTestFailedDisabled"
+                    @click="confirmDeleteQuickTestFailedRecords"
+                  >
+                    <DeleteOutlined />
+                    <span>批量删除快测失败密钥</span>
+                  </button>
                 </div>
               </template>
               <a-tooltip :title="batchActionButtonTitle">
@@ -928,6 +937,12 @@ function getScopedGroupId(groupId = activeKeyGroupId.value) {
   return normalized;
 }
 
+function getActiveKeyGroupName(groupId = activeKeyGroupId.value) {
+  const scopedGroupId = getScopedGroupId(groupId);
+  if (!scopedGroupId) return '全部密钥';
+  return keyGroups.value.find(group => group.id === scopedGroupId)?.name || '当前分组';
+}
+
 function getRecordSelectedModelValue(record, groupId = activeKeyGroupId.value) {
   const scopedGroupId = getScopedGroupId(groupId);
   const groupSelectedModels = normalizeGroupSelectedModels(record?.groupSelectedModels);
@@ -1537,6 +1552,8 @@ const quickGroupMatchedRecords = computed(() => {
 });
 const healthyKeyCount = computed(() => tableData.value.filter(record => record.status === 1).length);
 const abnormalKeyCount = computed(() => tableData.value.filter(record => Number(record?.status || 0) !== 1).length);
+const currentGroupQuickTestRecordCount = computed(() => displayedRows.value.filter(record => String(record?.quickTestStatus || '').trim()).length);
+const quickTestFailedKeyCount = computed(() => displayedRows.value.filter(record => String(record?.quickTestStatus || '').trim() === 'error').length);
 const syncSummary = computed(() => !syncMeta.value.lastBatchSyncAt ? '导入并批量检测后，会自动把获取到的 sk key 更新到本页。' : `最近一次批量同步写入 ${syncMeta.value.lastBatchSyncCount} 条记录，失败站点 ${syncMeta.value.lastBatchFailedCount} 个。`);
 const currentVisiblePageRows = computed(() => {
   if (isCompactMode.value) return displayedRows.value;
@@ -1545,6 +1562,7 @@ const currentVisiblePageRows = computed(() => {
 });
 const batchQuickTestDisabled = computed(() => batchQuickTestRunning.value || tableData.value.length === 0);
 const batchDeleteAbnormalDisabled = computed(() => batchQuickTestRunning.value || abnormalKeyCount.value === 0);
+const batchDeleteQuickTestFailedDisabled = computed(() => batchQuickTestRunning.value || displayedRows.value.length === 0);
 const batchQuickTestButtonTitle = computed(() => {
   if (batchQuickTestRunning.value) {
     return `批量快测进行中：已完成 ${batchQuickTestProgress.completed}/${batchQuickTestProgress.total}，并发 ${BATCH_QUICK_TEST_CONCURRENCY}，运行中 ${batchQuickTestProgress.active}`;
@@ -1554,6 +1572,14 @@ const batchQuickTestButtonTitle = computed(() => {
 const batchActionButtonTitle = computed(() => {
   if (batchQuickTestRunning.value) {
     return batchQuickTestButtonTitle.value;
+  }
+  if (quickTestFailedKeyCount.value > 0) {
+    return getScopedGroupId()
+      ? `批量操作：可从当前分组移除 ${quickTestFailedKeyCount.value} 条快测失败密钥`
+      : `批量操作：可删除 ${quickTestFailedKeyCount.value} 条快测失败密钥`;
+  }
+  if (displayedRows.value.length > 0 && currentGroupQuickTestRecordCount.value === 0) {
+    return '批量操作：当前分组暂无快测记录，可先整组批量快测';
   }
   if (abnormalKeyCount.value > 0) {
     return `批量操作：可删除 ${abnormalKeyCount.value} 条异常密钥`;
@@ -2003,7 +2029,31 @@ function buildBatchQuickTestQueue() {
   return queue;
 }
 
-function buildBatchQuickTestSummary(stats) {
+function buildCurrentGroupBatchQuickTestQueue() {
+  const queue = [];
+  const queued = new Set();
+  const pushRecords = records => {
+    records.forEach(record => {
+      if (!record?.rowKey || queued.has(record.rowKey)) return;
+      queued.add(record.rowKey);
+      queue.push(record);
+    });
+  };
+
+  const currentPageRows = currentVisiblePageRows.value;
+  pushRecords(currentPageRows.filter(record => Number(record?.status || 0) === 1));
+  pushRecords(currentPageRows.filter(record => Number(record?.status || 0) !== 1));
+
+  const otherVisibleRows = displayedRows.value.filter(record => !queued.has(record.rowKey));
+  pushRecords(otherVisibleRows.filter(record => Number(record?.status || 0) === 1));
+  pushRecords(otherVisibleRows.filter(record => Number(record?.status || 0) !== 1));
+
+  return queue;
+}
+
+function buildBatchQuickTestSummary(stats, options = {}) {
+  const messagePrefix = String(options?.messagePrefix || '批量快测完成：');
+  const fallbackDescription = String(options?.fallbackDescription || '已按当前页优先级完成整库快测。');
   const summaryText = `已执行 ${stats.executed} 条，可用 ${stats.success} 条，告警 ${stats.warning} 条，失败 ${stats.error} 条，跳过 ${stats.skipped} 条。`;
   const detailParts = [];
   if (stats.skippedNoModel > 0) detailParts.push(`未选择模型 ${stats.skippedNoModel} 条`);
@@ -2015,17 +2065,15 @@ function buildBatchQuickTestSummary(stats) {
   }
   return {
     type: stats.error > 0 ? 'warning' : 'success',
-    message: `批量快测完成：${summaryText}`,
-    description: detailParts.join('；') || '已按当前页优先级完成整库快测。',
+    message: `${messagePrefix}${summaryText}`,
+    description: detailParts.join('；') || fallbackDescription,
   };
 }
 
-async function runBatchQuickTest() {
+async function runBatchQuickTestWithQueue(queue, options = {}) {
   if (batchQuickTestRunning.value) return;
-
-  const queue = buildBatchQuickTestQueue();
   if (!queue.length) {
-    message.warning('当前没有可处理的密钥记录');
+    message.warning(options.emptyMessage || '当前没有可处理的密钥记录');
     return;
   }
 
@@ -2105,12 +2153,30 @@ async function runBatchQuickTest() {
     batchQuickTestRunning.value = false;
   }
 
-  const batchQuickTestNotice = buildBatchQuickTestSummary(stats);
+  const batchQuickTestNotice = buildBatchQuickTestSummary(stats, options);
   if (stats.error > 0) {
     message.warning(batchQuickTestNotice.message);
   } else {
     message.success(batchQuickTestNotice.message);
   }
+}
+
+async function runBatchQuickTest() {
+  const queue = buildBatchQuickTestQueue();
+  await runBatchQuickTestWithQueue(queue, {
+    emptyMessage: '当前没有可处理的密钥记录',
+    messagePrefix: '批量快测完成：',
+    fallbackDescription: '已按当前页优先级完成整库快测。',
+  });
+}
+
+async function runCurrentGroupBatchQuickTest() {
+  const queue = buildCurrentGroupBatchQuickTestQueue();
+  await runBatchQuickTestWithQueue(queue, {
+    emptyMessage: '当前分组没有可处理的密钥记录',
+    messagePrefix: '当前分组批量快测完成：',
+    fallbackDescription: '已按当前分组完成批量快测。',
+  });
 }
 
 async function resolveQuickTestModel(record) {
@@ -2513,6 +2579,107 @@ function confirmDeleteAbnormalRecords() {
     cancelText: '取消',
     okButtonProps: { danger: true },
     onOk: deleteAbnormalRecords,
+  });
+}
+
+function getCurrentGroupFailedQuickTestRecords() {
+  return displayedRows.value.filter(record => String(record?.quickTestStatus || '').trim() === 'error');
+}
+
+function removeRecordFromGroup(record, groupId) {
+  const scopedGroupId = getScopedGroupId(groupId);
+  if (!record || !scopedGroupId) return false;
+  const currentGroupIds = normalizeRecordGroupIds(record.groupIds);
+  if (!currentGroupIds.includes(scopedGroupId)) return false;
+  record.groupIds = currentGroupIds.filter(id => id !== scopedGroupId);
+  const nextGroupSelectedModels = normalizeGroupSelectedModels(record.groupSelectedModels);
+  delete nextGroupSelectedModels[scopedGroupId];
+  record.groupSelectedModels = nextGroupSelectedModels;
+  return true;
+}
+
+function deleteQuickTestFailedRecordsGlobally() {
+  const targetRecords = getCurrentGroupFailedQuickTestRecords();
+  const failedCount = targetRecords.length;
+  if (failedCount <= 0) {
+    message.warning('当前没有快测失败密钥可删除');
+    return;
+  }
+  const failedRowKeys = new Set(targetRecords.map(record => record.rowKey).filter(Boolean));
+  tableData.value = tableData.value.filter(record => !failedRowKeys.has(record?.rowKey));
+  persistRecords();
+  message.success(`已删除 ${failedCount} 条快测失败密钥`);
+}
+
+function removeQuickTestFailedRecordsFromCurrentGroup() {
+  const scopedGroupId = getScopedGroupId();
+  if (!scopedGroupId) {
+    deleteQuickTestFailedRecordsGlobally();
+    return;
+  }
+  const targetRecords = getCurrentGroupFailedQuickTestRecords();
+  const failedCount = targetRecords.length;
+  if (failedCount <= 0) {
+    message.warning('当前分组没有快测失败密钥可移除');
+    return;
+  }
+  const failedRowKeys = new Set(targetRecords.map(record => record.rowKey).filter(Boolean));
+  let removedCount = 0;
+  tableData.value.forEach(record => {
+    if (!failedRowKeys.has(record?.rowKey)) return;
+    if (removeRecordFromGroup(record, scopedGroupId)) removedCount += 1;
+  });
+  persistRecords();
+  message.success(`已从分组「${getActiveKeyGroupName(scopedGroupId)}」移除 ${removedCount} 条快测失败密钥`);
+}
+
+function confirmDeleteQuickTestFailedRecords() {
+  if (batchDeleteQuickTestFailedDisabled.value) return;
+  if (!displayedRows.value.length) {
+    message.warning(activeKeyGroupId.value === ALL_KEYS_GROUP_ID ? '当前没有可见密钥记录' : '当前分组暂无密钥');
+    return;
+  }
+  if (currentGroupQuickTestRecordCount.value === 0) {
+    Modal.confirm({
+      title: '暂无记录',
+      content: '当前分组下没有任何快测记录，是否批量对该分组全部快测？',
+      okText: '是',
+      cancelText: '否',
+      onOk: runCurrentGroupBatchQuickTest,
+    });
+    return;
+  }
+  if (quickTestFailedKeyCount.value <= 0) {
+    message.warning(getScopedGroupId() ? '当前分组没有快测失败密钥' : '当前没有快测失败密钥');
+    return;
+  }
+  const scopedGroupId = getScopedGroupId();
+  if (scopedGroupId) {
+    Modal.confirm({
+      title: '确认从当前分组移除快测失败密钥？',
+      content: `将从分组「${getActiveKeyGroupName(scopedGroupId)}」移除 ${quickTestFailedKeyCount.value} 条快测失败密钥，仅影响当前分组，其他分组和“全部密钥”中的同源记录会保留。`,
+      okText: '移除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: removeQuickTestFailedRecordsFromCurrentGroup,
+    });
+    return;
+  }
+  const targetRecords = getCurrentGroupFailedQuickTestRecords();
+  const impactedRecords = targetRecords.filter(record => normalizeRecordGroupIds(record?.groupIds).length > 0);
+  const impactedGroupIds = new Set(
+    impactedRecords.flatMap(record => normalizeRecordGroupIds(record?.groupIds))
+  );
+  const globalDeleteContent = impactedRecords.length > 0
+    ? `将全局删除 ${quickTestFailedKeyCount.value} 条快测失败密钥。其中 ${impactedRecords.length} 条仍被 ${impactedGroupIds.size} 个分组引用，继续后会一并从这些分组中清除。是否继续？`
+    : `将全局删除 ${quickTestFailedKeyCount.value} 条快测失败密钥，告警和可用密钥不会受影响。`;
+  Modal.confirm({
+    title: impactedRecords.length > 0 ? '确认全局删除快测失败密钥？' : '确认批量删除快测失败密钥？',
+    content: globalDeleteContent,
+    okText: '删除',
+    cancelText: '取消',
+    okButtonProps: { danger: true },
+    onOk: deleteQuickTestFailedRecordsGlobally,
   });
 }
 
