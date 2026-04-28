@@ -57,11 +57,55 @@
               <div class="selection-topbar">
                 <div class="selection-header-row">
                   <h3 class="selection-title">请勾选需要测试的网站与模型</h3>
-                  <a-space wrap class="selection-action-group">
-                    <a-button @click="selectAllNodes" size="small">全部全选</a-button>
-                    <a-button @click="unselectAllNodes" size="small">全部反选</a-button>
-                    <a-button @click="selectChatModelsOnly" size="small">仅选主流聊天</a-button>
-                  </a-space>
+                  <div class="selection-header-tools">
+                    <a-tooltip :title="siteBridgeSilentModeTooltip">
+                      <button
+                        type="button"
+                        class="site-bridge-toggle-button"
+                        :class="{ 'is-active': siteBridgeSilentMode }"
+                        @click="toggleSilentBridgeImportMode"
+                      >
+                        <ApiOutlined />
+                        <span v-if="siteBridgeSilentMode" class="site-bridge-toggle-dot" aria-hidden="true"></span>
+                      </button>
+                    </a-tooltip>
+                    <a-space class="selection-action-group">
+                      <a-button @click="selectAllNodes" size="small">全部全选</a-button>
+                      <a-button @click="unselectAllNodes" size="small">全部反选</a-button>
+                      <a-button @click="selectChatModelsOnly" size="small">仅选主流聊天</a-button>
+                    </a-space>
+                  </div>
+                </div>
+                <div v-if="siteBridgeFloatVisible" class="site-bridge-float-shell">
+                  <div class="site-bridge-float-card">
+                    <div class="site-bridge-float-head">
+                      <div class="site-bridge-float-title">
+                        <span class="site-bridge-float-kicker">Bridge Auto Match</span>
+                        <strong>标签静默导入悬窗</strong>
+                      </div>
+                      <div class="site-bridge-float-statuses">
+                        <a-tag :color="siteBridgeStatusColor">{{ siteBridgeStatusText }}</a-tag>
+                        <a-tag v-if="siteBridgeReadyCount > 0" color="blue">待接收 {{ siteBridgeReadyCount }}</a-tag>
+                        <a-tag v-if="siteBridgeLastReceivedAt" color="cyan">最近 {{ siteBridgeLastReceivedAt }}</a-tag>
+                      </div>
+                    </div>
+                    <div class="site-bridge-float-meta">
+                      <span v-if="siteBridgeClientReady">油猴桥接已握手，后续标签提交会自动补齐站点与 key。</span>
+                      <span v-else>先安装并激活桥接脚本，然后在目标站点标签页等待自动采集。</span>
+                      <button type="button" class="site-bridge-inline-link" @click="openSilentBridgeInstallPage">打开脚本页</button>
+                    </div>
+                    <div v-if="siteBridgeNoticeItems.length > 0" class="site-bridge-notice-strip">
+                      <span
+                        v-for="item in siteBridgeNoticeItems"
+                        :key="item.id"
+                        class="site-bridge-notice-chip"
+                        :class="`is-${item.tone}`"
+                      >
+                        <span class="site-bridge-notice-site">{{ item.siteName }}</span>
+                        <span class="site-bridge-notice-text">{{ item.text }}</span>
+                      </span>
+                    </div>
+                  </div>
                 </div>
                 <div class="selection-quick-filters">
                   <div class="quick-filter-toolbar">
@@ -264,6 +308,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ConfigProvider, message, theme } from 'ant-design-vue';
 import {
+  ApiOutlined,
   ReloadOutlined,
   LockOutlined,
   StopOutlined,
@@ -281,13 +326,21 @@ import { loadDesktopTokenSourceMode, loadTreeExpandedSetting } from '../utils/sy
 import { refreshCachedSiteTokens } from '../utils/siteTokenRefresh.js';
 import { getAppliedThemeMode, isDarkThemeMode, THEME_MODE_CHANGE_EVENT } from '../utils/theme.js';
 import {
+  buildBridgeImportedPreparedPayload,
+  fetchBridgeImportSites,
+  summarizeBridgeImportNotices,
+  syncBridgeSitesToKeyPanel,
+} from '../utils/siteBridgeImport.js';
+import {
   SITE_CACHE_SYNC_EVENT,
   appendCustomKeysToSiteCache,
+  buildSiteCacheKey,
   consumePendingBatchStart,
   deleteSiteCacheRecord,
   loadAllSiteCacheRecords,
   mergeExtractedSitesIntoTempCache,
   mergeExtractedSitesIntoCache,
+  normalizeSiteUrl,
   removeCustomKeyFromSiteCache,
   setSiteCacheDisabled,
   updateSiteCacheNote,
@@ -317,7 +370,22 @@ const batchConcurrency = ref(25);
 const modelTimeout = ref(15);
 const activeQuickFilters = ref([]);
 const quickFilterSelectionMode = ref(false);
+const siteBridgeSilentMode = ref(false);
+const siteBridgeSessionOpening = ref(false);
+const siteBridgePolling = ref(false);
+const siteBridgeImporting = ref(false);
+const siteBridgeRecords = ref([]);
+const siteBridgeReadyCount = ref(0);
+const siteBridgeLastReceivedAt = ref('');
+const siteBridgeServerUrl = ref('');
+const siteBridgeLogPath = ref('');
+const siteBridgeSessionActive = ref(false);
+const siteBridgeClientReady = ref(false);
+const siteBridgeLastClientPing = ref('');
+const siteBridgeNoticeItems = ref([]);
 const stableSiteOrderMap = new Map();
+const siteBridgeProcessedRecordIds = new Set();
+let siteBridgePollTimer = null;
 
 const configProviderTheme = computed(() => ({
   algorithm: isDarkMode.value ? theme.darkAlgorithm : theme.defaultAlgorithm,
@@ -329,6 +397,33 @@ const syncThemeState = () => {
 
 const disabledCount = computed(() => records.value.filter(item => item.disabled).length);
 const customTokenCount = computed(() => records.value.reduce((sum, item) => sum + (item.customTokens?.length || 0), 0));
+const siteBridgeSilentModeTooltip = computed(() => (
+  siteBridgeSilentMode.value
+    ? '关闭标签静默导入悬窗模式'
+    : '开启标签静默导入悬窗模式：后台监听当前浏览器标签桥接提交，自动补齐站点与 key'
+));
+const siteBridgeFloatVisible = computed(() => (
+  siteBridgeSilentMode.value ||
+  siteBridgeSessionOpening.value ||
+  siteBridgeImporting.value ||
+  siteBridgeNoticeItems.value.length > 0
+));
+const siteBridgeStatusColor = computed(() => {
+  if (siteBridgeImporting.value) return 'processing';
+  if (siteBridgeSessionOpening.value) return 'processing';
+  if (siteBridgeSilentMode.value && siteBridgeClientReady.value) return 'success';
+  if (siteBridgeSilentMode.value && siteBridgeSessionActive.value) return 'gold';
+  if (siteBridgeSilentMode.value) return 'red';
+  return 'default';
+});
+const siteBridgeStatusText = computed(() => {
+  if (siteBridgeImporting.value) return '自动补齐中';
+  if (siteBridgeSessionOpening.value) return '悬窗启动中';
+  if (siteBridgeSilentMode.value && siteBridgeClientReady.value) return '监听中';
+  if (siteBridgeSilentMode.value && siteBridgeSessionActive.value) return '等待脚本握手';
+  if (siteBridgeSilentMode.value) return '未握手';
+  return '已关闭';
+});
 const textPromptTitle = computed(() =>
   textPromptMode.value === 'sk' ? '手动追加自定义 sk' : '设置 10 字以内备注'
 );
@@ -1114,6 +1209,12 @@ const refreshOne = async record => {
   try {
     const refreshedAt = Date.now();
     const refreshedSite = await refreshCachedSiteTokens(record);
+    const refreshedTokens = Array.isArray(refreshedSite?.tokens)
+      ? refreshedSite.tokens.filter(token => String(token?.key || token?.access_token || '').trim())
+      : [];
+    if (refreshedTokens.length <= 0) {
+      throw new Error(String(refreshedSite?.error || '').trim() || '刷新失败：未获取到任何 key');
+    }
     mergeExtractedSitesIntoTempCache([refreshedSite], {
       importSource: 'site_cache_refresh',
       refreshedAt,
@@ -1248,6 +1349,207 @@ const removeRecordByNode = node => {
   removeRecord(record);
 };
 
+const getBridgeImportApp = () => window?.go?.main?.App || null;
+
+const stopSilentBridgeImportPolling = () => {
+  siteBridgePolling.value = false;
+  if (siteBridgePollTimer) {
+    clearInterval(siteBridgePollTimer);
+    siteBridgePollTimer = null;
+  }
+};
+
+const pushSilentBridgeNotices = notices => {
+  const normalized = (Array.isArray(notices) ? notices : [])
+    .map((item, index) => {
+      const siteName = String(item?.siteName || item?.title || '').trim();
+      const text = String(item?.text || item?.reason || '').trim();
+      if (!siteName || !text) return null;
+      return {
+        id: `${Date.now()}-${index}-${siteName}-${text}`,
+        siteName,
+        text,
+        tone: String(item?.tone || 'green').trim() || 'green',
+      };
+    })
+    .filter(Boolean);
+  if (!normalized.length) return;
+  siteBridgeNoticeItems.value = [...normalized, ...siteBridgeNoticeItems.value].slice(0, 8);
+};
+
+const getBridgeComparableUserId = siteLike => String(
+  siteLike?.resolvedUserId ||
+  siteLike?.resolved_user_id ||
+  siteLike?.accountInfo?.id ||
+  siteLike?.account_info?.id ||
+  ''
+).trim();
+
+const matchSilentBridgeSitesToRecords = (sites, existingRecords) => {
+  const recordsList = Array.isArray(existingRecords) ? existingRecords : [];
+  return (Array.isArray(sites) ? sites : []).map(site => {
+    const siteUrl = normalizeSiteUrl(site?.site_url || site?.siteUrl);
+    const siteName = String(site?.site_name || site?.siteName || '').trim();
+    const userId = getBridgeComparableUserId(site);
+    const sameUrlRecords = recordsList.filter(record => normalizeSiteUrl(record?.siteUrl || record?.site_url) === siteUrl);
+    let matched = sameUrlRecords.find(record => {
+      const recordUserId = getBridgeComparableUserId(record);
+      return Boolean(userId) && Boolean(recordUserId) && userId === recordUserId;
+    }) || null;
+    if (!matched) {
+      matched = sameUrlRecords.find(record => String(record?.siteName || '').trim() === siteName) || null;
+    }
+    if (!matched && sameUrlRecords.length === 1) {
+      matched = sameUrlRecords[0];
+    }
+    if (!matched) return site;
+    return {
+      ...site,
+      _siteCacheKey: String(matched.siteCacheKey || '').trim() || buildSiteCacheKey(site),
+      _localDisabled: matched.disabled === true,
+      _localNote: String(matched.note || '').trim(),
+    };
+  });
+};
+
+const syncSilentBridgeSnapshot = async () => {
+  const getter = getBridgeImportApp()?.GetBridgeImportSnapshot;
+  if (typeof getter !== 'function') return;
+  const snapshot = await getter();
+  siteBridgeRecords.value = Array.isArray(snapshot?.records) ? snapshot.records : [];
+  siteBridgeReadyCount.value = Number(snapshot?.readyCount || siteBridgeRecords.value.filter(item => item?.ready === true).length || 0);
+  siteBridgeLastReceivedAt.value = String(snapshot?.lastReceivedAt || '').trim();
+  siteBridgeServerUrl.value = String(snapshot?.serverUrl || '').trim();
+  siteBridgeLogPath.value = String(snapshot?.logPath || '').trim();
+  siteBridgeSessionActive.value = snapshot?.sessionActive === true;
+  siteBridgeClientReady.value = snapshot?.clientReady === true;
+  siteBridgeLastClientPing.value = String(snapshot?.lastClientPing || '').trim();
+};
+
+const processPendingSilentBridgeImports = async () => {
+  if (!siteBridgeSilentMode.value || siteBridgeImporting.value) return;
+  const pendingRecords = siteBridgeRecords.value.filter(record => {
+    const recordId = String(record?.id || '').trim();
+    return record?.ready === true && recordId && !siteBridgeProcessedRecordIds.has(recordId);
+  });
+  if (!pendingRecords.length) return;
+
+  siteBridgeImporting.value = true;
+  const pendingRecordIds = pendingRecords.map(record => String(record?.id || '').trim()).filter(Boolean);
+  try {
+    const beforeRecords = loadAllSiteCacheRecords();
+    const prepared = buildBridgeImportedPreparedPayload(pendingRecords);
+    const resolved = await fetchBridgeImportSites(prepared);
+    const matchedSites = matchSilentBridgeSitesToRecords(resolved.sites, beforeRecords);
+
+    if (matchedSites.length > 0) {
+      mergeExtractedSitesIntoTempCache(matchedSites, { importSource: 'browser_tag_bridge_silent' });
+      mergeExtractedSitesIntoCache(matchedSites, { importSource: 'browser_tag_bridge_silent' });
+
+      const importedSiteKeys = new Set(
+        matchedSites
+          .map(site => String(site?._siteCacheKey || site?.siteCacheKey || buildSiteCacheKey(site)).trim())
+          .filter(Boolean)
+      );
+      const latestImportedRecords = loadAllSiteCacheRecords().filter(record => importedSiteKeys.has(String(record?.siteCacheKey || '').trim()));
+      await Promise.allSettled(latestImportedRecords.map(record => refreshSiteTreeModels(record)));
+      const finalImportedRecords = loadAllSiteCacheRecords().filter(record => importedSiteKeys.has(String(record?.siteCacheKey || '').trim()));
+      syncBridgeSitesToKeyPanel(finalImportedRecords);
+      reloadRecords();
+      pushSilentBridgeNotices(summarizeBridgeImportNotices(beforeRecords, matchedSites));
+    }
+
+    if (resolved.skipped.length > 0) {
+      pushSilentBridgeNotices(resolved.skipped.map(item => ({
+        siteName: item.title,
+        text: item.reason,
+        tone: 'red',
+      })));
+    }
+
+    pendingRecordIds.forEach(recordId => {
+      siteBridgeProcessedRecordIds.add(recordId);
+    });
+  } catch (error) {
+    message.error(error?.message || '标签静默导入失败');
+  } finally {
+    siteBridgeImporting.value = false;
+  }
+};
+
+const startSilentBridgeImportPolling = async () => {
+  stopSilentBridgeImportPolling();
+  siteBridgePolling.value = true;
+  await syncSilentBridgeSnapshot();
+  await processPendingSilentBridgeImports();
+  siteBridgePollTimer = setInterval(() => {
+    void syncSilentBridgeSnapshot()
+      .then(() => processPendingSilentBridgeImports())
+      .catch(error => {
+        console.warn('[SiteBridgeImport] snapshot sync failed:', error?.message || String(error));
+      });
+  }, 1200);
+};
+
+const closeSilentBridgeImportSession = async () => {
+  const closer = getBridgeImportApp()?.CloseBridgeImportSession;
+  if (typeof closer !== 'function') return;
+  try {
+    await closer();
+  } catch (error) {
+    console.warn('[SiteBridgeImport] close session failed:', error?.message || String(error));
+  }
+};
+
+const openSilentBridgeInstallPage = async () => {
+  const opener = getBridgeImportApp()?.OpenBridgeScriptInstallPage;
+  if (typeof opener !== 'function') {
+    message.warning('当前环境不支持桥接脚本安装页');
+    return;
+  }
+  try {
+    await opener();
+  } catch (error) {
+    message.error(error?.message || '打开脚本页失败');
+  }
+};
+
+const enableSilentBridgeImportMode = async () => {
+  const starter = getBridgeImportApp()?.StartBridgeImportSession;
+  if (typeof starter !== 'function') {
+    message.warning('标签静默导入仅支持桌面端 EXE 环境');
+    return;
+  }
+  siteBridgeSilentMode.value = true;
+  siteBridgeSessionOpening.value = true;
+  siteBridgeProcessedRecordIds.clear();
+  try {
+    siteBridgeNoticeItems.value = [];
+    await starter();
+    await startSilentBridgeImportPolling();
+  } catch (error) {
+    siteBridgeSilentMode.value = false;
+    message.error(error?.message || '启动标签静默导入失败');
+  } finally {
+    siteBridgeSessionOpening.value = false;
+  }
+};
+
+const disableSilentBridgeImportMode = async () => {
+  siteBridgeSilentMode.value = false;
+  siteBridgeSessionOpening.value = false;
+  stopSilentBridgeImportPolling();
+  await closeSilentBridgeImportSession();
+};
+
+const toggleSilentBridgeImportMode = async () => {
+  if (siteBridgeSilentMode.value) {
+    await disableSilentBridgeImportMode();
+    return;
+  }
+  await enableSilentBridgeImportMode();
+};
+
 const goBackToImport = async () => {
   writePendingBatchStart({ autoStart: false });
   await router.push('/');
@@ -1330,6 +1632,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener(THEME_MODE_CHANGE_EVENT, syncThemeState);
   window.removeEventListener(SITE_CACHE_SYNC_EVENT, handleSync);
+  stopSilentBridgeImportPolling();
+  void closeSilentBridgeImportSession();
 });
 </script>
 
@@ -1351,25 +1655,223 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.selection-header-row::-webkit-scrollbar {
+  display: none;
 }
 
 .selection-title {
   margin: 0;
-  font-size: 28px;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: clamp(18px, 3vw, 28px);
   font-weight: 700;
   line-height: 1.2;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: #ffffff;
+}
+
+.selection-header-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
 .selection-action-group {
   display: flex;
-  justify-content: flex-end;
   align-items: center;
   gap: 10px;
+  flex-wrap: nowrap;
+  margin-left: 0;
+  flex: 0 0 auto;
+}
+
+.site-bridge-toggle-button {
+  position: relative;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid rgba(116, 144, 104, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  color: #495b4a;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 20px rgba(90, 117, 79, 0.08);
+  transition: transform 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+  cursor: pointer;
+}
+
+.site-bridge-toggle-button:hover,
+.site-bridge-toggle-button:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(96, 128, 84, 0.34);
+  background: rgba(255, 255, 255, 0.96);
+  color: #2e4431;
+  box-shadow: 0 10px 24px rgba(90, 117, 79, 0.14);
+}
+
+.site-bridge-toggle-button.is-active {
+  border-color: rgba(108, 148, 87, 0.42);
+  background: linear-gradient(135deg, rgba(233, 246, 212, 0.98), rgba(208, 229, 182, 0.94));
+  color: #264126;
+}
+
+.site-bridge-toggle-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #4a9d49;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.94);
+}
+
+.site-bridge-float-shell {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.site-bridge-float-card {
+  width: min(100%, 760px);
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(116, 144, 104, 0.16);
+  background:
+    radial-gradient(circle at top right, rgba(214, 236, 191, 0.24), transparent 34%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(245, 250, 241, 0.88));
+  box-shadow: 0 14px 30px rgba(90, 117, 79, 0.12);
+  backdrop-filter: blur(14px);
+}
+
+.site-bridge-float-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.site-bridge-float-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.site-bridge-float-kicker {
+  color: #7d8d75;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.site-bridge-float-title strong {
+  color: #314230;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.site-bridge-float-statuses {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
   flex-wrap: wrap;
-  margin-left: auto;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.site-bridge-float-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  color: #637260;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.site-bridge-inline-link {
+  border: 0;
+  background: transparent;
+  color: #4e7147;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.site-bridge-inline-link:hover,
+.site-bridge-inline-link:focus-visible {
+  color: #2f4a2f;
+}
+
+.site-bridge-notice-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.site-bridge-notice-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(116, 144, 104, 0.14);
+  background: rgba(255, 255, 255, 0.86);
+  color: #405041;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.site-bridge-notice-chip.is-green {
+  border-color: rgba(84, 148, 77, 0.2);
+  background: rgba(236, 249, 231, 0.92);
+}
+
+.site-bridge-notice-chip.is-blue {
+  border-color: rgba(82, 127, 171, 0.22);
+  background: rgba(235, 244, 255, 0.92);
+}
+
+.site-bridge-notice-chip.is-gold {
+  border-color: rgba(173, 139, 72, 0.22);
+  background: rgba(255, 247, 225, 0.94);
+}
+
+.site-bridge-notice-chip.is-red {
+  border-color: rgba(191, 100, 87, 0.24);
+  background: rgba(255, 239, 235, 0.94);
+}
+
+.site-bridge-notice-site {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.site-bridge-notice-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .selection-action-group :deep(.ant-btn) {
@@ -2137,6 +2639,36 @@ onBeforeUnmount(() => {
   color: #ffb6b7;
 }
 
+:deep(body.dark-mode) .site-bridge-toggle-button {
+  border-color: rgba(127, 164, 111, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: #e7f0e1;
+}
+
+:deep(body.dark-mode) .site-bridge-toggle-button.is-active {
+  border-color: rgba(127, 164, 111, 0.34);
+  background: linear-gradient(135deg, rgba(89, 119, 78, 0.56), rgba(68, 96, 61, 0.48));
+  color: #f4faee;
+}
+
+:deep(body.dark-mode) .site-bridge-float-card {
+  border-color: rgba(127, 164, 111, 0.16);
+  background:
+    radial-gradient(circle at top right, rgba(123, 156, 104, 0.12), transparent 34%),
+    linear-gradient(135deg, rgba(25, 34, 24, 0.92), rgba(21, 29, 20, 0.9));
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.24);
+}
+
+:deep(body.dark-mode) .site-bridge-float-kicker,
+:deep(body.dark-mode) .site-bridge-float-meta,
+:deep(body.dark-mode) .site-bridge-inline-link {
+  color: #b9c8b4;
+}
+
+:deep(body.dark-mode) .site-bridge-float-title strong {
+  color: #eef6e6;
+}
+
 :deep(body.gaia-dark) .batch-hero {
   border-color: rgba(101, 129, 138, 0.16);
   background:
@@ -2188,6 +2720,37 @@ onBeforeUnmount(() => {
   color: #f4faf8;
 }
 
+:deep(body.gaia-dark) .site-bridge-toggle-button {
+  border-color: rgba(101, 129, 138, 0.24);
+  background: linear-gradient(180deg, rgba(19, 31, 37, 0.96), rgba(14, 24, 29, 0.94));
+  color: #d9e9e7;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+}
+
+:deep(body.gaia-dark) .site-bridge-toggle-button.is-active {
+  border-color: rgba(123, 155, 166, 0.38);
+  background: linear-gradient(135deg, rgba(31, 63, 73, 0.98), rgba(49, 83, 94, 0.94));
+  color: #eff8f6;
+}
+
+:deep(body.gaia-dark) .site-bridge-float-card {
+  border-color: rgba(101, 129, 138, 0.18);
+  background:
+    radial-gradient(circle at top right, rgba(129, 153, 161, 0.12), transparent 34%),
+    linear-gradient(145deg, rgba(10, 19, 24, 0.96), rgba(14, 27, 33, 0.94));
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.28);
+}
+
+:deep(body.gaia-dark) .site-bridge-float-kicker,
+:deep(body.gaia-dark) .site-bridge-float-meta,
+:deep(body.gaia-dark) .site-bridge-inline-link {
+  color: #a8bfbc;
+}
+
+:deep(body.gaia-dark) .site-bridge-float-title strong {
+  color: #e6f2f0;
+}
+
 :deep(body.gaia-dark) .settings-action-bar {
   border-color: rgba(101, 129, 138, 0.16);
   background: linear-gradient(180deg, rgba(12, 20, 25, 0.96), rgba(9, 16, 20, 0.92));
@@ -2218,17 +2781,29 @@ onBeforeUnmount(() => {
   }
 
   .selection-header-row {
-    align-items: flex-start;
+    align-items: center;
+    flex-wrap: nowrap;
   }
 
   .selection-title,
+  .selection-header-tools,
   .selection-action-group {
-    white-space: normal;
+    white-space: nowrap;
+  }
+
+  .selection-header-tools {
+    margin-left: auto;
   }
 
   .selection-action-group {
     margin-left: 0;
     justify-content: flex-start;
+  }
+
+  .site-bridge-float-head,
+  .site-bridge-float-meta {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 
