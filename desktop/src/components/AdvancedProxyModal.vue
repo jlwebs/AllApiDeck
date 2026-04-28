@@ -1,5 +1,12 @@
 ﻿<template>
-  <a-modal :open="open" title="高级代理功能" :width="modalWidth" :footer="null" @cancel="handleCancel">
+  <a-modal
+    :open="open"
+    title="高级代理功能"
+    :width="modalWidth"
+    :footer="null"
+    wrap-class-name="advanced-proxy-modal-wrap"
+    @cancel="handleCancel"
+  >
     <a-spin :spinning="loading || saving">
       <div class="advanced-proxy-shell">
         <section class="advanced-proxy-hero">
@@ -1879,6 +1886,31 @@ function handleCancel() {
   height: 26px;
 }
 
+:deep(body.gaia-dark) .advanced-proxy-section :deep(.ant-select-selector),
+:deep(body.gaia-dark) .advanced-proxy-section :deep(.ant-input),
+:deep(body.gaia-dark) .advanced-proxy-section :deep(.ant-input-password),
+:deep(body.gaia-dark) .advanced-proxy-section :deep(.ant-input-affix-wrapper),
+:deep(body.gaia-dark) .advanced-proxy-section :deep(.ant-input-number),
+:deep(body.gaia-dark) .advanced-proxy-section :deep(.ant-btn),
+:deep(body.gaia-dark) .advanced-proxy-toolbar-icon-button {
+  color: #eef6f4 !important;
+}
+
+:deep(body.gaia-dark) .advanced-proxy-section :deep(.ant-select-single .ant-select-selector .ant-select-selection-item),
+:deep(body.gaia-dark) .advanced-proxy-section :deep(.ant-select-single .ant-select-selector .ant-select-selection-placeholder),
+:deep(body.gaia-dark) .advanced-proxy-section :deep(.ant-input-number-input),
+:deep(body.gaia-dark) .advanced-proxy-section :deep(.ant-input::placeholder),
+:deep(body.gaia-dark) .advanced-proxy-section :deep(.ant-input-password input::placeholder) {
+  color: #eef6f4 !important;
+  -webkit-text-fill-color: #eef6f4 !important;
+}
+
+:deep(body.gaia-dark) .advanced-proxy-section :deep(.ant-select-arrow),
+:deep(body.gaia-dark) .advanced-proxy-toolbar-icon-button :deep(.ant-btn-icon),
+:deep(body.gaia-dark) .advanced-proxy-toolbar-icon-button :deep(.anticon) {
+  color: rgba(238, 246, 244, 0.88) !important;
+}
+
 @media (max-width: 1180px) {
   .advanced-proxy-layout {
     grid-template-columns: 1fr;
@@ -1933,5 +1965,34 @@ function handleCancel() {
   .advanced-proxy-dense-rows {
     grid-template-columns: 1fr;
   }
+}
+</style>
+
+<style>
+body.gaia-dark .advanced-proxy-modal-wrap .ant-select-selector,
+body.gaia-dark .advanced-proxy-modal-wrap .ant-input,
+body.gaia-dark .advanced-proxy-modal-wrap .ant-input-password,
+body.gaia-dark .advanced-proxy-modal-wrap .ant-input-affix-wrapper,
+body.gaia-dark .advanced-proxy-modal-wrap .ant-input-number,
+body.gaia-dark .advanced-proxy-modal-wrap .ant-btn,
+body.gaia-dark .advanced-proxy-modal-wrap .advanced-proxy-toolbar-icon-button {
+  color: #eef6f4 !important;
+}
+
+body.gaia-dark .advanced-proxy-modal-wrap .ant-select-selection-item,
+body.gaia-dark .advanced-proxy-modal-wrap .ant-select-selection-placeholder,
+body.gaia-dark .advanced-proxy-modal-wrap .ant-input-number-input,
+body.gaia-dark .advanced-proxy-modal-wrap .ant-input,
+body.gaia-dark .advanced-proxy-modal-wrap .ant-input::placeholder,
+body.gaia-dark .advanced-proxy-modal-wrap .ant-input-password input,
+body.gaia-dark .advanced-proxy-modal-wrap .ant-input-password input::placeholder {
+  color: #eef6f4 !important;
+  -webkit-text-fill-color: #eef6f4 !important;
+}
+
+body.gaia-dark .advanced-proxy-modal-wrap .ant-select-arrow,
+body.gaia-dark .advanced-proxy-modal-wrap .ant-btn-icon,
+body.gaia-dark .advanced-proxy-modal-wrap .anticon {
+  color: rgba(238, 246, 244, 0.88) !important;
 }
 </style>
