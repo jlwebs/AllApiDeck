@@ -3966,7 +3966,7 @@ function persistMeta() {
 <style scoped>
 .batch-wrapper.key-management-wrapper{min-height:calc(var(--vh,1vh) * 100);padding:0;overflow:hidden}
 .batch-shell.key-management-shell{width:100%;min-height:calc(var(--vh,1vh) * 100);position:relative;isolation:isolate;overflow:hidden}
-.batch-page-content.key-management-page-content{background:transparent;border-radius:0;box-shadow:none;padding:2px;min-height:calc(var(--vh,1vh) * 100);position:relative;z-index:1}
+.batch-page-content.key-management-page-content{background:transparent;border-radius:24px;box-shadow:none;padding:2px;min-height:calc(var(--vh,1vh) * 100);position:relative;z-index:1;overflow:hidden}
 .batch-page-container.key-management-page-container{max-width:100% !important;padding:8px 8px 0 !important;margin:0 auto !important;min-height:calc(var(--vh,1vh) * 100 - 4px);display:flex}
 .batch-forest-scene{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0;background:radial-gradient(circle at 16% 18%,rgba(164,213,120,.14),transparent 24%),radial-gradient(circle at 84% 14%,rgba(255,213,116,.14),transparent 22%),linear-gradient(180deg,rgba(8,18,12,.14) 0%,rgba(8,20,13,.34) 42%,rgba(6,16,10,.62) 100%),url('/forest-batch-bg-v2.png') center center/cover no-repeat;opacity:.92}
 .forest-mist,.forest-path-glow,.forest-firegrass,.forest-slime{position:absolute}
@@ -3981,19 +3981,19 @@ function persistMeta() {
 .slime-a{left:44%}
 .slime-b{left:51%;width:20px;height:17px}
 .slime-c{left:57%;width:18px;height:15px}
-.key-management{width:100%;padding:0;min-height:100%;display:flex;flex:1 1 auto;flex-direction:column;gap:6px;position:relative;overflow:visible;border-radius:0;background:transparent;box-shadow:none}
+.key-management{width:100%;padding:0;min-height:100%;display:flex;flex:1 1 auto;flex-direction:column;gap:6px;position:relative;overflow:visible;border-radius:24px;background:transparent;box-shadow:none}
 .key-management-compact{padding:12px;gap:12px;min-height:100%;background:linear-gradient(180deg,#f8fafc,#eef2ff)}
 .key-management>*{position:relative;z-index:1}
 .compact-sidebar-summary{display:flex;flex-direction:column;gap:10px}
 .compact-sidebar-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .compact-sidebar-alert{margin:0}
 .sync-card,.inventory-card{width:100%}
-.inventory-card{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;overflow:hidden;border:0 !important;border-radius:0 !important;background:linear-gradient(180deg,rgba(228,233,226,.96),rgba(214,220,212,.92)) !important;box-shadow:none !important}
+.inventory-card{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;overflow:hidden;border:0 !important;border-radius:24px !important;background:linear-gradient(180deg,rgba(228,233,226,.96),rgba(214,220,212,.92)) !important;box-shadow:none !important}
 .inventory-card :deep(.ant-card-head),.inventory-card :deep(.ant-card-body){background:transparent}
-.inventory-card :deep(.ant-card-head){border-bottom-color:rgba(114,132,103,.08);min-height:54px;padding:0 12px 0 0}
-.inventory-card :deep(.ant-card-head-title){padding:10px 0 8px}
+.inventory-card :deep(.ant-card-head){border-bottom-color:rgba(114,132,103,.08);min-height:54px;padding:0 14px 0 18px}
+.inventory-card :deep(.ant-card-head-title){padding:11px 0 9px}
 .inventory-card :deep(.ant-card-extra){padding:8px 0 8px}
-.inventory-card :deep(.ant-card-body){display:flex;flex:1 1 auto;flex-direction:column;min-height:0;padding:4px 12px 4px}
+.inventory-card :deep(.ant-card-body){display:flex;flex:1 1 auto;flex-direction:column;min-height:0;padding:6px 14px 6px}
 .inventory-card :deep(.ant-empty){margin-block:auto}
 .key-group-strip{margin:0 0 1px}
 .key-group-tabs{display:flex;align-items:center;gap:2px;min-width:0;overflow-x:auto;overflow-y:hidden;padding-bottom:0;scrollbar-width:none}
@@ -4399,7 +4399,7 @@ function persistMeta() {
 .key-management .desktop-panel-title,.key-management .desktop-app-name,.key-management .site-title-text{font-family:Georgia,'Times New Roman',serif;color:#2d432f}
 .key-management .quick-test-button{border-radius:999px;background:linear-gradient(135deg,#476847,#6f8f55);border:0;box-shadow:0 8px 16px rgba(87,118,76,.18)}
 .key-management :deep(.ant-btn-default),.key-management :deep(.ant-btn-primary),.key-management :deep(.ant-select-selector),.key-management :deep(.ant-input),.key-management :deep(.ant-input-password),.key-management :deep(.ant-input-affix-wrapper){border-radius:12px}
-.key-management .inventory-card{width:100%;margin:0;flex:1 1 auto;border:0 !important;border-radius:0 !important;background:linear-gradient(180deg,rgba(228,233,226,.96),rgba(214,220,212,.92)) !important;box-shadow:none !important;backdrop-filter:none !important}
+.key-management .inventory-card{width:100%;margin:0;flex:1 1 auto;border:0 !important;border-radius:24px !important;background:linear-gradient(180deg,rgba(228,233,226,.96),rgba(214,220,212,.92)) !important;box-shadow:none !important;backdrop-filter:none !important}
 .key-management .inventory-card :deep(.ant-card-head){background:linear-gradient(180deg,rgba(228,233,226,.96),rgba(221,227,218,.94)) !important}
 .key-management .inventory-card :deep(.ant-card-body){background:transparent}
 .key-management .inventory-card :deep(.ant-card-head){border-bottom-color:rgba(114,132,103,.08)}
