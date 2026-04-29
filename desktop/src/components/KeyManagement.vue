@@ -4155,7 +4155,7 @@ function persistMeta() {
 .sync-card :deep(.sync-alert-warning.ant-alert){margin:0;flex:1 1 360px;min-width:min(100%,360px)}
 .cell-copy-text{max-width:240px;display:inline-block}
 .api-combined-cell{position:relative;display:flex;flex-direction:column;gap:2px;min-width:0;width:100%}
-.api-model-row{margin-top:8px;min-width:0;width:calc(100% + 72px);max-width:calc(100% + 72px)}
+.api-model-row{margin-top:8px;min-width:0;width:calc(100% + 64px);max-width:calc(100% + 64px)}
 .api-endpoint-text{font-size:12px;color:#64748b;line-height:1.1;margin-top:-1px}
 .models-text{display:block;width:100%;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .record-model-select{width:100%;min-width:0}
