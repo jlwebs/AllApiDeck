@@ -209,7 +209,11 @@ func buildMacOptions(mode launchMode) *mac.Options {
 	}
 	return &mac.Options{
 		WebviewIsTransparent: true,
-		WindowIsTranslucent:  true,
+		// Wails uses WindowIsTranslucent to inject NSVisualEffectView, which
+		// becomes a gray material surface on macOS. Panel/editor need actual
+		// holes, so we keep the webview transparent and clear the window
+		// natively after startup instead of enabling the material layer.
+		WindowIsTranslucent: false,
 	}
 }
 

@@ -14,6 +14,13 @@ static void batchApiCheckClearViewTree(NSView *view) {
 		return;
 	}
 
+	if ([view isKindOfClass:[NSVisualEffectView class]]) {
+		NSVisualEffectView *effectView = (NSVisualEffectView *)view;
+		[effectView setState:NSVisualEffectStateInactive];
+		[effectView setHidden:YES];
+		[effectView setAlphaValue:0.0];
+	}
+
 	[view setWantsLayer:YES];
 	if (view.layer != nil) {
 		view.layer.backgroundColor = NSColor.clearColor.CGColor;
@@ -45,6 +52,14 @@ static void batchApiCheckEnsureTransparentWindows(void) {
 			[window setBackgroundColor:NSColor.clearColor];
 			if ([window respondsToSelector:@selector(setTitlebarAppearsTransparent:)]) {
 				[window setTitlebarAppearsTransparent:YES];
+			}
+			NSView *frameView = [[window contentView] superview];
+			if (frameView != nil) {
+				[frameView setWantsLayer:YES];
+				if (frameView.layer != nil) {
+					frameView.layer.backgroundColor = NSColor.clearColor.CGColor;
+				}
+				batchApiCheckClearViewTree(frameView);
 			}
 			NSView *contentView = [window contentView];
 			if (contentView != nil) {
