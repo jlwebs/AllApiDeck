@@ -27,6 +27,7 @@ const (
 	launchModeMain          launchMode     = "main"
 	launchModePanel         launchMode     = "panel"
 	launchModeEditor        launchMode     = "editor"
+	launchModeAIImage       launchMode     = "ai-image"
 	launchModeDesktopConfig launchMode     = "desktop-config"
 	webviewGroupPIDEnvKey   string         = "BATCH_API_CHECK_WEBVIEW_GROUP_PID"
 	panelStartAuto          panelStartMode = "auto"
@@ -58,6 +59,10 @@ func resolveLaunchContext(args []string) (launchMode, string, panelStartMode) {
 		}
 		if strings.EqualFold(arg, "--editor") {
 			mode = launchModeEditor
+			continue
+		}
+		if strings.EqualFold(arg, "--ai-image") {
+			mode = launchModeAIImage
 			continue
 		}
 		if strings.EqualFold(arg, "--desktop-config") {
@@ -146,6 +151,16 @@ func buildAppOptions(app *App, mode launchMode) *options.App {
 		appOptions.AlwaysOnTop = true
 		appOptions.BackgroundColour = &options.RGBA{R: 0, G: 0, B: 0, A: 0}
 	}
+	if mode == launchModeAIImage {
+		appOptions.Title = "AI 绘图"
+		appOptions.Frameless = true
+		appOptions.Width = 1080
+		appOptions.Height = 860
+		appOptions.MinWidth = 920
+		appOptions.MinHeight = 720
+		appOptions.HideWindowOnClose = false
+		appOptions.BackgroundColour = &options.RGBA{R: 0, G: 0, B: 0, A: 0}
+	}
 	if mode == launchModeDesktopConfig {
 		appOptions.Title = "Desktop Config"
 		appOptions.Width = 840
@@ -195,7 +210,7 @@ func buildWindowsOptions(mode launchMode) *windows.Options {
 		windowOptions.WindowIsTranslucent = true
 		windowOptions.DisableFramelessWindowDecorations = true
 	}
-	if mode == launchModeEditor {
+	if mode == launchModeEditor || mode == launchModeAIImage {
 		windowOptions.WebviewIsTransparent = true
 		windowOptions.WindowIsTranslucent = true
 		windowOptions.DisableFramelessWindowDecorations = true
@@ -204,7 +219,7 @@ func buildWindowsOptions(mode launchMode) *windows.Options {
 }
 
 func buildMacOptions(mode launchMode) *mac.Options {
-	if mode != launchModePanel && mode != launchModeEditor {
+	if mode != launchModePanel && mode != launchModeEditor && mode != launchModeAIImage {
 		return nil
 	}
 	return &mac.Options{
@@ -218,7 +233,7 @@ func buildMacOptions(mode launchMode) *mac.Options {
 }
 
 func buildLinuxOptions(mode launchMode) *linux.Options {
-	if mode != launchModePanel && mode != launchModeEditor {
+	if mode != launchModePanel && mode != launchModeEditor && mode != launchModeAIImage {
 		return &linux.Options{}
 	}
 	return &linux.Options{

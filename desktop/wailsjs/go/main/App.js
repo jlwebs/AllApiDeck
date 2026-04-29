@@ -126,6 +126,10 @@ export function ListDesktopLogFiles() {
   return window['go']['main']['App']['ListDesktopLogFiles']();
 }
 
+export function OpenAIImageWindow(arg1) {
+  return window['go']['main']['App']['OpenAIImageWindow'](arg1);
+}
+
 export function OpenBridgeScriptInstallPage() {
   return window['go']['main']['App']['OpenBridgeScriptInstallPage']();
 }

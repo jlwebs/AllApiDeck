@@ -6614,6 +6614,7 @@ async function syncDetectedKeysToLocalStorage(options = {}) {
           apiKey,
           modelsSet: new Set(),
           statuses: [],
+          selectedModel: '',
           createdAt: now,
           updatedAt: now,
           quickTestStatus: '',
@@ -6632,7 +6633,11 @@ async function syncDetectedKeysToLocalStorage(options = {}) {
       record.updatedAt = now;
       record.statuses.push(String(task.status || ''));
       if (task.modelName) {
-        record.modelsSet.add(String(task.modelName).trim());
+        const normalizedModelName = String(task.modelName).trim();
+        record.modelsSet.add(normalizedModelName);
+        // 增量同步时，默认选中模型应该跟随本轮最新测试所使用的模型，
+        // 不能继续沿用旧的 selectedModel。
+        record.selectedModel = normalizedModelName;
       }
       if (!record.balanceLabel && isDisplayableQuotaLabel(task.quota)) {
         record.balanceLabel = String(task.quota).trim();
@@ -6652,6 +6657,9 @@ async function syncDetectedKeysToLocalStorage(options = {}) {
         apiKey: record.apiKey,
         modelsList,
         modelsText: modelsList.length ? modelsList.join(', ') : '未提供模型信息',
+        selectedModel: modelsList.includes(String(record.selectedModel || '').trim())
+          ? String(record.selectedModel || '').trim()
+          : (modelsList[0] || ''),
         status,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,

@@ -54,7 +54,7 @@ export default {
       const normalizedMode = String(mode || '').trim();
       const body = document.body;
       const root = document.documentElement;
-      const modeClasses = ['launch-mode-main-window', 'launch-mode-panel-window', 'launch-mode-editor-window', 'launch-mode-desktop-config-window'];
+      const modeClasses = ['launch-mode-main-window', 'launch-mode-panel-window', 'launch-mode-editor-window', 'launch-mode-ai-image-window', 'launch-mode-desktop-config-window'];
       body?.classList?.remove(...modeClasses);
       root?.classList?.remove(...modeClasses);
       if (!normalizedMode) return;
@@ -65,7 +65,7 @@ export default {
 
     const clearLaunchModeClasses = () => {
       if (typeof document === 'undefined') return;
-      const modeClasses = ['launch-mode-main-window', 'launch-mode-panel-window', 'launch-mode-editor-window', 'launch-mode-desktop-config-window'];
+      const modeClasses = ['launch-mode-main-window', 'launch-mode-panel-window', 'launch-mode-editor-window', 'launch-mode-ai-image-window', 'launch-mode-desktop-config-window'];
       document.body?.classList?.remove(...modeClasses);
       document.documentElement?.classList?.remove(...modeClasses);
     };
@@ -138,6 +138,8 @@ export default {
           await router.replace('/panel');
         } else if (mode === 'editor' && router.currentRoute.value.path !== '/editor') {
           await router.replace('/editor');
+        } else if (mode === 'ai-image' && router.currentRoute.value.path !== '/ai-image') {
+          await router.replace('/ai-image');
         } else if (mode === 'desktop-config' && router.currentRoute.value.path !== '/desktop-config') {
           await router.replace('/desktop-config');
         }
@@ -199,12 +201,14 @@ body.gaia-dark .app-shell::before {
 }
 
 body.launch-mode-panel-window .app-shell,
-body.launch-mode-editor-window .app-shell {
+body.launch-mode-editor-window .app-shell,
+body.launch-mode-ai-image-window .app-shell {
   background: transparent !important;
 }
 
 body.launch-mode-panel-window .app-shell::before,
-body.launch-mode-editor-window .app-shell::before {
+body.launch-mode-editor-window .app-shell::before,
+body.launch-mode-ai-image-window .app-shell::before {
   display: none !important;
 }
 </style>

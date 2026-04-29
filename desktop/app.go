@@ -116,7 +116,7 @@ func (a *App) shutdown(ctx context.Context) {
 func (a *App) domReady(ctx context.Context) {
 	_ = ctx
 	debugLogf("dom ready")
-	if a.isPanelMode() || a.isEditorMode() {
+	if a.isPanelMode() || a.isEditorMode() || a.isAIImageMode() {
 		ensureTransparentWindowSurface(a.mode)
 	}
 	if a.isPanelMode() {
@@ -131,7 +131,7 @@ func (a *App) domReady(ctx context.Context) {
 func (a *App) beforeClose(ctx context.Context) bool {
 	_ = ctx
 	debugLogf("before close")
-	if a.isPanelMode() || a.isEditorMode() || a.isDesktopConfigMode() {
+	if a.isPanelMode() || a.isEditorMode() || a.isAIImageMode() || a.isDesktopConfigMode() {
 		return false
 	}
 	if a.isQuitRequested() {
@@ -201,6 +201,10 @@ func (a *App) isPanelMode() bool {
 
 func (a *App) isEditorMode() bool {
 	return a.mode == launchModeEditor
+}
+
+func (a *App) isAIImageMode() bool {
+	return a.mode == launchModeAIImage
 }
 
 func (a *App) isDesktopConfigMode() bool {

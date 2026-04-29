@@ -17,10 +17,7 @@ let cachedHistoryBalanceRaw = null;
 let cachedHistoryBalanceMap = null;
 
 export function normalizeApiKey(rawKey) {
-  let apiKey = String(rawKey || '').trim();
-  if (!apiKey) return '';
-  if (!apiKey.startsWith('sk-')) apiKey = `sk-${apiKey}`;
-  return apiKey;
+  return String(rawKey || '').trim();
 }
 
 export function normalizeSiteUrl(rawUrl) {

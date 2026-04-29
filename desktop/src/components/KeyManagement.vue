@@ -554,6 +554,13 @@
         </button>
         <button
           type="button"
+          class="import-export-menu-item key-row-context-action"
+          @click="handleRowContextAIImage"
+        >
+          发起AI绘图
+        </button>
+        <button
+          type="button"
           class="import-export-menu-item key-row-context-action key-row-context-submenu-trigger"
           :class="{ 'key-row-context-submenu-trigger-active': rowContextMenu.groupSubmenuOpen }"
           @mouseenter="openRowContextGroupSubmenu"
@@ -841,7 +848,7 @@ import {
   HISTORY_SNAPSHOT_SYNC_EVENT,
   getCachedLastResultsSnapshotRaw,
 } from '../utils/historySnapshotStore.js';
-import { ExportTextFile } from '../../wailsjs/go/main/App.js';
+import { ExportTextFile, OpenAIImageWindow } from '../../wailsjs/go/main/App.js';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
 import geminiAppIcon from '../assets/app-icons/gemini.svg';
@@ -1543,6 +1550,26 @@ function handleRowContextDelete() {
     okButtonProps: { danger: true },
     onOk: () => deleteRecord(record),
   });
+}
+
+async function handleRowContextAIImage() {
+  const record = rowContextMenu.record;
+  closeRowContextMenu();
+  if (!record?.rowKey) return;
+
+  if (isWailsRuntime && typeof OpenAIImageWindow === 'function') {
+    try {
+      await OpenAIImageWindow(String(record.rowKey || ''));
+      return;
+    } catch (error) {
+      message.error(error?.message || '打开 AI 绘图窗口失败');
+      return;
+    }
+  }
+
+  const rowKey = encodeURIComponent(String(record.rowKey || '').trim());
+  const targetUrl = `${window.location.origin}/ai-image?rowKey=${rowKey}`;
+  window.open(targetUrl, '_blank', 'noopener');
 }
 
 const refreshManualSidebarBridgeReady = () => {
@@ -3339,10 +3366,7 @@ function createRecordFromDraft(draft, existingRecord = null) {
   };
 }
 function normalizeApiKey(rawKey) {
-  let apiKey = String(rawKey || '').trim();
-  if (!apiKey) return '';
-  if (!apiKey.startsWith('sk-')) apiKey = `sk-${apiKey}`;
-  return apiKey;
+  return String(rawKey || '').trim();
 }
 
 function normalizeSiteUrl(rawUrl) {

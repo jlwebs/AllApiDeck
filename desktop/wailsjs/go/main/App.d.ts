@@ -64,6 +64,8 @@ export function InitPanelWindow(arg1:number,arg2:number):Promise<void>;
 
 export function ListDesktopLogFiles():Promise<main.DesktopLogSnapshot>;
 
+export function OpenAIImageWindow(arg1:string):Promise<void>;
+
 export function OpenBridgeScriptInstallPage():Promise<void>;
 
 export function OpenDesktopConfigWindow(arg1:string):Promise<void>;

@@ -13,6 +13,10 @@ const routes = [
     component: () => import('../views/Editor.vue'),
   },
   {
+    path: '/ai-image',
+    component: () => import('../views/AIImage.vue'),
+  },
+  {
     path: '/desktop-config',
     component: () => import('../views/DesktopConfig.vue'),
   },
