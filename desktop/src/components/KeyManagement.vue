@@ -118,6 +118,16 @@
                 </a-button>
               </a-tooltip>
             </a-popover>
+            <a-tooltip :title="syncCurrentGroupProviderQueueTooltip">
+              <button
+                type="button"
+                class="inventory-icon-button inventory-icon-button-provider-queue"
+                :disabled="syncCurrentGroupProviderQueueDisabled"
+                @click="syncCurrentGroupToAdvancedProxyQueue"
+              >
+                <span class="inventory-emoji-icon" aria-hidden="true">💪</span>
+              </button>
+            </a-tooltip>
             <a-tooltip title="手工添加">
               <button type="button" class="inventory-icon-button inventory-icon-button-primary" @click="openManualRecordModal()">
                 <PlusOutlined />
@@ -217,6 +227,17 @@
                     @input="handleQuickGroupDraftNameInput"
                     @pressEnter="submitQuickGroupComposer"
                   />
+                  <a-tooltip title="刷新密钥当下最新的模型列表~" :getPopupContainer="getQuickGroupPopupContainer">
+                    <button
+                      type="button"
+                      class="key-quick-group-refresh-button"
+                      :disabled="quickGroupModelRefreshDisabled"
+                      aria-label="刷新密钥当下最新的模型列表"
+                      @click="refreshQuickGroupModelCatalog"
+                    >
+                      <ReloadOutlined class="key-quick-group-refresh-icon" :class="{ 'site-balance-refresh-icon-spinning': quickGroupModelRefreshRunning }" />
+                    </button>
+                  </a-tooltip>
                   <a-button type="primary" size="small" class="key-quick-group-create-button" @click="submitQuickGroupComposer">
                     创建
                   </a-button>
@@ -745,7 +766,11 @@
                 v-model:desktop-token-source-mode="desktopTokenSourceMode"
                 :app-name="'All API Deck'"
               />
-              <AdvancedProxyModal v-model:open="showExperimentalFeatures" />
+              <AdvancedProxyModal
+                v-model:open="showExperimentalFeatures"
+                :initial-queue-scope="advancedProxyFocusQueueScope"
+                :focus-queue-token="advancedProxyFocusQueueToken"
+              />
             </div>
           </div>
         </div>
@@ -767,6 +792,12 @@ import { fetchModelList } from '../utils/api.js';
 import { maskApiKey } from '../utils/normal.js';
 import { apiFetch, isProbablyWailsRuntime, openUrlInSystemBrowser } from '../utils/runtimeApi.js';
 import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManagedAppConfigFiles } from '../utils/desktopConfigBridge.js';
+import {
+  ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
+  getAdvancedProxyConfig,
+  normalizeAdvancedProxyConfig,
+  setAdvancedProxyConfig,
+} from '../utils/advancedProxyBridge.js';
 import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS, inferProviderKeyFromSnapshot } from '../utils/desktopConfigTransform.js';
 import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils/balance.js';
 import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
@@ -831,6 +862,8 @@ const loading = ref(false);
 const allResults = ref([]);
 const tableData = ref([]);
 const showExperimentalFeatures = ref(false);
+const advancedProxyFocusQueueScope = ref(ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
+const advancedProxyFocusQueueToken = ref(0);
 const syncMeta = ref({ lastBatchSyncAt: null, lastBatchSyncCount: 0, lastBatchFailedCount: 0 });
 const keyBalanceRefreshBootstrapped = ref(false);
 const batchHistoryContextMap = ref(new Map());
@@ -850,7 +883,9 @@ const manualModelLoading = ref(false);
 const manualModelFetchKey = ref('');
 const hideInvalidKeys = ref(true);
 const BATCH_QUICK_TEST_CONCURRENCY = 10;
+const QUICK_GROUP_MODEL_REFRESH_CONCURRENCY = 6;
 const batchQuickTestRunning = ref(false);
+const quickGroupModelRefreshRunning = ref(false);
 const batchQuickTestProgress = reactive({
   completed: 0,
   total: 0,
@@ -1190,6 +1225,59 @@ function toggleRecordGroupMembership(record, groupId) {
     ? current.filter(id => id !== groupId)
     : [...current, groupId];
   persistRecords();
+}
+
+function isValidProviderQueueSourceRecord(record) {
+  if (!record?.rowKey || !record?.siteUrl || !record?.apiKey) return false;
+  const quickTestStatus = String(record?.quickTestStatus || '').trim().toLowerCase();
+  return quickTestStatus === 'success' || quickTestStatus === 'warning';
+}
+
+function buildProviderFromManagedRecord(record, sortIndex) {
+  return {
+    id: record.rowKey,
+    rowKey: record.rowKey,
+    name: record.siteName || record.siteUrl || 'Provider',
+    baseUrl: record.siteUrl,
+    apiKey: record.apiKey,
+    model: getRecordSelectedModelValue(record) || record.quickTestModel || '',
+    apiFormat: 'openai_chat',
+    apiKeyField: 'ANTHROPIC_AUTH_TOKEN',
+    enabled: true,
+    sortIndex,
+    sourceType: record.sourceType || 'auto',
+  };
+}
+
+function ensureAdvancedProxyQueueSection(config, scope = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
+  if (!config.queues || typeof config.queues !== 'object') {
+    config.queues = {};
+  }
+  if (!config.queues[scope] || typeof config.queues[scope] !== 'object') {
+    config.queues[scope] = {
+      inheritGlobal: scope !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
+      providers: [],
+    };
+  }
+  if (!Array.isArray(config.queues[scope].providers)) {
+    config.queues[scope].providers = [];
+  }
+  if (scope === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
+    config.queues[scope].inheritGlobal = false;
+  }
+  return config.queues[scope];
+}
+
+function replaceAdvancedProxyQueueProviders(config, scope, providers) {
+  const queue = ensureAdvancedProxyQueueSection(config, scope);
+  queue.providers = providers.map((provider, index) => ({
+    ...provider,
+    enabled: provider?.enabled !== false,
+    sortIndex: index + 1,
+  }));
+  if (scope !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
+    queue.inheritGlobal = false;
+  }
 }
 
 function isQuickGroupFilterFamilyFullySelected(family) {
@@ -1554,6 +1642,8 @@ const healthyKeyCount = computed(() => tableData.value.filter(record => record.s
 const abnormalKeyCount = computed(() => tableData.value.filter(record => Number(record?.status || 0) !== 1).length);
 const currentGroupQuickTestRecordCount = computed(() => displayedRows.value.filter(record => String(record?.quickTestStatus || '').trim()).length);
 const quickTestFailedKeyCount = computed(() => displayedRows.value.filter(record => String(record?.quickTestStatus || '').trim() === 'error').length);
+const quickGroupModelRefreshTargetCount = computed(() => tableData.value.filter(record => normalizeSiteUrl(record?.siteUrl) && normalizeApiKey(record?.apiKey)).length);
+const quickGroupModelRefreshDisabled = computed(() => quickGroupModelRefreshRunning.value || quickGroupModelRefreshTargetCount.value === 0);
 const syncSummary = computed(() => !syncMeta.value.lastBatchSyncAt ? '导入并批量检测后，会自动把获取到的 sk key 更新到本页。' : `最近一次批量同步写入 ${syncMeta.value.lastBatchSyncCount} 条记录，失败站点 ${syncMeta.value.lastBatchFailedCount} 个。`);
 const currentVisiblePageRows = computed(() => {
   if (isCompactMode.value) return displayedRows.value;
@@ -1563,6 +1653,19 @@ const currentVisiblePageRows = computed(() => {
 const batchQuickTestDisabled = computed(() => batchQuickTestRunning.value || tableData.value.length === 0);
 const batchDeleteAbnormalDisabled = computed(() => batchQuickTestRunning.value || abnormalKeyCount.value === 0);
 const batchDeleteQuickTestFailedDisabled = computed(() => batchQuickTestRunning.value || displayedRows.value.length === 0);
+const activeKeyGroupLabel = computed(() => {
+  if (activeKeyGroupId.value === ALL_KEYS_GROUP_ID) return '全部密钥';
+  return keyGroups.value.find(group => group.id === activeKeyGroupId.value)?.name || '当前分组';
+});
+const currentGroupValidProviderQueueRecords = computed(() =>
+  displayedRows.value.filter(record => isValidProviderQueueSourceRecord(record))
+);
+const syncCurrentGroupProviderQueueDisabled = computed(() => currentGroupValidProviderQueueRecords.value.length === 0);
+const syncCurrentGroupProviderQueueTooltip = computed(() =>
+  syncCurrentGroupProviderQueueDisabled.value
+    ? '一键将当前分组密钥设置为provider队列前，请先完成快速测活'
+    : '一键将当前分组密钥设置为provider队列（用于本地Live高级代理）'
+);
 const batchQuickTestButtonTitle = computed(() => {
   if (batchQuickTestRunning.value) {
     return `批量快测进行中：已完成 ${batchQuickTestProgress.completed}/${batchQuickTestProgress.total}，并发 ${BATCH_QUICK_TEST_CONCURRENCY}，运行中 ${batchQuickTestProgress.active}`;
@@ -2179,6 +2282,54 @@ async function runCurrentGroupBatchQuickTest() {
   });
 }
 
+async function refreshQuickGroupModelCatalog() {
+  if (quickGroupModelRefreshRunning.value) return;
+  const targets = tableData.value.filter(record => normalizeSiteUrl(record?.siteUrl) && normalizeApiKey(record?.apiKey));
+  if (!targets.length) {
+    message.warning('当前没有可刷新模型列表的密钥');
+    return;
+  }
+
+  quickGroupModelRefreshRunning.value = true;
+  const stats = {
+    refreshed: 0,
+    failed: 0,
+    skippedBusy: 0,
+  };
+  let cursor = 0;
+
+  try {
+    const worker = async () => {
+      while (cursor < targets.length) {
+        const index = cursor;
+        cursor += 1;
+        const record = targets[index];
+        if (!record) continue;
+        if (record.modelLoading) {
+          stats.skippedBusy += 1;
+          continue;
+        }
+        const ok = await loadRecordModelOptions(record, true, { silent: true });
+        if (ok) stats.refreshed += 1;
+        else stats.failed += 1;
+      }
+    };
+
+    await Promise.allSettled(
+      Array.from({ length: Math.min(QUICK_GROUP_MODEL_REFRESH_CONCURRENCY, targets.length) }, () => worker())
+    );
+  } finally {
+    quickGroupModelRefreshRunning.value = false;
+  }
+
+  const summary = `模型列表刷新完成：成功 ${stats.refreshed} 条，失败 ${stats.failed} 条${stats.skippedBusy > 0 ? `，跳过 ${stats.skippedBusy} 条进行中记录` : ''}。快捷模型列表已同步更新。`;
+  if (stats.failed > 0) {
+    message.warning(summary);
+  } else {
+    message.success(summary);
+  }
+}
+
 async function resolveQuickTestModel(record) {
   const selectedModel = getRecordSelectedModelValue(record);
   if (selectedModel) return selectedModel;
@@ -2579,6 +2730,44 @@ function confirmDeleteAbnormalRecords() {
     cancelText: '取消',
     okButtonProps: { danger: true },
     onOk: deleteAbnormalRecords,
+  });
+}
+
+async function syncCurrentGroupToAdvancedProxyQueue() {
+  const validRecords = currentGroupValidProviderQueueRecords.value;
+  if (!validRecords.length) {
+    message.warning('当前分组暂无可写入 provider 队列的有效密钥，请先完成快速测活');
+    return;
+  }
+
+  try {
+    const savedConfig = await getAdvancedProxyConfig();
+    const nextConfig = normalizeAdvancedProxyConfig(savedConfig || {});
+    const providers = validRecords.map((record, index) => buildProviderFromManagedRecord(record, index + 1));
+    replaceAdvancedProxyQueueProviders(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, providers);
+    nextConfig.claude.providers = [...(nextConfig.queues?.[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE]?.providers || [])];
+    await setAdvancedProxyConfig(nextConfig);
+    advancedProxyFocusQueueScope.value = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
+    advancedProxyFocusQueueToken.value = Date.now();
+    showExperimentalFeatures.value = true;
+    message.success('已更新provider队列~');
+  } catch (error) {
+    message.error(error?.message || '写入全局 Provider 队列失败');
+  }
+}
+
+function confirmSyncCurrentGroupToAdvancedProxyQueue() {
+  const validCount = currentGroupValidProviderQueueRecords.value.length;
+  if (!validCount) {
+    message.warning('当前分组暂无可写入 provider 队列的有效密钥，请先完成快速测活');
+    return;
+  }
+  Modal.confirm({
+    title: '确认应用到 Provider 队列？',
+    content: `将把当前分组「${activeKeyGroupLabel.value}」的 ${validCount} 条有效密钥写入全局 Provider 队列，用于本地 Live 高级代理。`,
+    okText: '应用',
+    cancelText: '取消',
+    onOk: syncCurrentGroupToAdvancedProxyQueue,
   });
 }
 
@@ -3574,11 +3763,11 @@ function getRecordModelTooltip(record) {
   return getRecordRenderMeta(record).tooltip;
 }
 
-async function loadRecordModelOptions(record, force = false) {
-  if (!record?.siteUrl || !record?.apiKey) return;
+async function loadRecordModelOptions(record, force = false, options = {}) {
+  if (!record?.siteUrl || !record?.apiKey) return false;
   const currentFetchKey = `${normalizeSiteUrl(record.siteUrl)}::${normalizeApiKey(record.apiKey)}`;
   if (!force && record.modelFetchKey === currentFetchKey && Array.isArray(record.modelsList) && record.modelsList.length > 0) {
-    return;
+    return true;
   }
 
   record.modelLoading = true;
@@ -3606,9 +3795,13 @@ async function loadRecordModelOptions(record, force = false) {
       setRecordSelectedModelValue(record, context?.preferredModel || pickPreferredModel(mergedModels) || mergedModels[0] || '');
     }
     persistRecords();
+    return true;
   } catch (error) {
     console.error(error);
-    message.error(`获取模型列表失败：${error.message || '未知错误'}`);
+    if (!options?.silent) {
+      message.error(`获取模型列表失败：${error.message || '未知错误'}`);
+    }
+    return false;
   } finally {
     record.modelLoading = false;
   }
@@ -3764,7 +3957,11 @@ function persistMeta() {
 .key-quick-group-floating-panel{position:fixed;top:18vh;left:50%;transform:translateX(-50%);width:min(960px,78vw);max-width:min(960px,78vw);padding:16px 18px 18px;border-radius:22px;background:rgba(255,255,255,.98);box-shadow:0 24px 64px rgba(15,23,42,.18),0 10px 28px rgba(15,23,42,.1)}
 .key-quick-group-floating-panel-gaia{background:linear-gradient(180deg,rgba(28,35,30,.98),rgba(22,27,24,.98));box-shadow:0 28px 72px rgba(0,0,0,.42),0 12px 32px rgba(0,0,0,.26)}
 .key-quick-group-composer{display:grid;gap:8px;margin-bottom:10px}
-.key-quick-group-input-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
+.key-quick-group-input-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:center}
+.key-quick-group-refresh-button{width:30px;height:30px;border:1px solid rgba(96,165,250,.22);border-radius:10px;background:linear-gradient(135deg,#eff6ff,#dbeafe);color:#2563eb;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 8px 18px rgba(96,165,250,.14),inset 0 0 0 1px rgba(255,255,255,.24);transition:transform .18s ease,box-shadow .18s ease,filter .18s ease}
+.key-quick-group-refresh-button:hover:not(:disabled){transform:translateY(-1px);filter:saturate(1.06);box-shadow:0 12px 22px rgba(96,165,250,.18),inset 0 0 0 1px rgba(255,255,255,.28)}
+.key-quick-group-refresh-button:disabled{cursor:not-allowed;opacity:.55;transform:none;filter:none;box-shadow:0 6px 14px rgba(148,163,184,.1),inset 0 0 0 1px rgba(255,255,255,.18)}
+.key-quick-group-refresh-icon{font-size:14px;line-height:1}
 .key-quick-group-create-button{height:30px;padding:0 14px;border-radius:10px}
 .key-quick-group-summary{margin-top:-2px}
 .key-quick-filter-toolbar{width:min(640px,48vw)}
@@ -3800,6 +3997,8 @@ function persistMeta() {
 .key-management-gaia .quick-filter-family-trigger:hover,.key-management-gaia .quick-filter-clear-trigger:hover{background:rgba(186,228,149,.1) !important}
 .key-management-gaia .quick-filter-clear-trigger.ant-btn[disabled],.key-management-gaia .quick-filter-clear-trigger.ant-btn[disabled]:hover{background:rgba(255,255,255,.04) !important;color:rgba(216,229,212,.42) !important}
 .key-management-gaia .key-quick-group-preview{border-color:rgba(122,151,125,.16);background:linear-gradient(180deg,rgba(28,35,30,.94),rgba(22,27,24,.96))}
+.key-management-gaia .key-quick-group-refresh-button{border-color:rgba(101,129,138,.24);background:linear-gradient(180deg,rgba(37,56,66,.92),rgba(27,40,48,.96));color:#dbeafe;box-shadow:0 10px 24px rgba(0,0,0,.2),inset 0 0 0 1px rgba(181,214,225,.08)}
+.key-management-gaia .key-quick-group-refresh-button:hover:not(:disabled){background:linear-gradient(180deg,rgba(44,66,78,.96),rgba(31,46,55,.98));box-shadow:0 14px 28px rgba(0,0,0,.24),inset 0 0 0 1px rgba(181,214,225,.12)}
 .key-management-gaia .key-quick-group-preview-title{color:#e2e8f0}
 .key-management-gaia .key-quick-group-preview-count,.key-management-gaia .key-quick-group-preview-token,.key-management-gaia .key-quick-group-preview-key{color:#9fb0a4}
 .key-management-gaia .key-quick-group-preview-item{background:rgba(255,255,255,.04);box-shadow:inset 0 0 0 1px rgba(122,151,125,.14)}
@@ -3938,6 +4137,8 @@ function persistMeta() {
 .inventory-batch-quick-test-button{width:34px;height:34px;padding:0;border:0;border-radius:12px;background:linear-gradient(135deg,#476847,#6f8f55);box-shadow:0 10px 24px rgba(87,118,76,.18);display:inline-flex;align-items:center;justify-content:center;color:#fff}
 .inventory-batch-quick-test-button:disabled{opacity:.55}
 .inventory-batch-quick-test-button :deep(.anticon),.inventory-batch-quick-test-button svg{font-size:16px;line-height:1}
+.inventory-icon-button-provider-queue{background:linear-gradient(135deg,#fff8e7,#f6d57d);color:#8a5a12;box-shadow:0 10px 24px rgba(234,179,8,.18),inset 0 0 0 1px rgba(234,179,8,.2)}
+.inventory-emoji-icon{font-size:18px;line-height:1}
 .inventory-icon-button-primary{background:linear-gradient(135deg,#eff6ff,#dbeafe);color:#1d4ed8;box-shadow:0 10px 24px rgba(96,165,250,.18),inset 0 0 0 1px rgba(96,165,250,.22)}
 .inventory-icon-button-danger{background:linear-gradient(135deg,#fff1f2,#ffe4e6);color:#be123c;box-shadow:0 10px 24px rgba(244,63,94,.12),inset 0 0 0 1px rgba(244,63,94,.18)}
 .batch-quick-test-alert{margin-bottom:12px;border-radius:14px}

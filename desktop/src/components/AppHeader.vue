@@ -126,7 +126,11 @@
           {{ updateInfoError }}
         </div>
 
-        <div class="spring-update-progress-shell" :class="{ 'is-visible': showDownloadProgress }">
+        <div
+          v-if="showUpdateDownloadSection"
+          class="spring-update-progress-shell"
+          :class="{ 'is-visible': showDownloadProgress }"
+        >
           <div class="spring-update-progress-head">
             <span>{{ downloadSnapshot.message || (hasUpdate ? '可更新到最新版本' : '可重新下载安装包') }}</span>
             <span v-if="showDownloadProgress">{{ downloadPercentText }}</span>
@@ -159,10 +163,10 @@
             v-else
             type="primary"
             :loading="updateActionLoading"
-            :disabled="!hasCompatibleAsset || isDownloading"
+            :disabled="updatePrimaryActionDisabled"
             @click="startUpdateDownload"
           >
-            {{ hasUpdate ? '更新到最新版本' : '下载当前安装包' }}
+            {{ updatePrimaryActionText }}
           </a-button>
         </div>
       </a-spin>
@@ -376,6 +380,19 @@ const showOpenDownloadedButton = computed(() => (
   downloadSnapshot.value.stage === 'completed' &&
   Boolean(downloadSnapshot.value.savedPath)
 ));
+
+const showUpdateDownloadSection = computed(() => (
+  hasUpdate.value || showDownloadProgress.value || showOpenDownloadedButton.value
+));
+
+const updatePrimaryActionDisabled = computed(() => (
+  !hasUpdate.value || !hasCompatibleAsset.value || isDownloading.value
+));
+
+const updatePrimaryActionText = computed(() => {
+  if (!hasUpdate.value) return '\u5df2\u7ecf\u662f\u6700\u65b0\u7248\u672c\uff0c\u65e0\u9700\u66f4\u65b0';
+  return '\u4e0b\u8f7d\u5f53\u524d\u5b89\u88c5\u5305';
+});
 
 const releasePageUrl = computed(() => String(updateInfo.value?.htmlUrl || getAppGithubUrl()).trim());
 

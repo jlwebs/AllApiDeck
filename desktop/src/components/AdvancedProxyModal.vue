@@ -76,7 +76,7 @@
         </section>
 
         <div class="advanced-proxy-layout">
-          <section class="advanced-proxy-section">
+          <section ref="queuePanelRef" class="advanced-proxy-section">
             <div class="advanced-proxy-section-head">
               <div>
                 <h4>{{ queuePanelTitle }}</h4>
@@ -361,7 +361,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { CloudSyncOutlined, ReloadOutlined } from '@ant-design/icons-vue';
 import { message } from 'ant-design-vue';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
@@ -407,6 +407,14 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  initialQueueScope: {
+    type: String,
+    default: ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
+  },
+  focusQueueToken: {
+    type: [String, Number],
+    default: '',
+  },
 });
 
 const emit = defineEmits(['update:open']);
@@ -414,6 +422,7 @@ const emit = defineEmits(['update:open']);
 const loading = ref(false);
 const saving = ref(false);
 const previewOpen = ref(false);
+const queuePanelRef = ref(null);
 const selectedQueueScope = ref(ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
 const selectedHighAvailabilityRpmProviderKey = ref(ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
 const availableRecords = ref([]);
@@ -633,6 +642,301 @@ watch(
 
 function toPlainValue(value) {
   return JSON.parse(JSON.stringify(value ?? {}));
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && Object.prototype.toString.call(value) === '[object Object]';
+}
+
+function parseStrictJsonObjectSafe(text, fallback = {}) {
+  if (!String(text || '').trim()) {
+    return structuredClone(fallback);
+  }
+  try {
+    const parsed = JSON.parse(text);
+    return isPlainObject(parsed) ? parsed : structuredClone(fallback);
+  } catch {
+    return structuredClone(fallback);
+  }
+}
+
+function stripJsonComments(input) {
+  let result = '';
+  let inSingle = false;
+  let inDouble = false;
+  let escaping = false;
+
+  for (let index = 0; index < input.length; index += 1) {
+    const current = input[index];
+    const next = input[index + 1];
+
+    if (!inSingle && !inDouble && current === '/' && next === '/') {
+      while (index < input.length && input[index] !== '\n') {
+        index += 1;
+      }
+      if (index < input.length) {
+        result += '\n';
+      }
+      continue;
+    }
+
+    if (!inSingle && !inDouble && current === '/' && next === '*') {
+      index += 2;
+      while (index < input.length && !(input[index] === '*' && input[index + 1] === '/')) {
+        index += 1;
+      }
+      index += 1;
+      continue;
+    }
+
+    result += current;
+
+    if (escaping) {
+      escaping = false;
+      continue;
+    }
+
+    if ((inSingle || inDouble) && current === '\\') {
+      escaping = true;
+      continue;
+    }
+
+    if (!inDouble && current === '\'') {
+      inSingle = !inSingle;
+      continue;
+    }
+
+    if (!inSingle && current === '"') {
+      inDouble = !inDouble;
+    }
+  }
+
+  return result;
+}
+
+function convertSingleQuotedStrings(input) {
+  let result = '';
+  let inDouble = false;
+  let escaping = false;
+
+  for (let index = 0; index < input.length; index += 1) {
+    const current = input[index];
+
+    if (inDouble) {
+      result += current;
+      if (escaping) {
+        escaping = false;
+      } else if (current === '\\') {
+        escaping = true;
+      } else if (current === '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+
+    if (current === '"') {
+      inDouble = true;
+      result += current;
+      continue;
+    }
+
+    if (current !== '\'') {
+      result += current;
+      continue;
+    }
+
+    let buffer = '';
+    let innerEscaping = false;
+    let closed = false;
+    for (index += 1; index < input.length; index += 1) {
+      const inner = input[index];
+      if (innerEscaping) {
+        buffer += inner;
+        innerEscaping = false;
+        continue;
+      }
+      if (inner === '\\') {
+        innerEscaping = true;
+        buffer += inner;
+        continue;
+      }
+      if (inner === '\'') {
+        closed = true;
+        break;
+      }
+      buffer += inner;
+    }
+
+    if (!closed) {
+      throw new Error('Single-quoted string is not closed');
+    }
+
+    const decoded = buffer
+      .replace(/\\'/g, '\'')
+      .replace(/\\"/g, '"');
+    result += JSON.stringify(decoded);
+  }
+
+  return result;
+}
+
+function normalizeJson5LikeToJson(input) {
+  const withoutComments = stripJsonComments(String(input || ''));
+  const withDoubleQuotes = convertSingleQuotedStrings(withoutComments);
+  const quotedKeys = withDoubleQuotes.replace(
+    /([{,]\s*)([A-Za-z_$][\w$-]*)(\s*:)/g,
+    '$1"$2"$3'
+  );
+  return quotedKeys.replace(/,(\s*[}\]])/g, '$1');
+}
+
+function parseLooseJsonObjectSafe(text, fallback = {}) {
+  if (!String(text || '').trim()) {
+    return structuredClone(fallback);
+  }
+  try {
+    const parsed = JSON.parse(normalizeJson5LikeToJson(text));
+    return isPlainObject(parsed) ? parsed : structuredClone(fallback);
+  } catch {
+    return structuredClone(fallback);
+  }
+}
+
+function normalizeComparableUrl(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '';
+  try {
+    const url = new URL(normalized);
+    const pathname = (url.pathname || '/').replace(/\/+$/, '') || '/';
+    return `${url.protocol}//${url.host}${pathname}`.toLowerCase();
+  } catch {
+    return normalized.replace(/\/+$/, '').toLowerCase();
+  }
+}
+
+function findManagedSnapshotFile(snapshotFiles, appId, fileId) {
+  return (Array.isArray(snapshotFiles) ? snapshotFiles : []).find(file =>
+    String(file?.appId || '').trim() === String(appId || '').trim()
+    && String(file?.fileId || '').trim() === String(fileId || '').trim()
+  ) || null;
+}
+
+function isManagedProxyToken(value) {
+  return String(value || '').trim() === PROXY_MANAGED_TOKEN;
+}
+
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function extractCodexActiveProviderKey(text) {
+  const match = String(text || '').match(/^\s*model_provider\s*=\s*["']([^"'\n]+)["']/m);
+  return String(match?.[1] || '').trim();
+}
+
+function extractCodexProviderBaseUrl(text, providerKey) {
+  const normalizedProviderKey = String(providerKey || '').trim();
+  if (!normalizedProviderKey) return '';
+  const sectionPattern = new RegExp(
+    `^\\s*\\[model_providers\\.${escapeRegExp(normalizedProviderKey)}\\]\\s*$([\\s\\S]*?)(?=^\\s*\\[|\\s*$)`,
+    'm'
+  );
+  const sectionMatch = String(text || '').match(sectionPattern);
+  if (!sectionMatch?.[1]) return '';
+  const baseUrlMatch = sectionMatch[1].match(/^\s*base_url\s*=\s*["']([^"'\n]+)["']/m);
+  return String(baseUrlMatch?.[1] || '').trim();
+}
+
+function hasMatchingOpenCodeProxyProvider(config, expectedBaseUrl) {
+  const providers = isPlainObject(config?.provider) ? config.provider : {};
+  return Object.values(providers).some(provider =>
+    normalizeComparableUrl(provider?.options?.baseURL) === expectedBaseUrl
+    && isManagedProxyToken(provider?.options?.apiKey)
+  );
+}
+
+function hasMatchingOpenClawProxyProvider(config, expectedBaseUrl) {
+  const providers = isPlainObject(config?.models?.providers) ? config.models.providers : {};
+  const primary = String(config?.agents?.defaults?.model?.primary || '').trim();
+  if (primary.includes('/')) {
+    const primaryProviderKey = primary.split('/')[0];
+    const activeProvider = providers[primaryProviderKey];
+    if (activeProvider) {
+      return normalizeComparableUrl(activeProvider?.baseUrl) === expectedBaseUrl
+        && isManagedProxyToken(activeProvider?.apiKey)
+        && String(activeProvider?.api || '').trim() === 'openai-completions';
+    }
+  }
+  return Object.values(providers).some(provider =>
+    normalizeComparableUrl(provider?.baseUrl) === expectedBaseUrl
+    && isManagedProxyToken(provider?.apiKey)
+    && String(provider?.api || '').trim() === 'openai-completions'
+  );
+}
+
+function detectLocalAdvancedProxyTakeoverState(snapshot, config) {
+  const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
+  const claudeBaseUrl = normalizeComparableUrl(getAdvancedProxyAppBaseUrl('claude', config));
+  const codexBaseUrl = normalizeComparableUrl(getAdvancedProxyAppBaseUrl('codex', config));
+  const opencodeBaseUrl = normalizeComparableUrl(getAdvancedProxyAppBaseUrl('opencode', config));
+  const openclawBaseUrl = normalizeComparableUrl(getAdvancedProxyAppBaseUrl('openclaw', config));
+
+  const claudeSettings = parseStrictJsonObjectSafe(
+    findManagedSnapshotFile(files, 'claude', 'settings')?.content || '',
+    {}
+  );
+  const claudeEnv = isPlainObject(claudeSettings?.env) ? claudeSettings.env : {};
+
+  const codexAuth = parseStrictJsonObjectSafe(
+    findManagedSnapshotFile(files, 'codex', 'auth')?.content || '',
+    {}
+  );
+  const codexConfigText = String(findManagedSnapshotFile(files, 'codex', 'config')?.content || '');
+  const codexProviderKey = extractCodexActiveProviderKey(codexConfigText);
+  const codexProviderBaseUrl = normalizeComparableUrl(extractCodexProviderBaseUrl(codexConfigText, codexProviderKey));
+
+  const opencodeConfig = parseStrictJsonObjectSafe(
+    findManagedSnapshotFile(files, 'opencode', 'config')?.content || '',
+    { $schema: 'https://opencode.ai/config.json' }
+  );
+  const openclawConfig = parseLooseJsonObjectSafe(
+    findManagedSnapshotFile(files, 'openclaw', 'config')?.content || '',
+    { models: { mode: 'merge', providers: {} } }
+  );
+
+  return {
+    claude: normalizeComparableUrl(claudeEnv.ANTHROPIC_BASE_URL) === claudeBaseUrl
+      && (isManagedProxyToken(claudeEnv.ANTHROPIC_AUTH_TOKEN) || isManagedProxyToken(claudeEnv.ANTHROPIC_API_KEY)),
+    codex: isManagedProxyToken(codexAuth.OPENAI_API_KEY)
+      && codexProviderBaseUrl === codexBaseUrl,
+    opencode: hasMatchingOpenCodeProxyProvider(opencodeConfig, opencodeBaseUrl),
+    openclaw: hasMatchingOpenClawProxyProvider(openclawConfig, openclawBaseUrl),
+  };
+}
+
+async function reconcileLocalAppTakeoverState(config) {
+  if (!isDesktopConfigBridgeAvailable()) return;
+  const appIds = ADVANCED_PROXY_APPS.map(app => app.id);
+  const snapshot = await readManagedAppConfigFiles(appIds);
+  const takeoverState = detectLocalAdvancedProxyTakeoverState(snapshot, config);
+  const mismatchedApps = ADVANCED_PROXY_APPS.filter(app =>
+    config?.[app.id]?.enabled === true && takeoverState[app.id] !== true
+  );
+  if (!mismatchedApps.length) return;
+
+  const nextConfig = normalizeAdvancedProxyConfig(toPlainValue(config));
+  mismatchedApps.forEach(app => {
+    if (!nextConfig[app.id] || typeof nextConfig[app.id] !== 'object') {
+      nextConfig[app.id] = {};
+    }
+    nextConfig[app.id].enabled = false;
+  });
+
+  const savedConfig = await setAdvancedProxyConfig(createPendingConfig(nextConfig));
+  loadedConfigSnapshot.value = normalizeAdvancedProxyConfig(savedConfig);
+  overwriteDraft(loadedConfigSnapshot.value);
+  await reloadBreakerStatsForScope(selectedQueueScope.value, loadedConfigSnapshot.value);
+  message.warning(`检测到 ${mismatchedApps.map(app => app.label).join(' / ')} 当前已不处于高级代理接管状态，已自动清空面板勾选状态`);
 }
 
 function maskProviderApiKey(value) {
@@ -1037,6 +1341,20 @@ function handleQueueScopeChange(scope) {
     : ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
 }
 
+function focusQueuePanel() {
+  const requestedScope = ADVANCED_PROXY_QUEUE_SCOPES.some(item => item.id === props.initialQueueScope)
+    ? props.initialQueueScope
+    : ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
+  selectedQueueScope.value = requestedScope;
+  nextTick(() => {
+    queuePanelRef.value?.scrollIntoView?.({
+      behavior: 'smooth',
+      block: 'start',
+      inline: 'nearest',
+    });
+  });
+}
+
 function handleFollowGlobalQueue() {
   if (selectedQueueScope.value === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) return;
   if (selectedQueueInheritGlobal.value) {
@@ -1061,6 +1379,7 @@ async function loadData() {
     await reloadContext();
     const config = await getAdvancedProxyConfig();
     await syncSavedConfig(config);
+    await reconcileLocalAppTakeoverState(config);
   } catch (error) {
     message.error(error?.message || '加载高级代理配置失败');
   } finally {
@@ -1073,9 +1392,18 @@ watch(
   async value => {
     if (value) {
       await loadData();
+      focusQueuePanel();
     }
   },
   { immediate: true }
+);
+
+watch(
+  () => props.focusQueueToken,
+  value => {
+    if (!props.open || !value) return;
+    focusQueuePanel();
+  }
 );
 
 watch(
