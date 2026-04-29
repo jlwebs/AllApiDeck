@@ -1,6 +1,6 @@
 <template>
   <a-config-provider :theme="theme">
-    <div class="app-shell">
+    <div class="app-shell" :class="launchModeClass">
       <router-view v-if="appReady" />
     </div>
   </a-config-provider>
@@ -33,6 +33,7 @@ export default {
     const { t } = useI18n();
     const router = useRouter();
     const appReady = ref(false);
+    const launchMode = ref('');
     const themeMode = ref(getStoredThemeMode());
     const theme = computed(() => ({
       algorithm: isDarkThemeMode(themeMode.value) ? antTheme.darkAlgorithm : antTheme.defaultAlgorithm,
@@ -47,6 +48,32 @@ export default {
     }));
     const ADVANCED_PROXY_DEFAULT_PROMPT_STORAGE_KEY = 'batch_api_check_advanced_proxy_defaults_prompt_seen_version_v1';
     let themeModeListener = null;
+
+    const syncLaunchModeClasses = mode => {
+      if (typeof document === 'undefined') return;
+      const normalizedMode = String(mode || '').trim();
+      const body = document.body;
+      const root = document.documentElement;
+      const modeClasses = ['launch-mode-main-window', 'launch-mode-panel-window', 'launch-mode-editor-window', 'launch-mode-desktop-config-window'];
+      body?.classList?.remove(...modeClasses);
+      root?.classList?.remove(...modeClasses);
+      if (!normalizedMode) return;
+      const nextClass = `launch-mode-${normalizedMode}-window`;
+      body?.classList?.add(nextClass);
+      root?.classList?.add(nextClass);
+    };
+
+    const clearLaunchModeClasses = () => {
+      if (typeof document === 'undefined') return;
+      const modeClasses = ['launch-mode-main-window', 'launch-mode-panel-window', 'launch-mode-editor-window', 'launch-mode-desktop-config-window'];
+      document.body?.classList?.remove(...modeClasses);
+      document.documentElement?.classList?.remove(...modeClasses);
+    };
+
+    const launchModeClass = computed(() => {
+      const normalizedMode = String(launchMode.value || '').trim();
+      return normalizedMode ? `launch-mode-${normalizedMode}-window` : '';
+    });
 
     const markAdvancedProxyDefaultPromptSeen = (version) => {
       try {
@@ -105,6 +132,8 @@ export default {
       let mode = '';
       try {
         mode = await GetLaunchMode();
+        launchMode.value = String(mode || '').trim();
+        syncLaunchModeClasses(launchMode.value);
         if (mode === 'panel' && router.currentRoute.value.path !== '/panel') {
           await router.replace('/panel');
         } else if (mode === 'editor' && router.currentRoute.value.path !== '/editor') {
@@ -128,10 +157,12 @@ export default {
         window.removeEventListener(THEME_MODE_CHANGE_EVENT, themeModeListener);
         themeModeListener = null;
       }
+      clearLaunchModeClasses();
     });
 
     return {
       appReady,
+      launchModeClass,
       theme,
       t,
     };
@@ -165,5 +196,15 @@ body.gaia-dark .app-shell::before {
     radial-gradient(circle at 88% 10%, rgba(146, 110, 76, 0.12), transparent 18%),
     repeating-linear-gradient(120deg, rgba(255, 255, 255, 0.028) 0 1px, transparent 1px 150px),
     linear-gradient(180deg, rgba(255, 255, 255, 0.018), rgba(255, 255, 255, 0));
+}
+
+body.launch-mode-panel-window .app-shell,
+body.launch-mode-editor-window .app-shell {
+  background: transparent !important;
+}
+
+body.launch-mode-panel-window .app-shell::before,
+body.launch-mode-editor-window .app-shell::before {
+  display: none !important;
 }
 </style>

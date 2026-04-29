@@ -66,6 +66,36 @@ body.light-mode {
   --input-background-color: #ffffff;
   --input-border-color: #cccccc;
 }
+
+html.launch-mode-panel-window,
+html.launch-mode-editor-window,
+body.launch-mode-panel-window,
+body.launch-mode-editor-window,
+body.launch-mode-panel-window #app,
+body.launch-mode-editor-window #app,
+body.launch-mode-panel-window .app-shell,
+body.launch-mode-editor-window .app-shell {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+body.launch-mode-panel-window,
+body.launch-mode-editor-window {
+  --background-color: transparent;
+}
+
+body.launch-mode-panel-window::before,
+body.launch-mode-panel-window::after,
+body.launch-mode-editor-window::before,
+body.launch-mode-editor-window::after,
+body.launch-mode-panel-window .app-shell::before,
+body.launch-mode-panel-window .app-shell::after,
+body.launch-mode-editor-window .app-shell::before,
+body.launch-mode-editor-window .app-shell::after {
+  display: none !important;
+  content: none !important;
+}
 a {
   color: inherit;
   text-decoration: none;

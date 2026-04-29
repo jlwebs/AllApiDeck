@@ -116,6 +116,9 @@ func (a *App) shutdown(ctx context.Context) {
 func (a *App) domReady(ctx context.Context) {
 	_ = ctx
 	debugLogf("dom ready")
+	if a.isPanelMode() || a.isEditorMode() {
+		ensureTransparentWindowSurface(a.mode)
+	}
 	if a.isPanelMode() {
 		go a.initPanelWindow()
 		return
