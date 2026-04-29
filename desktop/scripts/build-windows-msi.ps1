@@ -87,22 +87,9 @@ $wxsContent = @"
         <Directory Id="INSTALLFOLDER" Name="$installDirNameEscaped">
           <Component Id="MainExecutableComponent" Guid="*">
             <File Id="MainExecutableFile" Source="$inputExePathEscaped" KeyPath="yes" Checksum="yes" />
-            <Shortcut
-              Id="StartMenuShortcut"
-              Directory="ProgramMenuDir"
-              Name="$productNameEscaped"
-              WorkingDirectory="INSTALLFOLDER"
-              Advertise="no"
-              Icon="AppIcon.ico"
-              IconIndex="0" />
             <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
-            <RemoveFolder Id="RemoveProgramMenuDir" Directory="ProgramMenuDir" On="uninstall" />
-            <RegistryValue Root="HKLM" Key="Software\$manufacturerEscaped\$productNameEscaped" Name="Installed" Type="integer" Value="1" KeyPath="no" />
           </Component>
         </Directory>
-      </Directory>
-      <Directory Id="ProgramMenuFolder">
-        <Directory Id="ProgramMenuDir" Name="$productNameEscaped" />
       </Directory>
     </Directory>
 
