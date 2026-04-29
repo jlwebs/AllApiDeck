@@ -27,14 +27,6 @@ static void batchApiCheckClearViewTree(NSView *view) {
 			[webview setValue:@NO forKey:@"drawsBackground"];
 		} @catch (NSException *exception) {
 		}
-		if (webview.scrollView != nil) {
-			[webview.scrollView setDrawsBackground:NO];
-			[webview.scrollView setBackgroundColor:NSColor.clearColor];
-			[webview.scrollView setWantsLayer:YES];
-			if (webview.scrollView.layer != nil) {
-				webview.scrollView.layer.backgroundColor = NSColor.clearColor.CGColor;
-			}
-		}
 	}
 
 	for (NSView *subview in view.subviews) {
