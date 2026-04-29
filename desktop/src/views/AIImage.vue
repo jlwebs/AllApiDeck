@@ -11,7 +11,7 @@
         </div>
 
         <div class="ai-image-header-actions">
-          <a-button type="text" size="small" class="ai-image-close-button" @click.stop="closeWindow">关闭</a-button>
+          <button type="button" class="ai-image-close-button" aria-label="关闭" @click.stop="closeWindow">×</button>
         </div>
       </div>
 
@@ -960,11 +960,30 @@ onMounted(() => {
 }
 .ai-image-close-button{
   -webkit-app-region:no-drag;
-  border-radius:12px;
-  padding-inline:12px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:32px;
+  height:32px;
+  border:none;
+  border-radius:999px;
+  background:rgba(185,28,28,.10);
+  color:#c62828;
+  font:700 22px/1 Georgia,serif;
+  cursor:pointer;
+  transition:background .18s ease,color .18s ease,transform .18s ease;
 }
 .ai-image-close-button:hover{
-  background:rgba(15,23,42,.06) !important;
+  background:rgba(185,28,28,.18);
+  color:#a31212;
+  transform:scale(1.04);
+}
+.ai-image-close-button:active{
+  transform:scale(.96);
+}
+.ai-image-close-button:focus-visible{
+  outline:2px solid rgba(198,40,40,.28);
+  outline-offset:2px;
 }
 .ai-image-kicker{
   margin-bottom:2px;
