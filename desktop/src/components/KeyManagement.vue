@@ -1595,9 +1595,9 @@ const sortManagedRecords = rows => [...rows].sort(
 );
 const columns = [
   { title: '网站', dataIndex: 'siteName', key: 'siteName', width: 142, sorter: (a, b) => String(a.siteName || '').localeCompare(String(b.siteName || '')) },
-  { title: 'API Key', dataIndex: 'apiKey', key: 'apiKey', className: 'api-key-column' },
-  { title: '状态', dataIndex: 'status', key: 'status', width: 72, sorter: (a, b) => Number(a.status || 0) - Number(b.status || 0) },
-  { title: '专属导出', dataIndex: 'exportActions', key: 'exportActions', width: 136 },
+  { title: 'API Key', dataIndex: 'apiKey', key: 'apiKey', width: 352, className: 'api-key-column' },
+  { title: '状态', dataIndex: 'status', key: 'status', width: 88, className: 'status-column', sorter: (a, b) => Number(a.status || 0) - Number(b.status || 0) },
+  { title: '专属导出', dataIndex: 'exportActions', key: 'exportActions', width: 136, className: 'export-actions-column' },
 ];
 const activeColumns = computed(() => (isCompactMode.value
   ? columns.filter(column => ['siteName', 'exportActions'].includes(column.dataIndex))
@@ -1987,7 +1987,6 @@ function refreshManagedRecordsFromStorage() {
   batchHistoryContextMap.value = loadBatchHistoryContextMap();
   tableData.value = loadStoredRecords();
   syncMeta.value = loadStoredMeta();
-  keyBalanceRefreshBootstrapped.value = false;
   void autoRefreshKeyBalancesOnce();
 }
 
@@ -3912,7 +3911,11 @@ async function autoRefreshKeyBalancesOnce() {
   if (keyBalanceRefreshBootstrapped.value) return;
   keyBalanceRefreshBootstrapped.value = true;
 
-  const targets = tableData.value.filter(record => canRefreshBalance(record));
+  const targets = tableData.value.filter(record => {
+    if (!canRefreshBalance(record)) return false;
+    if (record.balanceLoading) return false;
+    return !getRecordBalanceValue(record);
+  });
   if (!targets.length) return;
 
   const concurrency = 4;
@@ -4151,8 +4154,8 @@ function persistMeta() {
 .sync-card :deep(.sync-alert-inline.ant-alert .ant-alert-content){min-width:0}
 .sync-card :deep(.sync-alert-warning.ant-alert){margin:0;flex:1 1 360px;min-width:min(100%,360px)}
 .cell-copy-text{max-width:240px;display:inline-block}
-.api-combined-cell{display:flex;flex-direction:column;gap:2px;min-width:0;width:100%}
-.api-model-row{margin-top:8px;min-width:0;width:100%;max-width:100%}
+.api-combined-cell{position:relative;display:flex;flex-direction:column;gap:2px;min-width:0;width:100%}
+.api-model-row{margin-top:8px;min-width:0;width:calc(100% + 72px);max-width:calc(100% + 72px)}
 .api-endpoint-text{font-size:12px;color:#64748b;line-height:1.1;margin-top:-1px}
 .models-text{display:block;width:100%;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .record-model-select{width:100%;min-width:0}
@@ -4263,7 +4266,11 @@ function persistMeta() {
 .compact-key-table :deep(.ant-table-tbody > tr > td){padding:10px 12px 0;vertical-align:top}
 @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .compact-key-table :deep(.ant-table-cell){overflow:hidden}
-.compact-key-table :deep(.ant-table-tbody > tr > td.api-key-column){overflow:visible;position:relative;z-index:2}
+.compact-key-table :deep(.ant-table-tbody > tr > td.api-key-column){overflow:visible;position:relative;z-index:4}
+.compact-key-table :deep(.ant-table-thead > tr > th.status-column),
+.compact-key-table :deep(.ant-table-tbody > tr > td.status-column){position:relative;z-index:1}
+.compact-key-table :deep(.ant-table-tbody > tr > td.status-column){padding-left:4px}
+.compact-key-table :deep(.ant-table-tbody > tr > td.status-column .ant-tag){margin-inline-end:0}
 .compact-key-table :deep(.ant-table-tbody > tr > td:first-child){overflow:visible;position:relative;z-index:3}
 .desktop-config-modal{display:flex;flex-direction:column;gap:16px}
 .desktop-config-hero{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:0;margin-bottom:4px;padding:16px 18px;border-radius:22px;border:1px solid #8ec5ff;background:linear-gradient(180deg,#dcebfb,#d8eafc);box-shadow:inset 0 1px 0 rgba(255,255,255,.55)}
