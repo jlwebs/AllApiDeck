@@ -6414,6 +6414,7 @@ const startBatchCheck = async () => {
         siteId,
         siteName: site.site_name,
         siteUrl: effectiveUrl,
+        siteType: String(site.site_type || site.siteType || '').trim(),
         apiKey: tokenKey, // <--- 使用真正的 sk- 密钥!
         modelName: modelName,
         status: 'pending',
@@ -6816,6 +6817,7 @@ const runSingleTest = async (task, customPayload = null) => {
         url: apiUrlValue,
         key: keyToUse,
         model: modelToTest,
+        siteType: customPayload?.siteType || task.siteType || task.accountData?.site_type || task.accountData?.siteType || '',
         messages: messagesToUse,
         timeoutMs: backendTimeoutMs,
         _isFirst: isFirst

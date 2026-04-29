@@ -9,7 +9,7 @@
 // @match        https://*/*
 // @grant        GM_xmlhttpRequest
 // @connect      127.0.0.1
-// @run-at       document-idle
+// @run-at       document-start
 // ==/UserScript==
 
 (function () {
@@ -2450,6 +2450,7 @@
       tone: 'pending',
       detail: '正在等待页面稳定并检查本地桥接会话',
     });
+    installRuntimeObservers();
     await waitForPageSettle();
     if (isSecurityVerificationPage()) {
       bridgePanelSuppressed = true;
@@ -2479,7 +2480,6 @@
       return;
     }
 
-    installRuntimeObservers();
     bridgePanelSuppressed = false;
     updateBridgePanel({
       busy: true,

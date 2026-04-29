@@ -462,6 +462,7 @@ type normalizedCheckKeyPayload struct {
 	Key       string
 	Model     string
 	UID       string
+	SiteType  string
 	TimeoutMs int
 	Messages  any
 }
@@ -496,6 +497,10 @@ type sseCompletionParseResult struct {
 var checkEndpointStripPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`/v\d+/chat/completions$`),
 	regexp.MustCompile(`/chat/completions$`),
+	regexp.MustCompile(`/v\d+/responses$`),
+	regexp.MustCompile(`/responses$`),
+	regexp.MustCompile(`/v\d+/messages$`),
+	regexp.MustCompile(`/messages$`),
 	regexp.MustCompile(`/api/user/models$`),
 	regexp.MustCompile(`/api/models$`),
 	regexp.MustCompile(`/api/v\d+/models$`),
@@ -512,6 +517,7 @@ func normalizeCheckKeyPayload(payload map[string]any) (normalizedCheckKeyPayload
 		Key:       strings.TrimSpace(toStringValue(payload["key"])),
 		Model:     strings.TrimSpace(toStringValue(payload["model"])),
 		UID:       strings.TrimSpace(toStringValue(payload["uid"])),
+		SiteType:  strings.ToLower(strings.TrimSpace(toStringValue(payload["siteType"]))),
 		TimeoutMs: int(toFloat64OrZero(payload["timeoutMs"])),
 		Messages:  payload["messages"],
 	}
@@ -535,6 +541,9 @@ func normalizeCheckKeyPayload(payload map[string]any) (normalizedCheckKeyPayload
 		normalized.Model = strings.TrimSpace(toStringValue(payload["model"]))
 		if accountInfo, ok := siteMap["account_info"].(map[string]any); ok && normalized.UID == "" {
 			normalized.UID = strings.TrimSpace(toStringValue(accountInfo["id"]))
+		}
+		if normalized.SiteType == "" {
+			normalized.SiteType = strings.ToLower(strings.TrimSpace(toStringValue(siteMap["site_type"])))
 		}
 		if normalized.Messages == nil {
 			normalized.Messages = payload["messages"]
@@ -574,10 +583,60 @@ func addCheckEndpointCandidate(candidates *[]string, seen map[string]struct{}, c
 	*candidates = append(*candidates, normalized)
 }
 
-func buildCheckEndpointCandidates(raw string) []string {
+func addAnthropicCheckEndpointCandidates(candidates *[]string, seen map[string]struct{}, base string) {
+	lowerBase := strings.ToLower(base)
+	switch {
+	case strings.HasSuffix(lowerBase, "/messages"):
+		addCheckEndpointCandidate(candidates, seen, base)
+	case regexp.MustCompile(`/api/v\d+$`).MatchString(lowerBase) || regexp.MustCompile(`/v\d+$`).MatchString(lowerBase):
+		addCheckEndpointCandidate(candidates, seen, base+"/messages")
+	case strings.HasSuffix(lowerBase, "/api"):
+		addCheckEndpointCandidate(candidates, seen, base+"/v1/messages")
+		addCheckEndpointCandidate(candidates, seen, base+"/messages")
+	default:
+		addCheckEndpointCandidate(candidates, seen, base+"/v1/messages")
+		addCheckEndpointCandidate(candidates, seen, base+"/messages")
+	}
+}
+
+func isAnyrouterCheckPayload(payload normalizedCheckKeyPayload) bool {
+	if strings.EqualFold(strings.TrimSpace(payload.SiteType), "anyrouter") {
+		return true
+	}
+	parsed, err := url.Parse(strings.TrimSpace(payload.URL))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	return host == "anyrouter.top" || strings.HasSuffix(host, ".anyrouter.top")
+}
+
+func shouldTryResponsesCheck(payload normalizedCheckKeyPayload) bool {
+	return isAnyrouterCheckPayload(payload)
+}
+
+func shouldTryAnthropicCheck(payload normalizedCheckKeyPayload) bool {
+	if isAnyrouterCheckPayload(payload) {
+		return true
+	}
+	parsed, err := url.Parse(strings.TrimSpace(payload.URL))
+	if err == nil && strings.EqualFold(strings.TrimSpace(parsed.Hostname()), "api.anthropic.com") {
+		return true
+	}
+	return false
+}
+
+func buildOpenAIChatCheckEndpointCandidates(raw string) []string {
 	input := normalizeCheckEndpointInput(raw)
 	if input == "" {
 		return nil
+	}
+
+	if parsed, err := url.Parse(input); err == nil {
+		host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+		if host == "anyrouter.top" || strings.HasSuffix(host, ".anyrouter.top") {
+			return []string{strings.TrimRight(input, "/") + "/v1/chat/completions"}
+		}
 	}
 
 	bases := []string{input}
@@ -607,6 +666,140 @@ func buildCheckEndpointCandidates(raw string) []string {
 	}
 
 	return candidates
+}
+
+func buildCheckEndpointCandidates(payload normalizedCheckKeyPayload) []string {
+	openAICandidates := buildOpenAIChatCheckEndpointCandidates(payload.URL)
+	candidates := append([]string{}, openAICandidates...)
+	if len(candidates) == 0 && strings.TrimSpace(payload.URL) == "" {
+		return nil
+	}
+
+	input := normalizeCheckEndpointInput(payload.URL)
+	bases := []string{input}
+	stripped := stripKnownCheckEndpointSuffix(input)
+	if stripped != "" && stripped != input {
+		bases = append(bases, stripped)
+	}
+	anyrouterBase := input
+	if stripped != "" {
+		anyrouterBase = stripped
+	}
+
+	if shouldTryResponsesCheck(payload) {
+		if isAnyrouterCheckPayload(payload) {
+			seen := map[string]struct{}{}
+			for _, candidate := range candidates {
+				seen[normalizeCheckEndpointInput(candidate)] = struct{}{}
+			}
+			addCheckEndpointCandidate(&candidates, seen, anyrouterBase+"/v1/responses")
+		}
+
+		seen := map[string]struct{}{}
+		for _, candidate := range candidates {
+			seen[normalizeCheckEndpointInput(candidate)] = struct{}{}
+		}
+		responsesCandidates := make([]string, 0, 2)
+		for _, base := range bases {
+			if isAnyrouterCheckPayload(payload) {
+				continue
+			}
+			for _, candidate := range buildResponsesEndpointCandidates(base) {
+				addCheckEndpointCandidate(&responsesCandidates, seen, candidate)
+			}
+		}
+		if len(responsesCandidates) > 0 {
+			candidates = append(candidates, responsesCandidates...)
+		}
+	}
+
+	if shouldTryAnthropicCheck(payload) {
+		if isAnyrouterCheckPayload(payload) {
+			seen := map[string]struct{}{}
+			for _, candidate := range candidates {
+				seen[normalizeCheckEndpointInput(candidate)] = struct{}{}
+			}
+			addCheckEndpointCandidate(&candidates, seen, anyrouterBase+"/v1/messages")
+			return candidates
+		}
+
+		seen := map[string]struct{}{}
+		for _, candidate := range candidates {
+			seen[normalizeCheckEndpointInput(candidate)] = struct{}{}
+		}
+		anthropicCandidates := make([]string, 0, 2)
+		for _, base := range bases {
+			addAnthropicCheckEndpointCandidates(&anthropicCandidates, seen, base)
+		}
+		if len(anthropicCandidates) > 0 {
+			candidates = append(candidates, anthropicCandidates...)
+		}
+	}
+
+	return candidates
+}
+
+func shouldAllowCheckFallbackAfterFailure(payload normalizedCheckKeyPayload, result checkExecutionResult) bool {
+	endpoint := strings.ToLower(strings.TrimSpace(result.endpoint))
+	message := strings.ToLower(strings.TrimSpace(result.message))
+
+	if shouldTryResponsesCheck(payload) {
+		switch {
+		case strings.HasSuffix(endpoint, "/chat/completions"):
+			if strings.Contains(message, "stream response did not contain valid chunks") {
+				return true
+			}
+			if result.status == http.StatusNotFound || result.status == http.StatusMethodNotAllowed {
+				return true
+			}
+		case strings.HasSuffix(endpoint, "/responses"):
+			if result.status == http.StatusNotFound || result.status == http.StatusMethodNotAllowed {
+				return true
+			}
+			if strings.Contains(message, "不支持所选模型") || strings.Contains(message, "does not support selected model") {
+				return true
+			}
+			if strings.Contains(message, "invalid json") || strings.Contains(message, "(html)") {
+				return true
+			}
+		}
+	}
+
+	if shouldTryAnthropicCheck(payload) {
+		if strings.HasSuffix(endpoint, "/messages") {
+			return false
+		}
+		if strings.Contains(message, "stream response did not contain valid chunks") {
+			return true
+		}
+		if result.status == http.StatusNotFound || result.status == http.StatusMethodNotAllowed {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isAnyrouterClaude1MErrorMessage(message string) bool {
+	text := strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(text, "1m 上下文") || strings.Contains(text, "请启用 1m 上下文")
+}
+
+func buildAnyrouterClaudeUpgradeHint(model string) string {
+	modelText := strings.TrimSpace(model)
+	if modelText == "" {
+		return "Any Router 的 Claude 协议要求 1m 上下文；请改用 Opus 4.7 1m 后再测"
+	}
+	return fmt.Sprintf("Any Router 的 Claude 协议要求 1m 上下文；当前模型 %s 不可直接测活，请改用 Opus 4.7 1m 后再测", modelText)
+}
+
+func extractCheckErrorMessage(payload map[string]any, fallback string) string {
+	return firstNonEmpty(
+		getNestedString(payload, "error", "message"),
+		strings.TrimSpace(toStringValue(payload["message"])),
+		strings.TrimSpace(toStringValue(payload["error"])),
+		fallback,
+	)
 }
 
 func isRetryableCheckStatus(status int) bool {
@@ -751,6 +944,14 @@ func executeCheckKey(payload normalizedCheckKeyPayload) (int, map[string]any) {
 }
 
 func executeCheckKeyAttempt(payload normalizedCheckKeyPayload, targetURL string) checkExecutionResult {
+	lowerTargetURL := strings.ToLower(strings.TrimSpace(targetURL))
+	if strings.HasSuffix(lowerTargetURL, "/messages") {
+		return executeAnthropicCheckAttempt(payload, targetURL)
+	}
+	if strings.HasSuffix(lowerTargetURL, "/responses") {
+		return executeResponsesCheckAttempt(payload, targetURL)
+	}
+
 	requestBody := map[string]any{
 		"model":    payload.Model,
 		"messages": payload.Messages,
@@ -841,11 +1042,7 @@ func executeCheckKeyAttempt(payload normalizedCheckKeyPayload, targetURL string)
 		if strings.Contains(contentType, "json") {
 			var errorPayload map[string]any
 			if err := json.Unmarshal(rawBody, &errorPayload); err == nil {
-				errMessage = firstNonEmpty(
-					getNestedString(errorPayload, "error", "message"),
-					strings.TrimSpace(toStringValue(errorPayload["message"])),
-					errMessage,
-				)
+				errMessage = extractCheckErrorMessage(errorPayload, errMessage)
 			}
 		} else if title := extractHTMLTitle(string(rawBody)); title != "" {
 			errMessage = "(HTML) " + title
@@ -981,8 +1178,502 @@ func executeCheckKeyAttempt(payload normalizedCheckKeyPayload, targetURL string)
 	}
 }
 
+func buildResponsesCheckInput(raw any) any {
+	items, ok := raw.([]any)
+	if !ok || len(items) == 0 {
+		return "hi"
+	}
+
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		msg, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		role := strings.TrimSpace(toStringValue(msg["role"]))
+		contentText := ""
+		switch content := msg["content"].(type) {
+		case string:
+			contentText = strings.TrimSpace(content)
+		case []any:
+			parts := make([]string, 0, len(content))
+			for _, rawPart := range content {
+				partMap, ok := rawPart.(map[string]any)
+				if !ok {
+					continue
+				}
+				partType := strings.TrimSpace(toStringValue(partMap["type"]))
+				if partType != "" && partType != "text" && partType != "input_text" && partType != "output_text" {
+					continue
+				}
+				text := strings.TrimSpace(toStringValue(partMap["text"]))
+				if text != "" {
+					parts = append(parts, text)
+				}
+			}
+			contentText = strings.TrimSpace(strings.Join(parts, "\n"))
+		default:
+			contentText = strings.TrimSpace(toStringValue(msg["content"]))
+		}
+		if contentText == "" {
+			continue
+		}
+		if role == "" {
+			role = "user"
+		}
+		lines = append(lines, fmt.Sprintf("%s: %s", role, contentText))
+	}
+	if len(lines) == 0 {
+		return "hi"
+	}
+	return strings.Join(lines, "\n\n")
+}
+
+func extractResponsesOutputText(responsePayload map[string]any) string {
+	if text := strings.TrimSpace(toStringValue(responsePayload["output_text"])); text != "" {
+		return text
+	}
+
+	outputs, ok := responsePayload["output"].([]any)
+	if !ok {
+		return ""
+	}
+
+	parts := make([]string, 0, len(outputs))
+	for _, rawOutput := range outputs {
+		outputMap, ok := rawOutput.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(toStringValue(outputMap["type"])) != "message" {
+			continue
+		}
+		contents, ok := outputMap["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, rawContent := range contents {
+			contentMap, ok := rawContent.(map[string]any)
+			if !ok {
+				continue
+			}
+			contentType := strings.TrimSpace(toStringValue(contentMap["type"]))
+			switch contentType {
+			case "output_text", "text":
+				text := strings.TrimSpace(toStringValue(contentMap["text"]))
+				if text != "" {
+					parts = append(parts, text)
+				}
+			case "refusal":
+				text := strings.TrimSpace(toStringValue(contentMap["refusal"]))
+				if text != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+	}
+
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+func executeResponsesCheckAttempt(payload normalizedCheckKeyPayload, targetURL string) checkExecutionResult {
+	requestBody := map[string]any{
+		"model": payload.Model,
+		"input": buildResponsesCheckInput(payload.Messages),
+	}
+
+	appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] try(responses) %s | %s", payload.Model, targetURL))
+
+	bodyBytes, _ := json.Marshal(requestBody)
+	req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return checkExecutionResult{
+			ok:        false,
+			endpoint:  targetURL,
+			status:    http.StatusBadRequest,
+			message:   err.Error(),
+			retryable: false,
+			attempt: &checkEndpointAttempt{
+				Endpoint:  targetURL,
+				Status:    http.StatusBadRequest,
+				Message:   err.Error(),
+				Retryable: false,
+			},
+		}
+	}
+
+	req.Header.Set("Authorization", "Bearer "+payload.Key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "Mozilla/5.0 BatchApiCheck/1.0")
+	for key, value := range buildCompatHeaders(payload.UID) {
+		req.Header.Set(key, value)
+	}
+
+	client, err := newOutboundHTTPClient(time.Duration(payload.TimeoutMs) * time.Millisecond)
+	if err != nil {
+		return checkExecutionResult{
+			ok:        false,
+			endpoint:  targetURL,
+			status:    http.StatusInternalServerError,
+			message:   err.Error(),
+			retryable: false,
+			attempt: &checkEndpointAttempt{
+				Endpoint:  targetURL,
+				Status:    http.StatusInternalServerError,
+				Message:   err.Error(),
+				Retryable: false,
+			},
+		}
+	}
+
+	start := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := err.Error()
+		if os.IsTimeout(err) || strings.Contains(strings.ToLower(err.Error()), "timeout") {
+			status = http.StatusGatewayTimeout
+			message = fmt.Sprintf("Request timed out (%ds)", payload.TimeoutMs/1000)
+		}
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] error(responses) %s | %s | %s", payload.Model, targetURL, message))
+		return checkExecutionResult{
+			ok:        false,
+			endpoint:  targetURL,
+			status:    status,
+			message:   message,
+			retryable: false,
+			attempt: &checkEndpointAttempt{
+				Endpoint:  targetURL,
+				Status:    status,
+				Message:   message,
+				Retryable: false,
+			},
+		}
+	}
+	defer resp.Body.Close()
+
+	rawBody, _ := io.ReadAll(resp.Body)
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	duration := time.Since(start).Round(10 * time.Millisecond)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		errMessage := fmt.Sprintf("HTTP %d", resp.StatusCode)
+		if strings.Contains(contentType, "json") {
+			var errorPayload map[string]any
+			if err := json.Unmarshal(rawBody, &errorPayload); err == nil {
+				errMessage = extractCheckErrorMessage(errorPayload, errMessage)
+			}
+		} else if title := extractHTMLTitle(string(rawBody)); title != "" {
+			errMessage = "(HTML) " + title
+		}
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] fail(responses) %s | %s | %s | %s", payload.Model, targetURL, errMessage, duration))
+		return checkExecutionResult{
+			ok:        false,
+			endpoint:  targetURL,
+			status:    resp.StatusCode,
+			message:   errMessage,
+			retryable: isRetryableCheckStatus(resp.StatusCode),
+			attempt: &checkEndpointAttempt{
+				Endpoint:  targetURL,
+				Status:    resp.StatusCode,
+				Message:   errMessage,
+				Retryable: isRetryableCheckStatus(resp.StatusCode),
+			},
+		}
+	}
+
+	var responsePayload map[string]any
+	if err := json.Unmarshal(rawBody, &responsePayload); err != nil {
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] error(responses) %s | %s | invalid JSON", payload.Model, targetURL))
+		return checkExecutionResult{
+			ok:        false,
+			endpoint:  targetURL,
+			status:    http.StatusBadGateway,
+			message:   "Invalid JSON",
+			retryable: false,
+			attempt: &checkEndpointAttempt{
+				Endpoint:  targetURL,
+				Status:    http.StatusBadGateway,
+				Message:   "Invalid JSON",
+				Retryable: false,
+			},
+		}
+	}
+
+	textContent := extractResponsesOutputText(responsePayload)
+	if textContent == "" {
+		errMessage := firstNonEmpty(
+			getNestedString(responsePayload, "error", "message"),
+			strings.TrimSpace(toStringValue(responsePayload["message"])),
+			strings.TrimSpace(toStringValue(responsePayload["error"])),
+			"Unknown error",
+		)
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] fail(responses) %s | %s | %s | %s", payload.Model, targetURL, errMessage, duration))
+		return checkExecutionResult{
+			ok:        false,
+			endpoint:  targetURL,
+			status:    http.StatusBadRequest,
+			message:   errMessage,
+			retryable: false,
+			attempt: &checkEndpointAttempt{
+				Endpoint:  targetURL,
+				Status:    http.StatusBadRequest,
+				Message:   errMessage,
+				Retryable: false,
+			},
+		}
+	}
+
+	usage := normalizeUsageTokenTotals(responsePayload["usage"])
+	appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] ok(responses) %s | %s | %s", payload.Model, targetURL, duration))
+	return checkExecutionResult{
+		ok:       true,
+		endpoint: targetURL,
+		status:   http.StatusOK,
+		body: map[string]any{
+			"model": firstNonEmpty(strings.TrimSpace(toStringValue(responsePayload["model"])), payload.Model),
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": textContent,
+					},
+				},
+			},
+			"usage":   usage,
+			"message": "success",
+		},
+	}
+}
+
+func normalizeAnthropicMessages(raw any) []map[string]any {
+	items, ok := raw.([]any)
+	if !ok || len(items) == 0 {
+		return []map[string]any{{"role": "user", "content": "hi"}}
+	}
+
+	messages := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		msg, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		role := strings.TrimSpace(toStringValue(msg["role"]))
+		if role == "" || strings.EqualFold(role, "system") {
+			continue
+		}
+		content := msg["content"]
+		if content == nil {
+			content = ""
+		}
+		messages = append(messages, map[string]any{
+			"role":    role,
+			"content": content,
+		})
+	}
+	if len(messages) == 0 {
+		return []map[string]any{{"role": "user", "content": "hi"}}
+	}
+	return messages
+}
+
+func extractAnthropicTextContent(raw any) string {
+	switch value := raw.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case []any:
+		parts := make([]string, 0, len(value))
+		for _, item := range value {
+			block, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if strings.TrimSpace(toStringValue(block["type"])) != "text" {
+				continue
+			}
+			text := strings.TrimSpace(toStringValue(block["text"]))
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	default:
+		return ""
+	}
+}
+
+func executeAnthropicCheckAttempt(payload normalizedCheckKeyPayload, targetURL string) checkExecutionResult {
+	requestBody := map[string]any{
+		"model":      payload.Model,
+		"messages":   normalizeAnthropicMessages(payload.Messages),
+		"max_tokens": 32,
+		"stream":     false,
+	}
+
+	appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] try(anthropic) %s | %s", payload.Model, targetURL))
+
+	bodyBytes, _ := json.Marshal(requestBody)
+	req, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return checkExecutionResult{
+			ok:        false,
+			endpoint:  targetURL,
+			status:    http.StatusBadRequest,
+			message:   err.Error(),
+			retryable: false,
+			attempt: &checkEndpointAttempt{
+				Endpoint:  targetURL,
+				Status:    http.StatusBadRequest,
+				Message:   err.Error(),
+				Retryable: false,
+			},
+		}
+	}
+
+	req.Header.Set("Authorization", "Bearer "+payload.Key)
+	req.Header.Set("x-api-key", payload.Key)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Mozilla/5.0 BatchApiCheck/1.0")
+
+	client, err := newOutboundHTTPClient(time.Duration(payload.TimeoutMs) * time.Millisecond)
+	if err != nil {
+		return checkExecutionResult{
+			ok:        false,
+			endpoint:  targetURL,
+			status:    http.StatusInternalServerError,
+			message:   err.Error(),
+			retryable: false,
+			attempt: &checkEndpointAttempt{
+				Endpoint:  targetURL,
+				Status:    http.StatusInternalServerError,
+				Message:   err.Error(),
+				Retryable: false,
+			},
+		}
+	}
+
+	start := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := err.Error()
+		if os.IsTimeout(err) || strings.Contains(strings.ToLower(err.Error()), "timeout") {
+			status = http.StatusGatewayTimeout
+			message = fmt.Sprintf("Request timed out (%ds)", payload.TimeoutMs/1000)
+		}
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] error(anthropic) %s | %s | %s", payload.Model, targetURL, message))
+		return checkExecutionResult{
+			ok:        false,
+			endpoint:  targetURL,
+			status:    status,
+			message:   message,
+			retryable: false,
+			attempt: &checkEndpointAttempt{
+				Endpoint:  targetURL,
+				Status:    status,
+				Message:   message,
+				Retryable: false,
+			},
+		}
+	}
+	defer resp.Body.Close()
+
+	rawBody, _ := io.ReadAll(resp.Body)
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	duration := time.Since(start).Round(10 * time.Millisecond)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		errMessage := fmt.Sprintf("HTTP %d", resp.StatusCode)
+		if strings.Contains(contentType, "json") {
+			var errorPayload map[string]any
+			if err := json.Unmarshal(rawBody, &errorPayload); err == nil {
+				errMessage = extractCheckErrorMessage(errorPayload, errMessage)
+			}
+		} else if title := extractHTMLTitle(string(rawBody)); title != "" {
+			errMessage = "(HTML) " + title
+		}
+		if isAnyrouterCheckPayload(payload) && isAnyrouterClaude1MErrorMessage(errMessage) {
+			errMessage = buildAnyrouterClaudeUpgradeHint(payload.Model)
+		}
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] fail(anthropic) %s | %s | %s | %s", payload.Model, targetURL, errMessage, duration))
+		return checkExecutionResult{
+			ok:        false,
+			endpoint:  targetURL,
+			status:    resp.StatusCode,
+			message:   errMessage,
+			retryable: isRetryableCheckStatus(resp.StatusCode),
+			attempt: &checkEndpointAttempt{
+				Endpoint:  targetURL,
+				Status:    resp.StatusCode,
+				Message:   errMessage,
+				Retryable: isRetryableCheckStatus(resp.StatusCode),
+			},
+		}
+	}
+
+	var responsePayload map[string]any
+	if err := json.Unmarshal(rawBody, &responsePayload); err != nil {
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] error(anthropic) %s | %s | invalid JSON", payload.Model, targetURL))
+		return checkExecutionResult{
+			ok:        false,
+			endpoint:  targetURL,
+			status:    http.StatusBadGateway,
+			message:   "Invalid JSON",
+			retryable: false,
+			attempt: &checkEndpointAttempt{
+				Endpoint:  targetURL,
+				Status:    http.StatusBadGateway,
+				Message:   "Invalid JSON",
+				Retryable: false,
+			},
+		}
+	}
+
+	textContent := extractAnthropicTextContent(responsePayload["content"])
+	if textContent == "" {
+		errMessage := extractCheckErrorMessage(responsePayload, "Unknown error")
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] fail(anthropic) %s | %s | %s | %s", payload.Model, targetURL, errMessage, duration))
+		return checkExecutionResult{
+			ok:        false,
+			endpoint:  targetURL,
+			status:    http.StatusBadRequest,
+			message:   errMessage,
+			retryable: false,
+			attempt: &checkEndpointAttempt{
+				Endpoint:  targetURL,
+				Status:    http.StatusBadRequest,
+				Message:   errMessage,
+				Retryable: false,
+			},
+		}
+	}
+
+	usage := normalizeUsageTokenTotals(responsePayload["usage"])
+	appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] ok(anthropic) %s | %s | %s", payload.Model, targetURL, duration))
+	return checkExecutionResult{
+		ok:       true,
+		endpoint: targetURL,
+		status:   http.StatusOK,
+		body: map[string]any{
+			"model": firstNonEmpty(strings.TrimSpace(toStringValue(responsePayload["model"])), payload.Model),
+			"choices": []map[string]any{
+				{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": textContent,
+					},
+				},
+			},
+			"usage":   usage,
+			"message": "success",
+		},
+	}
+}
+
 func executeCheckKeySmart(payload normalizedCheckKeyPayload) (int, map[string]any) {
-	endpoints := buildCheckEndpointCandidates(payload.URL)
+	endpoints := buildCheckEndpointCandidates(payload)
 	if len(endpoints) == 0 {
 		return http.StatusBadRequest, map[string]any{
 			"error": map[string]any{
@@ -1011,6 +1702,9 @@ func executeCheckKeySmart(payload normalizedCheckKeyPayload) (int, map[string]an
 		lastFailure = &result
 		if result.attempt != nil {
 			attempts = append(attempts, *result.attempt)
+		}
+		if shouldAllowCheckFallbackAfterFailure(payload, result) {
+			continue
 		}
 		if !result.retryable {
 			return result.status, map[string]any{

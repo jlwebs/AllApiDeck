@@ -795,7 +795,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 	targets := []string{}
 	switch apiFormat {
 	case "openai_chat":
-		targets = buildCheckEndpointCandidates(provider.BaseURL)
+		targets = buildOpenAIChatCheckEndpointCandidates(provider.BaseURL)
 	case "openai_responses":
 		targets = buildResponsesEndpointCandidates(provider.BaseURL)
 	default:
@@ -934,7 +934,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 	var targets []string
 	switch routeKind {
 	case "chat":
-		targets = buildCheckEndpointCandidates(provider.BaseURL)
+		targets = buildOpenAIChatCheckEndpointCandidates(provider.BaseURL)
 	case "responses":
 		targets = buildResponsesEndpointCandidates(provider.BaseURL)
 	case "responses_compact":
