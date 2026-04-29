@@ -34,13 +34,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - label: Windows EXE
+          - label: Windows EXE + MSI
             os: windows-latest
             platform: windows/amd64
             artifact_name: allapideck-windows-amd64
             release_file: allapideck-windows-amd64.exe
             wails_output: allapideck-windows-amd64.exe
-            upload_path: desktop/release-assets/allapideck-windows-amd64.exe
+            release_file_msi: allapideck-windows-amd64.msi
+            upload_path: |
+              desktop/release-assets/allapideck-windows-amd64.exe
+              desktop/release-assets/allapideck-windows-amd64.msi
           - label: macOS DMG
             os: macos-latest
             platform: darwin/universal
@@ -104,6 +107,21 @@ jobs:
           "$gopath/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
         shell: pwsh
 
+      - name: Install WiX Toolset
+        if: runner.os == 'Windows'
+        run: |
+          choco install wixtoolset --no-progress -y
+          $wixRoot = Get-ChildItem ${env:ProgramFiles(x86)} -Directory | Where-Object { $_.Name -like 'WiX Toolset v*' } | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $wixRoot) {
+            throw "WiX Toolset installation directory not found under ${env:ProgramFiles(x86)}"
+          }
+          $wixBin = Join-Path $wixRoot.FullName 'bin'
+          if (-not (Test-Path $wixBin)) {
+            throw "WiX Toolset bin directory not found: $wixBin"
+          }
+          $wixBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: pwsh
+
       - name: Install Linux desktop build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -129,6 +147,10 @@ jobs:
           bun run build:desktop -- --platform ${{ matrix.platform }} -o ${{ matrix.wails_output }}
           New-Item -ItemType Directory -Path release-assets -Force | Out-Null
           Copy-Item "build/bin/${{ matrix.release_file }}" "release-assets/${{ matrix.release_file }}"
+          .\scripts\build-windows-msi.ps1 `
+            -InputExe "build/bin/${{ matrix.release_file }}" `
+            -Version "${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}" `
+            -OutputFile "release-assets/${{ matrix.release_file_msi }}"
         shell: pwsh
 
       - name: Build macOS app bundle and package DMG
