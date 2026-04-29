@@ -1595,7 +1595,7 @@ const sortManagedRecords = rows => [...rows].sort(
 );
 const columns = [
   { title: '网站', dataIndex: 'siteName', key: 'siteName', width: 142, sorter: (a, b) => String(a.siteName || '').localeCompare(String(b.siteName || '')) },
-  { title: 'API Key', dataIndex: 'apiKey', key: 'apiKey', width: 352, className: 'api-key-column' },
+  { title: 'API Key', dataIndex: 'apiKey', key: 'apiKey', width: 188, className: 'api-key-column' },
   { title: '状态', dataIndex: 'status', key: 'status', width: 88, className: 'status-column', sorter: (a, b) => Number(a.status || 0) - Number(b.status || 0) },
   { title: '专属导出', dataIndex: 'exportActions', key: 'exportActions', width: 136, className: 'export-actions-column' },
 ];
@@ -4155,7 +4155,9 @@ function persistMeta() {
 .sync-card :deep(.sync-alert-warning.ant-alert){margin:0;flex:1 1 360px;min-width:min(100%,360px)}
 .cell-copy-text{max-width:240px;display:inline-block}
 .api-combined-cell{position:relative;display:flex;flex-direction:column;gap:2px;min-width:0;width:100%}
-.api-model-row{margin-top:8px;min-width:0;width:calc(100% + 64px);max-width:calc(100% + 64px)}
+.api-model-row{margin-top:8px;min-width:0;width:calc(100% + 45px);max-width:calc(100% + 45px)}
+.api-combined-cell .cell-copy-text{max-width:176px}
+.api-combined-cell .api-endpoint-text{max-width:176px}
 .api-endpoint-text{font-size:12px;color:#64748b;line-height:1.1;margin-top:-1px}
 .models-text{display:block;width:100%;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .record-model-select{width:100%;min-width:0}
