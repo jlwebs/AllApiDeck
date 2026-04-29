@@ -536,6 +536,7 @@
 
       <div
         v-if="rowContextMenu.open && rowContextMenu.record"
+        ref="rowContextMenuRef"
         class="key-row-context-menu"
         :class="{ 'key-row-context-menu-dark': isDarkMode }"
         :style="{ left: `${rowContextMenu.x}px`, top: `${rowContextMenu.y}px` }"
@@ -808,7 +809,7 @@
 </template>
 
 <script setup>
-import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ClockCircleOutlined, DeleteOutlined, DownloadOutlined, FileTextOutlined, ImportOutlined, MenuFoldOutlined, PlusOutlined, ReloadOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import { ConfigProvider, message, Modal, theme } from 'ant-design-vue';
 import { useRoute } from 'vue-router';
@@ -942,6 +943,7 @@ const quickGroupDraftNameMode = ref('auto');
 const createKeyGroupModalOpen = ref(false);
 const createKeyGroupSaving = ref(false);
 const createKeyGroupDraftName = ref('');
+const rowContextMenuRef = ref(null);
 const rowContextMenu = reactive({
   open: false,
   x: 0,
@@ -1435,24 +1437,52 @@ function closeRowContextMenu() {
   rowContextMenu.groupSubmenuOpen = false;
 }
 
-function openRowContextMenu(record, event) {
+function resolveContextMenuPosition(anchorX, anchorY, menuWidth, menuHeight, edgePadding = 12, gap = 8) {
+  const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 0;
+  const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 0;
+  const safeWidth = Math.max(0, Number(menuWidth) || 0);
+  const safeHeight = Math.max(0, Number(menuHeight) || 0);
+  const x = viewportWidth > 0
+    ? Math.max(edgePadding, Math.min(anchorX, viewportWidth - safeWidth - edgePadding))
+    : anchorX;
+  if (viewportHeight <= 0) {
+    return { x, y: anchorY + gap };
+  }
+
+  const belowY = anchorY + gap;
+  const aboveY = anchorY - safeHeight - gap;
+  const maxY = viewportHeight - safeHeight - edgePadding;
+  const canOpenBelow = belowY <= maxY;
+  const canOpenAbove = aboveY >= edgePadding;
+  let y = belowY;
+  if (!canOpenBelow && canOpenAbove) {
+    y = aboveY;
+  } else if (!canOpenBelow) {
+    y = Math.max(edgePadding, Math.min(belowY, maxY));
+  }
+  return { x, y };
+}
+
+async function openRowContextMenu(record, event) {
   if (!record || !event) return;
   event.preventDefault();
   event.stopPropagation();
-  const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 0;
-  const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 0;
-  const menuWidth = 264;
-  const menuHeight = Math.min(440, 226 + Math.max(0, keyGroups.value.length - 1) * 36);
-  const edgePadding = 12;
   rowContextMenu.record = record;
   rowContextMenu.groupSubmenuOpen = false;
-  rowContextMenu.x = viewportWidth > 0
-    ? Math.max(edgePadding, Math.min(event.clientX, viewportWidth - menuWidth - edgePadding))
-    : event.clientX;
-  rowContextMenu.y = viewportHeight > 0
-    ? Math.max(edgePadding, Math.min(event.clientY, viewportHeight - menuHeight - edgePadding))
-    : event.clientY;
+  const anchorX = Number(event.clientX) || 0;
+  const anchorY = Number(event.clientY) || 0;
+  const initialPosition = resolveContextMenuPosition(anchorX, anchorY, 224, 220);
+  rowContextMenu.x = initialPosition.x;
+  rowContextMenu.y = initialPosition.y;
   rowContextMenu.open = true;
+  await nextTick();
+  if (!rowContextMenu.open || rowContextMenu.record !== record) return;
+  const menuElement = rowContextMenuRef.value;
+  const measuredWidth = menuElement?.offsetWidth || 224;
+  const measuredHeight = menuElement?.offsetHeight || 220;
+  const resolvedPosition = resolveContextMenuPosition(anchorX, anchorY, measuredWidth, measuredHeight);
+  rowContextMenu.x = resolvedPosition.x;
+  rowContextMenu.y = resolvedPosition.y;
 }
 
 function getManagedRecordRowProps(record) {
