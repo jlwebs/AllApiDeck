@@ -4,12 +4,12 @@
     title="高级代理功能"
     :width="modalWidth"
     :footer="null"
-    centered
+    :style="{ top: '10px' }"
     wrap-class-name="advanced-proxy-modal-wrap"
     @cancel="handleCancel"
   >
     <a-spin :spinning="loading || saving">
-      <div class="advanced-proxy-shell">
+      <div ref="shellScrollRef" class="advanced-proxy-shell">
         <section class="advanced-proxy-hero">
           <div class="advanced-proxy-hero-copy">
             <a-tag color="green">本地代理接管</a-tag>
@@ -422,6 +422,7 @@ const emit = defineEmits(['update:open']);
 const loading = ref(false);
 const saving = ref(false);
 const previewOpen = ref(false);
+const shellScrollRef = ref(null);
 const queuePanelRef = ref(null);
 const selectedQueueScope = ref(ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
 const selectedHighAvailabilityRpmProviderKey = ref(ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
@@ -1347,10 +1348,13 @@ function focusQueuePanel() {
     : ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
   selectedQueueScope.value = requestedScope;
   nextTick(() => {
-    queuePanelRef.value?.scrollIntoView?.({
+    const shell = shellScrollRef.value;
+    const panel = queuePanelRef.value;
+    if (!shell || !panel) return;
+    const targetTop = Math.max(0, panel.offsetTop - 8);
+    shell.scrollTo({
+      top: targetTop,
       behavior: 'smooth',
-      block: 'start',
-      inline: 'nearest',
     });
   });
 }
@@ -1583,9 +1587,48 @@ function handleCancel() {
 </script>
 
 <style scoped>
+:global(.advanced-proxy-modal-wrap) {
+  overflow: hidden;
+}
+
+:global(.advanced-proxy-modal-wrap .ant-modal) {
+  margin: 0 auto;
+  padding-bottom: 10px;
+}
+
+:global(.advanced-proxy-modal-wrap .ant-modal-content) {
+  max-height: calc(100vh - 20px);
+  overflow: hidden;
+}
+
+:global(.advanced-proxy-modal-wrap .ant-modal-body) {
+  overflow: hidden;
+  max-height: calc(100vh - 96px);
+}
+
+:global(.advanced-proxy-modal-wrap .ant-spin-nested-loading) {
+  max-height: calc(100vh - 96px);
+}
+
+:global(.advanced-proxy-modal-wrap .ant-spin-container) {
+  max-height: calc(100vh - 96px);
+}
+
 .advanced-proxy-shell {
   display: grid;
   gap: 10px;
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.advanced-proxy-shell::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 .advanced-proxy-hero,

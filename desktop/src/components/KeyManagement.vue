@@ -118,15 +118,41 @@
                 </a-button>
               </a-tooltip>
             </a-popover>
-            <a-tooltip :title="syncCurrentGroupProviderQueueTooltip">
-              <button
-                type="button"
-                class="inventory-icon-button inventory-icon-button-provider-queue"
-                :disabled="syncCurrentGroupProviderQueueDisabled"
-                @click="confirmSyncCurrentGroupToAdvancedProxyQueue"
+            <a-tooltip v-if="syncCurrentGroupProviderQueueDisabled" :title="syncCurrentGroupProviderQueueTooltip">
+              <span class="inventory-popover-trigger">
+                <button
+                  type="button"
+                  class="inventory-icon-button inventory-icon-button-provider-queue"
+                  :disabled="true"
+                >
+                  <span class="inventory-emoji-icon" aria-hidden="true">💪</span>
+                </button>
+              </span>
+            </a-tooltip>
+            <a-tooltip v-else :title="syncCurrentGroupProviderQueueTooltip">
+              <a-popover
+                v-model:open="providerQueueInlineConfirmOpen"
+                trigger="click"
+                placement="bottom"
+                overlay-class-name="provider-queue-inline-popover"
+                :getPopupContainer="getSidebarPopupContainer"
               >
-                <span class="inventory-emoji-icon" aria-hidden="true">💪</span>
-              </button>
+                <template #content>
+                  <div class="provider-queue-inline-confirm">
+                    <span class="provider-queue-inline-confirm-text">应用到 Provider 队列？</span>
+                    <a-button type="primary" size="small" @click="handleConfirmSyncCurrentGroupToAdvancedProxyQueue">
+                      应用
+                    </a-button>
+                  </div>
+                </template>
+                <button
+                  type="button"
+                  class="inventory-icon-button inventory-icon-button-provider-queue"
+                  aria-label="一键将当前分组密钥设置为provider队列"
+                >
+                  <span class="inventory-emoji-icon" aria-hidden="true">💪</span>
+                </button>
+              </a-popover>
             </a-tooltip>
             <a-tooltip title="手工添加">
               <button type="button" class="inventory-icon-button inventory-icon-button-primary" @click="openManualRecordModal()">
@@ -921,6 +947,7 @@ const rowContextMenu = reactive({
   record: null,
   groupSubmenuOpen: false,
 });
+const providerQueueInlineConfirmOpen = ref(false);
 const keyGroupContextMenu = reactive({
   open: false,
   x: 0,
@@ -1653,10 +1680,6 @@ const currentVisiblePageRows = computed(() => {
 const batchQuickTestDisabled = computed(() => batchQuickTestRunning.value || tableData.value.length === 0);
 const batchDeleteAbnormalDisabled = computed(() => batchQuickTestRunning.value || abnormalKeyCount.value === 0);
 const batchDeleteQuickTestFailedDisabled = computed(() => batchQuickTestRunning.value || displayedRows.value.length === 0);
-const activeKeyGroupLabel = computed(() => {
-  if (activeKeyGroupId.value === ALL_KEYS_GROUP_ID) return '全部密钥';
-  return keyGroups.value.find(group => group.id === activeKeyGroupId.value)?.name || '当前分组';
-});
 const currentGroupValidProviderQueueRecords = computed(() =>
   displayedRows.value.filter(record => isValidProviderQueueSourceRecord(record))
 );
@@ -1757,6 +1780,10 @@ watch([displayedRows, currentTablePageSize, isCompactMode], () => {
     currentTablePage.value = maxPage;
   }
 }, { immediate: true });
+
+watch(syncCurrentGroupProviderQueueDisabled, disabled => {
+  if (disabled) providerQueueInlineConfirmOpen.value = false;
+});
 
 const openSettingsModal = () => {
   showAppSettingsModal.value = true;
@@ -2756,19 +2783,9 @@ async function syncCurrentGroupToAdvancedProxyQueue() {
   }
 }
 
-function confirmSyncCurrentGroupToAdvancedProxyQueue() {
-  const validCount = currentGroupValidProviderQueueRecords.value.length;
-  if (!validCount) {
-    message.warning('当前分组暂无可写入 provider 队列的有效密钥，请先完成快速测活');
-    return;
-  }
-  Modal.confirm({
-    title: '确认应用到 Provider 队列？',
-    content: `将把当前分组「${activeKeyGroupLabel.value}」的 ${validCount} 条有效密钥写入全局 Provider 队列，用于本地 Live 高级代理。`,
-    okText: '应用',
-    cancelText: '取消',
-    onOk: syncCurrentGroupToAdvancedProxyQueue,
-  });
+async function handleConfirmSyncCurrentGroupToAdvancedProxyQueue() {
+  providerQueueInlineConfirmOpen.value = false;
+  await syncCurrentGroupToAdvancedProxyQueue();
 }
 
 function getCurrentGroupFailedQuickTestRecords() {
@@ -4134,6 +4151,7 @@ function persistMeta() {
 .inventory-icon-button:hover:not(:disabled){transform:translateY(-1px) scale(1.06);filter:saturate(1.08)}
 .inventory-icon-button:disabled{cursor:not-allowed;opacity:.45;transform:none;filter:none;box-shadow:inset 0 0 0 1px rgba(148,163,184,.18)}
 .inventory-icon-button :deep(.anticon),.inventory-icon-button svg{font-size:16px;line-height:1}
+.inventory-popover-trigger{display:inline-flex;flex:0 0 auto}
 .inventory-batch-quick-test-button{width:34px;height:34px;padding:0;border:0;border-radius:12px;background:linear-gradient(135deg,#476847,#6f8f55);box-shadow:0 10px 24px rgba(87,118,76,.18);display:inline-flex;align-items:center;justify-content:center;color:#fff}
 .inventory-batch-quick-test-button:disabled{opacity:.55}
 .inventory-batch-quick-test-button :deep(.anticon),.inventory-batch-quick-test-button svg{font-size:16px;line-height:1}
@@ -4157,6 +4175,10 @@ function persistMeta() {
 :global(.key-management-mini-bar-tooltip .ant-tooltip-inner){max-width:calc(100vw - 24px);white-space:normal;overflow-wrap:anywhere}
 :global(.key-management-import-popover .ant-popover-inner){max-width:calc(100vw - 24px)}
 :global(.key-management-import-popover .ant-popover-inner-content){padding:8px}
+:global(.provider-queue-inline-popover .ant-popover-inner){border-radius:12px}
+:global(.provider-queue-inline-popover .ant-popover-inner-content){padding:8px 10px}
+.provider-queue-inline-confirm{display:flex;align-items:center;gap:8px;white-space:nowrap}
+.provider-queue-inline-confirm-text{font-size:12px;line-height:1.2;color:#475569}
 .quick-test-tag{width:fit-content}
 .quick-test-cell{gap:6px;min-width:0;align-items:flex-start;padding-left:0}
 .export-quick-test-row{width:100%;flex-direction:row;align-items:center;gap:8px;flex-wrap:nowrap}

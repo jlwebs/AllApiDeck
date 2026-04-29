@@ -1,6 +1,24 @@
 :root {
   --vh: 1vh;
 }
+
+html,
+body,
+#app,
+.app-shell {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+#app::-webkit-scrollbar,
+.app-shell::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
 body {
   font-family: Arial, sans-serif;
   margin: 0;

@@ -218,11 +218,26 @@
                         <span>{{ node.isModelDiscovering ? (node.modelDiscoveringHint || '模型检测中') : node.pendingHint }}</span>
                       </span>
                       <div v-if="node.isSiteRoot" class="site-tree-actions">
-                        <a-tooltip title="重新加载">
-                          <button type="button" class="site-tree-action-btn" @click.stop="refreshOneByNode(node)">
-                            <ReloadOutlined />
-                          </button>
-                        </a-tooltip>
+                        <a-popover
+                          :open="refreshFailureGuideSiteCacheKey === String(node.siteCacheKey || '').trim()"
+                          trigger="click"
+                          placement="bottom"
+                          overlayClassName="site-refresh-fail-guide-popover"
+                        >
+                          <template #content>
+                            <div class="site-refresh-fail-guide">
+                              <span class="site-refresh-fail-guide-text">是否激活标签导入模式，手动点击进入网站自动导入？</span>
+                              <a-button type="primary" size="small" @click="activateSilentBridgeImportFromGuide">
+                                开启
+                              </a-button>
+                            </div>
+                          </template>
+                          <a-tooltip :title="refreshFailureGuideSiteCacheKey === String(node.siteCacheKey || '').trim() ? null : '重新加载'">
+                            <button type="button" class="site-tree-action-btn site-tree-action-btn-refresh" @click.stop="refreshOneByNode(node)">
+                              <ReloadOutlined />
+                            </button>
+                          </a-tooltip>
+                        </a-popover>
                         <a-tooltip title="手动追加自定义 sk">
                           <button type="button" class="site-tree-action-btn" @click.stop="appendCustomSkByNode(node)">
                             <LockOutlined />
@@ -383,6 +398,7 @@ const siteBridgeSessionActive = ref(false);
 const siteBridgeClientReady = ref(false);
 const siteBridgeLastClientPing = ref('');
 const siteBridgeNoticeItems = ref([]);
+const refreshFailureGuideSiteCacheKey = ref('');
 const stableSiteOrderMap = new Map();
 const siteBridgeProcessedRecordIds = new Set();
 let siteBridgePollTimer = null;
@@ -1205,7 +1221,25 @@ const selectChatModelsOnly = () => {
   checkedKeys.value = filteredKeys;
 };
 
+const getRecordManagedKeyCount = record => {
+  const remoteTokens = Array.isArray(record?.tokens) ? record.tokens : [];
+  const customTokens = Array.isArray(record?.customTokens) ? record.customTokens : [];
+  return [...remoteTokens, ...customTokens]
+    .filter(token => String(token?.key || token?.access_token || '').trim())
+    .length;
+};
+
+const shouldSuggestSilentBridgeImport = siteCacheKey => {
+  if (siteBridgeSilentMode.value) return false;
+  const normalizedSiteCacheKey = String(siteCacheKey || '').trim();
+  if (!normalizedSiteCacheKey) return false;
+  const latestRecord = loadAllSiteCacheRecords().find(item => String(item?.siteCacheKey || '').trim() === normalizedSiteCacheKey) || null;
+  return getRecordManagedKeyCount(latestRecord) === 0;
+};
+
 const refreshOne = async record => {
+  const siteCacheKey = String(record?.siteCacheKey || '').trim();
+  refreshFailureGuideSiteCacheKey.value = '';
   try {
     const refreshedAt = Date.now();
     const refreshedSite = await refreshCachedSiteTokens(record);
@@ -1230,6 +1264,9 @@ const refreshOne = async record => {
     reloadRecords();
     message.success(`已刷新 ${record.siteName}`);
   } catch (error) {
+    if (shouldSuggestSilentBridgeImport(siteCacheKey)) {
+      refreshFailureGuideSiteCacheKey.value = siteCacheKey;
+    }
     message.error(error?.message || '刷新失败');
   }
 };
@@ -1535,6 +1572,11 @@ const enableSilentBridgeImportMode = async () => {
   }
 };
 
+const activateSilentBridgeImportFromGuide = async () => {
+  refreshFailureGuideSiteCacheKey.value = '';
+  await enableSilentBridgeImportMode();
+};
+
 const disableSilentBridgeImportMode = async () => {
   siteBridgeSilentMode.value = false;
   siteBridgeSessionOpening.value = false;
@@ -1598,6 +1640,23 @@ const handleTreeCheck = keys => {
   checkedKeys.value = Array.isArray(keys) ? [...keys] : [];
 };
 
+const closeRefreshFailureGuide = () => {
+  refreshFailureGuideSiteCacheKey.value = '';
+};
+
+const handleRefreshFailureGuidePointerDown = event => {
+  if (!refreshFailureGuideSiteCacheKey.value) return;
+  const target = event?.target;
+  if (target?.closest?.('.site-refresh-fail-guide-popover')) return;
+  if (target?.closest?.('.site-tree-action-btn-refresh')) return;
+  closeRefreshFailureGuide();
+};
+
+const handleRefreshFailureGuideScrollDismiss = () => {
+  if (!refreshFailureGuideSiteCacheKey.value) return;
+  closeRefreshFailureGuide();
+};
+
 const handleSettings = () => {
   showAppSettingsModal.value = true;
 };
@@ -1627,11 +1686,19 @@ onMounted(() => {
   }
   window.addEventListener(THEME_MODE_CHANGE_EVENT, syncThemeState);
   window.addEventListener(SITE_CACHE_SYNC_EVENT, handleSync);
+  document.addEventListener('pointerdown', handleRefreshFailureGuidePointerDown, true);
+  window.addEventListener('wheel', handleRefreshFailureGuideScrollDismiss, { capture: true, passive: true });
+  window.addEventListener('scroll', handleRefreshFailureGuideScrollDismiss, true);
+  window.addEventListener('resize', handleRefreshFailureGuideScrollDismiss);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener(THEME_MODE_CHANGE_EVENT, syncThemeState);
   window.removeEventListener(SITE_CACHE_SYNC_EVENT, handleSync);
+  document.removeEventListener('pointerdown', handleRefreshFailureGuidePointerDown, true);
+  window.removeEventListener('wheel', handleRefreshFailureGuideScrollDismiss, true);
+  window.removeEventListener('scroll', handleRefreshFailureGuideScrollDismiss, true);
+  window.removeEventListener('resize', handleRefreshFailureGuideScrollDismiss);
   stopSilentBridgeImportPolling();
   void closeSilentBridgeImportSession();
 });
@@ -2449,6 +2516,19 @@ onBeforeUnmount(() => {
   background: rgba(22, 119, 255, 0.16);
 }
 
+.site-refresh-fail-guide {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 320px;
+}
+
+.site-refresh-fail-guide-text {
+  font-size: 12px;
+  line-height: 1.4;
+  color: #475569;
+}
+
 .site-tree-action-btn.is-danger {
   background: rgba(255, 77, 79, 0.08);
   color: #ff4d4f;
@@ -2617,6 +2697,19 @@ onBeforeUnmount(() => {
 
 :deep(body.dark-mode) .site-tree-action-btn:hover {
   background: rgba(172, 199, 151, 0.22);
+}
+
+:deep(.site-refresh-fail-guide-popover .ant-popover-inner) {
+  border-radius: 12px;
+}
+
+:deep(.site-refresh-fail-guide-popover .ant-popover-inner-content) {
+  padding: 8px 10px;
+}
+
+:deep(body.dark-mode) .site-refresh-fail-guide-text,
+:deep(body.gaia-dark) .site-refresh-fail-guide-text {
+  color: #d7e4db;
 }
 
 :deep(body.dark-mode) .site-tree-action-btn.is-danger {
