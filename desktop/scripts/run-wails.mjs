@@ -401,7 +401,10 @@ async function runDevMode() {
   const wailsChild = spawn(wailsExecutable, wailsArgs, {
     cwd: projectRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env,
+    env: {
+      ...env,
+      ALLAPIDECK_SKIP_DEV_SIDECAR: '1',
+    },
   });
   attachChildLogging(wailsChild, 'wails', wailsLogPath);
 

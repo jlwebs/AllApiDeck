@@ -469,6 +469,9 @@ func looksLikeProjectRoot(dir string) bool {
 }
 
 func shouldStartDevSidecar() bool {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("ALLAPIDECK_SKIP_DEV_SIDECAR")), "1") {
+		return false
+	}
 	projectRoot, err := findProjectRoot()
 	if err != nil {
 		return false
