@@ -233,10 +233,12 @@
               {{ group.name }}
               <span class="key-group-tab-count">{{ getGroupRecordCount(group.id) }}</span>
             </button>
-            <button type="button" class="key-group-tab key-group-tab-create" @click.stop="toggleQuickGroupPopover">
-              <PlusOutlined />
-              <span>快捷分组</span>
-            </button>
+            <a-tooltip title="新增分组，数据独立维护，可从全部密钥克隆导入" overlay-class-name="key-group-create-tooltip">
+              <button type="button" class="key-group-tab key-group-tab-create" @click.stop="toggleQuickGroupPopover">
+                <PlusOutlined />
+                <span>快捷分组</span>
+              </button>
+            </a-tooltip>
           </div>
         </div>
 
@@ -1256,8 +1258,7 @@ function toggleRecordGroupMembership(record, groupId) {
 
 function isValidProviderQueueSourceRecord(record) {
   if (!record?.rowKey || !record?.siteUrl || !record?.apiKey) return false;
-  const quickTestStatus = String(record?.quickTestStatus || '').trim().toLowerCase();
-  return quickTestStatus === 'success' || quickTestStatus === 'warning';
+  return Number(record?.status || 0) === 1;
 }
 
 function buildProviderFromManagedRecord(record, sortIndex) {
@@ -1680,14 +1681,28 @@ const currentVisiblePageRows = computed(() => {
 const batchQuickTestDisabled = computed(() => batchQuickTestRunning.value || tableData.value.length === 0);
 const batchDeleteAbnormalDisabled = computed(() => batchQuickTestRunning.value || abnormalKeyCount.value === 0);
 const batchDeleteQuickTestFailedDisabled = computed(() => batchQuickTestRunning.value || displayedRows.value.length === 0);
+const activeKeyGroupLabel = computed(() => {
+  if (activeKeyGroupId.value === ALL_KEYS_GROUP_ID) return '全部密钥';
+  return keyGroups.value.find(group => group.id === activeKeyGroupId.value)?.name || '当前分组';
+});
+const providerQueueSourceRecords = computed(() => {
+  const source = activeKeyGroupId.value === ALL_KEYS_GROUP_ID ? allSortedRows.value : displayedRows.value;
+  const seen = new Set();
+  return source.filter(record => {
+    const rowKey = String(record?.rowKey || '').trim();
+    if (!rowKey || seen.has(rowKey)) return false;
+    seen.add(rowKey);
+    return true;
+  });
+});
 const currentGroupValidProviderQueueRecords = computed(() =>
-  displayedRows.value.filter(record => isValidProviderQueueSourceRecord(record))
+  providerQueueSourceRecords.value.filter(record => isValidProviderQueueSourceRecord(record))
 );
 const syncCurrentGroupProviderQueueDisabled = computed(() => currentGroupValidProviderQueueRecords.value.length === 0);
 const syncCurrentGroupProviderQueueTooltip = computed(() =>
   syncCurrentGroupProviderQueueDisabled.value
-    ? '一键将当前分组密钥设置为provider队列前，请先完成快速测活'
-    : '一键将当前分组密钥设置为provider队列（用于本地Live高级代理）'
+    ? '当前分组没有可写入 provider 队列的状态正常密钥'
+    : `将${activeKeyGroupLabel.value}中的 ${currentGroupValidProviderQueueRecords.value.length} 条状态正常密钥设置为provider队列（用于本地Live高级代理）`
 );
 const batchQuickTestButtonTitle = computed(() => {
   if (batchQuickTestRunning.value) {
@@ -2763,7 +2778,7 @@ function confirmDeleteAbnormalRecords() {
 async function syncCurrentGroupToAdvancedProxyQueue() {
   const validRecords = currentGroupValidProviderQueueRecords.value;
   if (!validRecords.length) {
-    message.warning('当前分组暂无可写入 provider 队列的有效密钥，请先完成快速测活');
+    message.warning('当前分组暂无可写入 provider 队列的状态正常密钥');
     return;
   }
 
@@ -2777,7 +2792,7 @@ async function syncCurrentGroupToAdvancedProxyQueue() {
     advancedProxyFocusQueueScope.value = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
     advancedProxyFocusQueueToken.value = Date.now();
     showExperimentalFeatures.value = true;
-    message.success('已更新provider队列~');
+    message.success(`已将 ${activeKeyGroupLabel.value} 的 ${validRecords.length} 条状态正常密钥写入 provider 队列`);
   } catch (error) {
     message.error(error?.message || '写入全局 Provider 队列失败');
   }
@@ -4173,6 +4188,7 @@ function persistMeta() {
 .switch-app-item{border:0;border-radius:10px;background:#f8fafc;color:#0f172a;padding:8px 10px;text-align:left;cursor:pointer;transition:background .18s ease,color .18s ease}
 .switch-app-item:hover{background:#e0ecff;color:#1d4ed8}
 :global(.key-management-mini-bar-tooltip .ant-tooltip-inner){max-width:calc(100vw - 24px);white-space:normal;overflow-wrap:anywhere}
+:global(.key-group-create-tooltip .ant-tooltip-inner){font-size:11px;line-height:1.2;white-space:nowrap;max-width:none}
 :global(.key-management-import-popover .ant-popover-inner){max-width:calc(100vw - 24px)}
 :global(.key-management-import-popover .ant-popover-inner-content){padding:8px}
 :global(.provider-queue-inline-popover .ant-popover-inner){border-radius:12px}
