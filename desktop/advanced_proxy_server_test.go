@@ -113,6 +113,35 @@ func TestOpenAIResponsesToAnthropicPreservesWhitespaceOnlyTextSegments(t *testin
 	}
 }
 
+func TestOpenAIResponsesToAnthropicMarksToolUseStopReason(t *testing.T) {
+	response := map[string]any{
+		"id":     "resp_tool_123",
+		"model":  "gpt-5.4",
+		"status": "completed",
+		"output": []any{
+			map[string]any{
+				"type":      "function_call",
+				"call_id":   "call_123",
+				"name":      "search_docs",
+				"arguments": `{"q":"advanced proxy"}`,
+			},
+		},
+		"usage": map[string]any{
+			"input_tokens":  12,
+			"output_tokens": 6,
+		},
+	}
+
+	result := openAIResponsesToAnthropic(response, "gpt-5.4")
+	if got := result["stop_reason"]; got != "tool_use" {
+		t.Fatalf("expected stop_reason tool_use, got %#v", got)
+	}
+	content := contentBlocksOf(t, result["content"])
+	if len(content) != 1 || content[0]["type"] != "tool_use" {
+		t.Fatalf("expected tool_use content block, got %#v", content)
+	}
+}
+
 func TestBuildClaudeProviderHeadersPreservesAnthropicHeaders(t *testing.T) {
 	headers := http.Header{}
 	headers.Set("User-Agent", "Claude-Client")
@@ -271,6 +300,59 @@ func TestForwardClaudeRequestViaProviderUpdatesRoutingSnapshotForOpenAIChatStrea
 	}
 }
 
+func TestForwardClaudeRequestViaProviderUpdatesRoutingSnapshotForOpenAIResponsesStream(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/responses" {
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write([]byte(strings.Join([]string{
+			`event: response.created`,
+			`data: {"type":"response.created","response":{"id":"resp_test","model":"gpt-5.4"}}`,
+			"",
+			`event: response.completed`,
+			`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2}}}`,
+			"",
+		}, "\n")))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "claude-openai-responses-provider",
+		RowKey:    "row-claude-openai-responses",
+		Name:      "Claude OpenAI Responses Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test",
+		APIFormat: "openai_responses",
+	}
+
+	result := forwardClaudeRequestViaProvider(provider, map[string]any{
+		"model":  "gpt-5.4",
+		"stream": true,
+		"messages": []any{
+			map[string]any{"role": "user", "content": "hello"},
+		},
+	}, http.Header{}, true, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK || result.StreamBody == nil {
+		t.Fatalf("expected successful responses stream, got %#v", result)
+	}
+	_ = result.StreamBody.Close()
+
+	snapshot := advancedProxyRuntime.GetRoutingSnapshot()
+	state := snapshot.Apps["claude"]
+	if state.ProviderID != provider.ID || state.ProviderRowKey != provider.RowKey {
+		t.Fatalf("unexpected provider binding: %#v", state)
+	}
+	if state.RouteKind != "responses" || state.Status != "success" {
+		t.Fatalf("unexpected claude responses route state: %#v", state)
+	}
+	if state.TargetURL != server.URL+"/v1/responses" {
+		t.Fatalf("unexpected target url: %#v", state)
+	}
+}
+
 func TestWriteAnthropicSSEFromOpenAIChatStreamPreservesNewlineDeltas(t *testing.T) {
 	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
 		`data: {"id":"chatcmpl-test","choices":[{"delta":{"content":"line1"}}]}`,
@@ -295,6 +377,43 @@ func TestWriteAnthropicSSEFromOpenAIChatStreamPreservesNewlineDeltas(t *testing.
 	}
 	if !strings.Contains(body, `"text":"line2"`) {
 		t.Fatalf("expected second text delta, got %q", body)
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIResponsesStreamEmitsToolUseLifecycle(t *testing.T) {
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"resp_tool_stream","model":"gpt-5.4"}}`,
+		"",
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","item_id":"fc_1","item":{"id":"fc_1","type":"function_call","call_id":"call_123","name":"search_docs"}}`,
+		"",
+		`event: response.function_call_arguments.delta`,
+		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"q\":\"hello\"}"}`,
+		"",
+		`event: response.function_call_arguments.done`,
+		`data: {"type":"response.function_call_arguments.done","item_id":"fc_1"}`,
+		"",
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":8,"output_tokens":4}}}`,
+		"",
+	}, "\n")))
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIResponsesStream(recorder, streamBody, "gpt-5.4")
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"type":"tool_use"`) {
+		t.Fatalf("expected tool_use block, got %q", body)
+	}
+	if !strings.Contains(body, `"partial_json":"{\"q\":\"hello\"}"`) {
+		t.Fatalf("expected input_json_delta for tool args, got %q", body)
+	}
+	if !strings.Contains(body, `"stop_reason":"tool_use"`) {
+		t.Fatalf("expected tool_use stop reason, got %q", body)
+	}
+	if !strings.Contains(body, `"type":"message_stop"`) {
+		t.Fatalf("expected message_stop, got %q", body)
 	}
 }
 

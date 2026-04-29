@@ -161,6 +161,25 @@ func mapOpenAIStopReason(value string) string {
 	}
 }
 
+func mapOpenAIResponsesStopReason(status string, hasToolUse bool, incompleteReason string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed":
+		if hasToolUse {
+			return "tool_use"
+		}
+		return "end_turn"
+	case "incomplete":
+		switch strings.ToLower(strings.TrimSpace(incompleteReason)) {
+		case "", "max_output_tokens", "max_tokens":
+			return "max_tokens"
+		default:
+			return "end_turn"
+		}
+	default:
+		return "end_turn"
+	}
+}
+
 func openAIUsageToAnthropic(response map[string]any) map[string]any {
 	usage := map[string]any{
 		"input_tokens":  0,
@@ -262,6 +281,7 @@ func openAIChatToAnthropic(response map[string]any, fallbackModel string, includ
 
 func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) map[string]any {
 	contentBlocks := make([]map[string]any, 0, 2)
+	hasToolUse := false
 	if outputText := toStringValue(response["output_text"]); outputText != "" {
 		contentBlocks = append(contentBlocks, map[string]any{"type": "text", "text": outputText})
 	}
@@ -295,6 +315,7 @@ func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) m
 					}
 				}
 			case "function_call":
+				hasToolUse = true
 				contentBlocks = append(contentBlocks, map[string]any{
 					"type":  "tool_use",
 					"id":    firstNonEmpty(strings.TrimSpace(toStringValue(outputMap["call_id"])), fmt.Sprintf("tool_%d", len(contentBlocks)+1)),
@@ -312,10 +333,15 @@ func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) m
 		usage["input_tokens"] = toIntValue(usageMap["input_tokens"])
 		usage["output_tokens"] = toIntValue(usageMap["output_tokens"])
 	}
-	stopReason := "end_turn"
-	if strings.TrimSpace(toStringValue(response["status"])) == "incomplete" {
-		stopReason = "max_tokens"
+	incompleteReason := ""
+	if incompleteMap, ok := response["incomplete_details"].(map[string]any); ok {
+		incompleteReason = toStringValue(incompleteMap["reason"])
 	}
+	stopReason := mapOpenAIResponsesStopReason(
+		toStringValue(response["status"]),
+		hasToolUse,
+		incompleteReason,
+	)
 	model := strings.TrimSpace(toStringValue(response["model"]))
 	if model == "" {
 		model = fallbackModel
@@ -393,6 +419,371 @@ func performRawUpstreamRequest(method string, targetURL string, headers map[stri
 		return response.StatusCode, response.Header.Clone(), nil, nil, time.Since(startedAt), err
 	}
 	return response.StatusCode, response.Header.Clone(), body, nil, time.Since(startedAt), nil
+}
+
+func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, streamBody io.ReadCloser, fallbackModel string) {
+	writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-cache")
+	writer.Header().Set("Connection", "keep-alive")
+	writer.WriteHeader(http.StatusOK)
+
+	defer streamBody.Close()
+
+	flusher, _ := writer.(http.Flusher)
+	writeEvent := func(event string, payload any) {
+		raw, _ := json.Marshal(payload)
+		_, _ = fmt.Fprintf(writer, "event: %s\ndata: %s\n\n", event, string(raw))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	type responsesToolStreamState struct {
+		Index   int
+		ID      string
+		Name    string
+		Started bool
+	}
+
+	messageID := ""
+	model := strings.TrimSpace(fallbackModel)
+	if model == "" {
+		model = "claude-proxy"
+	}
+	messageStarted := false
+	messageStopped := false
+	messageDeltaSent := false
+	hasToolUse := false
+	nextContentIndex := 0
+	currentTextIndex := -1
+	currentThinkingIndex := -1
+	usage := map[string]any{
+		"input_tokens":  0,
+		"output_tokens": 0,
+	}
+	toolStates := map[string]*responsesToolStreamState{}
+
+	emitMessageStart := func() {
+		if messageStarted {
+			return
+		}
+		writeEvent("message_start", map[string]any{
+			"type": "message_start",
+			"message": map[string]any{
+				"id":    firstNonEmpty(messageID, fmt.Sprintf("msg_%d", time.Now().UnixNano())),
+				"type":  "message",
+				"role":  "assistant",
+				"model": model,
+				"usage": usage,
+			},
+		})
+		messageStarted = true
+	}
+	closeIndex := func(index *int) {
+		if index == nil || *index < 0 {
+			return
+		}
+		writeEvent("content_block_stop", map[string]any{
+			"type":  "content_block_stop",
+			"index": *index,
+		})
+		*index = -1
+	}
+	closeOpenTools := func() {
+		indices := make([]int, 0, len(toolStates))
+		for _, state := range toolStates {
+			if state != nil && state.Started {
+				indices = append(indices, state.Index)
+			}
+		}
+		sort.Ints(indices)
+		for _, index := range indices {
+			writeEvent("content_block_stop", map[string]any{
+				"type":  "content_block_stop",
+				"index": index,
+			})
+			for key, state := range toolStates {
+				if state != nil && state.Started && state.Index == index {
+					delete(toolStates, key)
+				}
+			}
+		}
+	}
+	emitMessageStop := func(stopReason string) {
+		if messageStopped {
+			return
+		}
+		closeIndex(&currentTextIndex)
+		closeIndex(&currentThinkingIndex)
+		closeOpenTools()
+		emitMessageStart()
+		if !messageDeltaSent {
+			var resolvedStopReason any
+			if strings.TrimSpace(stopReason) != "" {
+				resolvedStopReason = strings.TrimSpace(stopReason)
+			}
+			writeEvent("message_delta", map[string]any{
+				"type": "message_delta",
+				"delta": map[string]any{
+					"stop_reason":   resolvedStopReason,
+					"stop_sequence": nil,
+				},
+				"usage": usage,
+			})
+			messageDeltaSent = true
+		}
+		writeEvent("message_stop", map[string]any{"type": "message_stop"})
+		messageStopped = true
+	}
+	ensureTextBlock := func(blockType string) int {
+		if blockType == "thinking" {
+			closeIndex(&currentTextIndex)
+			if currentThinkingIndex >= 0 {
+				return currentThinkingIndex
+			}
+			emitMessageStart()
+			currentThinkingIndex = nextContentIndex
+			nextContentIndex++
+			writeEvent("content_block_start", map[string]any{
+				"type":  "content_block_start",
+				"index": currentThinkingIndex,
+				"content_block": map[string]any{
+					"type":     "thinking",
+					"thinking": "",
+				},
+			})
+			return currentThinkingIndex
+		}
+		closeIndex(&currentThinkingIndex)
+		if currentTextIndex >= 0 {
+			return currentTextIndex
+		}
+		emitMessageStart()
+		currentTextIndex = nextContentIndex
+		nextContentIndex++
+		writeEvent("content_block_start", map[string]any{
+			"type":  "content_block_start",
+			"index": currentTextIndex,
+			"content_block": map[string]any{
+				"type": "text",
+				"text": "",
+			},
+		})
+		return currentTextIndex
+	}
+	responsesUsageToAnthropic := func(source map[string]any) map[string]any {
+		mapped := map[string]any{
+			"input_tokens":  toIntValue(source["input_tokens"]),
+			"output_tokens": toIntValue(source["output_tokens"]),
+		}
+		if details, ok := source["input_tokens_details"].(map[string]any); ok {
+			if cached := toIntValue(details["cached_tokens"]); cached > 0 {
+				mapped["cache_read_input_tokens"] = cached
+			}
+		}
+		if cachedRead := toIntValue(source["cache_read_input_tokens"]); cachedRead > 0 {
+			mapped["cache_read_input_tokens"] = cachedRead
+		}
+		if cacheCreated := toIntValue(source["cache_creation_input_tokens"]); cacheCreated > 0 {
+			mapped["cache_creation_input_tokens"] = cacheCreated
+		}
+		return mapped
+	}
+	resolveToolKey := func(data map[string]any) string {
+		if itemID := strings.TrimSpace(toStringValue(data["item_id"])); itemID != "" {
+			return "item:" + itemID
+		}
+		if callID := strings.TrimSpace(toStringValue(data["call_id"])); callID != "" {
+			return "call:" + callID
+		}
+		if outputIndex := toIntValue(data["output_index"]); outputIndex > 0 || toStringValue(data["output_index"]) == "0" {
+			return fmt.Sprintf("output:%d", outputIndex)
+		}
+		return ""
+	}
+	resolveToolState := func(key string) *responsesToolStreamState {
+		if strings.TrimSpace(key) == "" {
+			key = fmt.Sprintf("auto:%d", nextContentIndex)
+		}
+		if state, exists := toolStates[key]; exists {
+			return state
+		}
+		state := &responsesToolStreamState{Index: nextContentIndex}
+		nextContentIndex++
+		toolStates[key] = state
+		return state
+	}
+	startToolState := func(state *responsesToolStreamState) {
+		if state == nil || state.Started || strings.TrimSpace(state.ID) == "" || strings.TrimSpace(state.Name) == "" {
+			return
+		}
+		emitMessageStart()
+		writeEvent("content_block_start", map[string]any{
+			"type":  "content_block_start",
+			"index": state.Index,
+			"content_block": map[string]any{
+				"type": "tool_use",
+				"id":   state.ID,
+				"name": state.Name,
+			},
+		})
+		state.Started = true
+	}
+
+	scanner := bufio.NewScanner(streamBody)
+	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
+	eventName := ""
+	dataParts := make([]string, 0, 4)
+	processEvent := func(eventName string, dataParts []string) {
+		if len(dataParts) == 0 {
+			return
+		}
+		payload := strings.Join(dataParts, "\n")
+		data := map[string]any{}
+		if err := json.Unmarshal([]byte(payload), &data); err != nil {
+			return
+		}
+		responseData := data
+		if responseMap, ok := data["response"].(map[string]any); ok && responseMap != nil {
+			responseData = responseMap
+		}
+		if id := strings.TrimSpace(toStringValue(responseData["id"])); id != "" && messageID == "" {
+			messageID = id
+		}
+		if resolvedModel := strings.TrimSpace(toStringValue(responseData["model"])); resolvedModel != "" {
+			model = resolvedModel
+		}
+
+		switch strings.TrimSpace(eventName) {
+		case "response.created":
+			if usageMap, ok := responseData["usage"].(map[string]any); ok {
+				usage = responsesUsageToAnthropic(usageMap)
+			}
+			emitMessageStart()
+		case "response.content_part.added":
+			partMap, _ := data["part"].(map[string]any)
+			partType := strings.TrimSpace(toStringValue(partMap["type"]))
+			if partType == "output_text" || partType == "refusal" {
+				_ = ensureTextBlock("text")
+			}
+		case "response.output_text.delta", "response.refusal.delta":
+			delta := firstNonEmptyExact(toStringValue(data["delta"]), toStringValue(data["text"]))
+			if delta == "" {
+				return
+			}
+			index := ensureTextBlock("text")
+			writeEvent("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": index,
+				"delta": map[string]any{
+					"type": "text_delta",
+					"text": delta,
+				},
+			})
+		case "response.output_text.done", "response.refusal.done":
+			closeIndex(&currentTextIndex)
+		case "response.reasoning.delta":
+			delta := firstNonEmptyExact(toStringValue(data["delta"]), toStringValue(data["text"]))
+			if delta == "" {
+				return
+			}
+			index := ensureTextBlock("thinking")
+			writeEvent("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": index,
+				"delta": map[string]any{
+					"type":     "thinking_delta",
+					"thinking": delta,
+				},
+			})
+		case "response.reasoning.done":
+			closeIndex(&currentThinkingIndex)
+		case "response.output_item.added":
+			itemMap, _ := data["item"].(map[string]any)
+			if strings.TrimSpace(toStringValue(itemMap["type"])) != "function_call" {
+				return
+			}
+			hasToolUse = true
+			closeIndex(&currentTextIndex)
+			closeIndex(&currentThinkingIndex)
+			state := resolveToolState(firstNonEmpty(resolveToolKey(data), resolveToolKey(itemMap)))
+			state.ID = firstNonEmpty(strings.TrimSpace(toStringValue(itemMap["call_id"])), state.ID, strings.TrimSpace(toStringValue(itemMap["id"])))
+			state.Name = firstNonEmpty(strings.TrimSpace(toStringValue(itemMap["name"])), state.Name)
+			startToolState(state)
+			if args := strings.TrimSpace(toStringValue(itemMap["arguments"])); args != "" {
+				writeEvent("content_block_delta", map[string]any{
+					"type":  "content_block_delta",
+					"index": state.Index,
+					"delta": map[string]any{
+						"type":         "input_json_delta",
+						"partial_json": args,
+					},
+				})
+			}
+		case "response.function_call_arguments.delta":
+			hasToolUse = true
+			closeIndex(&currentTextIndex)
+			closeIndex(&currentThinkingIndex)
+			state := resolveToolState(resolveToolKey(data))
+			state.ID = firstNonEmpty(strings.TrimSpace(toStringValue(data["call_id"])), state.ID, strings.TrimSpace(toStringValue(data["item_id"])))
+			state.Name = firstNonEmpty(strings.TrimSpace(toStringValue(data["name"])), state.Name)
+			startToolState(state)
+			delta := toStringValue(data["delta"])
+			if delta == "" {
+				return
+			}
+			writeEvent("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": state.Index,
+				"delta": map[string]any{
+					"type":         "input_json_delta",
+					"partial_json": delta,
+				},
+			})
+		case "response.function_call_arguments.done", "response.output_item.done":
+			key := resolveToolKey(data)
+			if key == "" {
+				return
+			}
+			if state, exists := toolStates[key]; exists && state != nil && state.Started {
+				writeEvent("content_block_stop", map[string]any{
+					"type":  "content_block_stop",
+					"index": state.Index,
+				})
+				delete(toolStates, key)
+			}
+		case "response.completed":
+			if usageMap, ok := responseData["usage"].(map[string]any); ok {
+				usage = responsesUsageToAnthropic(usageMap)
+			}
+			incompleteReason := ""
+			if incompleteMap, ok := responseData["incomplete_details"].(map[string]any); ok {
+				incompleteReason = toStringValue(incompleteMap["reason"])
+			}
+			emitMessageStop(mapOpenAIResponsesStopReason(toStringValue(responseData["status"]), hasToolUse, incompleteReason))
+		}
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) == "" {
+			processEvent(eventName, dataParts)
+			eventName = ""
+			dataParts = dataParts[:0]
+			continue
+		}
+		if strings.HasPrefix(line, "event:") {
+			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			dataParts = append(dataParts, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+	}
+	if len(dataParts) > 0 {
+		processEvent(eventName, dataParts)
+	}
+	emitMessageStop(mapOpenAIResponsesStopReason("completed", hasToolUse, ""))
 }
 
 func isAdvancedProxyTimeoutStatusCode(statusCode int) bool {
@@ -829,7 +1220,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 		for _, targetURL := range targets {
 			advancedProxyRuntime.MarkDispatch("claude", provider, routeKind, targetURL)
 			fallbackModel := firstNonEmpty(strings.TrimSpace(provider.Model), strings.TrimSpace(toStringValue(basePayload["model"])))
-			if stream && apiFormat == "openai_chat" {
+			if stream && (apiFormat == "openai_chat" || apiFormat == "openai_responses") {
 				rawTransformed, err := json.Marshal(transformed)
 				if err != nil {
 					advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
@@ -1328,6 +1719,8 @@ func (a *App) handleAdvancedProxyClaude(writer http.ResponseWriter, request *htt
 			switch result.APIFormat {
 			case "openai_chat":
 				writeAnthropicSSEFromOpenAIChatStream(writer, result.StreamBody, result.Model, anthropicThinkingEnabled(requestBody))
+			case "openai_responses":
+				writeAnthropicSSEFromOpenAIResponsesStream(writer, result.StreamBody, result.Model)
 			default:
 				result.StreamBody.Close()
 				writeAnthropicProxyError(writer, http.StatusBadGateway, "unsupported Claude streaming proxy format")
