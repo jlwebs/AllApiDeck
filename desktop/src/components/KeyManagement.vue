@@ -123,7 +123,7 @@
                 type="button"
                 class="inventory-icon-button inventory-icon-button-provider-queue"
                 :disabled="syncCurrentGroupProviderQueueDisabled"
-                @click="syncCurrentGroupToAdvancedProxyQueue"
+                @click="confirmSyncCurrentGroupToAdvancedProxyQueue"
               >
                 <span class="inventory-emoji-icon" aria-hidden="true">💪</span>
               </button>
