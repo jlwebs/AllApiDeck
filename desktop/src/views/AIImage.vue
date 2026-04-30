@@ -121,21 +121,64 @@
                 <a-empty v-else description="还没有选择底图" />
               </div>
 
-              <a-form-item label="图片尺寸">
-                <div class="ai-image-size-strip">
-                  <button
-                    v-for="item in SIZE_OPTIONS"
-                    :key="item.value"
-                    type="button"
-                    class="ai-image-size-option"
-                    :class="{ 'ai-image-size-option-active': draft.size === item.value }"
-                    @click="draft.size = item.value"
-                  >
-                    {{ item.label }}
-                  </button>
+              <a-form-item label="分辨率与比例">
+                <div class="ai-image-size-config">
+                  <div class="ai-image-size-strip">
+                    <button
+                      v-for="item in RESOLUTION_OPTIONS"
+                      :key="item.value"
+                      type="button"
+                      class="ai-image-size-option"
+                      :class="{ 'ai-image-size-option-active': draft.resolutionPreset === item.value }"
+                      @click="draft.resolutionPreset = item.value"
+                    >
+                      {{ item.label }}
+                    </button>
+                  </div>
+                  <div class="ai-image-size-ratio-row">
+                    <a-select
+                      v-model:value="draft.aspectRatio"
+                      class="ai-image-aspect-select"
+                      :options="ASPECT_RATIO_OPTIONS"
+                      placeholder="选择常见比例"
+                    />
+                    <span class="ai-image-size-current">{{ currentRequestSizeLabel }}</span>
+                  </div>
                 </div>
                 <div class="ai-image-model-hint">请求仍然统一走 `/v1/responses`，局部重绘会额外附带蒙版图片。</div>
               </a-form-item>
+
+              <a-collapse ghost class="ai-image-misc-collapse">
+                <a-collapse-panel key="misc" header="杂项选项">
+                  <div class="ai-image-misc-grid">
+                    <a-form-item label="格式" class="ai-image-misc-item">
+                      <a-select v-model:value="draft.outputFormat" :options="OUTPUT_FORMAT_OPTIONS" />
+                    </a-form-item>
+
+                    <a-form-item label="背景" class="ai-image-misc-item">
+                      <a-select v-model:value="draft.background" :options="backgroundOptions" />
+                    </a-form-item>
+                  </div>
+
+                  <a-form-item label="压缩度" class="ai-image-misc-item">
+                    <div class="ai-image-compression-row">
+                      <input
+                        v-model="draft.outputCompression"
+                        class="ai-image-compression-range"
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        :disabled="!supportsOutputCompression"
+                      />
+                      <span class="ai-image-compression-value">{{ draft.outputCompression }}%</span>
+                    </div>
+                    <div class="ai-image-model-hint">
+                      {{ supportsOutputCompression ? '仅对 JPEG / WebP 生效，数值越大压缩越强。' : '当前格式不支持压缩度，发送请求时会自动忽略。' }}
+                    </div>
+                  </a-form-item>
+                </a-collapse-panel>
+              </a-collapse>
 
               <a-form-item label="提示词">
                 <a-textarea
@@ -217,7 +260,7 @@
               <div class="ai-image-result-meta">
                 <div class="ai-image-result-meta-line">模式：{{ WORKFLOW_MODE_LABEL_MAP[activeItem.mode] || '文生图' }}</div>
                 <div class="ai-image-result-meta-line">模型：{{ activeItem.model || '未记录' }}</div>
-                <div class="ai-image-result-meta-line">尺寸：{{ activeItem.size || 'auto' }}</div>
+                <div class="ai-image-result-meta-line">尺寸：{{ formatHistorySize(activeItem) }}</div>
                 <div class="ai-image-result-meta-line">时间：{{ formatDateTime(activeItem.timestamp) }}</div>
               </div>
               <div class="ai-image-result-prompt">{{ activeItem.prompt }}</div>
@@ -242,12 +285,22 @@
           <div class="ai-image-history-head">
             <div>
               <div class="ai-image-panel-title">本地历史</div>
-              <div class="ai-image-panel-hint">仅保留当前 key 的绘图记录，互不串库。</div>
+              <div class="ai-image-panel-hint">{{ historyPanelHint }}</div>
             </div>
-            <a-button danger :disabled="historyItems.length === 0" @click="confirmClearHistory">清空历史</a-button>
+            <div class="ai-image-history-controls">
+              <a-select
+                v-if="historyScopeOptions.length > 0"
+                v-model:value="selectedHistoryScopeKey"
+                class="ai-image-history-scope-select"
+                :options="historyScopeOptions"
+                placeholder="选择历史来源"
+              />
+              <a-button danger :disabled="historyItems.length === 0" @click="confirmClearHistory">清空历史</a-button>
+            </div>
           </div>
 
-          <a-empty v-if="historyItems.length === 0" description="当前 key 暂无绘图历史。" />
+          <a-empty v-if="historyScopeOptions.length === 0" description="还没有任何站点生成过图片历史。" />
+          <a-empty v-else-if="historyItems.length === 0" description="当前选择的站点暂无绘图历史。" />
 
           <div v-else class="ai-image-history-grid">
             <button
@@ -298,13 +351,41 @@ import { loadPanelRecords } from '../utils/keyPanelStore.js';
 import { maskApiKey } from '../utils/normal.js';
 import { apiFetch, isProbablyWailsRuntime } from '../utils/runtimeApi.js';
 
-const SIZE_OPTIONS = [
-  { label: '1024×1024', value: '1024x1024' },
-  { label: '1024×1536', value: '1024x1536' },
-  { label: '1536×1024', value: '1536x1024' },
-  { label: '2K', value: '2048x2048' },
-  { label: '4K', value: '4096x4096' },
-  { label: 'Auto', value: 'auto' },
+const RESOLUTION_OPTIONS = [
+  { label: '720P', value: '720p', width: 1280, height: 720 },
+  { label: '1080P', value: '1080p', width: 1920, height: 1080 },
+  { label: '1.5K', value: '1.5k', width: 2304, height: 1296 },
+  { label: '2K', value: '2k', width: 2560, height: 1440 },
+  { label: '4K', value: '4k', width: 3840, height: 2160 },
+];
+
+const ASPECT_RATIO_OPTIONS = [
+  { label: '1:1', value: '1:1' },
+  { label: '4:3', value: '4:3' },
+  { label: '3:4', value: '3:4' },
+  { label: '16:9', value: '16:9' },
+  { label: '9:16', value: '9:16' },
+  { label: '3:2', value: '3:2' },
+  { label: '2:3', value: '2:3' },
+  { label: '21:9', value: '21:9' },
+];
+
+const DEFAULT_RESOLUTION_PRESET = '1080p';
+const DEFAULT_ASPECT_RATIO = '16:9';
+const DEFAULT_OUTPUT_FORMAT = 'png';
+const DEFAULT_BACKGROUND = 'auto';
+const DEFAULT_OUTPUT_COMPRESSION = 50;
+
+const OUTPUT_FORMAT_OPTIONS = [
+  { label: 'PNG', value: 'png' },
+  { label: 'JPEG', value: 'jpeg' },
+  { label: 'WebP', value: 'webp' },
+];
+
+const BACKGROUND_OPTIONS = [
+  { label: '自动', value: 'auto' },
+  { label: '不透明', value: 'opaque' },
+  { label: '透明', value: 'transparent' },
 ];
 
 const WORKFLOW_MODES = [
@@ -334,6 +415,8 @@ const scopeKey = ref('');
 const generating = ref(false);
 const errorMessage = ref('');
 const historyItems = ref([]);
+const historyScopeOptions = ref([]);
+const selectedHistoryScopeKey = ref('');
 const activeItemId = ref(null);
 const previewOpen = ref(false);
 const previewItem = ref(null);
@@ -356,12 +439,35 @@ const draft = reactive({
   apiKey: '',
   model: '',
   prompt: '',
-  size: '1024x1536',
+  resolutionPreset: DEFAULT_RESOLUTION_PRESET,
+  aspectRatio: DEFAULT_ASPECT_RATIO,
+  outputFormat: DEFAULT_OUTPUT_FORMAT,
+  background: DEFAULT_BACKGROUND,
+  outputCompression: DEFAULT_OUTPUT_COMPRESSION,
 });
 
 const maskedRecordKeyLabel = computed(() => maskApiKey(String(targetRecord.value?.apiKey || '').trim()) || '未命名 Key');
 const activeItem = computed(() => historyItems.value.find(item => item.id === activeItemId.value) || historyItems.value[0] || null);
 const hasPreferredModel = computed(() => modelOptions.value.some(item => item.value === 'gpt-5.3-codex'));
+const currentRequestSize = computed(() => buildResolvedSize(draft.resolutionPreset, draft.aspectRatio));
+const supportsTransparentBackground = computed(() => draft.outputFormat === 'png' || draft.outputFormat === 'webp');
+const supportsOutputCompression = computed(() => draft.outputFormat === 'jpeg' || draft.outputFormat === 'webp');
+const backgroundOptions = computed(() => BACKGROUND_OPTIONS.map(item => ({
+  ...item,
+  disabled: item.value === 'transparent' && !supportsTransparentBackground.value,
+})));
+const currentRequestSizeLabel = computed(() => {
+  const presetLabel = getResolutionOptionLabel(draft.resolutionPreset);
+  const ratioLabel = getAspectRatioLabel(draft.aspectRatio);
+  const sizeValue = currentRequestSize.value;
+  return sizeValue ? `${presetLabel} · ${ratioLabel} · ${sizeValue}` : `${presetLabel} · ${ratioLabel}`;
+});
+const selectedHistoryScopeMeta = computed(() => historyScopeOptions.value.find(item => item.value === selectedHistoryScopeKey.value) || null);
+const historyPanelHint = computed(() => {
+  if (!historyScopeOptions.value.length) return '仅显示有过绘图记录的站点与密钥。';
+  const selectedLabel = String(selectedHistoryScopeMeta.value?.label || '').trim();
+  return selectedLabel ? `当前查看：${selectedLabel}` : '仅显示有过绘图记录的站点与密钥。';
+});
 const inpaintStageStyle = computed(() => {
   const width = Number(inpaintSourceImage.value?.width || 0);
   const height = Number(inpaintSourceImage.value?.height || 0);
@@ -506,6 +612,120 @@ function buildDefaultPrompt(record) {
   return siteName ? `围绕“${siteName}”生成一张可直接使用的高质量图片，主体明确、构图完整、细节干净。` : '';
 }
 
+function parseAspectRatio(value) {
+  const match = String(value || '').trim().match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+  return { width, height };
+}
+
+function roundToStep(value, step = 8) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return step;
+  return Math.max(step, Math.round(numeric / step) * step);
+}
+
+function getResolutionOption(value) {
+  return RESOLUTION_OPTIONS.find(item => item.value === String(value || '').trim()) || RESOLUTION_OPTIONS[1];
+}
+
+function getResolutionOptionLabel(value) {
+  return getResolutionOption(value)?.label || '1080P';
+}
+
+function getAspectRatioLabel(value) {
+  return ASPECT_RATIO_OPTIONS.find(item => item.value === String(value || '').trim())?.label || DEFAULT_ASPECT_RATIO;
+}
+
+function buildResolvedSize(resolutionPreset, aspectRatio) {
+  const preset = getResolutionOption(resolutionPreset);
+  const ratio = parseAspectRatio(aspectRatio) || parseAspectRatio(DEFAULT_ASPECT_RATIO);
+  if (!preset || !ratio) return '';
+
+  const referenceArea = Number(preset.width || 0) * Number(preset.height || 0);
+  if (!Number.isFinite(referenceArea) || referenceArea <= 0) {
+    return `${preset.width}x${preset.height}`;
+  }
+
+  const ratioValue = ratio.width / ratio.height;
+  let width = Math.sqrt(referenceArea * ratioValue);
+  let height = width / ratioValue;
+  width = roundToStep(width);
+  height = roundToStep(height);
+  return `${width}x${height}`;
+}
+
+function inferAspectRatioValue(width, height) {
+  const numericWidth = Number(width || 0);
+  const numericHeight = Number(height || 0);
+  if (!numericWidth || !numericHeight) return DEFAULT_ASPECT_RATIO;
+  const actualRatio = numericWidth / numericHeight;
+  let best = DEFAULT_ASPECT_RATIO;
+  let bestDiff = Number.POSITIVE_INFINITY;
+  ASPECT_RATIO_OPTIONS.forEach(item => {
+    const parsed = parseAspectRatio(item.value);
+    if (!parsed) return;
+    const expectedRatio = parsed.width / parsed.height;
+    const diff = Math.abs(Math.log(actualRatio / expectedRatio));
+    if (diff < bestDiff) {
+      best = item.value;
+      bestDiff = diff;
+    }
+  });
+  return best;
+}
+
+function inferResolutionPresetValue(width, height) {
+  const area = Number(width || 0) * Number(height || 0);
+  if (!Number.isFinite(area) || area <= 0) return DEFAULT_RESOLUTION_PRESET;
+  let best = DEFAULT_RESOLUTION_PRESET;
+  let bestDiff = Number.POSITIVE_INFINITY;
+  RESOLUTION_OPTIONS.forEach(item => {
+    const expectedArea = Number(item.width || 0) * Number(item.height || 0);
+    if (!expectedArea) return;
+    const diff = Math.abs(Math.log(area / expectedArea));
+    if (diff < bestDiff) {
+      best = item.value;
+      bestDiff = diff;
+    }
+  });
+  return best;
+}
+
+function parseLegacySizeValue(value) {
+  const match = String(value || '').trim().match(/^(\d+)\s*x\s*(\d+)$/i);
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+  return { width, height };
+}
+
+function resolveDraftImageConfig(saved) {
+  const savedPreset = String(saved?.resolutionPreset || '').trim();
+  const savedAspectRatio = String(saved?.aspectRatio || '').trim();
+  const hasPreset = RESOLUTION_OPTIONS.some(item => item.value === savedPreset);
+  const hasAspectRatio = ASPECT_RATIO_OPTIONS.some(item => item.value === savedAspectRatio);
+  if (hasPreset && hasAspectRatio) {
+    return { resolutionPreset: savedPreset, aspectRatio: savedAspectRatio };
+  }
+
+  const legacySize = parseLegacySizeValue(saved?.size);
+  if (legacySize) {
+    return {
+      resolutionPreset: inferResolutionPresetValue(legacySize.width, legacySize.height),
+      aspectRatio: inferAspectRatioValue(legacySize.width, legacySize.height),
+    };
+  }
+
+  return {
+    resolutionPreset: hasPreset ? savedPreset : DEFAULT_RESOLUTION_PRESET,
+    aspectRatio: hasAspectRatio ? savedAspectRatio : DEFAULT_ASPECT_RATIO,
+  };
+}
+
 function loadPersistedSettings() {
   try {
     return JSON.parse(localStorage.getItem(buildScopeSettingsKey()) || '{}');
@@ -517,12 +737,18 @@ function loadPersistedSettings() {
 function persistSettings() {
   if (!scopeKey.value) return;
   try {
+    const resolvedSize = currentRequestSize.value;
     localStorage.setItem(buildScopeSettingsKey(), JSON.stringify({
       baseUrl: draft.baseUrl,
       apiKey: draft.apiKey,
       model: draft.model,
       prompt: draft.prompt,
-      size: draft.size,
+      resolutionPreset: draft.resolutionPreset,
+      aspectRatio: draft.aspectRatio,
+      outputFormat: draft.outputFormat,
+      background: draft.background,
+      outputCompression: draft.outputCompression,
+      size: resolvedSize,
       workflowMode: workflowMode.value,
     }));
   } catch {}
@@ -530,17 +756,24 @@ function persistSettings() {
 
 function buildInitialDraft(record) {
   const saved = loadPersistedSettings();
+  const imageConfig = resolveDraftImageConfig(saved);
   draft.baseUrl = String(saved.baseUrl || normalizeBaseUrl(record?.siteUrl || '')).trim();
   draft.apiKey = String(saved.apiKey || record?.apiKey || '').trim();
   draft.model = String(saved.model || record?.selectedModel || '').trim();
   draft.prompt = String(saved.prompt || buildDefaultPrompt(record)).trim();
-  draft.size = String(saved.size || '1024x1536').trim() || '1024x1536';
+  draft.resolutionPreset = imageConfig.resolutionPreset;
+  draft.aspectRatio = imageConfig.aspectRatio;
+  draft.outputFormat = OUTPUT_FORMAT_OPTIONS.some(item => item.value === saved.outputFormat) ? saved.outputFormat : DEFAULT_OUTPUT_FORMAT;
+  draft.background = BACKGROUND_OPTIONS.some(item => item.value === saved.background) ? saved.background : DEFAULT_BACKGROUND;
+  draft.outputCompression = normalizeOutputCompression(saved.outputCompression);
   workflowMode.value = WORKFLOW_MODES.some(item => item.value === saved.workflowMode) ? saved.workflowMode : 'generate';
 }
 
 function buildImagePrompt(prompt, size, mode = workflowMode.value) {
   const normalizedPrompt = String(prompt || '').trim();
-  const sizeHint = size === 'auto' ? '尺寸要求：自动。' : `尺寸要求：${size}。`;
+  const sizeHint = size
+    ? `分辨率要求：${getResolutionOptionLabel(draft.resolutionPreset)}，比例 ${getAspectRatioLabel(draft.aspectRatio)}，目标尺寸 ${size}。`
+    : `分辨率要求：${getResolutionOptionLabel(draft.resolutionPreset)}，比例 ${getAspectRatioLabel(draft.aspectRatio)}。`;
   const modeHintMap = {
     generate: '请调用 image_generation 工具直接输出图片，不要输出说明文字。',
     reference: '请参考随附参考图的主体、色彩、构图或质感重新生成图片，并直接输出图片结果。',
@@ -567,14 +800,39 @@ function buildResponsesInput(finalPrompt) {
 }
 
 function buildImageGenerationTool() {
-  const tool = { type: 'image_generation' };
-  if (draft.size && draft.size !== 'auto') {
-    tool.size = draft.size;
+  const tool = {
+    type: 'image_generation',
+    output_format: draft.outputFormat,
+  };
+  if (currentRequestSize.value) {
+    tool.size = currentRequestSize.value;
+  }
+  if (draft.background && draft.background !== 'auto') {
+    tool.background = draft.background;
+  }
+  if (supportsOutputCompression.value) {
+    tool.output_compression = normalizeOutputCompression(draft.outputCompression);
   }
   if (workflowMode.value === 'inpaint') {
     tool.input_image_mask = { image_url: buildMaskDataUrl() };
   }
   return tool;
+}
+
+function formatHistorySize(item) {
+  const rawSize = String(item?.size || '').trim();
+  const preset = String(item?.resolutionPreset || '').trim();
+  const ratio = String(item?.aspectRatio || '').trim();
+  if (preset && ratio && rawSize) {
+    return `${getResolutionOptionLabel(preset)} · ${getAspectRatioLabel(ratio)} · ${rawSize}`;
+  }
+  return rawSize || '未记录';
+}
+
+function normalizeOutputCompression(value) {
+  const numeric = Number(value ?? DEFAULT_OUTPUT_COMPRESSION);
+  if (!Number.isFinite(numeric)) return DEFAULT_OUTPUT_COMPRESSION;
+  return Math.min(100, Math.max(0, Math.round(numeric)));
 }
 
 function buildErrorMessage(status, responseText) {
@@ -643,6 +901,35 @@ function formatCompactDateTime(timestamp) {
   const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
   return `${month}-${day} ${hours}:${minutes}`;
+}
+
+function getRecordByScopeKey(targetScopeKey) {
+  const normalized = String(targetScopeKey || '').trim();
+  if (!normalized) return null;
+  return records.value.find(item => String(item?.rowKey || '').trim() === normalized) || null;
+}
+
+function buildHistoryScopeLabel(meta) {
+  const siteName = String(meta?.siteName || '').trim() || '未命名站点';
+  const apiKeyMasked = String(meta?.apiKeyMasked || '').trim();
+  return apiKeyMasked ? `${siteName} · ${apiKeyMasked}` : siteName;
+}
+
+function buildHistoryScopeMeta(scopeValue, latestItem, count) {
+  const record = getRecordByScopeKey(scopeValue);
+  const siteName = String(record?.siteName || latestItem?.siteName || '').trim() || '未命名站点';
+  const apiKeyMasked = String(record?.apiKey ? maskApiKey(String(record.apiKey).trim()) : (latestItem?.apiKeyMasked || '')).trim();
+  const siteUrl = String(record?.siteUrl || latestItem?.siteUrl || '').trim();
+  const lastTimestamp = Number(latestItem?.timestamp || 0);
+  return {
+    value: scopeValue,
+    label: buildHistoryScopeLabel({ siteName, apiKeyMasked }),
+    siteName,
+    apiKeyMasked,
+    siteUrl,
+    count,
+    lastTimestamp,
+  };
 }
 
 function toDataUrl(base64) {
@@ -926,7 +1213,7 @@ async function saveHistoryItem(item) {
 }
 
 async function loadHistoryList() {
-  if (!scopeKey.value) {
+  if (!selectedHistoryScopeKey.value) {
     historyItems.value = [];
     activeItemId.value = null;
     return;
@@ -937,7 +1224,7 @@ async function loadHistoryList() {
     const transaction = database.transaction(IMAGE_HISTORY_STORE, 'readonly');
     const store = transaction.objectStore(IMAGE_HISTORY_STORE);
     const index = store.index(IMAGE_HISTORY_SCOPE_INDEX);
-    const request = index.getAll(scopeKey.value);
+    const request = index.getAll(selectedHistoryScopeKey.value);
     request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
     request.onerror = () => reject(request.error || new Error('历史读取失败'));
     transaction.oncomplete = () => database.close();
@@ -949,6 +1236,56 @@ async function loadHistoryList() {
   } else {
     activeItemId.value = historyItems.value[0]?.id ?? null;
   }
+}
+
+async function loadHistoryScopeOptions() {
+  const database = await openHistoryDb();
+  const items = await new Promise((resolve, reject) => {
+    const transaction = database.transaction(IMAGE_HISTORY_STORE, 'readonly');
+    const store = transaction.objectStore(IMAGE_HISTORY_STORE);
+    const request = store.getAll();
+    request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
+    request.onerror = () => reject(request.error || new Error('历史读取失败'));
+    transaction.oncomplete = () => database.close();
+    transaction.onerror = () => reject(transaction.error || new Error('历史读取失败'));
+  });
+
+  const grouped = new Map();
+  items.forEach(item => {
+    const itemScopeKey = String(item?.scopeKey || '').trim();
+    if (!itemScopeKey) return;
+    const current = grouped.get(itemScopeKey);
+    if (!current) {
+      grouped.set(itemScopeKey, { count: 1, latestItem: item });
+      return;
+    }
+    current.count += 1;
+    if (Number(item?.timestamp || 0) >= Number(current.latestItem?.timestamp || 0)) {
+      current.latestItem = item;
+    }
+  });
+
+  historyScopeOptions.value = Array.from(grouped.entries())
+    .map(([itemScopeKey, meta]) => buildHistoryScopeMeta(itemScopeKey, meta.latestItem, meta.count))
+    .sort((left, right) => Number(right.lastTimestamp || 0) - Number(left.lastTimestamp || 0));
+
+  if (!historyScopeOptions.value.length) {
+    selectedHistoryScopeKey.value = '';
+    historyItems.value = [];
+    activeItemId.value = null;
+    return;
+  }
+
+  if (historyScopeOptions.value.some(item => item.value === selectedHistoryScopeKey.value)) {
+    return;
+  }
+
+  if (scopeKey.value && historyScopeOptions.value.some(item => item.value === scopeKey.value)) {
+    selectedHistoryScopeKey.value = scopeKey.value;
+    return;
+  }
+
+  selectedHistoryScopeKey.value = historyScopeOptions.value[0]?.value || '';
 }
 
 async function deleteHistoryItem(id) {
@@ -964,14 +1301,15 @@ async function deleteHistoryItem(id) {
   });
 }
 
-async function clearHistoryByScope() {
-  if (!scopeKey.value) return;
+async function clearHistoryByScope(targetScopeKey = selectedHistoryScopeKey.value) {
+  const normalizedScopeKey = String(targetScopeKey || '').trim();
+  if (!normalizedScopeKey) return;
   const database = await openHistoryDb();
   await new Promise((resolve, reject) => {
     const transaction = database.transaction(IMAGE_HISTORY_STORE, 'readwrite');
     const store = transaction.objectStore(IMAGE_HISTORY_STORE);
     const index = store.index(IMAGE_HISTORY_SCOPE_INDEX);
-    const request = index.openCursor(IDBKeyRange.only(scopeKey.value));
+    const request = index.openCursor(IDBKeyRange.only(normalizedScopeKey));
     request.onsuccess = () => {
       const cursor = request.result;
       if (!cursor) {
@@ -985,8 +1323,8 @@ async function clearHistoryByScope() {
     transaction.oncomplete = () => database.close();
     transaction.onerror = () => reject(transaction.error || new Error('历史清空失败'));
   });
-  historyItems.value = [];
-  activeItemId.value = null;
+  await loadHistoryScopeOptions();
+  await loadHistoryList();
 }
 
 async function refreshModelOptions(showFeedback = false) {
@@ -1088,7 +1426,8 @@ async function generateImage() {
   errorMessage.value = '';
 
   try {
-    const finalPrompt = buildImagePrompt(draft.prompt, draft.size, workflowMode.value);
+    const resolvedSize = currentRequestSize.value;
+    const finalPrompt = buildImagePrompt(draft.prompt, resolvedSize, workflowMode.value);
     const requestBody = buildRequestBody(finalPrompt);
     const { endpoint, payload } = await requestImageGeneration(requestBody);
     const outputs = Array.isArray(payload?.output) ? payload.output : [];
@@ -1110,8 +1449,11 @@ async function generateImage() {
       scopeKey: scopeKey.value,
       siteName: String(targetRecord.value?.siteName || '').trim(),
       siteUrl: String(targetRecord.value?.siteUrl || '').trim(),
+      apiKeyMasked: maskedRecordKeyLabel.value,
       model: String(draft.model || '').trim(),
-      size: draft.size,
+      size: resolvedSize,
+      resolutionPreset: draft.resolutionPreset,
+      aspectRatio: draft.aspectRatio,
       prompt: String(draft.prompt || '').trim(),
       mode: workflowMode.value,
       base64,
@@ -1119,6 +1461,8 @@ async function generateImage() {
     };
 
     nextItem.id = await saveHistoryItem(nextItem);
+    await loadHistoryScopeOptions();
+    selectedHistoryScopeKey.value = scopeKey.value || selectedHistoryScopeKey.value;
     await loadHistoryList();
     activeItemId.value = nextItem.id;
     persistSettings();
@@ -1163,21 +1507,23 @@ function confirmDeleteHistoryItem(item) {
     okButtonProps: { danger: true },
     async onOk() {
       await deleteHistoryItem(item.id);
+      await loadHistoryScopeOptions();
       await loadHistoryList();
     },
   });
 }
 
 function confirmClearHistory() {
+  const targetLabel = selectedHistoryScopeMeta.value?.label || '当前选择的站点';
   Modal.confirm({
-    title: '确认清空当前 key 的绘图历史？',
-    content: '只会删除当前密钥对应的本地绘图历史，不影响其他 key。',
+    title: `确认清空“${targetLabel}”的绘图历史？`,
+    content: '只会删除当前下拉选中的站点与密钥历史，不影响其他记录。',
     okText: '清空',
     cancelText: '取消',
     okButtonProps: { danger: true },
     async onOk() {
       await clearHistoryByScope();
-      message.success('当前 key 的绘图历史已清空');
+      message.success(`已清空“${targetLabel}”的绘图历史`);
     },
   });
 }
@@ -1215,14 +1561,47 @@ async function bootstrap() {
   modelOptions.value = buildModelOptions(targetRecord.value);
   draft.model = pickPreferredModel(draft.model || targetRecord.value.selectedModel || '');
   await refreshModelOptions(false);
+  await loadHistoryScopeOptions();
   await loadHistoryList();
   updateWindowTitle();
 }
 
 watch(
-  () => [draft.baseUrl, draft.apiKey, draft.model, draft.prompt, draft.size, workflowMode.value],
+  () => [
+    draft.baseUrl,
+    draft.apiKey,
+    draft.model,
+    draft.prompt,
+    draft.resolutionPreset,
+    draft.aspectRatio,
+    draft.outputFormat,
+    draft.background,
+    draft.outputCompression,
+    workflowMode.value,
+  ],
   () => {
     persistSettings();
+  }
+);
+
+watch(
+  () => selectedHistoryScopeKey.value,
+  () => {
+    void loadHistoryList();
+  }
+);
+
+watch(
+  () => draft.outputFormat,
+  format => {
+    if (format === 'jpeg' && draft.background === 'transparent') {
+      draft.background = 'opaque';
+    }
+    if (!supportsOutputCompression.value) {
+      draft.outputCompression = DEFAULT_OUTPUT_COMPRESSION;
+    } else {
+      draft.outputCompression = normalizeOutputCompression(draft.outputCompression);
+    }
   }
 );
 
@@ -1453,6 +1832,91 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.ai-image-size-config {
+  display: grid;
+  gap: 10px;
+}
+
+.ai-image-misc-collapse {
+  margin: 2px 0 18px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.48);
+  box-shadow: inset 0 0 0 1px rgba(118, 144, 108, 0.12);
+}
+
+.ai-image-misc-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}
+
+.ai-image-misc-item {
+  margin-bottom: 12px;
+}
+
+.ai-image-size-ratio-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.ai-image-history-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ai-image-history-scope-select {
+  min-width: 250px;
+}
+
+.ai-image-aspect-select {
+  min-width: 132px;
+}
+
+.ai-image-size-current {
+  color: #5b6d58;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ai-image-compression-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ai-image-compression-range {
+  flex: 1 1 auto;
+}
+
+.ai-image-compression-value {
+  min-width: 42px;
+  color: #5b6d58;
+  font-size: 12px;
+  text-align: right;
+}
+
+:deep(.ai-image-misc-collapse .ant-collapse-item) {
+  border-bottom: none;
+}
+
+:deep(.ai-image-misc-collapse .ant-collapse-header) {
+  color: #344235 !important;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+:deep(.ai-image-misc-collapse .ant-collapse-content) {
+  background: transparent;
+}
+
+:deep(.ai-image-misc-collapse .ant-collapse-content-box) {
+  padding-top: 4px !important;
+  padding-bottom: 6px !important;
 }
 
 .ai-image-mode-option,
@@ -1830,6 +2294,15 @@ onMounted(() => {
 
   .ai-image-form-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-image-misc-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-image-history-scope-select {
+    min-width: 0;
+    width: 100%;
   }
 
   .ai-image-record-pills {
