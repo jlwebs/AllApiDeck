@@ -349,6 +349,8 @@ func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) m
 	contentBlocks := make([]map[string]any, 0, 2)
 	hasToolUse := false
 	webSearchRequests := 0
+	annotationResultContents := extractResponsesAnnotatedWebSearchResultContents(response["output"])
+	annotationResultIndex := 0
 	if outputText := toStringValue(response["output_text"]); outputText != "" {
 		contentBlocks = append(contentBlocks, map[string]any{"type": "text", "text": outputText})
 	}
@@ -371,7 +373,11 @@ func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) m
 						case "output_text", "text":
 							text := toStringValue(contentMap["text"])
 							if text != "" {
-								contentBlocks = append(contentBlocks, map[string]any{"type": "text", "text": text})
+								textBlock := map[string]any{"type": "text", "text": text}
+								if citations := buildAnthropicWebSearchCitations(text, contentMap["annotations"]); len(citations) > 0 {
+									textBlock["citations"] = citations
+								}
+								contentBlocks = append(contentBlocks, textBlock)
 							}
 						case "refusal":
 							text := toStringValue(contentMap["refusal"])
@@ -391,9 +397,9 @@ func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) m
 				})
 			case "web_search_call":
 				webSearchRequests++
-				toolUseID := firstNonEmpty(
+				toolUseID := normalizeAnthropicServerToolUseID(
 					strings.TrimSpace(toStringValue(outputMap["id"])),
-					fmt.Sprintf("srvtoolu_%d", webSearchRequests),
+					webSearchRequests,
 				)
 				if input := buildAnthropicWebSearchInput(outputMap); len(input) > 0 {
 					contentBlocks = append(contentBlocks, map[string]any{
@@ -403,7 +409,12 @@ func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) m
 						"input": input,
 					})
 				}
-				if result := buildAnthropicWebSearchResultBlock(toolUseID, outputMap); result != nil {
+				result := buildAnthropicWebSearchResultBlock(toolUseID, outputMap)
+				if result == nil && annotationResultIndex < len(annotationResultContents) {
+					result = buildAnthropicWebSearchResultBlockFromContent(toolUseID, annotationResultContents[annotationResultIndex])
+					annotationResultIndex++
+				}
+				if result != nil {
 					contentBlocks = append(contentBlocks, result)
 				}
 			}
@@ -471,6 +482,10 @@ func buildAnthropicWebSearchInput(webSearchCall map[string]any) map[string]any {
 
 func buildAnthropicWebSearchResultBlock(toolUseID string, webSearchCall map[string]any) map[string]any {
 	content := buildAnthropicWebSearchResultContent(webSearchCall)
+	return buildAnthropicWebSearchResultBlockFromContent(toolUseID, content)
+}
+
+func buildAnthropicWebSearchResultBlockFromContent(toolUseID string, content any) map[string]any {
 	if content == nil {
 		return nil
 	}
@@ -519,6 +534,168 @@ func buildAnthropicWebSearchResultContent(webSearchCall map[string]any) any {
 		return nil
 	}
 	return results
+}
+
+func buildAnthropicWebSearchResultContentFromAnnotations(annotations any) any {
+	items, ok := annotations.([]any)
+	if !ok || len(items) == 0 {
+		return nil
+	}
+	results := make([]map[string]any, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, rawItem := range items {
+		itemMap, ok := rawItem.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(toStringValue(itemMap["type"])) != "url_citation" {
+			continue
+		}
+		url := strings.TrimSpace(toStringValue(itemMap["url"]))
+		if url == "" {
+			continue
+		}
+		if _, exists := seen[url]; exists {
+			continue
+		}
+		seen[url] = struct{}{}
+		result := map[string]any{
+			"type": "web_search_result",
+			"url":  url,
+		}
+		if title := strings.TrimSpace(toStringValue(itemMap["title"])); title != "" {
+			result["title"] = title
+		}
+		results = append(results, result)
+	}
+	if len(results) == 0 {
+		return nil
+	}
+	return results
+}
+
+func extractResponsesWebSearchCalls(output any) []map[string]any {
+	items, ok := output.([]any)
+	if !ok {
+		return nil
+	}
+	results := make([]map[string]any, 0, len(items))
+	for _, rawItem := range items {
+		itemMap, ok := rawItem.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(toStringValue(itemMap["type"])) != "web_search_call" {
+			continue
+		}
+		results = append(results, itemMap)
+	}
+	return results
+}
+
+func extractResponsesAnnotatedWebSearchResultContents(output any) []any {
+	items, ok := output.([]any)
+	if !ok {
+		return nil
+	}
+	results := make([]any, 0, len(items))
+	for _, rawItem := range items {
+		itemMap, ok := rawItem.(map[string]any)
+		if !ok || strings.TrimSpace(toStringValue(itemMap["type"])) != "message" {
+			continue
+		}
+		contentItems, _ := itemMap["content"].([]any)
+		for _, rawContent := range contentItems {
+			contentMap, ok := rawContent.(map[string]any)
+			if !ok {
+				continue
+			}
+			contentType := strings.TrimSpace(toStringValue(contentMap["type"]))
+			if contentType != "output_text" && contentType != "text" {
+				continue
+			}
+			if resultContent := buildAnthropicWebSearchResultContentFromAnnotations(contentMap["annotations"]); resultContent != nil {
+				results = append(results, resultContent)
+			}
+		}
+	}
+	if len(results) == 0 {
+		return nil
+	}
+	return results
+}
+
+func buildAnthropicWebSearchCitations(text string, annotations any) []map[string]any {
+	items, ok := annotations.([]any)
+	if !ok || len(items) == 0 {
+		return nil
+	}
+	results := make([]map[string]any, 0, len(items))
+	for _, rawItem := range items {
+		itemMap, ok := rawItem.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(toStringValue(itemMap["type"])) != "url_citation" {
+			continue
+		}
+		url := strings.TrimSpace(toStringValue(itemMap["url"]))
+		if url == "" {
+			continue
+		}
+		citation := map[string]any{
+			"type": "web_search_result_location",
+			"url":  url,
+		}
+		if title := strings.TrimSpace(toStringValue(itemMap["title"])); title != "" {
+			citation["title"] = title
+		}
+		start := toIntValue(itemMap["start_index"])
+		end := toIntValue(itemMap["end_index"])
+		if start >= 0 && end > start {
+			runes := []rune(text)
+			if start < len(runes) {
+				if end > len(runes) {
+					end = len(runes)
+				}
+				citedText := strings.TrimSpace(string(runes[start:end]))
+				if citedText != "" {
+					citation["cited_text"] = citedText
+				}
+			}
+		}
+		results = append(results, citation)
+	}
+	if len(results) == 0 {
+		return nil
+	}
+	return results
+}
+
+func normalizeAnthropicServerToolUseID(raw string, fallbackIndex int) string {
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(trimmed, "srvtoolu_") || strings.HasPrefix(trimmed, "servertoolu_") {
+		return trimmed
+	}
+	sanitized := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + ('a' - 'A')
+		case r >= '0' && r <= '9':
+			return r
+		default:
+			return -1
+		}
+	}, trimmed)
+	if sanitized == "" {
+		if fallbackIndex < 1 {
+			fallbackIndex = 1
+		}
+		sanitized = fmt.Sprintf("%d", fallbackIndex)
+	}
+	return "srvtoolu_" + sanitized
 }
 
 func performJSONUpstreamRequest(method string, targetURL string, headers map[string]string, payload map[string]any, timeoutSeconds int) (int, http.Header, []byte, time.Duration, error) {
@@ -800,11 +977,11 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 		return fmt.Sprintf("ws:auto:%d", nextContentIndex)
 	}
 	emitWebSearchLifecycle := func(key string, itemMap map[string]any) {
-		toolUseID := firstNonEmpty(
+		toolUseID := normalizeAnthropicServerToolUseID(firstNonEmpty(
 			webSearchToolUseIDs[key],
 			strings.TrimSpace(toStringValue(itemMap["id"])),
 			fmt.Sprintf("srvtoolu_%d", webSearchRequests+1),
-		)
+		), webSearchRequests+1)
 		webSearchToolUseIDs[key] = toolUseID
 		if !webSearchSeen[key] {
 			webSearchSeen[key] = true
@@ -855,6 +1032,31 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 				webSearchResultEmitted[key] = true
 			}
 		}
+	}
+	emitWebSearchResultContent := func(key string, content any) {
+		if webSearchResultEmitted[key] || content == nil {
+			return
+		}
+		toolUseID := normalizeAnthropicServerToolUseID(firstNonEmpty(
+			webSearchToolUseIDs[key],
+			fmt.Sprintf("srvtoolu_%d", webSearchRequests+1),
+		), webSearchRequests+1)
+		webSearchToolUseIDs[key] = toolUseID
+		result := buildAnthropicWebSearchResultBlockFromContent(toolUseID, content)
+		if result == nil {
+			return
+		}
+		writeEvent("content_block_start", map[string]any{
+			"type":          "content_block_start",
+			"index":         nextContentIndex,
+			"content_block": result,
+		})
+		writeEvent("content_block_stop", map[string]any{
+			"type":  "content_block_stop",
+			"index": nextContentIndex,
+		})
+		nextContentIndex++
+		webSearchResultEmitted[key] = true
 	}
 	startToolState := func(state *responsesToolStreamState) {
 		if state == nil || state.Started || strings.TrimSpace(state.ID) == "" || strings.TrimSpace(state.Name) == "" {
@@ -1072,6 +1274,16 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 				delete(toolStates, key)
 			}
 		case "response.completed":
+			annotationResultContents := extractResponsesAnnotatedWebSearchResultContents(responseData["output"])
+			annotationResultIndex := 0
+			for _, webSearchCall := range extractResponsesWebSearchCalls(responseData["output"]) {
+				key := resolveWebSearchKey(map[string]any{}, webSearchCall)
+				emitWebSearchLifecycle(key, webSearchCall)
+				if !webSearchResultEmitted[key] && annotationResultIndex < len(annotationResultContents) {
+					emitWebSearchResultContent(key, annotationResultContents[annotationResultIndex])
+					annotationResultIndex++
+				}
+			}
 			if usageMap, ok := responseData["usage"].(map[string]any); ok {
 				usage = responsesUsageToAnthropic(usageMap)
 			}

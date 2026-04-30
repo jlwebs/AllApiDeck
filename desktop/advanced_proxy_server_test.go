@@ -185,13 +185,79 @@ func TestOpenAIResponsesToAnthropicMapsWebSearchBlocksAndUsage(t *testing.T) {
 	if content[0]["type"] != "server_tool_use" || content[0]["name"] != "web_search" {
 		t.Fatalf("expected server_tool_use block, got %#v", content[0])
 	}
-	if content[1]["type"] != "web_search_tool_result" || content[1]["tool_use_id"] != "ws_123" {
+	if content[1]["type"] != "web_search_tool_result" || content[1]["tool_use_id"] != "srvtoolu_ws123" {
 		t.Fatalf("expected web_search_tool_result block, got %#v", content[1])
 	}
 	usage, _ := result["usage"].(map[string]any)
 	serverToolUse, _ := usage["server_tool_use"].(map[string]any)
 	if toIntValue(serverToolUse["web_search_requests"]) != 1 {
 		t.Fatalf("expected one web search request in usage, got %#v", result["usage"])
+	}
+}
+
+func TestOpenAIResponsesToAnthropicBuildsWebSearchResultFromAnnotations(t *testing.T) {
+	response := map[string]any{
+		"id":     "resp_search_annotations",
+		"model":  "gpt-5.4",
+		"status": "completed",
+		"output": []any{
+			map[string]any{
+				"type": "web_search_call",
+				"id":   "ws_annotations",
+				"action": map[string]any{
+					"type":  "search",
+					"query": "site:github.com CLIProxyAPI",
+				},
+			},
+			map[string]any{
+				"type": "message",
+				"content": []any{
+					map[string]any{
+						"type": "output_text",
+						"text": "Top GitHub results ...",
+						"annotations": []any{
+							map[string]any{
+								"type":        "url_citation",
+								"url":         "https://github.com/router-for-me/CLIProxyAPI/issues/2599",
+								"title":       "router-for-me/CLIProxyAPI issue #2599",
+								"start_index": 4,
+								"end_index":   10,
+							},
+						},
+					},
+				},
+			},
+		},
+		"usage": map[string]any{
+			"input_tokens":  12,
+			"output_tokens": 8,
+		},
+	}
+
+	result := openAIResponsesToAnthropic(response, "gpt-5.4")
+	content := contentBlocksOf(t, result["content"])
+	if len(content) != 3 {
+		t.Fatalf("expected server_tool_use + synthesized web_search_tool_result + text, got %#v", content)
+	}
+	if content[1]["type"] != "web_search_tool_result" || content[1]["tool_use_id"] != "srvtoolu_wsannotations" {
+		t.Fatalf("expected synthesized web_search_tool_result block, got %#v", content[1])
+	}
+	switch typed := content[1]["content"].(type) {
+	case []map[string]any:
+		if len(typed) != 1 {
+			t.Fatalf("expected synthesized search result content, got %#v", content[1]["content"])
+		}
+	case []any:
+		if len(typed) != 1 {
+			t.Fatalf("expected synthesized search result content, got %#v", content[1]["content"])
+		}
+	default:
+		t.Fatalf("expected synthesized search result content, got %#v", content[1]["content"])
+	}
+	textBlock := content[2]
+	citations, ok := textBlock["citations"].([]map[string]any)
+	if !ok || len(citations) != 1 {
+		t.Fatalf("expected text citations derived from annotations, got %#v", textBlock)
 	}
 }
 
@@ -678,6 +744,59 @@ func TestWriteAnthropicSSEFromOpenAIResponsesStreamEmitsWebSearchLifecycle(t *te
 	}
 	if !strings.Contains(body, `"web_search_requests":1`) {
 		t.Fatalf("expected web search usage count in SSE message_delta, got %q", body)
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIResponsesStreamReplaysWebSearchFromCompletedPayload(t *testing.T) {
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"resp_search","model":"gpt-5.4"}}`,
+		"",
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","delta":"Top GitHub results ..."}`,
+		"",
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2},"output":[{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"site:github.com CLIProxyAPI","sources":[{"type":"url","url":"https://github.com/router-for-me/CLIProxyAPI/issues/2599","title":"router-for-me/CLIProxyAPI issue #2599"}]}}]}}`,
+		"",
+	}, "\n")))
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIResponsesStream(recorder, streamBody, "gpt-5.4")
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"type":"server_tool_use"`) {
+		t.Fatalf("expected replayed server_tool_use from completed payload, got %q", body)
+	}
+	if !strings.Contains(body, `"type":"web_search_tool_result"`) {
+		t.Fatalf("expected replayed web_search_tool_result from completed payload, got %q", body)
+	}
+	if !strings.Contains(body, `"web_search_requests":1`) {
+		t.Fatalf("expected replayed web search usage count, got %q", body)
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIResponsesStreamSynthesizesWebSearchResultFromAnnotations(t *testing.T) {
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"resp_search","model":"gpt-5.4"}}`,
+		"",
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"site:github.com CLIProxyAPI"}}}`,
+		"",
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2},"output":[{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"site:github.com CLIProxyAPI"}},{"type":"message","content":[{"type":"output_text","text":"Top GitHub results ...","annotations":[{"type":"url_citation","url":"https://github.com/router-for-me/CLIProxyAPI/issues/2599","title":"router-for-me/CLIProxyAPI issue #2599"}]}]}]}}`,
+		"",
+	}, "\n")))
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIResponsesStream(recorder, streamBody, "gpt-5.4")
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"type":"web_search_tool_result"`) {
+		t.Fatalf("expected synthesized web_search_tool_result from annotations, got %q", body)
+	}
+	if !strings.Contains(body, `https://github.com/router-for-me/CLIProxyAPI/issues/2599`) {
+		t.Fatalf("expected synthesized source URL in web_search_tool_result, got %q", body)
 	}
 }
 
