@@ -1227,6 +1227,10 @@ type advancedProxyProviderCapabilities struct {
 	MergeSystemPrompt         bool
 }
 
+type claudeRequestFeatures struct {
+	HasAnthropicWebSearchTool bool
+}
+
 func resolveAdvancedProxyProviderCapabilities(provider AdvancedProxyProvider) advancedProxyProviderCapabilities {
 	apiFormat := normalizeClaudeAPIFormat(provider.APIFormat)
 	capabilities := advancedProxyProviderCapabilities{
@@ -1238,6 +1242,59 @@ func resolveAdvancedProxyProviderCapabilities(provider AdvancedProxyProvider) ad
 		MergeSystemPrompt:         apiFormat == "openai_chat",
 	}
 	return capabilities
+}
+
+func classifyClaudeRequestFeatures(body map[string]any) claudeRequestFeatures {
+	features := claudeRequestFeatures{}
+	tools, ok := body["tools"].([]any)
+	if !ok {
+		return features
+	}
+	for _, rawTool := range tools {
+		toolMap, ok := rawTool.(map[string]any)
+		if !ok {
+			continue
+		}
+		toolType := strings.TrimSpace(strings.ToLower(toStringValue(toolMap["type"])))
+		if strings.HasPrefix(toolType, "web_search_") {
+			features.HasAnthropicWebSearchTool = true
+		}
+	}
+	return features
+}
+
+func (features claudeRequestFeatures) requiresAnthropicProvider() bool {
+	return features.HasAnthropicWebSearchTool
+}
+
+func providerSupportsClaudeRequest(provider AdvancedProxyProvider, features claudeRequestFeatures) bool {
+	if !features.requiresAnthropicProvider() {
+		return true
+	}
+	return normalizeClaudeAPIFormat(provider.APIFormat) == "anthropic"
+}
+
+func filterCompatibleClaudeProviders(providers []AdvancedProxyProvider, features claudeRequestFeatures) []AdvancedProxyProvider {
+	if len(providers) == 0 {
+		return nil
+	}
+	if !features.requiresAnthropicProvider() {
+		return append([]AdvancedProxyProvider(nil), providers...)
+	}
+	filtered := make([]AdvancedProxyProvider, 0, len(providers))
+	for _, provider := range providers {
+		if providerSupportsClaudeRequest(provider, features) {
+			filtered = append(filtered, provider)
+		}
+	}
+	return filtered
+}
+
+func incompatibleClaudeRequestMessage(features claudeRequestFeatures) string {
+	if features.HasAnthropicWebSearchTool {
+		return "Claude native web_search tools require an Anthropic provider in the advanced proxy Claude queue; current queue has no compatible provider."
+	}
+	return "Claude request requires a compatible advanced proxy provider, but none are available."
 }
 
 func collectAdjacentAssistantToolUseIDs(messages []any, currentIndex int) map[string]struct{} {

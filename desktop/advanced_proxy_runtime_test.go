@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseJSONStringMapReturnsEmptyMapOnInvalidJSON(t *testing.T) {
 	parsed := parseJSONStringMap(`{"file_path":`)
@@ -134,6 +137,72 @@ func TestAnthropicRequestToOpenAIResponsesUsesInstructionsAndMapsImages(t *testi
 	path, _ := properties["path"].(map[string]any)
 	if _, exists := path["format"]; exists {
 		t.Fatalf("expected cleaned responses schema, got %#v", path)
+	}
+}
+
+func TestClassifyClaudeRequestFeaturesDetectsAnthropicWebSearchTool(t *testing.T) {
+	features := classifyClaudeRequestFeatures(map[string]any{
+		"tools": []any{
+			map[string]any{
+				"type":            "web_search_20250305",
+				"name":            "web_search",
+				"allowed_domains": []any{"github.com"},
+			},
+		},
+	})
+
+	if !features.HasAnthropicWebSearchTool {
+		t.Fatalf("expected web_search tool to be detected, got %#v", features)
+	}
+	if !features.requiresAnthropicProvider() {
+		t.Fatalf("expected detected web_search tool to require anthropic provider")
+	}
+}
+
+func TestFilterCompatibleClaudeProvidersKeepsOnlyAnthropicForWebSearch(t *testing.T) {
+	providers := []AdvancedProxyProvider{
+		{ID: "openai-chat", APIFormat: "openai_chat"},
+		{ID: "anthropic", APIFormat: "anthropic"},
+		{ID: "openai-responses", APIFormat: "openai_responses"},
+	}
+
+	filtered := filterCompatibleClaudeProviders(providers, claudeRequestFeatures{
+		HasAnthropicWebSearchTool: true,
+	})
+
+	if len(filtered) != 1 {
+		t.Fatalf("expected one compatible provider, got %#v", filtered)
+	}
+	if filtered[0].ID != "anthropic" {
+		t.Fatalf("expected anthropic provider retained, got %#v", filtered)
+	}
+}
+
+func TestFilterCompatibleClaudeProvidersKeepsRegularRequestsUntouched(t *testing.T) {
+	providers := []AdvancedProxyProvider{
+		{ID: "openai-chat", APIFormat: "openai_chat"},
+		{ID: "anthropic", APIFormat: "anthropic"},
+	}
+
+	filtered := filterCompatibleClaudeProviders(providers, claudeRequestFeatures{})
+
+	if len(filtered) != len(providers) {
+		t.Fatalf("expected all providers retained, got %#v", filtered)
+	}
+	for index := range providers {
+		if filtered[index].ID != providers[index].ID {
+			t.Fatalf("expected provider order preserved, got %#v", filtered)
+		}
+	}
+}
+
+func TestIncompatibleClaudeRequestMessageMentionsAnthropicWebSearch(t *testing.T) {
+	message := incompatibleClaudeRequestMessage(claudeRequestFeatures{
+		HasAnthropicWebSearchTool: true,
+	})
+
+	if !strings.Contains(message, "web_search") || !strings.Contains(strings.ToLower(message), "anthropic") {
+		t.Fatalf("expected explicit compatibility message, got %q", message)
 	}
 }
 

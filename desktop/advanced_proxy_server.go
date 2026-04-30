@@ -1852,6 +1852,21 @@ func (a *App) handleAdvancedProxyClaude(writer http.ResponseWriter, request *htt
 		return
 	}
 
+	requestFeatures := classifyClaudeRequestFeatures(requestBody)
+	compatibleProviders := filterCompatibleClaudeProviders(providers, requestFeatures)
+	if len(compatibleProviders) == 0 {
+		writeAnthropicProxyError(writer, http.StatusBadRequest, incompatibleClaudeRequestMessage(requestFeatures))
+		return
+	}
+	if len(compatibleProviders) != len(providers) && advancedProxyDebugEnabled(config) {
+		appendAdvancedProxyLogf(
+			"[CLAUDE_PROXY_ROUTE_FILTER] feature=anthropic_web_search compatible=%d total=%d",
+			len(compatibleProviders),
+			len(providers),
+		)
+	}
+	providers = compatibleProviders
+
 	stream := truthy(requestBody["stream"])
 	failoverActive := config.Failover.Enabled && config.Failover.AutoFailoverEnabled
 
