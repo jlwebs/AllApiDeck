@@ -14,8 +14,11 @@ const (
 	swHidePanel              = 0
 	swShowNoActivatePanel    = 4
 	hwndTopmostPanel         = ^uintptr(0)
+	hwndNoTopmostPanel       = ^uintptr(1)
 	swpNoActivatePanel       = 0x0010
 	swpShowWindowPanel       = 0x0040
+	swpNoSizePanel           = 0x0001
+	swpNoMovePanel           = 0x0002
 	dwmwaExtendedFrameBounds = 9
 )
 
@@ -121,6 +124,7 @@ func getNativePanelWindowRect(hwnd uintptr) (desktopRect, error) {
 }
 
 func reinforceNativePanelTopmost(bounds sidebarWindowBounds) error {
+	_ = bounds
 	var lastErr error
 	delays := []time.Duration{
 		0,
@@ -141,8 +145,35 @@ func reinforceNativePanelTopmost(bounds sidebarWindowBounds) error {
 			}
 			continue
 		}
-		if err := showNativePanelWindow(hwnd, bounds); err != nil {
-			lastErr = err
+		_, _, normalizeErr := procSetWindowPosTaskbar.Call(
+			hwnd,
+			hwndNoTopmostPanel,
+			0,
+			0,
+			0,
+			0,
+			uintptr(swpNoSizePanel|swpNoMovePanel|swpNoActivatePanel),
+		)
+		if normalizeErr != windows.ERROR_SUCCESS && normalizeErr != nil {
+			lastErr = fmt.Errorf("SetWindowPos normalize failed: %v", normalizeErr)
+			continue
+		}
+		ret, _, topmostErr := procSetWindowPosTaskbar.Call(
+			hwnd,
+			hwndTopmostPanel,
+			0,
+			0,
+			0,
+			0,
+			uintptr(swpNoSizePanel|swpNoMovePanel|swpNoActivatePanel|swpShowWindowPanel),
+		)
+		if ret == 0 {
+			lastErr = fmt.Errorf("SetWindowPos topmost failed: %v", topmostErr)
+			continue
+		}
+		_, _, showErr := procShowWindowPanel.Call(hwnd, uintptr(swShowNoActivatePanel))
+		if showErr != windows.ERROR_SUCCESS && showErr != nil {
+			lastErr = fmt.Errorf("ShowWindow show failed: %v", showErr)
 			continue
 		}
 		return nil
