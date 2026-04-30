@@ -261,6 +261,99 @@ func TestOpenAIResponsesToAnthropicBuildsWebSearchResultFromAnnotations(t *testi
 	}
 }
 
+func TestOpenAIResponsesToAnthropicSynthesizesLifecycleFromAnnotationsWithoutCall(t *testing.T) {
+	response := map[string]any{
+		"id":     "resp_search_annotations_only",
+		"model":  "gpt-5.4",
+		"status": "completed",
+		"output": []any{
+			map[string]any{
+				"type": "message",
+				"content": []any{
+					map[string]any{
+						"type": "output_text",
+						"text": "Top GitHub results ...",
+						"annotations": []any{
+							map[string]any{
+								"type":  "url_citation",
+								"url":   "https://github.com/router-for-me/CLIProxyAPI/issues/2599",
+								"title": "router-for-me/CLIProxyAPI issue #2599",
+							},
+						},
+					},
+				},
+			},
+		},
+		"usage": map[string]any{
+			"input_tokens":  12,
+			"output_tokens": 8,
+		},
+	}
+
+	result := openAIResponsesToAnthropic(response, "gpt-5.4")
+	content := contentBlocksOf(t, result["content"])
+	if len(content) != 3 {
+		t.Fatalf("expected synthesized server_tool_use + web_search_tool_result + text, got %#v", content)
+	}
+	foundServerToolUse := false
+	foundSearchResult := false
+	for _, block := range content {
+		switch block["type"] {
+		case "server_tool_use":
+			foundServerToolUse = true
+		case "web_search_tool_result":
+			foundSearchResult = true
+		}
+	}
+	if !foundServerToolUse || !foundSearchResult {
+		t.Fatalf("expected synthesized web search lifecycle, got %#v", content)
+	}
+	usage, _ := result["usage"].(map[string]any)
+	serverToolUse, _ := usage["server_tool_use"].(map[string]any)
+	if toIntValue(serverToolUse["web_search_requests"]) != 1 {
+		t.Fatalf("expected one synthesized web search request in usage, got %#v", result["usage"])
+	}
+}
+
+func TestOpenAIResponsesToAnthropicSynthesizesLifecycleFromTextURLsWithoutCall(t *testing.T) {
+	response := map[string]any{
+		"id":     "resp_search_text_only",
+		"model":  "gpt-5.4",
+		"status": "completed",
+		"output": []any{
+			map[string]any{
+				"type": "message",
+				"content": []any{
+					map[string]any{
+						"type": "output_text",
+						"text": "Sources:\n- https://github.com/anthropics/claude-code\n- https://github.com/anthropics/claude-code/blob/main/README.md",
+					},
+				},
+			},
+		},
+		"usage": map[string]any{
+			"input_tokens":  12,
+			"output_tokens": 8,
+		},
+	}
+
+	result := openAIResponsesToAnthropic(response, "gpt-5.4")
+	content := contentBlocksOf(t, result["content"])
+	foundServerToolUse := false
+	foundSearchResult := false
+	for _, block := range content {
+		switch block["type"] {
+		case "server_tool_use":
+			foundServerToolUse = true
+		case "web_search_tool_result":
+			foundSearchResult = true
+		}
+	}
+	if !foundServerToolUse || !foundSearchResult {
+		t.Fatalf("expected synthesized web search lifecycle from text URLs, got %#v", content)
+	}
+}
+
 func TestBuildClaudeProviderHeadersPreservesAnthropicHeaders(t *testing.T) {
 	headers := http.Header{}
 	headers.Set("User-Agent", "Claude-Client")
@@ -797,6 +890,96 @@ func TestWriteAnthropicSSEFromOpenAIResponsesStreamSynthesizesWebSearchResultFro
 	}
 	if !strings.Contains(body, `https://github.com/router-for-me/CLIProxyAPI/issues/2599`) {
 		t.Fatalf("expected synthesized source URL in web_search_tool_result, got %q", body)
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIResponsesStreamSynthesizesLifecycleFromAnnotationsWithoutCall(t *testing.T) {
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"resp_search","model":"gpt-5.4"}}`,
+		"",
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2},"output":[{"type":"message","content":[{"type":"output_text","text":"Top GitHub results ...","annotations":[{"type":"url_citation","url":"https://github.com/router-for-me/CLIProxyAPI/issues/2599","title":"router-for-me/CLIProxyAPI issue #2599"}]}]}]}}`,
+		"",
+	}, "\n")))
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIResponsesStream(recorder, streamBody, "gpt-5.4")
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"type":"server_tool_use"`) {
+		t.Fatalf("expected synthesized server_tool_use from annotations-only response, got %q", body)
+	}
+	if !strings.Contains(body, `"type":"web_search_tool_result"`) {
+		t.Fatalf("expected synthesized web_search_tool_result from annotations-only response, got %q", body)
+	}
+	if !strings.Contains(body, `"web_search_requests":1`) {
+		t.Fatalf("expected synthesized web search usage count, got %q", body)
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIResponsesStreamSynthesizesFromAnnotationAddedEvents(t *testing.T) {
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"resp_search","model":"gpt-5.4"}}`,
+		"",
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"Top GitHub results ..."}`,
+		"",
+		`event: response.output_text.annotation.added`,
+		`data: {"type":"response.output_text.annotation.added","item_id":"msg_1","output_index":0,"content_index":0,"annotation":{"type":"url_citation","url":"https://github.com/router-for-me/CLIProxyAPI/issues/2599","title":"router-for-me/CLIProxyAPI issue #2599"}}`,
+		"",
+		`event: response.output_item.done`,
+		`data: {"type":"response.output_item.done","item":{"type":"message","id":"msg_1"}}`,
+		"",
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2}}}`,
+		"",
+	}, "\n")))
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIResponsesStream(recorder, streamBody, "gpt-5.4")
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"type":"server_tool_use"`) {
+		t.Fatalf("expected synthesized server_tool_use from annotation stream events, got %q", body)
+	}
+	if !strings.Contains(body, `"type":"web_search_tool_result"`) {
+		t.Fatalf("expected synthesized web_search_tool_result from annotation stream events, got %q", body)
+	}
+	if !strings.Contains(body, `https://github.com/router-for-me/CLIProxyAPI/issues/2599`) {
+		t.Fatalf("expected synthesized source URL from annotation stream events, got %q", body)
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIResponsesStreamSynthesizesFromTextURLsWithoutAnnotations(t *testing.T) {
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"resp_search","model":"gpt-5.4"}}`,
+		"",
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"Sources:\n- https://github.com/anthropics/claude-code\n- https://github.com/anthropics/claude-code/blob/main/README.md"}`,
+		"",
+		`event: response.output_item.done`,
+		`data: {"type":"response.output_item.done","item":{"type":"message","id":"msg_1"}}`,
+		"",
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2}}}`,
+		"",
+	}, "\n")))
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIResponsesStream(recorder, streamBody, "gpt-5.4")
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"type":"server_tool_use"`) {
+		t.Fatalf("expected synthesized server_tool_use from text URL stream events, got %q", body)
+	}
+	if !strings.Contains(body, `"type":"web_search_tool_result"`) {
+		t.Fatalf("expected synthesized web_search_tool_result from text URL stream events, got %q", body)
+	}
+	if !strings.Contains(body, `https://github.com/anthropics/claude-code`) {
+		t.Fatalf("expected synthesized source URL from text URL stream events, got %q", body)
 	}
 }
 

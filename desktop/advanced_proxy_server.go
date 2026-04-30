@@ -11,12 +11,15 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 )
 
 const advancedProxySSEScannerMaxTokenSize = 16 * 1024 * 1024
+
+var webSearchResultURLPattern = regexp.MustCompile(`https?://[^\s<>"')\]]+`)
 
 type providerAttemptResult struct {
 	Response   map[string]any
@@ -350,7 +353,9 @@ func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) m
 	hasToolUse := false
 	webSearchRequests := 0
 	annotationResultContents := extractResponsesAnnotatedWebSearchResultContents(response["output"])
+	textResultContents := extractResponsesTextWebSearchResultContents(response["output"])
 	annotationResultIndex := 0
+	textResultIndex := 0
 	if outputText := toStringValue(response["output_text"]); outputText != "" {
 		contentBlocks = append(contentBlocks, map[string]any{"type": "text", "text": outputText})
 	}
@@ -414,9 +419,42 @@ func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) m
 					result = buildAnthropicWebSearchResultBlockFromContent(toolUseID, annotationResultContents[annotationResultIndex])
 					annotationResultIndex++
 				}
+				if result == nil && textResultIndex < len(textResultContents) {
+					result = buildAnthropicWebSearchResultBlockFromContent(toolUseID, textResultContents[textResultIndex])
+					textResultIndex++
+				}
 				if result != nil {
 					contentBlocks = append(contentBlocks, result)
 				}
+			}
+		}
+	}
+	if webSearchRequests == 0 && len(annotationResultContents) > 0 {
+		for _, annotationResultContent := range annotationResultContents {
+			webSearchRequests++
+			toolUseID := normalizeAnthropicServerToolUseID("", webSearchRequests)
+			contentBlocks = append(contentBlocks, map[string]any{
+				"type":  "server_tool_use",
+				"id":    toolUseID,
+				"name":  "web_search",
+				"input": map[string]any{},
+			})
+			if result := buildAnthropicWebSearchResultBlockFromContent(toolUseID, annotationResultContent); result != nil {
+				contentBlocks = append(contentBlocks, result)
+			}
+		}
+	} else if webSearchRequests == 0 && len(textResultContents) > 0 {
+		for _, textResultContent := range textResultContents {
+			webSearchRequests++
+			toolUseID := normalizeAnthropicServerToolUseID("", webSearchRequests)
+			contentBlocks = append(contentBlocks, map[string]any{
+				"type":  "server_tool_use",
+				"id":    toolUseID,
+				"name":  "web_search",
+				"input": map[string]any{},
+			})
+			if result := buildAnthropicWebSearchResultBlockFromContent(toolUseID, textResultContent); result != nil {
+				contentBlocks = append(contentBlocks, result)
 			}
 		}
 	}
@@ -445,6 +483,16 @@ func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) m
 	model := strings.TrimSpace(toStringValue(response["model"]))
 	if model == "" {
 		model = fallbackModel
+	}
+	if webSearchRequests > 0 || len(annotationResultContents) > 0 || len(textResultContents) > 0 {
+		appendAdvancedProxyLogf(
+			"[CLAUDE_PROXY_WEB_SEARCH_NONSTREAM] response_id=%s web_search_requests=%d annotation_result_sets=%d text_result_sets=%d content_blocks=%d",
+			firstNonEmpty(strings.TrimSpace(toStringValue(response["id"])), "unknown"),
+			webSearchRequests,
+			len(annotationResultContents),
+			len(textResultContents),
+			len(contentBlocks),
+		)
 	}
 	return map[string]any{
 		"id":            firstNonEmpty(strings.TrimSpace(toStringValue(response["id"])), fmt.Sprintf("msg_%d", time.Now().UnixNano())),
@@ -574,6 +622,44 @@ func buildAnthropicWebSearchResultContentFromAnnotations(annotations any) any {
 	return results
 }
 
+func buildAnthropicWebSearchResultContentFromText(text string) any {
+	matches := webSearchResultURLPattern.FindAllString(strings.TrimSpace(text), -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	results := make([]map[string]any, 0, len(matches))
+	seen := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		url := strings.TrimSpace(strings.TrimRight(match, ".,;:"))
+		if url == "" {
+			continue
+		}
+		if _, exists := seen[url]; exists {
+			continue
+		}
+		seen[url] = struct{}{}
+		results = append(results, map[string]any{
+			"type": "web_search_result",
+			"url":  url,
+		})
+	}
+	if len(results) == 0 {
+		return nil
+	}
+	return results
+}
+
+func countAnthropicWebSearchResults(content any) int {
+	switch typed := content.(type) {
+	case []map[string]any:
+		return len(typed)
+	case []any:
+		return len(typed)
+	default:
+		return 0
+	}
+}
+
 func extractResponsesWebSearchCalls(output any) []map[string]any {
 	items, ok := output.([]any)
 	if !ok {
@@ -615,6 +701,38 @@ func extractResponsesAnnotatedWebSearchResultContents(output any) []any {
 				continue
 			}
 			if resultContent := buildAnthropicWebSearchResultContentFromAnnotations(contentMap["annotations"]); resultContent != nil {
+				results = append(results, resultContent)
+			}
+		}
+	}
+	if len(results) == 0 {
+		return nil
+	}
+	return results
+}
+
+func extractResponsesTextWebSearchResultContents(output any) []any {
+	items, ok := output.([]any)
+	if !ok {
+		return nil
+	}
+	results := make([]any, 0, len(items))
+	for _, rawItem := range items {
+		itemMap, ok := rawItem.(map[string]any)
+		if !ok || strings.TrimSpace(toStringValue(itemMap["type"])) != "message" {
+			continue
+		}
+		contentItems, _ := itemMap["content"].([]any)
+		for _, rawContent := range contentItems {
+			contentMap, ok := rawContent.(map[string]any)
+			if !ok {
+				continue
+			}
+			contentType := strings.TrimSpace(toStringValue(contentMap["type"]))
+			if contentType != "output_text" && contentType != "text" {
+				continue
+			}
+			if resultContent := buildAnthropicWebSearchResultContentFromText(toStringValue(contentMap["text"])); resultContent != nil {
 				results = append(results, resultContent)
 			}
 		}
@@ -797,6 +915,7 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 	messageDeltaSent := false
 	hasToolUse := false
 	webSearchRequests := 0
+	webSearchAnnotationEvents := 0
 	nextContentIndex := 0
 	currentTextIndex := -1
 	currentThinkingIndex := -1
@@ -808,6 +927,8 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 	webSearchSeen := map[string]bool{}
 	webSearchResultEmitted := map[string]bool{}
 	webSearchToolUseIDs := map[string]string{}
+	streamedOutputText := map[string]string{}
+	streamedOutputAnnotations := map[string][]any{}
 
 	emitMessageStart := func() {
 		if messageStarted {
@@ -976,6 +1097,67 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 		}
 		return fmt.Sprintf("ws:auto:%d", nextContentIndex)
 	}
+	resolveResponsesOutputTextKey := func(data map[string]any) string {
+		itemID := strings.TrimSpace(toStringValue(data["item_id"]))
+		if itemID == "" {
+			itemID = strings.TrimSpace(toStringValue(data["output_item_id"]))
+		}
+		outputIndex := -1
+		if raw, exists := data["output_index"]; exists {
+			outputIndex = toIntValue(raw)
+		}
+		contentIndex := -1
+		if raw, exists := data["content_index"]; exists {
+			contentIndex = toIntValue(raw)
+		}
+		return fmt.Sprintf("item:%s|output:%d|content:%d", itemID, outputIndex, contentIndex)
+	}
+	buildStreamedWebSearchResultContents := func() []any {
+		keySet := map[string]struct{}{}
+		for key := range streamedOutputAnnotations {
+			keySet[key] = struct{}{}
+		}
+		for key := range streamedOutputText {
+			keySet[key] = struct{}{}
+		}
+		if len(keySet) == 0 {
+			return nil
+		}
+		keys := make([]string, 0, len(keySet))
+		for key := range keySet {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		results := make([]any, 0, len(keys))
+		for _, key := range keys {
+			content := buildAnthropicWebSearchResultContentFromAnnotations(streamedOutputAnnotations[key])
+			if content == nil {
+				content = buildAnthropicWebSearchResultContentFromText(streamedOutputText[key])
+			}
+			if content == nil {
+				continue
+			}
+			results = append(results, content)
+		}
+		if len(results) == 0 {
+			return nil
+		}
+		return results
+	}
+	firstPendingWebSearchKey := func() string {
+		keys := make([]string, 0, len(webSearchSeen))
+		for key := range webSearchSeen {
+			if webSearchResultEmitted[key] {
+				continue
+			}
+			keys = append(keys, key)
+		}
+		if len(keys) == 0 {
+			return ""
+		}
+		sort.Strings(keys)
+		return keys[0]
+	}
 	emitWebSearchLifecycle := func(key string, itemMap map[string]any) {
 		toolUseID := normalizeAnthropicServerToolUseID(firstNonEmpty(
 			webSearchToolUseIDs[key],
@@ -1016,6 +1198,13 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 			usage["server_tool_use"] = map[string]any{
 				"web_search_requests": webSearchRequests,
 			}
+			appendAdvancedProxyLogf(
+				"[CLAUDE_PROXY_WEB_SEARCH_STREAM_TOOL] response_id=%s key=%s tool_use_id=%s query=%s",
+				firstNonEmpty(messageID, "unknown"),
+				key,
+				toolUseID,
+				previewAdvancedProxyText(toStringValue(buildAnthropicWebSearchInput(itemMap)["query"]), 200),
+			)
 		}
 		if !webSearchResultEmitted[key] {
 			if result := buildAnthropicWebSearchResultBlock(toolUseID, itemMap); result != nil {
@@ -1030,6 +1219,13 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 				})
 				nextContentIndex++
 				webSearchResultEmitted[key] = true
+				appendAdvancedProxyLogf(
+					"[CLAUDE_PROXY_WEB_SEARCH_STREAM_RESULT] response_id=%s key=%s tool_use_id=%s source=web_search_call results=%d",
+					firstNonEmpty(messageID, "unknown"),
+					key,
+					toolUseID,
+					countAnthropicWebSearchResults(result["content"]),
+				)
 			}
 		}
 	}
@@ -1057,6 +1253,61 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 		})
 		nextContentIndex++
 		webSearchResultEmitted[key] = true
+		appendAdvancedProxyLogf(
+			"[CLAUDE_PROXY_WEB_SEARCH_STREAM_RESULT] response_id=%s key=%s tool_use_id=%s source=synthesized results=%d",
+			firstNonEmpty(messageID, "unknown"),
+			key,
+			toolUseID,
+			countAnthropicWebSearchResults(content),
+		)
+	}
+	emitSyntheticWebSearchLifecycle := func(content any) {
+		if content == nil {
+			return
+		}
+		webSearchRequests++
+		toolUseID := normalizeAnthropicServerToolUseID("", webSearchRequests)
+		closeIndex(&currentTextIndex)
+		closeIndex(&currentThinkingIndex)
+		emitMessageStart()
+		writeEvent("content_block_start", map[string]any{
+			"type":  "content_block_start",
+			"index": nextContentIndex,
+			"content_block": map[string]any{
+				"type":  "server_tool_use",
+				"id":    toolUseID,
+				"name":  "web_search",
+				"input": map[string]any{},
+			},
+		})
+		writeEvent("content_block_stop", map[string]any{
+			"type":  "content_block_stop",
+			"index": nextContentIndex,
+		})
+		nextContentIndex++
+		usage["server_tool_use"] = map[string]any{
+			"web_search_requests": webSearchRequests,
+		}
+		writeEvent("content_block_start", map[string]any{
+			"type":  "content_block_start",
+			"index": nextContentIndex,
+			"content_block": map[string]any{
+				"type":        "web_search_tool_result",
+				"tool_use_id": toolUseID,
+				"content":     content,
+			},
+		})
+		writeEvent("content_block_stop", map[string]any{
+			"type":  "content_block_stop",
+			"index": nextContentIndex,
+		})
+		nextContentIndex++
+		appendAdvancedProxyLogf(
+			"[CLAUDE_PROXY_WEB_SEARCH_STREAM_SYNTHETIC] response_id=%s tool_use_id=%s results=%d",
+			firstNonEmpty(messageID, "unknown"),
+			toolUseID,
+			countAnthropicWebSearchResults(content),
+		)
 	}
 	startToolState := func(state *responsesToolStreamState) {
 		if state == nil || state.Started || strings.TrimSpace(state.ID) == "" || strings.TrimSpace(state.Name) == "" {
@@ -1179,6 +1430,7 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 			if delta == "" {
 				return
 			}
+			streamedOutputText[resolveResponsesOutputTextKey(data)] += delta
 			index := ensureTextBlock("text")
 			writeEvent("content_block_delta", map[string]any{
 				"type":  "content_block_delta",
@@ -1188,6 +1440,21 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 					"text": delta,
 				},
 			})
+		case "response.output_text.annotation.added":
+			key := resolveResponsesOutputTextKey(data)
+			annotationMap, _ := data["annotation"].(map[string]any)
+			if annotationMap != nil {
+				streamedOutputAnnotations[key] = append(streamedOutputAnnotations[key], annotationMap)
+				webSearchAnnotationEvents++
+				appendAdvancedProxyLogf(
+					"[CLAUDE_PROXY_WEB_SEARCH_STREAM_ANNOTATION] response_id=%s key=%s annotation_type=%s url=%s total_for_key=%d",
+					firstNonEmpty(messageID, "unknown"),
+					key,
+					strings.TrimSpace(toStringValue(annotationMap["type"])),
+					previewAdvancedProxyText(toStringValue(annotationMap["url"]), 220),
+					len(streamedOutputAnnotations[key]),
+				)
+			}
 		case "response.output_text.done", "response.refusal.done":
 			closeIndex(&currentTextIndex)
 		case "response.reasoning.delta":
@@ -1243,6 +1510,20 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 				emitWebSearchLifecycle(resolveWebSearchKey(data, itemMap), itemMap)
 				return
 			}
+			if strings.TrimSpace(toStringValue(itemMap["type"])) == "message" {
+				annotationResultContents := extractResponsesAnnotatedWebSearchResultContents([]any{itemMap})
+				if len(annotationResultContents) == 0 {
+					annotationResultContents = buildStreamedWebSearchResultContents()
+				}
+				if len(annotationResultContents) > 0 {
+					if key := firstPendingWebSearchKey(); key != "" {
+						emitWebSearchResultContent(key, annotationResultContents[0])
+					} else {
+						emitSyntheticWebSearchLifecycle(annotationResultContents[0])
+					}
+				}
+				return
+			}
 			key := resolveToolKey(data)
 			if key == "" {
 				return
@@ -1275,15 +1556,48 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 			}
 		case "response.completed":
 			annotationResultContents := extractResponsesAnnotatedWebSearchResultContents(responseData["output"])
+			textResultContents := extractResponsesTextWebSearchResultContents(responseData["output"])
+			if len(annotationResultContents) == 0 {
+				annotationResultContents = buildStreamedWebSearchResultContents()
+			}
+			if len(textResultContents) == 0 {
+				textResultContents = buildStreamedWebSearchResultContents()
+			}
 			annotationResultIndex := 0
-			for _, webSearchCall := range extractResponsesWebSearchCalls(responseData["output"]) {
+			textResultIndex := 0
+			webSearchCalls := extractResponsesWebSearchCalls(responseData["output"])
+			for _, webSearchCall := range webSearchCalls {
 				key := resolveWebSearchKey(map[string]any{}, webSearchCall)
 				emitWebSearchLifecycle(key, webSearchCall)
 				if !webSearchResultEmitted[key] && annotationResultIndex < len(annotationResultContents) {
 					emitWebSearchResultContent(key, annotationResultContents[annotationResultIndex])
 					annotationResultIndex++
+					continue
+				}
+				if !webSearchResultEmitted[key] && textResultIndex < len(textResultContents) {
+					emitWebSearchResultContent(key, textResultContents[textResultIndex])
+					textResultIndex++
 				}
 			}
+			if len(webSearchCalls) == 0 && len(annotationResultContents) > 0 {
+				for _, annotationResultContent := range annotationResultContents {
+					emitSyntheticWebSearchLifecycle(annotationResultContent)
+				}
+			} else if len(webSearchCalls) == 0 && len(textResultContents) > 0 {
+				for _, textResultContent := range textResultContents {
+					emitSyntheticWebSearchLifecycle(textResultContent)
+				}
+			}
+			appendAdvancedProxyLogf(
+				"[CLAUDE_PROXY_WEB_SEARCH_STREAM_COMPLETE] response_id=%s web_search_calls=%d annotation_events=%d annotation_result_sets=%d text_result_sets=%d emitted_results=%d web_search_requests=%d",
+				firstNonEmpty(messageID, "unknown"),
+				len(webSearchCalls),
+				webSearchAnnotationEvents,
+				len(annotationResultContents),
+				len(textResultContents),
+				len(webSearchResultEmitted),
+				webSearchRequests,
+			)
 			if usageMap, ok := responseData["usage"].(map[string]any); ok {
 				usage = responsesUsageToAnthropic(usageMap)
 			}
