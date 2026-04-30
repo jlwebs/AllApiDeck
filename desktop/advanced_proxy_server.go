@@ -97,6 +97,50 @@ func summarizeAdvancedProxyBody(raw []byte) string {
 	return previewAdvancedProxyText(normalizeAnthropicErrorMessage(raw), 220)
 }
 
+func shouldFallbackClaudeResponsesToOpenAIChat(statusCode int, message string, features claudeRequestFeatures) bool {
+	if features.HasAnthropicWebSearchTool {
+		return false
+	}
+
+	switch statusCode {
+	case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented, http.StatusUnsupportedMediaType:
+		return true
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(message))
+	if lower == "" {
+		return false
+	}
+
+	mentionsResponses := strings.Contains(lower, "/responses") ||
+		strings.Contains(lower, "responses api") ||
+		strings.Contains(lower, "responses endpoint") ||
+		strings.Contains(lower, "openai responses") ||
+		strings.Contains(lower, " response ") ||
+		strings.HasPrefix(lower, "response ") ||
+		strings.Contains(lower, "responses")
+	if !mentionsResponses {
+		return false
+	}
+
+	switch {
+	case strings.Contains(lower, "not support"),
+		strings.Contains(lower, "unsupported"),
+		strings.Contains(lower, "not implemented"),
+		strings.Contains(lower, "not found"),
+		strings.Contains(lower, "unknown path"),
+		strings.Contains(lower, "unknown url"),
+		strings.Contains(lower, "unrecognized request url"),
+		strings.Contains(lower, "no route"),
+		strings.Contains(lower, "404 page not found"),
+		strings.Contains(lower, "only supported"),
+		strings.Contains(lower, "invalid url"):
+		return true
+	default:
+		return false
+	}
+}
+
 func describeOutboundProxyMode() string {
 	config, err := loadOutboundProxyConfig()
 	if err != nil {
@@ -304,6 +348,7 @@ func openAIChatToAnthropic(response map[string]any, fallbackModel string, includ
 func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) map[string]any {
 	contentBlocks := make([]map[string]any, 0, 2)
 	hasToolUse := false
+	webSearchRequests := 0
 	if outputText := toStringValue(response["output_text"]); outputText != "" {
 		contentBlocks = append(contentBlocks, map[string]any{"type": "text", "text": outputText})
 	}
@@ -344,6 +389,23 @@ func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) m
 					"name":  strings.TrimSpace(toStringValue(outputMap["name"])),
 					"input": parseJSONStringMap(outputMap["arguments"]),
 				})
+			case "web_search_call":
+				webSearchRequests++
+				toolUseID := firstNonEmpty(
+					strings.TrimSpace(toStringValue(outputMap["id"])),
+					fmt.Sprintf("srvtoolu_%d", webSearchRequests),
+				)
+				if input := buildAnthropicWebSearchInput(outputMap); len(input) > 0 {
+					contentBlocks = append(contentBlocks, map[string]any{
+						"type":  "server_tool_use",
+						"id":    toolUseID,
+						"name":  "web_search",
+						"input": input,
+					})
+				}
+				if result := buildAnthropicWebSearchResultBlock(toolUseID, outputMap); result != nil {
+					contentBlocks = append(contentBlocks, result)
+				}
 			}
 		}
 	}
@@ -354,6 +416,11 @@ func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) m
 	if usageMap, ok := response["usage"].(map[string]any); ok {
 		usage["input_tokens"] = toIntValue(usageMap["input_tokens"])
 		usage["output_tokens"] = toIntValue(usageMap["output_tokens"])
+	}
+	if webSearchRequests > 0 {
+		usage["server_tool_use"] = map[string]any{
+			"web_search_requests": webSearchRequests,
+		}
 	}
 	incompleteReason := ""
 	if incompleteMap, ok := response["incomplete_details"].(map[string]any); ok {
@@ -378,6 +445,80 @@ func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) m
 		"stop_sequence": nil,
 		"usage":         usage,
 	}
+}
+
+func buildAnthropicWebSearchInput(webSearchCall map[string]any) map[string]any {
+	actionMap, _ := webSearchCall["action"].(map[string]any)
+	if actionMap == nil {
+		return nil
+	}
+	query := strings.TrimSpace(toStringValue(actionMap["query"]))
+	if query == "" {
+		if queries, ok := actionMap["queries"].([]any); ok {
+			for _, rawQuery := range queries {
+				query = strings.TrimSpace(toStringValue(rawQuery))
+				if query != "" {
+					break
+				}
+			}
+		}
+	}
+	if query == "" {
+		return nil
+	}
+	return map[string]any{"query": query}
+}
+
+func buildAnthropicWebSearchResultBlock(toolUseID string, webSearchCall map[string]any) map[string]any {
+	content := buildAnthropicWebSearchResultContent(webSearchCall)
+	if content == nil {
+		return nil
+	}
+	return map[string]any{
+		"type":        "web_search_tool_result",
+		"tool_use_id": toolUseID,
+		"content":     content,
+	}
+}
+
+func buildAnthropicWebSearchResultContent(webSearchCall map[string]any) any {
+	actionMap, _ := webSearchCall["action"].(map[string]any)
+	if actionMap == nil {
+		return nil
+	}
+	sources, ok := actionMap["sources"].([]any)
+	if !ok || len(sources) == 0 {
+		return nil
+	}
+	results := make([]map[string]any, 0, len(sources))
+	for _, rawSource := range sources {
+		sourceMap, ok := rawSource.(map[string]any)
+		if !ok {
+			continue
+		}
+		url := strings.TrimSpace(toStringValue(sourceMap["url"]))
+		if url == "" {
+			continue
+		}
+		result := map[string]any{
+			"type": "web_search_result",
+			"url":  url,
+		}
+		if title := strings.TrimSpace(toStringValue(sourceMap["title"])); title != "" {
+			result["title"] = title
+		}
+		if pageAge := strings.TrimSpace(toStringValue(sourceMap["page_age"])); pageAge != "" {
+			result["page_age"] = pageAge
+		}
+		if encrypted := strings.TrimSpace(toStringValue(sourceMap["encrypted_content"])); encrypted != "" {
+			result["encrypted_content"] = encrypted
+		}
+		results = append(results, result)
+	}
+	if len(results) == 0 {
+		return nil
+	}
+	return results
 }
 
 func performJSONUpstreamRequest(method string, targetURL string, headers map[string]string, payload map[string]any, timeoutSeconds int) (int, http.Header, []byte, time.Duration, error) {
@@ -478,6 +619,7 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 	messageStopped := false
 	messageDeltaSent := false
 	hasToolUse := false
+	webSearchRequests := 0
 	nextContentIndex := 0
 	currentTextIndex := -1
 	currentThinkingIndex := -1
@@ -486,6 +628,9 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 		"output_tokens": 0,
 	}
 	toolStates := map[string]*responsesToolStreamState{}
+	webSearchSeen := map[string]bool{}
+	webSearchResultEmitted := map[string]bool{}
+	webSearchToolUseIDs := map[string]string{}
 
 	emitMessageStart := func() {
 		if messageStarted {
@@ -611,6 +756,13 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 		if cacheCreated := toIntValue(source["cache_creation_input_tokens"]); cacheCreated > 0 {
 			mapped["cache_creation_input_tokens"] = cacheCreated
 		}
+		if serverToolUse, ok := source["server_tool_use"].(map[string]any); ok && serverToolUse != nil {
+			if webSearchCount := toIntValue(serverToolUse["web_search_requests"]); webSearchCount > 0 {
+				mapped["server_tool_use"] = map[string]any{
+					"web_search_requests": webSearchCount,
+				}
+			}
+		}
 		return mapped
 	}
 	resolveToolKey := func(data map[string]any) string {
@@ -636,6 +788,73 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 		nextContentIndex++
 		toolStates[key] = state
 		return state
+	}
+	resolveWebSearchKey := func(data map[string]any, itemMap map[string]any) string {
+		key := resolveToolKey(data)
+		if key != "" {
+			return key
+		}
+		if itemID := strings.TrimSpace(toStringValue(itemMap["id"])); itemID != "" {
+			return "ws:" + itemID
+		}
+		return fmt.Sprintf("ws:auto:%d", nextContentIndex)
+	}
+	emitWebSearchLifecycle := func(key string, itemMap map[string]any) {
+		toolUseID := firstNonEmpty(
+			webSearchToolUseIDs[key],
+			strings.TrimSpace(toStringValue(itemMap["id"])),
+			fmt.Sprintf("srvtoolu_%d", webSearchRequests+1),
+		)
+		webSearchToolUseIDs[key] = toolUseID
+		if !webSearchSeen[key] {
+			webSearchSeen[key] = true
+			webSearchRequests++
+			closeIndex(&currentTextIndex)
+			closeIndex(&currentThinkingIndex)
+			emitMessageStart()
+			writeEvent("content_block_start", map[string]any{
+				"type":  "content_block_start",
+				"index": nextContentIndex,
+				"content_block": map[string]any{
+					"type": "server_tool_use",
+					"id":   toolUseID,
+					"name": "web_search",
+				},
+			})
+			if input := buildAnthropicWebSearchInput(itemMap); len(input) > 0 {
+				writeEvent("content_block_delta", map[string]any{
+					"type":  "content_block_delta",
+					"index": nextContentIndex,
+					"delta": map[string]any{
+						"type":         "input_json_delta",
+						"partial_json": stringifyJSON(input),
+					},
+				})
+			}
+			writeEvent("content_block_stop", map[string]any{
+				"type":  "content_block_stop",
+				"index": nextContentIndex,
+			})
+			nextContentIndex++
+			usage["server_tool_use"] = map[string]any{
+				"web_search_requests": webSearchRequests,
+			}
+		}
+		if !webSearchResultEmitted[key] {
+			if result := buildAnthropicWebSearchResultBlock(toolUseID, itemMap); result != nil {
+				writeEvent("content_block_start", map[string]any{
+					"type":          "content_block_start",
+					"index":         nextContentIndex,
+					"content_block": result,
+				})
+				writeEvent("content_block_stop", map[string]any{
+					"type":  "content_block_stop",
+					"index": nextContentIndex,
+				})
+				nextContentIndex++
+				webSearchResultEmitted[key] = true
+			}
+		}
 	}
 	startToolState := func(state *responsesToolStreamState) {
 		if state == nil || state.Started || strings.TrimSpace(state.ID) == "" || strings.TrimSpace(state.Name) == "" {
@@ -787,7 +1006,12 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 			closeIndex(&currentThinkingIndex)
 		case "response.output_item.added":
 			itemMap, _ := data["item"].(map[string]any)
-			if strings.TrimSpace(toStringValue(itemMap["type"])) != "function_call" {
+			switch strings.TrimSpace(toStringValue(itemMap["type"])) {
+			case "web_search_call":
+				emitWebSearchLifecycle(resolveWebSearchKey(data, itemMap), itemMap)
+				return
+			case "function_call":
+			default:
 				return
 			}
 			hasToolUse = true
@@ -812,6 +1036,11 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 			}
 			emitToolArguments(state, delta)
 		case "response.function_call_arguments.done", "response.output_item.done":
+			itemMap, _ := data["item"].(map[string]any)
+			if strings.TrimSpace(toStringValue(itemMap["type"])) == "web_search_call" {
+				emitWebSearchLifecycle(resolveWebSearchKey(data, itemMap), itemMap)
+				return
+			}
 			key := resolveToolKey(data)
 			if key == "" {
 				return
@@ -845,6 +1074,11 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 		case "response.completed":
 			if usageMap, ok := responseData["usage"].(map[string]any); ok {
 				usage = responsesUsageToAnthropic(usageMap)
+			}
+			if webSearchRequests > 0 {
+				usage["server_tool_use"] = map[string]any{
+					"web_search_requests": webSearchRequests,
+				}
 			}
 			incompleteReason := ""
 			if incompleteMap, ok := responseData["incomplete_details"].(map[string]any); ok {
@@ -1310,8 +1544,12 @@ func buildOpenAIProviderHeaders(provider AdvancedProxyProvider) map[string]strin
 func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody map[string]any, requestHeaders http.Header, stream bool, config AdvancedProxyConfig) providerAttemptResult {
 	failoverActive := config.Failover.Enabled && config.Failover.AutoFailoverEnabled
 	timeoutSeconds := computeAdvancedProxyTimeoutSeconds(stream, failoverActive, config.Failover)
+	requestFeatures := classifyClaudeRequestFeatures(requestBody)
 	capabilities := resolveAdvancedProxyProviderCapabilities(provider)
 	apiFormat := capabilities.APIFormat
+	if requestFeatures.HasAnthropicWebSearchTool && apiFormat == "openai_chat" {
+		apiFormat = "openai_responses"
+	}
 	debugEnabled := advancedProxyDebugEnabled(config)
 	routeKind := "messages"
 	switch apiFormat {
@@ -1319,19 +1557,6 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 		routeKind = "chat"
 	case "openai_responses":
 		routeKind = "responses"
-	}
-
-	targets := []string{}
-	switch apiFormat {
-	case "openai_chat":
-		targets = buildOpenAIChatCheckEndpointCandidates(provider.BaseURL)
-	case "openai_responses":
-		targets = buildResponsesEndpointCandidates(provider.BaseURL)
-	default:
-		targets = []string{resolveAnthropicMessagesEndpoint(provider.BaseURL)}
-	}
-	if len(targets) == 0 {
-		return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "provider endpoint is empty"}
 	}
 
 	basePayload := deepCopyJSONMap(requestBody)
@@ -1359,8 +1584,24 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 
 	signatureRectified := false
 	budgetRectified := false
+	responsesDowngraded := false
 
 	for {
+		targets := []string{}
+		switch apiFormat {
+		case "openai_chat":
+			targets = buildOpenAIChatCheckEndpointCandidates(provider.BaseURL)
+		case "openai_responses":
+			targets = buildResponsesEndpointCandidates(provider.BaseURL)
+		default:
+			targets = []string{resolveAnthropicMessagesEndpoint(provider.BaseURL)}
+		}
+		if len(targets) == 0 {
+			return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "provider endpoint is empty"}
+		}
+		lastStatus := http.StatusBadGateway
+		lastMessage := "no compatible upstream endpoint found"
+
 		payload := deepCopyJSONMap(basePayload)
 		var transformed map[string]any
 		switch apiFormat {
@@ -1406,12 +1647,22 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 					if streamBody != nil {
 						streamBody.Close()
 					}
+					errorMessage := summarizeAdvancedProxyBody(rawResponse)
 					if debugEnabled {
-						appendAdvancedProxyLogf("[CLAUDE_PROXY_STREAM_REJECT] provider=%s format=%s route=%s endpoint=%s status=%d detail=%s", advancedProxyProviderLabel(provider), apiFormat, routeKind, targetURL, statusCode, summarizeAdvancedProxyBody(rawResponse))
+						appendAdvancedProxyLogf("[CLAUDE_PROXY_STREAM_REJECT] provider=%s format=%s route=%s endpoint=%s status=%d detail=%s", advancedProxyProviderLabel(provider), apiFormat, routeKind, targetURL, statusCode, errorMessage)
+					}
+					if apiFormat == "openai_responses" && !responsesDowngraded && shouldFallbackClaudeResponsesToOpenAIChat(statusCode, errorMessage, requestFeatures) {
+						if debugEnabled {
+							appendAdvancedProxyLogf("[CLAUDE_PROXY_DOWNGRADE] provider=%s from=openai_responses to=openai_chat reason=%s", advancedProxyProviderLabel(provider), previewAdvancedProxyText(errorMessage, 220))
+						}
+						apiFormat = "openai_chat"
+						routeKind = "chat"
+						responsesDowngraded = true
+						goto retryProvider
 					}
 					return providerAttemptResult{
 						StatusCode: statusCode,
-						Message:    fmt.Sprintf("HTTP %d", statusCode),
+						Message:    firstNonEmpty(errorMessage, fmt.Sprintf("HTTP %d", statusCode)),
 					}
 				}
 				advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, true)
@@ -1448,14 +1699,27 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 					budgetRectified = true
 					goto retryProvider
 				}
+				if apiFormat == "openai_responses" && !responsesDowngraded && shouldFallbackClaudeResponsesToOpenAIChat(statusCode, errorMessage, requestFeatures) {
+					advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
+					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
+					if debugEnabled {
+						appendAdvancedProxyLogf("[CLAUDE_PROXY_DOWNGRADE] provider=%s from=openai_responses to=openai_chat reason=%s", advancedProxyProviderLabel(provider), previewAdvancedProxyText(errorMessage, 220))
+					}
+					apiFormat = "openai_chat"
+					routeKind = "chat"
+					responsesDowngraded = true
+					goto retryProvider
+				}
 				advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
 				observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
+				lastStatus = statusCode
+				lastMessage = firstNonEmpty(errorMessage, fmt.Sprintf("HTTP %d", statusCode))
 				if isRetryableCheckStatus(statusCode) && (apiFormat == "openai_chat" || apiFormat == "openai_responses") {
 					continue
 				}
 				return providerAttemptResult{
-					StatusCode: statusCode,
-					Message:    firstNonEmpty(errorMessage, fmt.Sprintf("HTTP %d", statusCode)),
+					StatusCode: lastStatus,
+					Message:    lastMessage,
 				}
 			}
 
@@ -1475,7 +1739,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 			return providerAttemptResult{Response: responseMap, StatusCode: http.StatusOK, Headers: responseHeaders}
 		}
 
-		return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "no compatible upstream endpoint found"}
+		return providerAttemptResult{StatusCode: lastStatus, Message: lastMessage}
 
 	retryProvider:
 		continue
@@ -1873,6 +2137,9 @@ func (a *App) handleAdvancedProxyClaude(writer http.ResponseWriter, request *htt
 	maxAttempts := 1
 	if failoverActive {
 		maxAttempts = clampInt(config.Failover.MaxRetries+1, 1, len(providers))
+	}
+	if requestFeatures.HasAnthropicWebSearchTool {
+		maxAttempts = len(providers)
 	}
 
 	lastStatus := http.StatusBadGateway

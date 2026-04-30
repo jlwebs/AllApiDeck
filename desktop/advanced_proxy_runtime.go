@@ -1263,22 +1263,43 @@ func classifyClaudeRequestFeatures(body map[string]any) claudeRequestFeatures {
 	return features
 }
 
-func (features claudeRequestFeatures) requiresAnthropicProvider() bool {
+func (features claudeRequestFeatures) requiresResponsesOrAnthropicProvider() bool {
 	return features.HasAnthropicWebSearchTool
 }
 
 func providerSupportsClaudeRequest(provider AdvancedProxyProvider, features claudeRequestFeatures) bool {
-	if !features.requiresAnthropicProvider() {
+	if !features.requiresResponsesOrAnthropicProvider() {
 		return true
 	}
-	return normalizeClaudeAPIFormat(provider.APIFormat) == "anthropic"
+	switch normalizeClaudeAPIFormat(provider.APIFormat) {
+	case "openai_responses", "anthropic", "openai_chat":
+		return true
+	default:
+		return false
+	}
+}
+
+func claudeProviderCompatibilityRank(provider AdvancedProxyProvider, features claudeRequestFeatures) int {
+	if !features.requiresResponsesOrAnthropicProvider() {
+		return 0
+	}
+	switch normalizeClaudeAPIFormat(provider.APIFormat) {
+	case "openai_responses":
+		return 0
+	case "anthropic":
+		return 1
+	case "openai_chat":
+		return 2
+	default:
+		return 3
+	}
 }
 
 func filterCompatibleClaudeProviders(providers []AdvancedProxyProvider, features claudeRequestFeatures) []AdvancedProxyProvider {
 	if len(providers) == 0 {
 		return nil
 	}
-	if !features.requiresAnthropicProvider() {
+	if !features.requiresResponsesOrAnthropicProvider() {
 		return append([]AdvancedProxyProvider(nil), providers...)
 	}
 	filtered := make([]AdvancedProxyProvider, 0, len(providers))
@@ -1287,12 +1308,15 @@ func filterCompatibleClaudeProviders(providers []AdvancedProxyProvider, features
 			filtered = append(filtered, provider)
 		}
 	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return claudeProviderCompatibilityRank(filtered[i], features) < claudeProviderCompatibilityRank(filtered[j], features)
+	})
 	return filtered
 }
 
 func incompatibleClaudeRequestMessage(features claudeRequestFeatures) string {
 	if features.HasAnthropicWebSearchTool {
-		return "Claude native web_search tools require an Anthropic provider in the advanced proxy Claude queue; current queue has no compatible provider."
+		return "Claude native web_search tools require an OpenAI Responses or Anthropic provider in the advanced proxy Claude queue; current queue has no compatible provider."
 	}
 	return "Claude request requires a compatible advanced proxy provider, but none are available."
 }
@@ -1589,6 +1613,24 @@ func anthropicToolsToResponses(raw any) []map[string]any {
 		if !ok {
 			continue
 		}
+		toolType := strings.TrimSpace(strings.ToLower(toStringValue(toolMap["type"])))
+		if strings.HasPrefix(toolType, "web_search_") {
+			mapped := map[string]any{
+				"type": "web_search",
+			}
+			filters := map[string]any{}
+			if allowedDomains, ok := toolMap["allowed_domains"].([]any); ok && len(allowedDomains) > 0 {
+				filters["allowed_domains"] = allowedDomains
+			}
+			if blockedDomains, ok := toolMap["blocked_domains"].([]any); ok && len(blockedDomains) > 0 {
+				filters["blocked_domains"] = blockedDomains
+			}
+			if len(filters) > 0 {
+				mapped["filters"] = filters
+			}
+			result = append(result, mapped)
+			continue
+		}
 		result = append(result, map[string]any{
 			"type":        "function",
 			"name":        firstNonEmpty(strings.TrimSpace(toStringValue(toolMap["name"])), "tool"),
@@ -1630,6 +1672,9 @@ func anthropicToolChoiceToResponses(raw any) any {
 	case "any":
 		return "required"
 	case "tool":
+		if strings.EqualFold(strings.TrimSpace(toStringValue(choiceMap["name"])), "web_search") {
+			return "required"
+		}
 		return map[string]any{
 			"type": "function",
 			"name": strings.TrimSpace(toStringValue(choiceMap["name"])),
@@ -1876,6 +1921,16 @@ func anthropicRequestToOpenAIResponses(body map[string]any, provider AdvancedPro
 	}
 	if tools := anthropicToolsToResponses(body["tools"]); len(tools) > 0 {
 		request["tools"] = tools
+		hasWebSearchTool := false
+		for _, tool := range tools {
+			if strings.TrimSpace(strings.ToLower(toStringValue(tool["type"]))) == "web_search" {
+				hasWebSearchTool = true
+				break
+			}
+		}
+		if hasWebSearchTool {
+			request["include"] = []any{"web_search_call.action.sources"}
+		}
 	}
 	if toolChoice := anthropicToolChoiceToResponses(body["tool_choice"]); toolChoice != nil {
 		request["tool_choice"] = toolChoice

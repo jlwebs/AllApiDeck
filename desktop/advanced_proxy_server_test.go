@@ -143,6 +143,58 @@ func TestOpenAIResponsesToAnthropicMarksToolUseStopReason(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponsesToAnthropicMapsWebSearchBlocksAndUsage(t *testing.T) {
+	response := map[string]any{
+		"id":     "resp_search_123",
+		"model":  "gpt-5.4",
+		"status": "completed",
+		"output": []any{
+			map[string]any{
+				"type": "web_search_call",
+				"id":   "ws_123",
+				"action": map[string]any{
+					"type":  "search",
+					"query": "site:github.com CLIProxyAPI",
+					"sources": []any{
+						map[string]any{
+							"type":  "url",
+							"url":   "https://github.com/router-for-me/CLIProxyAPI/issues/2599",
+							"title": "router-for-me/CLIProxyAPI issue #2599",
+						},
+					},
+				},
+			},
+			map[string]any{
+				"type": "message",
+				"content": []any{
+					map[string]any{"type": "output_text", "text": "Top GitHub results ..."},
+				},
+			},
+		},
+		"usage": map[string]any{
+			"input_tokens":  12,
+			"output_tokens": 8,
+		},
+	}
+
+	result := openAIResponsesToAnthropic(response, "gpt-5.4")
+	content := contentBlocksOf(t, result["content"])
+	if len(content) != 3 {
+		t.Fatalf("expected server_tool_use + web_search_tool_result + text, got %#v", content)
+	}
+	if content[0]["type"] != "server_tool_use" || content[0]["name"] != "web_search" {
+		t.Fatalf("expected server_tool_use block, got %#v", content[0])
+	}
+	if content[1]["type"] != "web_search_tool_result" || content[1]["tool_use_id"] != "ws_123" {
+		t.Fatalf("expected web_search_tool_result block, got %#v", content[1])
+	}
+	usage, _ := result["usage"].(map[string]any)
+	serverToolUse, _ := usage["server_tool_use"].(map[string]any)
+	if toIntValue(serverToolUse["web_search_requests"]) != 1 {
+		t.Fatalf("expected one web search request in usage, got %#v", result["usage"])
+	}
+}
+
 func TestBuildClaudeProviderHeadersPreservesAnthropicHeaders(t *testing.T) {
 	headers := http.Header{}
 	headers.Set("User-Agent", "Claude-Client")
@@ -354,6 +406,159 @@ func TestForwardClaudeRequestViaProviderUpdatesRoutingSnapshotForOpenAIResponses
 	}
 }
 
+func TestForwardClaudeRequestViaProviderFallsBackFromResponsesToChat(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requestCount++
+		switch request.URL.Path {
+		case "/v1/responses", "/responses":
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = writer.Write([]byte(`{"error":{"message":"OpenAI Responses endpoint is not supported on this upstream"}}`))
+		case "/v1/chat/completions", "/chat/completions":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"id":"chatcmpl_test","object":"chat.completion","model":"gpt-5.5","choices":[{"index":0,"message":{"role":"assistant","content":"fallback ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`))
+		default:
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "claude-openai-responses-provider",
+		RowKey:    "row-claude-openai-responses",
+		Name:      "Claude OpenAI Responses Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test",
+		APIFormat: "openai_responses",
+	}
+
+	result := forwardClaudeRequestViaProvider(provider, map[string]any{
+		"model": "gpt-5.5",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "hello"},
+		},
+	}, http.Header{}, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK || result.Response == nil {
+		t.Fatalf("expected successful chat fallback, got %#v", result)
+	}
+	if requestCount != 2 {
+		t.Fatalf("expected one responses attempt and one chat fallback, got %d", requestCount)
+	}
+
+	snapshot := advancedProxyRuntime.GetRoutingSnapshot()
+	state := snapshot.Apps["claude"]
+	if state.RouteKind != "chat" || state.Status != "success" {
+		t.Fatalf("expected chat fallback route state, got %#v", state)
+	}
+	if state.TargetURL != server.URL+"/v1/chat/completions" && state.TargetURL != server.URL+"/chat/completions" {
+		t.Fatalf("unexpected fallback target url: %#v", state)
+	}
+}
+
+func TestForwardClaudeRequestViaProviderPromotesChatConfiguredWebSearchToResponses(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requestCount++
+		if request.URL.Path != "/v1/responses" && request.URL.Path != "/responses" {
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"resp_test","object":"response","model":"gpt-5.5","status":"completed","output":[{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"search ok"}]}],"usage":{"input_tokens":3,"output_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "claude-openai-chat-provider",
+		RowKey:    "row-claude-openai-chat",
+		Name:      "Claude OpenAI Chat Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test",
+		APIFormat: "openai_chat",
+	}
+
+	result := forwardClaudeRequestViaProvider(provider, map[string]any{
+		"model": "gpt-5.5",
+		"tools": []any{
+			map[string]any{
+				"type":            "web_search_20250305",
+				"name":            "web_search",
+				"allowed_domains": []any{"github.com"},
+			},
+		},
+		"messages": []any{
+			map[string]any{"role": "user", "content": "search"},
+		},
+	}, http.Header{}, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK || result.Response == nil {
+		t.Fatalf("expected promoted responses request to succeed, got %#v", result)
+	}
+	if requestCount != 1 {
+		t.Fatalf("expected single promoted responses attempt, got %d", requestCount)
+	}
+
+	snapshot := advancedProxyRuntime.GetRoutingSnapshot()
+	state := snapshot.Apps["claude"]
+	if state.RouteKind != "responses" || state.Status != "success" {
+		t.Fatalf("expected responses route after promotion, got %#v", state)
+	}
+}
+
+func TestForwardClaudeRequestViaProviderDoesNotFallbackWebSearchToChat(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requestCount++
+		if request.URL.Path != "/v1/responses" && request.URL.Path != "/responses" {
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusNotFound)
+		_, _ = writer.Write([]byte(`{"error":{"message":"OpenAI Responses endpoint is not supported on this upstream"}}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "claude-openai-responses-provider",
+		RowKey:    "row-claude-openai-responses",
+		Name:      "Claude OpenAI Responses Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test",
+		APIFormat: "openai_responses",
+	}
+
+	result := forwardClaudeRequestViaProvider(provider, map[string]any{
+		"model": "gpt-5.5",
+		"tools": []any{
+			map[string]any{
+				"type":            "web_search_20250305",
+				"name":            "web_search",
+				"allowed_domains": []any{"github.com"},
+			},
+		},
+		"messages": []any{
+			map[string]any{"role": "user", "content": "search"},
+		},
+	}, http.Header{}, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected responses failure to bubble for web_search request, got %#v", result)
+	}
+	if requestCount != 2 {
+		t.Fatalf("expected web_search request to stay on responses candidates only, got %d attempts", requestCount)
+	}
+
+	snapshot := advancedProxyRuntime.GetRoutingSnapshot()
+	state := snapshot.Apps["claude"]
+	if state.RouteKind != "responses" || state.Status != "failed" {
+		t.Fatalf("expected responses route error state without chat fallback, got %#v", state)
+	}
+}
+
 func TestWriteAnthropicSSEFromOpenAIChatStreamPreservesNewlineDeltas(t *testing.T) {
 	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
 		`data: {"id":"chatcmpl-test","choices":[{"delta":{"content":"line1"}}]}`,
@@ -442,6 +647,37 @@ func TestWriteAnthropicSSEFromOpenAIResponsesStreamEmitsToolUseLifecycle(t *test
 	}
 	if !strings.Contains(body, `"type":"message_stop"`) {
 		t.Fatalf("expected message_stop, got %q", body)
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIResponsesStreamEmitsWebSearchLifecycle(t *testing.T) {
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"resp_search","model":"gpt-5.4"}}`,
+		"",
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"site:github.com CLIProxyAPI","sources":[{"type":"url","url":"https://github.com/router-for-me/CLIProxyAPI/issues/2599","title":"router-for-me/CLIProxyAPI issue #2599"}]}}}`,
+		"",
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","delta":"Top GitHub results ..."}`,
+		"",
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2}}}`,
+		"",
+	}, "\n")))
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIResponsesStream(recorder, streamBody, "gpt-5.4")
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"type":"server_tool_use"`) {
+		t.Fatalf("expected server_tool_use SSE block, got %q", body)
+	}
+	if !strings.Contains(body, `"type":"web_search_tool_result"`) {
+		t.Fatalf("expected web_search_tool_result SSE block, got %q", body)
+	}
+	if !strings.Contains(body, `"web_search_requests":1`) {
+		t.Fatalf("expected web search usage count in SSE message_delta, got %q", body)
 	}
 }
 

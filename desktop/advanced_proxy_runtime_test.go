@@ -140,6 +140,48 @@ func TestAnthropicRequestToOpenAIResponsesUsesInstructionsAndMapsImages(t *testi
 	}
 }
 
+func TestAnthropicRequestToOpenAIResponsesMapsWebSearchTool(t *testing.T) {
+	request := anthropicRequestToOpenAIResponses(map[string]any{
+		"model": "gpt-5.5",
+		"tools": []any{
+			map[string]any{
+				"type":            "web_search_20250305",
+				"name":            "web_search",
+				"allowed_domains": []any{"github.com"},
+				"blocked_domains": []any{"reddit.com"},
+			},
+		},
+		"tool_choice": map[string]any{
+			"type": "tool",
+			"name": "web_search",
+		},
+	}, AdvancedProxyProvider{})
+
+	tools, ok := request["tools"].([]map[string]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("expected one responses tool, got %#v", request["tools"])
+	}
+	if tools[0]["type"] != "web_search" {
+		t.Fatalf("expected web_search tool mapping, got %#v", tools[0])
+	}
+	filters, _ := tools[0]["filters"].(map[string]any)
+	allowedDomains, _ := filters["allowed_domains"].([]any)
+	blockedDomains, _ := filters["blocked_domains"].([]any)
+	if len(allowedDomains) != 1 || allowedDomains[0] != "github.com" {
+		t.Fatalf("expected allowed_domains passthrough, got %#v", filters)
+	}
+	if len(blockedDomains) != 1 || blockedDomains[0] != "reddit.com" {
+		t.Fatalf("expected blocked_domains passthrough, got %#v", filters)
+	}
+	if toolChoice := request["tool_choice"]; toolChoice != "required" {
+		t.Fatalf("expected web_search forced tool choice to map to required, got %#v", toolChoice)
+	}
+	include, _ := request["include"].([]any)
+	if len(include) != 1 || include[0] != "web_search_call.action.sources" {
+		t.Fatalf("expected web search sources include, got %#v", request["include"])
+	}
+}
+
 func TestClassifyClaudeRequestFeaturesDetectsAnthropicWebSearchTool(t *testing.T) {
 	features := classifyClaudeRequestFeatures(map[string]any{
 		"tools": []any{
@@ -154,12 +196,12 @@ func TestClassifyClaudeRequestFeaturesDetectsAnthropicWebSearchTool(t *testing.T
 	if !features.HasAnthropicWebSearchTool {
 		t.Fatalf("expected web_search tool to be detected, got %#v", features)
 	}
-	if !features.requiresAnthropicProvider() {
-		t.Fatalf("expected detected web_search tool to require anthropic provider")
+	if !features.requiresResponsesOrAnthropicProvider() {
+		t.Fatalf("expected detected web_search tool to require responses-or-anthropic compatibility")
 	}
 }
 
-func TestFilterCompatibleClaudeProvidersKeepsOnlyAnthropicForWebSearch(t *testing.T) {
+func TestFilterCompatibleClaudeProvidersPrioritizesResponsesForWebSearch(t *testing.T) {
 	providers := []AdvancedProxyProvider{
 		{ID: "openai-chat", APIFormat: "openai_chat"},
 		{ID: "anthropic", APIFormat: "anthropic"},
@@ -170,11 +212,11 @@ func TestFilterCompatibleClaudeProvidersKeepsOnlyAnthropicForWebSearch(t *testin
 		HasAnthropicWebSearchTool: true,
 	})
 
-	if len(filtered) != 1 {
-		t.Fatalf("expected one compatible provider, got %#v", filtered)
+	if len(filtered) != 3 {
+		t.Fatalf("expected three compatible providers, got %#v", filtered)
 	}
-	if filtered[0].ID != "anthropic" {
-		t.Fatalf("expected anthropic provider retained, got %#v", filtered)
+	if filtered[0].ID != "openai-responses" || filtered[1].ID != "anthropic" || filtered[2].ID != "openai-chat" {
+		t.Fatalf("expected responses first, anthropic second, chat-configured providers last, got %#v", filtered)
 	}
 }
 
@@ -201,7 +243,7 @@ func TestIncompatibleClaudeRequestMessageMentionsAnthropicWebSearch(t *testing.T
 		HasAnthropicWebSearchTool: true,
 	})
 
-	if !strings.Contains(message, "web_search") || !strings.Contains(strings.ToLower(message), "anthropic") {
+	if !strings.Contains(message, "web_search") || !strings.Contains(strings.ToLower(message), "anthropic") || !strings.Contains(strings.ToLower(message), "responses") {
 		t.Fatalf("expected explicit compatibility message, got %q", message)
 	}
 }

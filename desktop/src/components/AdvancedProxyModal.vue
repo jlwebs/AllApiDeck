@@ -1051,7 +1051,7 @@ function buildProviderFromRecord(record, sortIndex) {
     baseUrl: record.siteUrl,
     apiKey: record.apiKey,
     model: record.selectedModel || record.quickTestModel || '',
-    apiFormat: 'openai_chat',
+    apiFormat: 'openai_responses',
     apiKeyField: 'ANTHROPIC_AUTH_TOKEN',
     enabled: true,
     sortIndex,
