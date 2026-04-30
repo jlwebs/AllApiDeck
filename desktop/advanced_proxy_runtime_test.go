@@ -1,0 +1,216 @@
+package main
+
+import "testing"
+
+func TestParseJSONStringMapReturnsEmptyMapOnInvalidJSON(t *testing.T) {
+	parsed := parseJSONStringMap(`{"file_path":`)
+	if len(parsed) != 0 {
+		t.Fatalf("expected invalid json to degrade to empty map, got %#v", parsed)
+	}
+}
+
+func TestAnthropicRequestToOpenAIChatMapsImagesStopAndCleansSchema(t *testing.T) {
+	request := anthropicRequestToOpenAIChat(map[string]any{
+		"model": "gpt-5.4",
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "text", "text": "look at this"},
+					map[string]any{
+						"type": "image",
+						"source": map[string]any{
+							"media_type": "image/png",
+							"data":       "abc123",
+						},
+					},
+				},
+			},
+		},
+		"tools": []any{
+			map[string]any{
+				"name":        "Write",
+				"description": "write file",
+				"input_schema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"file_path": map[string]any{"type": "string", "format": "uri"},
+					},
+					"required": []any{"file_path"},
+				},
+			},
+		},
+		"stop_sequences": []any{"</tool>"},
+	}, AdvancedProxyProvider{})
+
+	messages, ok := request["messages"].([]map[string]any)
+	if !ok || len(messages) != 1 {
+		t.Fatalf("expected one mapped chat message, got %#v", request["messages"])
+	}
+	content, ok := messages[0]["content"].([]map[string]any)
+	if !ok || len(content) != 2 {
+		t.Fatalf("expected multimodal content array, got %#v", messages[0]["content"])
+	}
+	if content[1]["type"] != "image_url" {
+		t.Fatalf("expected image_url content part, got %#v", content[1])
+	}
+	imageURL, _ := content[1]["image_url"].(map[string]any)
+	if imageURL["url"] != "data:image/png;base64,abc123" {
+		t.Fatalf("unexpected image url payload: %#v", imageURL)
+	}
+	stop, ok := request["stop"].([]any)
+	if !ok || len(stop) != 1 || stop[0] != "</tool>" {
+		t.Fatalf("expected stop_sequences mapped to stop, got %#v", request["stop"])
+	}
+	tools, ok := request["tools"].([]map[string]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("expected one tool, got %#v", request["tools"])
+	}
+	functionMap, _ := tools[0]["function"].(map[string]any)
+	parameters, _ := functionMap["parameters"].(map[string]any)
+	properties, _ := parameters["properties"].(map[string]any)
+	filePath, _ := properties["file_path"].(map[string]any)
+	if _, exists := filePath["format"]; exists {
+		t.Fatalf("expected unsupported uri format removed, got %#v", filePath)
+	}
+}
+
+func TestAnthropicRequestToOpenAIResponsesUsesInstructionsAndMapsImages(t *testing.T) {
+	request := anthropicRequestToOpenAIResponses(map[string]any{
+		"model":  "gpt-5.4",
+		"system": []any{map[string]any{"type": "text", "text": "You are Claude Code."}},
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "text", "text": "analyze"},
+					map[string]any{
+						"type": "image",
+						"source": map[string]any{
+							"media_type": "image/jpeg",
+							"data":       "xyz987",
+						},
+					},
+				},
+			},
+		},
+		"tools": []any{
+			map[string]any{
+				"name": "Read",
+				"input_schema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"path": map[string]any{"type": "string", "format": "uri"},
+					},
+				},
+			},
+		},
+	}, AdvancedProxyProvider{})
+
+	if request["instructions"] != "You are Claude Code." {
+		t.Fatalf("expected responses instructions, got %#v", request["instructions"])
+	}
+	input, ok := request["input"].([]any)
+	if !ok || len(input) != 1 {
+		t.Fatalf("expected one input message, got %#v", request["input"])
+	}
+	message, _ := input[0].(map[string]any)
+	if role := message["role"]; role != "user" {
+		t.Fatalf("expected user role in input, got %#v", role)
+	}
+	content, ok := message["content"].([]map[string]any)
+	if !ok || len(content) != 2 {
+		t.Fatalf("expected text + image content items, got %#v", message["content"])
+	}
+	if content[1]["type"] != "input_image" || content[1]["image_url"] != "data:image/jpeg;base64,xyz987" {
+		t.Fatalf("unexpected image mapping: %#v", content[1])
+	}
+	tools, ok := request["tools"].([]map[string]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("expected one responses tool, got %#v", request["tools"])
+	}
+	parameters, _ := tools[0]["parameters"].(map[string]any)
+	properties, _ := parameters["properties"].(map[string]any)
+	path, _ := properties["path"].(map[string]any)
+	if _, exists := path["format"]; exists {
+		t.Fatalf("expected cleaned responses schema, got %#v", path)
+	}
+}
+
+func TestSanitizeOrphanToolResultsRewritesDanglingToolResult(t *testing.T) {
+	body := map[string]any{
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type":        "tool_result",
+						"tool_use_id": "toolu_orphan",
+						"content": []any{
+							map[string]any{"type": "text", "text": "write failed"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	sanitized := sanitizeOrphanToolResults(body)
+	if sanitized != 1 {
+		t.Fatalf("expected one sanitized block, got %d", sanitized)
+	}
+
+	messages, _ := body["messages"].([]any)
+	message, _ := messages[0].(map[string]any)
+	content, _ := message["content"].([]any)
+	block, _ := content[0].(map[string]any)
+	if block["type"] != "text" {
+		t.Fatalf("expected orphan tool_result rewritten as text, got %#v", block)
+	}
+	if block["text"] != "[Tool result for toolu_orphan]: write failed" {
+		t.Fatalf("unexpected fallback text: %#v", block["text"])
+	}
+}
+
+func TestSanitizeOrphanToolResultsPreservesAdjacentToolResult(t *testing.T) {
+	body := map[string]any{
+		"messages": []any{
+			map[string]any{
+				"role": "assistant",
+				"content": []any{
+					map[string]any{
+						"type":  "tool_use",
+						"id":    "toolu_keep",
+						"name":  "write_file",
+						"input": map[string]any{"file_path": "/tmp/test.txt"},
+					},
+				},
+			},
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type":        "tool_result",
+						"tool_use_id": "toolu_keep",
+						"content": []any{
+							map[string]any{"type": "text", "text": "ok"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	sanitized := sanitizeOrphanToolResults(body)
+	if sanitized != 0 {
+		t.Fatalf("expected no sanitization for adjacent tool_result, got %d", sanitized)
+	}
+
+	messages, _ := body["messages"].([]any)
+	message, _ := messages[1].(map[string]any)
+	content, _ := message["content"].([]any)
+	block, _ := content[0].(map[string]any)
+	if block["type"] != "tool_result" || block["tool_use_id"] != "toolu_keep" {
+		t.Fatalf("expected valid tool_result preserved, got %#v", block)
+	}
+}

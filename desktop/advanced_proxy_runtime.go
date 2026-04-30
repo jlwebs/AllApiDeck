@@ -1218,6 +1218,108 @@ func rectifyThinkingBudget(body map[string]any) bool {
 	return beforeType != "enabled" || beforeBudget != 32000 || beforeMax == 0 || beforeMax < 32001
 }
 
+type advancedProxyProviderCapabilities struct {
+	APIFormat                 string
+	UsesResponsesInstructions bool
+	SupportsChatMultimodal    bool
+	SupportsResponsesInput    bool
+	SanitizeOrphanToolResults bool
+	MergeSystemPrompt         bool
+}
+
+func resolveAdvancedProxyProviderCapabilities(provider AdvancedProxyProvider) advancedProxyProviderCapabilities {
+	apiFormat := normalizeClaudeAPIFormat(provider.APIFormat)
+	capabilities := advancedProxyProviderCapabilities{
+		APIFormat:                 apiFormat,
+		UsesResponsesInstructions: apiFormat == "openai_responses",
+		SupportsChatMultimodal:    apiFormat == "openai_chat",
+		SupportsResponsesInput:    apiFormat == "openai_responses",
+		SanitizeOrphanToolResults: true,
+		MergeSystemPrompt:         apiFormat == "openai_chat",
+	}
+	return capabilities
+}
+
+func collectAdjacentAssistantToolUseIDs(messages []any, currentIndex int) map[string]struct{} {
+	if currentIndex <= 0 {
+		return map[string]struct{}{}
+	}
+	previousMessage, ok := messages[currentIndex-1].(map[string]any)
+	if !ok || strings.TrimSpace(toStringValue(previousMessage["role"])) != "assistant" {
+		return map[string]struct{}{}
+	}
+	contentList, ok := previousMessage["content"].([]any)
+	if !ok || len(contentList) == 0 {
+		return map[string]struct{}{}
+	}
+	ids := map[string]struct{}{}
+	for _, rawBlock := range contentList {
+		blockMap, ok := rawBlock.(map[string]any)
+		if !ok || strings.TrimSpace(toStringValue(blockMap["type"])) != "tool_use" {
+			continue
+		}
+		if id := strings.TrimSpace(toStringValue(blockMap["id"])); id != "" {
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
+}
+
+func orphanToolResultFallbackText(toolUseID string, content any) string {
+	text := strings.TrimSpace(anthropicContentValueToText(content))
+	switch {
+	case strings.TrimSpace(toolUseID) != "" && text != "":
+		return fmt.Sprintf("[Tool result for %s]: %s", strings.TrimSpace(toolUseID), text)
+	case strings.TrimSpace(toolUseID) != "":
+		return fmt.Sprintf("[Tool result for %s]", strings.TrimSpace(toolUseID))
+	case text != "":
+		return "[Tool result]: " + text
+	default:
+		return "[Tool result]"
+	}
+}
+
+func sanitizeOrphanToolResults(body map[string]any) int {
+	messages, ok := body["messages"].([]any)
+	if !ok || len(messages) == 0 {
+		return 0
+	}
+	sanitizedCount := 0
+	for messageIndex, rawMessage := range messages {
+		messageMap, ok := rawMessage.(map[string]any)
+		if !ok {
+			continue
+		}
+		contentList, ok := messageMap["content"].([]any)
+		if !ok || len(contentList) == 0 {
+			continue
+		}
+		validToolUseIDs := collectAdjacentAssistantToolUseIDs(messages, messageIndex)
+		nextContent := make([]any, 0, len(contentList))
+		for _, rawBlock := range contentList {
+			blockMap, ok := rawBlock.(map[string]any)
+			if !ok || strings.TrimSpace(toStringValue(blockMap["type"])) != "tool_result" {
+				nextContent = append(nextContent, rawBlock)
+				continue
+			}
+			toolUseID := strings.TrimSpace(toStringValue(blockMap["tool_use_id"]))
+			if _, exists := validToolUseIDs[toolUseID]; exists && toolUseID != "" {
+				nextContent = append(nextContent, rawBlock)
+				continue
+			}
+			sanitizedCount++
+			nextContent = append(nextContent, map[string]any{
+				"type": "text",
+				"text": orphanToolResultFallbackText(toolUseID, blockMap["content"]),
+			})
+		}
+		messageMap["content"] = nextContent
+		messages[messageIndex] = messageMap
+	}
+	body["messages"] = messages
+	return sanitizedCount
+}
+
 func deepCopyJSONMap(input map[string]any) map[string]any {
 	if input == nil {
 		return map[string]any{}
@@ -1279,9 +1381,31 @@ func parseJSONStringMap(value any) map[string]any {
 		if err := json.Unmarshal([]byte(typed), &decoded); err == nil {
 			return decoded
 		}
-		return map[string]any{"raw": typed}
+		return map[string]any{}
 	default:
 		return map[string]any{}
+	}
+}
+
+func cleanJSONSchema(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		cleaned := make(map[string]any, len(typed))
+		for key, child := range typed {
+			if key == "format" && strings.EqualFold(strings.TrimSpace(toStringValue(child)), "uri") {
+				continue
+			}
+			cleaned[key] = cleanJSONSchema(child)
+		}
+		return cleaned
+	case []any:
+		items := make([]any, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, cleanJSONSchema(item))
+		}
+		return items
+	default:
+		return value
 	}
 }
 
@@ -1343,6 +1467,19 @@ func anthropicContentValueToText(value any) string {
 	}
 }
 
+func anthropicImageSourceToDataURL(source any) string {
+	sourceMap, ok := source.(map[string]any)
+	if !ok || sourceMap == nil {
+		return ""
+	}
+	data := strings.TrimSpace(toStringValue(sourceMap["data"]))
+	if data == "" {
+		return ""
+	}
+	mediaType := firstNonEmpty(strings.TrimSpace(toStringValue(sourceMap["media_type"])), "image/png")
+	return fmt.Sprintf("data:%s;base64,%s", mediaType, data)
+}
+
 func anthropicThinkingToReasoningEffort(raw any) string {
 	thinking, ok := raw.(map[string]any)
 	if !ok || strings.TrimSpace(toStringValue(thinking["type"])) == "" {
@@ -1377,7 +1514,7 @@ func anthropicToolsToOpenAI(raw any) []map[string]any {
 			"function": map[string]any{
 				"name":        firstNonEmpty(strings.TrimSpace(toStringValue(toolMap["name"])), "tool"),
 				"description": strings.TrimSpace(toStringValue(toolMap["description"])),
-				"parameters":  toolMap["input_schema"],
+				"parameters":  cleanJSONSchema(toolMap["input_schema"]),
 			},
 		})
 	}
@@ -1399,7 +1536,7 @@ func anthropicToolsToResponses(raw any) []map[string]any {
 			"type":        "function",
 			"name":        firstNonEmpty(strings.TrimSpace(toStringValue(toolMap["name"])), "tool"),
 			"description": strings.TrimSpace(toStringValue(toolMap["description"])),
-			"parameters":  toolMap["input_schema"],
+			"parameters":  cleanJSONSchema(toolMap["input_schema"]),
 		})
 	}
 	return result
@@ -1447,16 +1584,16 @@ func anthropicToolChoiceToResponses(raw any) any {
 	}
 }
 
-func anthropicContentToChatPayloads(role string, content any) ([]string, []map[string]any, []map[string]any) {
+func anthropicContentToChatPayloads(role string, content any) ([]map[string]any, []map[string]any, []map[string]any) {
 	switch typed := content.(type) {
 	case string:
 		text := strings.TrimSpace(typed)
 		if text == "" {
 			return nil, nil, nil
 		}
-		return []string{text}, nil, nil
+		return []map[string]any{{"type": "text", "text": text}}, nil, nil
 	case []any:
-		textParts := make([]string, 0, len(typed))
+		contentParts := make([]map[string]any, 0, len(typed))
 		toolCalls := make([]map[string]any, 0)
 		toolResults := make([]map[string]any, 0)
 		for _, raw := range typed {
@@ -1468,7 +1605,19 @@ func anthropicContentToChatPayloads(role string, content any) ([]string, []map[s
 			case "text":
 				text := strings.TrimSpace(toStringValue(blockMap["text"]))
 				if text != "" {
-					textParts = append(textParts, text)
+					contentParts = append(contentParts, map[string]any{
+						"type": "text",
+						"text": text,
+					})
+				}
+			case "image":
+				if imageURL := anthropicImageSourceToDataURL(blockMap["source"]); imageURL != "" {
+					contentParts = append(contentParts, map[string]any{
+						"type": "image_url",
+						"image_url": map[string]any{
+							"url": imageURL,
+						},
+					})
 				}
 			case "tool_use":
 				toolCalls = append(toolCalls, map[string]any{
@@ -1487,22 +1636,26 @@ func anthropicContentToChatPayloads(role string, content any) ([]string, []map[s
 				})
 			}
 		}
-		return textParts, toolCalls, toolResults
+		return contentParts, toolCalls, toolResults
 	default:
 		return nil, nil, nil
 	}
 }
 
-func anthropicContentToResponsesPayloads(role string, content any) ([]string, []map[string]any, []map[string]any) {
+func anthropicContentToResponsesPayloads(role string, content any) ([]map[string]any, []map[string]any, []map[string]any) {
 	switch typed := content.(type) {
 	case string:
 		text := strings.TrimSpace(typed)
 		if text == "" {
 			return nil, nil, nil
 		}
-		return []string{text}, nil, nil
+		contentType := "input_text"
+		if role == "assistant" {
+			contentType = "output_text"
+		}
+		return []map[string]any{{"type": contentType, "text": text}}, nil, nil
 	case []any:
-		textParts := make([]string, 0, len(typed))
+		contentParts := make([]map[string]any, 0, len(typed))
 		toolCalls := make([]map[string]any, 0)
 		toolResults := make([]map[string]any, 0)
 		for _, raw := range typed {
@@ -1514,7 +1667,21 @@ func anthropicContentToResponsesPayloads(role string, content any) ([]string, []
 			case "text":
 				text := strings.TrimSpace(toStringValue(blockMap["text"]))
 				if text != "" {
-					textParts = append(textParts, text)
+					contentType := "input_text"
+					if role == "assistant" {
+						contentType = "output_text"
+					}
+					contentParts = append(contentParts, map[string]any{
+						"type": contentType,
+						"text": text,
+					})
+				}
+			case "image":
+				if imageURL := anthropicImageSourceToDataURL(blockMap["source"]); imageURL != "" {
+					contentParts = append(contentParts, map[string]any{
+						"type":      "input_image",
+						"image_url": imageURL,
+					})
 				}
 			case "tool_use":
 				toolCalls = append(toolCalls, map[string]any{
@@ -1531,10 +1698,29 @@ func anthropicContentToResponsesPayloads(role string, content any) ([]string, []
 				})
 			}
 		}
-		return textParts, toolCalls, toolResults
+		return contentParts, toolCalls, toolResults
 	default:
 		return nil, nil, nil
 	}
+}
+
+func collapseOpenAIChatContent(parts []map[string]any) any {
+	if len(parts) == 0 {
+		return nil
+	}
+	textOnly := true
+	textParts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(toStringValue(part["type"])) != "text" {
+			textOnly = false
+			break
+		}
+		textParts = append(textParts, toStringValue(part["text"]))
+	}
+	if textOnly {
+		return strings.Join(textParts, "\n")
+	}
+	return parts
 }
 
 func anthropicRequestToOpenAIChat(body map[string]any, provider AdvancedProxyProvider) map[string]any {
@@ -1557,11 +1743,11 @@ func anthropicRequestToOpenAIChat(body map[string]any, provider AdvancedProxyPro
 				continue
 			}
 			role := strings.TrimSpace(toStringValue(messageMap["role"]))
-			textParts, toolCalls, toolResults := anthropicContentToChatPayloads(role, messageMap["content"])
-			if len(textParts) > 0 || len(toolCalls) > 0 {
+			contentParts, toolCalls, toolResults := anthropicContentToChatPayloads(role, messageMap["content"])
+			if len(contentParts) > 0 || len(toolCalls) > 0 {
 				payload := map[string]any{"role": role}
-				if len(textParts) > 0 {
-					payload["content"] = strings.Join(textParts, "\n")
+				if len(contentParts) > 0 {
+					payload["content"] = collapseOpenAIChatContent(contentParts)
 				}
 				if len(toolCalls) > 0 {
 					payload["tool_calls"] = toolCalls
@@ -1579,6 +1765,9 @@ func anthropicRequestToOpenAIChat(body map[string]any, provider AdvancedProxyPro
 	copyOptionalField(body, request, "temperature")
 	copyOptionalField(body, request, "top_p")
 	copyOptionalField(body, request, "max_tokens")
+	if stopSequences, exists := body["stop_sequences"]; exists && stopSequences != nil {
+		request["stop"] = stopSequences
+	}
 	if tools := anthropicToolsToOpenAI(body["tools"]); len(tools) > 0 {
 		request["tools"] = tools
 	}
@@ -1598,14 +1787,6 @@ func anthropicRequestToOpenAIResponses(body map[string]any, provider AdvancedPro
 	}
 	inputItems := make([]any, 0, 8)
 	systemText := anthropicSystemText(body["system"])
-	if systemText != "" {
-		inputItems = append(inputItems, map[string]any{
-			"role": "system",
-			"content": []map[string]any{
-				{"type": "input_text", "text": systemText},
-			},
-		})
-	}
 	if rawMessages, ok := body["messages"].([]any); ok {
 		for _, rawMessage := range rawMessages {
 			messageMap, ok := rawMessage.(map[string]any)
@@ -1613,19 +1794,8 @@ func anthropicRequestToOpenAIResponses(body map[string]any, provider AdvancedPro
 				continue
 			}
 			role := strings.TrimSpace(toStringValue(messageMap["role"]))
-			textParts, toolCalls, toolResults := anthropicContentToResponsesPayloads(role, messageMap["content"])
-			if len(textParts) > 0 {
-				contentItems := make([]map[string]any, 0, len(textParts))
-				for _, text := range textParts {
-					contentType := "input_text"
-					if role == "assistant" {
-						contentType = "output_text"
-					}
-					contentItems = append(contentItems, map[string]any{
-						"type": contentType,
-						"text": text,
-					})
-				}
+			contentItems, toolCalls, toolResults := anthropicContentToResponsesPayloads(role, messageMap["content"])
+			if len(contentItems) > 0 {
 				inputItems = append(inputItems, map[string]any{
 					"role":    role,
 					"content": contentItems,
@@ -1643,6 +1813,9 @@ func anthropicRequestToOpenAIResponses(body map[string]any, provider AdvancedPro
 		"model":  model,
 		"input":  inputItems,
 		"stream": truthy(body["stream"]),
+	}
+	if systemText != "" {
+		request["instructions"] = systemText
 	}
 	if tools := anthropicToolsToResponses(body["tools"]); len(tools) > 0 {
 		request["tools"] = tools

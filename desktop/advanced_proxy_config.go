@@ -104,6 +104,7 @@ type OptimizerConfig struct {
 
 type AdvancedProxyConfig struct {
 	Enabled          bool                      `json:"enabled"`
+	DebugLogging     bool                      `json:"debugLogging"`
 	ListenHost       string                    `json:"listenHost"`
 	ListenPort       int                       `json:"listenPort"`
 	Queues           AdvancedProxyQueuesConfig `json:"queues"`
@@ -180,10 +181,11 @@ func defaultAdvancedProxyQueuesConfig() AdvancedProxyQueuesConfig {
 
 func defaultAdvancedProxyConfig() AdvancedProxyConfig {
 	return AdvancedProxyConfig{
-		Enabled:    false,
-		ListenHost: bridgeServerHost,
-		ListenPort: bridgeServerPort,
-		Queues:     defaultAdvancedProxyQueuesConfig(),
+		Enabled:      false,
+		DebugLogging: false,
+		ListenHost:   bridgeServerHost,
+		ListenPort:   bridgeServerPort,
+		Queues:       defaultAdvancedProxyQueuesConfig(),
 		Claude: ClaudeProxyCompatConfig{
 			Enabled:      false,
 			BasePath:     advancedProxyClaudeBasePath,

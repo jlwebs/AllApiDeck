@@ -9,11 +9,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 )
+
+const advancedProxySSEScannerMaxTokenSize = 16 * 1024 * 1024
 
 type providerAttemptResult struct {
 	Response   map[string]any
@@ -45,6 +48,25 @@ func appendAdvancedProxyLogf(format string, args ...any) {
 	message := fmt.Sprintf(format, args...)
 	appendLine(resolveAdvancedProxyLogPath(), message)
 	debugLogf("[ADV_PROXY] %s", message)
+}
+
+func advancedProxyDebugEnabled(config AdvancedProxyConfig) bool {
+	if config.DebugLogging {
+		return true
+	}
+	value := strings.TrimSpace(strings.ToLower(os.Getenv("BATCH_API_CHECK_ADVANCED_PROXY_DEBUG")))
+	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func summarizeAdvancedProxyJSON(value any, limit int) string {
+	if value == nil {
+		return ""
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return previewAdvancedProxyText(fmt.Sprint(value), limit)
+	}
+	return previewAdvancedProxyText(string(raw), limit)
 }
 
 func previewAdvancedProxyText(raw string, limit int) string {
@@ -439,10 +461,12 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 	}
 
 	type responsesToolStreamState struct {
-		Index   int
-		ID      string
-		Name    string
-		Started bool
+		Index       int
+		ID          string
+		Name        string
+		Started     bool
+		PendingArgs string
+		EmittedArgs string
 	}
 
 	messageID := ""
@@ -628,10 +652,73 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 			},
 		})
 		state.Started = true
+		if state.PendingArgs != "" {
+			writeEvent("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": state.Index,
+				"delta": map[string]any{
+					"type":         "input_json_delta",
+					"partial_json": state.PendingArgs,
+				},
+			})
+			state.EmittedArgs = state.PendingArgs
+			state.PendingArgs = ""
+		}
+	}
+	mergeToolArguments := func(existing string, incoming string) string {
+		if incoming == "" {
+			return existing
+		}
+		if existing == "" {
+			return incoming
+		}
+		switch {
+		case incoming == existing:
+			return existing
+		case strings.HasPrefix(incoming, existing):
+			return incoming
+		case strings.HasPrefix(existing, incoming):
+			return existing
+		default:
+			return existing + incoming
+		}
+	}
+	emitToolArguments := func(state *responsesToolStreamState, incoming string) {
+		if state == nil || incoming == "" {
+			return
+		}
+		if !state.Started {
+			state.PendingArgs = mergeToolArguments(state.PendingArgs, incoming)
+			return
+		}
+		next := mergeToolArguments(state.EmittedArgs, incoming)
+		if len(next) <= len(state.EmittedArgs) {
+			return
+		}
+		delta := next[len(state.EmittedArgs):]
+		writeEvent("content_block_delta", map[string]any{
+			"type":  "content_block_delta",
+			"index": state.Index,
+			"delta": map[string]any{
+				"type":         "input_json_delta",
+				"partial_json": delta,
+			},
+		})
+		state.EmittedArgs = next
+	}
+	extractResponsesToolArguments := func(data map[string]any) string {
+		if args := strings.TrimSpace(toStringValue(data["arguments"])); args != "" {
+			return args
+		}
+		itemMap, _ := data["item"].(map[string]any)
+		if args := strings.TrimSpace(toStringValue(itemMap["arguments"])); args != "" {
+			return args
+		}
+		return ""
 	}
 
 	scanner := bufio.NewScanner(streamBody)
-	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), advancedProxySSEScannerMaxTokenSize)
 	eventName := ""
 	dataParts := make([]string, 0, 4)
 	processEvent := func(eventName string, dataParts []string) {
@@ -710,16 +797,7 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 			state.ID = firstNonEmpty(strings.TrimSpace(toStringValue(itemMap["call_id"])), state.ID, strings.TrimSpace(toStringValue(itemMap["id"])))
 			state.Name = firstNonEmpty(strings.TrimSpace(toStringValue(itemMap["name"])), state.Name)
 			startToolState(state)
-			if args := strings.TrimSpace(toStringValue(itemMap["arguments"])); args != "" {
-				writeEvent("content_block_delta", map[string]any{
-					"type":  "content_block_delta",
-					"index": state.Index,
-					"delta": map[string]any{
-						"type":         "input_json_delta",
-						"partial_json": args,
-					},
-				})
-			}
+			emitToolArguments(state, strings.TrimSpace(toStringValue(itemMap["arguments"])))
 		case "response.function_call_arguments.delta":
 			hasToolUse = true
 			closeIndex(&currentTextIndex)
@@ -732,18 +810,30 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 			if delta == "" {
 				return
 			}
-			writeEvent("content_block_delta", map[string]any{
-				"type":  "content_block_delta",
-				"index": state.Index,
-				"delta": map[string]any{
-					"type":         "input_json_delta",
-					"partial_json": delta,
-				},
-			})
+			emitToolArguments(state, delta)
 		case "response.function_call_arguments.done", "response.output_item.done":
 			key := resolveToolKey(data)
 			if key == "" {
 				return
+			}
+			if state, exists := toolStates[key]; exists && state != nil {
+				itemMap, _ := data["item"].(map[string]any)
+				if strings.TrimSpace(toStringValue(itemMap["type"])) == "function_call" || strings.TrimSpace(eventName) == "response.function_call_arguments.done" {
+					state.ID = firstNonEmpty(
+						strings.TrimSpace(toStringValue(data["call_id"])),
+						strings.TrimSpace(toStringValue(itemMap["call_id"])),
+						state.ID,
+						strings.TrimSpace(toStringValue(data["item_id"])),
+						strings.TrimSpace(toStringValue(itemMap["id"])),
+					)
+					state.Name = firstNonEmpty(
+						strings.TrimSpace(toStringValue(data["name"])),
+						strings.TrimSpace(toStringValue(itemMap["name"])),
+						state.Name,
+					)
+					startToolState(state)
+					emitToolArguments(state, extractResponsesToolArguments(data))
+				}
 			}
 			if state, exists := toolStates[key]; exists && state != nil && state.Started {
 				writeEvent("content_block_stop", map[string]any{
@@ -782,6 +872,9 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 	}
 	if len(dataParts) > 0 {
 		processEvent(eventName, dataParts)
+	}
+	if err := scanner.Err(); err != nil {
+		appendAdvancedProxyLogf("responses stream scanner failed: %v", err)
 	}
 	emitMessageStop(mapOpenAIResponsesStopReason("completed", hasToolUse, ""))
 }
@@ -991,7 +1084,7 @@ func writeAnthropicSSEFromOpenAIChatStream(writer http.ResponseWriter, streamBod
 	}
 
 	scanner := bufio.NewScanner(streamBody)
-	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), advancedProxySSEScannerMaxTokenSize)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || !strings.HasPrefix(line, "data:") {
@@ -1154,6 +1247,9 @@ func writeAnthropicSSEFromOpenAIChatStream(writer http.ResponseWriter, streamBod
 			emitMessageDelta()
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		appendAdvancedProxyLogf("chat stream scanner failed: %v", err)
+	}
 
 	closeCurrentBlock()
 	closeOpenToolBlocks()
@@ -1174,7 +1270,9 @@ func buildOpenAIProviderHeaders(provider AdvancedProxyProvider) map[string]strin
 func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody map[string]any, requestHeaders http.Header, stream bool, config AdvancedProxyConfig) providerAttemptResult {
 	failoverActive := config.Failover.Enabled && config.Failover.AutoFailoverEnabled
 	timeoutSeconds := computeAdvancedProxyTimeoutSeconds(stream, failoverActive, config.Failover)
-	apiFormat := normalizeClaudeAPIFormat(provider.APIFormat)
+	capabilities := resolveAdvancedProxyProviderCapabilities(provider)
+	apiFormat := capabilities.APIFormat
+	debugEnabled := advancedProxyDebugEnabled(config)
 	routeKind := "messages"
 	switch apiFormat {
 	case "openai_chat":
@@ -1201,6 +1299,23 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 	if strings.TrimSpace(provider.Model) != "" {
 		basePayload["model"] = provider.Model
 	}
+	if capabilities.SanitizeOrphanToolResults {
+		sanitizedCount := sanitizeOrphanToolResults(basePayload)
+		if sanitizedCount > 0 {
+			appendAdvancedProxyLogf("[CLAUDE_PROXY_SANITIZE] provider=%s route=%s sanitized_orphan_tool_results=%d", advancedProxyProviderLabel(provider), routeKind, sanitizedCount)
+		}
+	}
+	if debugEnabled {
+		appendAdvancedProxyLogf(
+			"[CLAUDE_PROXY_REQUEST] provider=%s format=%s route=%s stream=%t capabilities=%s payload=%s",
+			advancedProxyProviderLabel(provider),
+			apiFormat,
+			routeKind,
+			stream,
+			summarizeAdvancedProxyJSON(capabilities, 320),
+			summarizeAdvancedProxyJSON(basePayload, 1800),
+		)
+	}
 
 	signatureRectified := false
 	budgetRectified := false
@@ -1216,6 +1331,15 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 		default:
 			transformed = payload
 		}
+		if debugEnabled {
+			appendAdvancedProxyLogf(
+				"[CLAUDE_PROXY_TRANSFORM] provider=%s format=%s route=%s transformed=%s",
+				advancedProxyProviderLabel(provider),
+				apiFormat,
+				routeKind,
+				summarizeAdvancedProxyJSON(transformed, 2200),
+			)
+		}
 
 		for _, targetURL := range targets {
 			advancedProxyRuntime.MarkDispatch("claude", provider, routeKind, targetURL)
@@ -1227,10 +1351,13 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 					observeAdvancedProxyAttempt("claude", provider, 0, 0, err)
 					return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "invalid upstream JSON request"}
 				}
-				statusCode, responseHeaders, _, streamBody, elapsed, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, apiFormat, requestHeaders, stream), rawTransformed, timeoutSeconds, true)
+				statusCode, responseHeaders, rawResponse, streamBody, elapsed, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, apiFormat, requestHeaders, stream), rawTransformed, timeoutSeconds, true)
 				if err != nil {
 					advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
 					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, err)
+					if debugEnabled {
+						appendAdvancedProxyLogf("[CLAUDE_PROXY_STREAM_ERROR] provider=%s format=%s route=%s endpoint=%s detail=%s", advancedProxyProviderLabel(provider), apiFormat, routeKind, targetURL, previewAdvancedProxyText(err.Error(), 320))
+					}
 					return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: err.Error()}
 				}
 				if statusCode < 200 || statusCode >= 300 {
@@ -1238,6 +1365,9 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
 					if streamBody != nil {
 						streamBody.Close()
+					}
+					if debugEnabled {
+						appendAdvancedProxyLogf("[CLAUDE_PROXY_STREAM_REJECT] provider=%s format=%s route=%s endpoint=%s status=%d detail=%s", advancedProxyProviderLabel(provider), apiFormat, routeKind, targetURL, statusCode, summarizeAdvancedProxyBody(rawResponse))
 					}
 					return providerAttemptResult{
 						StatusCode: statusCode,
@@ -1258,10 +1388,16 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 			if err != nil {
 				advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
 				observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, err)
+				if debugEnabled {
+					appendAdvancedProxyLogf("[CLAUDE_PROXY_ERROR] provider=%s format=%s route=%s endpoint=%s detail=%s", advancedProxyProviderLabel(provider), apiFormat, routeKind, targetURL, previewAdvancedProxyText(err.Error(), 320))
+				}
 				return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: err.Error()}
 			}
 			if statusCode < 200 || statusCode >= 300 {
 				errorMessage := normalizeAnthropicErrorMessage(rawResponse)
+				if debugEnabled {
+					appendAdvancedProxyLogf("[CLAUDE_PROXY_REJECT] provider=%s format=%s route=%s endpoint=%s status=%d detail=%s raw=%s", advancedProxyProviderLabel(provider), apiFormat, routeKind, targetURL, statusCode, previewAdvancedProxyText(errorMessage, 320), summarizeAdvancedProxyBody(rawResponse))
+				}
 				if apiFormat == "anthropic" && !signatureRectified && shouldRectifyThinkingSignature(errorMessage, config.Rectifier) && rectifyThinkingSignature(basePayload) {
 					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
 					signatureRectified = true

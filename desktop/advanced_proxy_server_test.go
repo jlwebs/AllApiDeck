@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -414,6 +415,64 @@ func TestWriteAnthropicSSEFromOpenAIResponsesStreamEmitsToolUseLifecycle(t *test
 	}
 	if !strings.Contains(body, `"type":"message_stop"`) {
 		t.Fatalf("expected message_stop, got %q", body)
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIResponsesStreamEmitsToolArgsFromDoneEvents(t *testing.T) {
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"resp_tool_done","model":"gpt-5.4"}}`,
+		"",
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","item_id":"fc_done","item":{"id":"fc_done","type":"function_call","call_id":"call_done","name":"write_file"}}`,
+		"",
+		`event: response.output_item.done`,
+		`data: {"type":"response.output_item.done","item_id":"fc_done","item":{"id":"fc_done","type":"function_call","call_id":"call_done","name":"write_file","arguments":"{\"file_path\":\"/tmp/test.txt\",\"content\":\"hello\"}"}}`,
+		"",
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":9,"output_tokens":5}}}`,
+		"",
+	}, "\n")))
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIResponsesStream(recorder, streamBody, "gpt-5.4")
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"partial_json":"{\"file_path\":\"/tmp/test.txt\",\"content\":\"hello\"}"`) {
+		t.Fatalf("expected tool args emitted from done event, got %q", body)
+	}
+	if !strings.Contains(body, `"type":"message_stop"`) {
+		t.Fatalf("expected message_stop, got %q", body)
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIResponsesStreamSupportsLargeToolArgs(t *testing.T) {
+	largeContent := strings.Repeat("a", advancedProxySSEScannerMaxTokenSize/2)
+	toolArgs := fmt.Sprintf("{\"file_path\":\"/tmp/large.txt\",\"content\":\"%s\"}", largeContent)
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"resp_tool_large","model":"gpt-5.4"}}`,
+		"",
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","item_id":"fc_large","item":{"id":"fc_large","type":"function_call","call_id":"call_large","name":"write_file"}}`,
+		"",
+		`event: response.function_call_arguments.done`,
+		fmt.Sprintf(`data: {"type":"response.function_call_arguments.done","item_id":"fc_large","arguments":%q}`, toolArgs),
+		"",
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":10,"output_tokens":6}}}`,
+		"",
+	}, "\n")))
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIResponsesStream(recorder, streamBody, "gpt-5.4")
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"id":"call_large"`) {
+		t.Fatalf("expected tool_use block, got body length=%d", len(body))
+	}
+	if !strings.Contains(body, `/tmp/large.txt`) || !strings.Contains(body, strings.Repeat("a", 128)) {
+		t.Fatalf("expected large tool args to survive SSE scanning, got body length=%d", len(body))
 	}
 }
 
