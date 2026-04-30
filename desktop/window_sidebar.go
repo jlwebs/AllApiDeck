@@ -1044,6 +1044,14 @@ func (a *App) applyPanelWindowState(screenWidth int, screenHeight int, collapsed
 	wruntime.WindowSetPosition(a.ctx, x, y)
 	wruntime.WindowShow(a.ctx)
 	wruntime.Show(a.ctx)
+	if err := reinforceNativePanelTopmost(sidebarWindowBounds{
+		Width:  width,
+		Height: height,
+		X:      x,
+		Y:      y,
+	}); err != nil {
+		debugLogf("panel apply state topmost reinforce failed: %v", err)
+	}
 	debugLogf("panel apply state committed: collapsed=%t size=%dx%d pos=(%d,%d)", collapsed, width, height, x, y)
 	return nil
 }
@@ -1108,6 +1116,14 @@ func (a *App) applyManualPanelWindowState(screenWidth int, screenHeight int) err
 	wruntime.WindowSetPosition(a.ctx, x, y)
 	wruntime.WindowShow(a.ctx)
 	wruntime.Show(a.ctx)
+	if err := reinforceNativePanelTopmost(sidebarWindowBounds{
+		Width:  width,
+		Height: height,
+		X:      x,
+		Y:      y,
+	}); err != nil {
+		debugLogf("manual panel topmost reinforce failed: %v", err)
+	}
 	if !a.isManualPanelStart() {
 		_ = hidePanelWindowFromTaskbar()
 	}

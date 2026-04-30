@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -117,4 +118,38 @@ func getNativePanelWindowRect(hwnd uintptr) (desktopRect, error) {
 		return desktopRect{}, fmt.Errorf("GetWindowRect failed: %v", err)
 	}
 	return rect, nil
+}
+
+func reinforceNativePanelTopmost(bounds sidebarWindowBounds) error {
+	var lastErr error
+	delays := []time.Duration{
+		0,
+		40 * time.Millisecond,
+		120 * time.Millisecond,
+	}
+
+	for _, delay := range delays {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		hwnd, err := findPanelWindowHandle()
+		if err != nil || hwnd == 0 {
+			if err != nil {
+				lastErr = err
+			} else {
+				lastErr = fmt.Errorf("panel hwnd unavailable")
+			}
+			continue
+		}
+		if err := showNativePanelWindow(hwnd, bounds); err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("panel hwnd unavailable")
 }

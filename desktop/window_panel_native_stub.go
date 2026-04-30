@@ -29,3 +29,7 @@ func isNativePanelWindowForeground(hwnd uintptr) bool {
 func getNativePanelWindowRect(hwnd uintptr) (desktopRect, error) {
 	return desktopRect{}, nil
 }
+
+func reinforceNativePanelTopmost(bounds sidebarWindowBounds) error {
+	return nil
+}
