@@ -118,7 +118,7 @@
 
           <div class="spring-update-summary">
             <div class="spring-update-summary-head">更新说明</div>
-            <pre class="spring-update-summary-body">{{ releaseNotesText }}</pre>
+            <div class="spring-update-summary-body spring-update-summary-body-markdown" v-html="releaseNotesHtml"></div>
           </div>
         </div>
 
@@ -403,6 +403,75 @@ const releaseNotesText = computed(() => {
   if (updateInfoError.value) return '最新版本信息获取失败，可以直接打开 GitHub Release 页面查看。';
   return '当前版本暂无额外更新说明。';
 });
+
+function escapeReleaseNotesHtml(input) {
+  return String(input || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderReleaseNotesHtml(input) {
+  const source = String(input || '').replace(/\r\n?/g, '\n').trim();
+  if (!source) {
+    return '<p>当前版本暂无额外更新说明。</p>';
+  }
+
+  const lines = source.split('\n');
+  const blocks = [];
+  let paragraphLines = [];
+  let listItems = [];
+
+  const flushParagraph = () => {
+    if (!paragraphLines.length) return;
+    blocks.push(`<p>${paragraphLines.join('<br>')}</p>`);
+    paragraphLines = [];
+  };
+
+  const flushList = () => {
+    if (!listItems.length) return;
+    blocks.push(`<ul>${listItems.map(item => `<li>${item}</li>`).join('')}</ul>`);
+    listItems = [];
+  };
+
+  lines.forEach(rawLine => {
+    const line = String(rawLine || '').trim();
+    if (!line) {
+      flushParagraph();
+      flushList();
+      return;
+    }
+
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      flushParagraph();
+      flushList();
+      const level = Math.min(6, headingMatch[1].length);
+      const text = escapeReleaseNotesHtml(headingMatch[2].trim());
+      blocks.push(`<h${level}>${text}</h${level}>`);
+      return;
+    }
+
+    const listMatch = line.match(/^-\s+(.+)$/);
+    if (listMatch) {
+      flushParagraph();
+      listItems.push(escapeReleaseNotesHtml(listMatch[1].trim()));
+      return;
+    }
+
+    flushList();
+    paragraphLines.push(escapeReleaseNotesHtml(line));
+  });
+
+  flushParagraph();
+  flushList();
+
+  return blocks.join('') || `<p>${escapeReleaseNotesHtml(source)}</p>`;
+}
+
+const releaseNotesHtml = computed(() => renderReleaseNotesHtml(releaseNotesText.value));
 
 const downloadPercent = computed(() => {
   const percent = Number(downloadSnapshot.value.percent || 0);
@@ -811,6 +880,55 @@ onBeforeUnmount(() => {
   word-break: break-word;
 }
 
+.spring-update-summary-body-markdown {
+  font: 12px/1.55 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  white-space: normal;
+}
+
+.spring-update-summary-body-markdown :deep(h1),
+.spring-update-summary-body-markdown :deep(h2),
+.spring-update-summary-body-markdown :deep(h3),
+.spring-update-summary-body-markdown :deep(h4),
+.spring-update-summary-body-markdown :deep(h5),
+.spring-update-summary-body-markdown :deep(h6) {
+  margin: 0 0 8px;
+  color: #314735;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.spring-update-summary-body-markdown :deep(h1) {
+  font-size: 16px;
+}
+
+.spring-update-summary-body-markdown :deep(h2) {
+  font-size: 15px;
+}
+
+.spring-update-summary-body-markdown :deep(h3),
+.spring-update-summary-body-markdown :deep(h4),
+.spring-update-summary-body-markdown :deep(h5),
+.spring-update-summary-body-markdown :deep(h6) {
+  font-size: 13px;
+}
+
+.spring-update-summary-body-markdown :deep(p) {
+  margin: 0 0 8px;
+}
+
+.spring-update-summary-body-markdown :deep(ul) {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+
+.spring-update-summary-body-markdown :deep(li) {
+  margin: 0 0 4px;
+}
+
+.spring-update-summary-body-markdown :deep(*:last-child) {
+  margin-bottom: 0;
+}
+
 .spring-update-progress-shell {
   display: flex;
   flex-direction: column;
@@ -937,6 +1055,15 @@ onBeforeUnmount(() => {
   color: #c8d6c2;
 }
 
+:deep(body.dark-mode) .spring-update-summary-body-markdown :deep(h1),
+:deep(body.dark-mode) .spring-update-summary-body-markdown :deep(h2),
+:deep(body.dark-mode) .spring-update-summary-body-markdown :deep(h3),
+:deep(body.dark-mode) .spring-update-summary-body-markdown :deep(h4),
+:deep(body.dark-mode) .spring-update-summary-body-markdown :deep(h5),
+:deep(body.dark-mode) .spring-update-summary-body-markdown :deep(h6) {
+  color: #eef6e6;
+}
+
 :deep(body.dark-mode) .spring-update-error {
   background: rgba(75, 34, 30, 0.88);
   border-color: rgba(180, 85, 74, 0.24);
@@ -1026,6 +1153,15 @@ onBeforeUnmount(() => {
 :deep(body.gaia-dark) .spring-update-hero-copy small,
 :deep(body.gaia-dark) .spring-update-summary-body {
   color: #bfd0d3;
+}
+
+:deep(body.gaia-dark) .spring-update-summary-body-markdown :deep(h1),
+:deep(body.gaia-dark) .spring-update-summary-body-markdown :deep(h2),
+:deep(body.gaia-dark) .spring-update-summary-body-markdown :deep(h3),
+:deep(body.gaia-dark) .spring-update-summary-body-markdown :deep(h4),
+:deep(body.gaia-dark) .spring-update-summary-body-markdown :deep(h5),
+:deep(body.gaia-dark) .spring-update-summary-body-markdown :deep(h6) {
+  color: #eef6f4;
 }
 
 :deep(body.gaia-dark) .spring-update-error {

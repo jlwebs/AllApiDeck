@@ -302,6 +302,8 @@ const SIZE_OPTIONS = [
   { label: '1024×1024', value: '1024x1024' },
   { label: '1024×1536', value: '1024x1536' },
   { label: '1536×1024', value: '1536x1024' },
+  { label: '2K', value: '2048x2048' },
+  { label: '4K', value: '4096x4096' },
   { label: 'Auto', value: 'auto' },
 ];
 

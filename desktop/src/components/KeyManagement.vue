@@ -2547,8 +2547,7 @@ async function importFromClipboardPackage() {
       throw new Error('剪贴板内容不是 sk:// 导入包');
     }
 
-    const payloadText = await decompressClipboardPackage(text.slice('sk://'.length));
-    const payload = JSON.parse(payloadText);
+    const payload = await resolveClipboardPackagePayload(text.slice('sk://'.length));
     const importedRecords = Array.isArray(payload?.records) ? payload.records : [];
     if (importedRecords.length === 0) {
       throw new Error('导入包中没有记录');
@@ -2753,6 +2752,41 @@ async function decompressClipboardPackage(text) {
   const bytes = base64UrlToBytes(text);
   const decompressed = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
   return await new Response(decompressed).text();
+}
+
+async function resolveClipboardPackagePayload(text) {
+  const encoded = String(text || '').trim();
+  try {
+    return await readClipboardPackagePayload(encoded);
+  } catch (primaryError) {
+    const fallbackEncoded = remapClipboardPackageToken(encoded);
+    if (!fallbackEncoded || fallbackEncoded === encoded) {
+      throw primaryError;
+    }
+    try {
+      return await readClipboardPackagePayload(fallbackEncoded);
+    } catch {
+      throw primaryError;
+    }
+  }
+}
+
+async function readClipboardPackagePayload(text) {
+  const payloadText = await decompressClipboardPackage(text);
+  return JSON.parse(payloadText);
+}
+
+function remapClipboardPackageToken(value) {
+  return String(value || '').replace(/[A-Za-z]/g, letter => {
+    const code = letter.charCodeAt(0);
+    if (code >= 65 && code <= 90) {
+      return String.fromCharCode(90 - (code - 65));
+    }
+    if (code >= 97 && code <= 122) {
+      return String.fromCharCode(122 - (code - 97));
+    }
+    return letter;
+  });
 }
 
 function bytesToBase64Url(bytes) {
