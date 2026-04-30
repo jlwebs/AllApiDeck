@@ -76,6 +76,7 @@ function normalizeQueueScope(scope) {
 export function createDefaultAdvancedProxyConfig() {
   return {
     enabled: false,
+    debugLogging: false,
     listenHost: '127.0.0.1',
     listenPort: 8888,
     queues: {
@@ -275,6 +276,7 @@ export function normalizeAdvancedProxyConfig(input) {
 
   next.listenHost = String(next.listenHost || defaults.listenHost).trim() || defaults.listenHost;
   next.listenPort = Number(next.listenPort || defaults.listenPort) || defaults.listenPort;
+  next.debugLogging = next.debugLogging === true;
 
   next.queues.global = normalizeQueueSection(
     next.queues.global,

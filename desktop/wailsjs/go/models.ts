@@ -284,6 +284,7 @@ export namespace main {
 	}
 	export class AdvancedProxyConfig {
 	    enabled: boolean;
+	    debugLogging: boolean;
 	    listenHost: string;
 	    listenPort: number;
 	    queues: AdvancedProxyQueuesConfig;
@@ -304,6 +305,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
+	        this.debugLogging = source["debugLogging"];
 	        this.listenHost = source["listenHost"];
 	        this.listenPort = source["listenPort"];
 	        this.queues = this.convertValues(source["queues"], AdvancedProxyQueuesConfig);

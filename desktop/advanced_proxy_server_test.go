@@ -381,6 +381,33 @@ func TestWriteAnthropicSSEFromOpenAIChatStreamPreservesNewlineDeltas(t *testing.
 	}
 }
 
+func TestWriteAnthropicSSEFromOpenAIChatStreamMergesCumulativeToolArgs(t *testing.T) {
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`data: {"id":"chatcmpl-tool","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_write","function":{"name":"write_file","arguments":"{\"file_path\":\"/tmp/test.txt\"}"}}]}}]}`,
+		"",
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"file_path\":\"/tmp/test.txt\",\"content\":\"hello\"}"}}]}}]}`,
+		"",
+		`data: {"choices":[{"finish_reason":"tool_calls","delta":{}}]}`,
+		"",
+		`data: [DONE]`,
+		"",
+	}, "\n")))
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIChatStream(recorder, streamBody, "gpt-5.4", false)
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"type":"tool_use"`) {
+		t.Fatalf("expected tool_use block, got %q", body)
+	}
+	if strings.Count(body, `"type":"content_block_delta"`) != 1 {
+		t.Fatalf("expected a single stable tool args delta, got %q", body)
+	}
+	if !strings.Contains(body, `"partial_json":"{\"file_path\":\"/tmp/test.txt\",\"content\":\"hello\"}"`) {
+		t.Fatalf("expected fully merged tool args emitted once, got %q", body)
+	}
+}
+
 func TestWriteAnthropicSSEFromOpenAIResponsesStreamEmitsToolUseLifecycle(t *testing.T) {
 	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
 		`event: response.created`,

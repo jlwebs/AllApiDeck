@@ -964,6 +964,48 @@ type anthropicToolStreamState struct {
 	Name        string
 	Started     bool
 	PendingArgs string
+	EmittedArgs string
+}
+
+func mergeAdvancedProxyToolArguments(existing string, incoming string) string {
+	if incoming == "" {
+		return existing
+	}
+	if existing == "" {
+		return incoming
+	}
+	switch {
+	case incoming == existing:
+		return existing
+	case strings.HasPrefix(incoming, existing):
+		return incoming
+	case strings.HasPrefix(existing, incoming):
+		return existing
+	default:
+		return existing + incoming
+	}
+}
+
+func accumulateAdvancedProxyToolArguments(existing string, incoming string) string {
+	if incoming == "" {
+		return existing
+	}
+	if existing == "" {
+		return incoming
+	}
+	if json.Valid([]byte(existing)) && json.Valid([]byte(incoming)) {
+		return incoming
+	}
+	switch {
+	case incoming == existing:
+		return existing
+	case strings.HasPrefix(incoming, existing):
+		return incoming
+	case strings.HasPrefix(existing, incoming):
+		return existing
+	default:
+		return existing + incoming
+	}
 }
 
 func mapOpenAIStopReasonOptional(value string) any {
@@ -1046,6 +1088,22 @@ func writeAnthropicSSEFromOpenAIChatStream(writer http.ResponseWriter, streamBod
 		}
 		sort.Ints(indices)
 		for _, index := range indices {
+			for _, state := range toolStates {
+				if state == nil || !state.Started || state.Index != index {
+					continue
+				}
+				if state.PendingArgs != "" && state.EmittedArgs != state.PendingArgs {
+					writeEvent("content_block_delta", map[string]any{
+						"type":  "content_block_delta",
+						"index": state.Index,
+						"delta": map[string]any{
+							"type":         "input_json_delta",
+							"partial_json": state.PendingArgs,
+						},
+					})
+					state.EmittedArgs = state.PendingArgs
+				}
+			}
 			writeEvent("content_block_stop", map[string]any{
 				"type":  "content_block_stop",
 				"index": index,
@@ -1081,6 +1139,12 @@ func writeAnthropicSSEFromOpenAIChatStream(writer http.ResponseWriter, streamBod
 			"index":         currentBlockIndex,
 			"content_block": payload,
 		})
+	}
+	emitToolArguments := func(state *anthropicToolStreamState, incoming string) {
+		if state == nil || incoming == "" {
+			return
+		}
+		state.PendingArgs = accumulateAdvancedProxyToolArguments(state.PendingArgs, incoming)
 	}
 
 	scanner := bufio.NewScanner(streamBody)
@@ -1197,20 +1261,7 @@ func writeAnthropicSSEFromOpenAIChatStream(writer http.ResponseWriter, streamBod
 						state.Name = name
 					}
 					args := toStringValue(functionMap["arguments"])
-					if args != "" {
-						if state.Started {
-							writeEvent("content_block_delta", map[string]any{
-								"type":  "content_block_delta",
-								"index": state.Index,
-								"delta": map[string]any{
-									"type":         "input_json_delta",
-									"partial_json": args,
-								},
-							})
-						} else {
-							state.PendingArgs += args
-						}
-					}
+					emitToolArguments(state, args)
 				}
 				if !state.Started && state.ID != "" && state.Name != "" {
 					emitMessageStart()
@@ -1225,17 +1276,6 @@ func writeAnthropicSSEFromOpenAIChatStream(writer http.ResponseWriter, streamBod
 					})
 					openToolIndices[state.Index] = struct{}{}
 					state.Started = true
-					if state.PendingArgs != "" {
-						writeEvent("content_block_delta", map[string]any{
-							"type":  "content_block_delta",
-							"index": state.Index,
-							"delta": map[string]any{
-								"type":         "input_json_delta",
-								"partial_json": state.PendingArgs,
-							},
-						})
-						state.PendingArgs = ""
-					}
 				}
 			}
 		}

@@ -310,6 +310,25 @@
             <section class="advanced-proxy-section">
               <div class="advanced-proxy-section-head">
                 <div>
+                  <h4>调试日志</h4>
+                  <p>打开后会把高级代理请求转换、上游拒绝和流式异常详细写入 <code>advanced-proxy.log</code>。</p>
+                </div>
+              </div>
+
+              <div class="advanced-proxy-toggle-list">
+                <div class="advanced-proxy-toggle-row">
+                  <span>写入详细调试日志</span>
+                  <a-switch
+                    :checked="draft.debugLogging"
+                    @change="value => handleConfigMutation(next => { next.debugLogging = value; }, value ? '高级代理调试日志已开启' : '高级代理调试日志已关闭')"
+                  />
+                </div>
+              </div>
+            </section>
+
+            <section class="advanced-proxy-section">
+              <div class="advanced-proxy-section-head">
+                <div>
                   <h4>错误修正</h4>
                   <p>仅作用于 Claude 兼容链路，用来最小化修正常见的 thinking 签名和预算错误。</p>
                 </div>
