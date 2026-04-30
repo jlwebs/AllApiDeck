@@ -185,7 +185,7 @@ func resolveMainWindowSize() (width int, height int, minWidth int, minHeight int
 		return
 	}
 
-	width = clampWindowSize(int(float64(workArea.Width())*0.40), minWidth, 860)
+	width = clampWindowSize(int(float64(workArea.Width())*0.40), minWidth, 910)
 	height = clampWindowSize(int(float64(workArea.Height())*0.6), minHeight, 600)
 	return
 }
