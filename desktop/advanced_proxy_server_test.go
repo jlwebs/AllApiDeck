@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,27 @@ import (
 	"testing"
 	"time"
 )
+
+type failingReadCloser struct {
+	chunks [][]byte
+	err    error
+}
+
+func (f *failingReadCloser) Read(p []byte) (int, error) {
+	if len(f.chunks) == 0 {
+		if f.err != nil {
+			return 0, f.err
+		}
+		return 0, io.EOF
+	}
+	chunk := f.chunks[0]
+	f.chunks = f.chunks[1:]
+	return copy(p, chunk), nil
+}
+
+func (f *failingReadCloser) Close() error {
+	return nil
+}
 
 func contentBlocksOf(t *testing.T, raw any) []map[string]any {
 	t.Helper()
@@ -466,15 +488,157 @@ func TestForwardClaudeRequestViaProviderUpdatesRoutingSnapshotForAnthropic(t *te
 	}
 }
 
-func TestForwardClaudeRequestViaProviderUpdatesRoutingSnapshotForOpenAIChatStream(t *testing.T) {
+func TestForwardClaudeRequestViaProviderPersistsResponsesUpgradeAfterSuccessfulProbe(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/v1/chat/completions" {
+		if request.URL.Path != "/v1/responses" {
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"resp_test","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "claude-openai-provider",
+		RowKey:    "row-claude-openai",
+		Name:      "Claude OpenAI Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test",
+		APIFormat: "openai_chat",
+	}
+
+	_, err := saveAdvancedProxyConfig(AdvancedProxyConfig{
+		Queues: AdvancedProxyQueuesConfig{
+			Global: AdvancedProxyQueueConfig{
+				Providers: []AdvancedProxyProvider{provider},
+			},
+			Claude:   defaultAdvancedProxyQueueConfig(true),
+			Codex:    defaultAdvancedProxyQueueConfig(true),
+			OpenCode: defaultAdvancedProxyQueueConfig(true),
+			OpenClaw: defaultAdvancedProxyQueueConfig(true),
+		},
+		Claude: ClaudeProxyCompatConfig{
+			Enabled:  true,
+			BasePath: advancedProxyClaudeBasePath,
+		},
+	})
+	if err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	result := forwardClaudeRequestViaProvider(provider, map[string]any{
+		"model": "claude-sonnet",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "hello"},
+		},
+	}, http.Header{}, false, AdvancedProxyConfig{})
+
+	if result.StatusCode != http.StatusOK || result.Response == nil {
+		t.Fatalf("expected successful response, got %#v", result)
+	}
+
+	saved, err := loadAdvancedProxyConfig()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(saved.Queues.Global.Providers) != 1 {
+		t.Fatalf("expected one saved provider, got %#v", saved.Queues.Global.Providers)
+	}
+	if saved.Queues.Global.Providers[0].APIFormat != "openai_responses" {
+		t.Fatalf("expected provider format persisted as openai_responses, got %#v", saved.Queues.Global.Providers[0])
+	}
+}
+
+func TestForwardClaudeRequestViaProviderFallsBackToChatWithoutPersistingResponses(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/v1/responses":
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = writer.Write([]byte(`{"error":{"message":"responses endpoint not found"}}`))
+		case "/v1/chat/completions":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"id":"chatcmpl_test","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+		default:
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "claude-openai-provider",
+		RowKey:    "row-claude-openai",
+		Name:      "Claude OpenAI Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test",
+		APIFormat: "openai_chat",
+	}
+
+	_, err := saveAdvancedProxyConfig(AdvancedProxyConfig{
+		Queues: AdvancedProxyQueuesConfig{
+			Global: AdvancedProxyQueueConfig{
+				Providers: []AdvancedProxyProvider{provider},
+			},
+			Claude:   defaultAdvancedProxyQueueConfig(true),
+			Codex:    defaultAdvancedProxyQueueConfig(true),
+			OpenCode: defaultAdvancedProxyQueueConfig(true),
+			OpenClaw: defaultAdvancedProxyQueueConfig(true),
+		},
+		Claude: ClaudeProxyCompatConfig{
+			Enabled:  true,
+			BasePath: advancedProxyClaudeBasePath,
+		},
+	})
+	if err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	result := forwardClaudeRequestViaProvider(provider, map[string]any{
+		"model": "claude-sonnet",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "hello"},
+		},
+	}, http.Header{}, false, AdvancedProxyConfig{})
+
+	if result.StatusCode != http.StatusOK || result.Response == nil {
+		t.Fatalf("expected fallback chat response to succeed, got %#v", result)
+	}
+
+	saved, err := loadAdvancedProxyConfig()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(saved.Queues.Global.Providers) != 1 {
+		t.Fatalf("expected one saved provider, got %#v", saved.Queues.Global.Providers)
+	}
+	if saved.Queues.Global.Providers[0].APIFormat != "openai_chat" {
+		t.Fatalf("expected provider format to remain openai_chat after fallback, got %#v", saved.Queues.Global.Providers[0])
+	}
+}
+
+func TestForwardClaudeRequestViaProviderUpdatesRoutingSnapshotForOpenAIChatConfiguredProviderStream(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/responses" {
 			t.Fatalf("unexpected path: %s", request.URL.Path)
 		}
 		writer.Header().Set("Content-Type", "text/event-stream")
-		_, _ = writer.Write([]byte("data: {\"id\":\"chatcmpl-test\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+		_, _ = writer.Write([]byte(strings.Join([]string{
+			`event: response.created`,
+			`data: {"type":"response.created","response":{"id":"resp_test","model":"gpt-5.4"}}`,
+			"",
+			`event: response.output_text.delta`,
+			`data: {"type":"response.output_text.delta","delta":"hi"}`,
+			"",
+			`event: response.completed`,
+			`data: {"type":"response.completed","response":{"id":"resp_test","model":"gpt-5.4","usage":{"input_tokens":1,"output_tokens":1}}}`,
+			"",
+		}, "\n")))
 	}))
 	defer server.Close()
 
@@ -504,10 +668,10 @@ func TestForwardClaudeRequestViaProviderUpdatesRoutingSnapshotForOpenAIChatStrea
 	if state.ProviderID != provider.ID || state.ProviderRowKey != provider.RowKey {
 		t.Fatalf("unexpected provider binding: %#v", state)
 	}
-	if state.RouteKind != "chat" || state.Status != "success" {
+	if state.RouteKind != "responses" || state.Status != "success" {
 		t.Fatalf("unexpected claude streaming route state: %#v", state)
 	}
-	if state.TargetURL != server.URL+"/v1/chat/completions" {
+	if state.TargetURL != server.URL+"/v1/responses" {
 		t.Fatalf("unexpected target url: %#v", state)
 	}
 }
@@ -764,11 +928,43 @@ func TestWriteAnthropicSSEFromOpenAIChatStreamMergesCumulativeToolArgs(t *testin
 	if !strings.Contains(body, `"type":"tool_use"`) {
 		t.Fatalf("expected tool_use block, got %q", body)
 	}
-	if strings.Count(body, `"type":"content_block_delta"`) != 1 {
-		t.Fatalf("expected a single stable tool args delta, got %q", body)
+	if strings.Count(body, `"type":"content_block_delta"`) != 2 {
+		t.Fatalf("expected cumulative tool args to stream as two deltas, got %q", body)
 	}
-	if !strings.Contains(body, `"partial_json":"{\"file_path\":\"/tmp/test.txt\",\"content\":\"hello\"}"`) {
-		t.Fatalf("expected fully merged tool args emitted once, got %q", body)
+	if !strings.Contains(body, `"partial_json":"{\"file_path\":\"/tmp/test.txt\"}"`) {
+		t.Fatalf("expected initial tool args delta, got %q", body)
+	}
+	if !strings.Contains(body, `"partial_json":",\"content\":\"hello\"}"`) {
+		t.Fatalf("expected incremental suffix delta for cumulative tool args, got %q", body)
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIChatStreamDelaysToolStartUntilIDAndNameReady(t *testing.T) {
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`data: {"id":"chatcmpl-tool-delay","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"file_path\":\"/tmp/test.txt\",\"content\":\"hel"}}]}}]}`,
+		"",
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_write","function":{"name":"write_file"}}]}}]}`,
+		"",
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"lo\"}"}}]}}]}`,
+		"",
+		`data: {"choices":[{"finish_reason":"tool_calls","delta":{}}]}`,
+		"",
+		`data: [DONE]`,
+		"",
+	}, "\n")))
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIChatStream(recorder, streamBody, "gpt-5.4", false)
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"id":"call_write"`) || !strings.Contains(body, `"name":"write_file"`) {
+		t.Fatalf("expected delayed tool block start to preserve id/name, got %q", body)
+	}
+	if !strings.Contains(body, `"partial_json":"{\"file_path\":\"/tmp/test.txt\",\"content\":\"hel"`) {
+		t.Fatalf("expected buffered tool args emitted after delayed start, got %q", body)
+	}
+	if !strings.Contains(body, `"partial_json":"lo\"}"`) {
+		t.Fatalf("expected trailing tool args delta after start, got %q", body)
 	}
 }
 
@@ -1012,7 +1208,11 @@ func TestWriteAnthropicSSEFromOpenAIResponsesStreamEmitsToolArgsFromDoneEvents(t
 }
 
 func TestWriteAnthropicSSEFromOpenAIResponsesStreamSupportsLargeToolArgs(t *testing.T) {
-	largeContent := strings.Repeat("a", advancedProxySSEScannerMaxTokenSize/2)
+	lines := make([]string, 0, 2000)
+	for index := 0; index < 2000; index++ {
+		lines = append(lines, fmt.Sprintf("export const value%04d = { id: %d, label: \"line-%04d\", enabled: %t };", index, index, index, index%2 == 0))
+	}
+	largeContent := strings.Join(lines, "\n")
 	toolArgs := fmt.Sprintf("{\"file_path\":\"/tmp/large.txt\",\"content\":\"%s\"}", largeContent)
 	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
 		`event: response.created`,
@@ -1036,8 +1236,70 @@ func TestWriteAnthropicSSEFromOpenAIResponsesStreamSupportsLargeToolArgs(t *test
 	if !strings.Contains(body, `"id":"call_large"`) {
 		t.Fatalf("expected tool_use block, got body length=%d", len(body))
 	}
-	if !strings.Contains(body, `/tmp/large.txt`) || !strings.Contains(body, strings.Repeat("a", 128)) {
+	if !strings.Contains(body, `/tmp/large.txt`) || !strings.Contains(body, `export const value0000`) || !strings.Contains(body, `export const value1999`) {
 		t.Fatalf("expected large tool args to survive SSE scanning, got body length=%d", len(body))
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIChatStreamDoesNotEmitMessageStopOnScannerError(t *testing.T) {
+	streamBody := &failingReadCloser{
+		chunks: [][]byte{
+			[]byte("data: {\"id\":\"chatcmpl-tool\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_write\",\"function\":{\"name\":\"write_file\"}}]}}]}\n\n"),
+		},
+		err: errors.New("stream interrupted"),
+	}
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIChatStream(recorder, streamBody, "gpt-5.4", false)
+
+	body := recorder.Body.String()
+	if strings.Contains(body, `"type":"message_stop"`) {
+		t.Fatalf("expected interrupted chat stream to avoid message_stop, got %q", body)
+	}
+}
+
+func TestPerformRawUpstreamRequestStreamingDoesNotUseWholeBodyTimeout(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.WriteHeader(http.StatusOK)
+		flusher, _ := writer.(http.Flusher)
+		_, _ = writer.Write([]byte("data: first\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		time.Sleep(1500 * time.Millisecond)
+		_, _ = writer.Write([]byte("data: second\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer server.Close()
+
+	statusCode, _, _, streamBody, _, err := performRawUpstreamRequest(
+		http.MethodPost,
+		server.URL,
+		map[string]string{"Content-Type": "application/json"},
+		[]byte(`{}`),
+		1,
+		true,
+	)
+	if err != nil {
+		t.Fatalf("expected streaming request to succeed, got %v", err)
+	}
+	if statusCode != http.StatusOK || streamBody == nil {
+		t.Fatalf("expected streaming body, got status=%d body=%v", statusCode, streamBody)
+	}
+	defer streamBody.Close()
+
+	bodyBytes, readErr := io.ReadAll(streamBody)
+	if readErr != nil {
+		t.Fatalf("expected full streamed body without whole-body timeout, got %v", readErr)
+	}
+	body := string(bodyBytes)
+	if !strings.Contains(body, "data: first") || !strings.Contains(body, "data: second") {
+		t.Fatalf("expected both streamed chunks, got %q", body)
 	}
 }
 

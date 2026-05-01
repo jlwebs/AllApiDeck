@@ -154,6 +154,23 @@ func newOutboundHTTPClient(timeout time.Duration) (*http.Client, error) {
 	}, nil
 }
 
+func newOutboundStreamingHTTPClient(responseHeaderTimeout time.Duration) (*http.Client, error) {
+	config, err := loadOutboundProxyConfig()
+	if err != nil {
+		return nil, err
+	}
+	transport, err := newOutboundHTTPTransport(config)
+	if err != nil {
+		return nil, err
+	}
+	if responseHeaderTimeout > 0 {
+		transport.ResponseHeaderTimeout = responseHeaderTimeout
+	}
+	return &http.Client{
+		Transport: transport,
+	}, nil
+}
+
 func newOutboundHTTPTransport(config OutboundProxyConfig) (*http.Transport, error) {
 	baseTransport, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {

@@ -498,6 +498,85 @@ func sanitizeAdvancedProxyProviders(providers []AdvancedProxyProvider) []Advance
 	return cleaned
 }
 
+func advancedProxyProviderMatches(left AdvancedProxyProvider, right AdvancedProxyProvider) bool {
+	leftRowKey := strings.TrimSpace(left.RowKey)
+	rightRowKey := strings.TrimSpace(right.RowKey)
+	if leftRowKey != "" && rightRowKey != "" {
+		return leftRowKey == rightRowKey
+	}
+
+	leftID := strings.TrimSpace(left.ID)
+	rightID := strings.TrimSpace(right.ID)
+	if leftID != "" && rightID != "" {
+		return leftID == rightID
+	}
+
+	leftBaseURL := strings.TrimRight(strings.TrimSpace(left.BaseURL), "/")
+	rightBaseURL := strings.TrimRight(strings.TrimSpace(right.BaseURL), "/")
+	leftModel := strings.TrimSpace(left.Model)
+	rightModel := strings.TrimSpace(right.Model)
+	if leftBaseURL != "" && rightBaseURL != "" && leftModel != "" && rightModel != "" {
+		return leftBaseURL == rightBaseURL && leftModel == rightModel
+	}
+
+	if leftBaseURL != "" && rightBaseURL != "" {
+		return leftBaseURL == rightBaseURL
+	}
+
+	return false
+}
+
+func updateAdvancedProxyProviderFormat(providers []AdvancedProxyProvider, target AdvancedProxyProvider, apiFormat string) ([]AdvancedProxyProvider, bool) {
+	normalizedFormat := normalizeClaudeAPIFormat(apiFormat)
+	if len(providers) == 0 {
+		return providers, false
+	}
+
+	updated := append([]AdvancedProxyProvider(nil), providers...)
+	changed := false
+	for index := range updated {
+		if !advancedProxyProviderMatches(updated[index], target) {
+			continue
+		}
+		if normalizeClaudeAPIFormat(updated[index].APIFormat) == normalizedFormat {
+			continue
+		}
+		updated[index].APIFormat = normalizedFormat
+		changed = true
+	}
+	return updated, changed
+}
+
+func persistClaudeProviderAPIFormat(provider AdvancedProxyProvider, apiFormat string) (bool, error) {
+	normalizedFormat := normalizeClaudeAPIFormat(apiFormat)
+	if normalizedFormat == "" {
+		return false, nil
+	}
+
+	config, err := loadAdvancedProxyConfig()
+	if err != nil {
+		return false, err
+	}
+
+	changed := false
+	if nextProviders, updated := updateAdvancedProxyProviderFormat(config.Queues.Global.Providers, provider, normalizedFormat); updated {
+		config.Queues.Global.Providers = nextProviders
+		changed = true
+	}
+	if nextProviders, updated := updateAdvancedProxyProviderFormat(config.Queues.Claude.Providers, provider, normalizedFormat); updated {
+		config.Queues.Claude.Providers = nextProviders
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
+
+	if _, err := saveAdvancedProxyConfig(config); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func ensureLeadingSlash(value string) string {
 	if value == "" {
 		return "/"

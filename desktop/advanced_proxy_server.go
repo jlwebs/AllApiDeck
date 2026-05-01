@@ -860,7 +860,13 @@ func performRawUpstreamRequest(method string, targetURL string, headers map[stri
 		}
 		request.Header.Set(key, value)
 	}
-	client, err := newOutboundHTTPClient(time.Duration(clampInt(timeoutSeconds, 5, 900)) * time.Second)
+	clientTimeout := time.Duration(clampInt(timeoutSeconds, 5, 900)) * time.Second
+	var client *http.Client
+	if keepStream {
+		client, err = newOutboundStreamingHTTPClient(clientTimeout)
+	} else {
+		client, err = newOutboundHTTPClient(clientTimeout)
+	}
 	if err != nil {
 		return 0, nil, nil, nil, time.Since(startedAt), err
 	}
@@ -1635,6 +1641,7 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 	}
 	if err := scanner.Err(); err != nil {
 		appendAdvancedProxyLogf("responses stream scanner failed: %v", err)
+		return
 	}
 	emitMessageStop(mapOpenAIResponsesStopReason("completed", hasToolUse, ""))
 }
@@ -1728,44 +1735,51 @@ type anthropicToolStreamState struct {
 }
 
 func mergeAdvancedProxyToolArguments(existing string, incoming string) string {
+	updated, _ := extendAdvancedProxyToolArguments(existing, incoming)
+	return updated
+}
+
+func longestCommonPrefixLength(left string, right string) int {
+	max := len(left)
+	if len(right) < max {
+		max = len(right)
+	}
+	for index := 0; index < max; index++ {
+		if left[index] != right[index] {
+			return index
+		}
+	}
+	return max
+}
+
+func extendAdvancedProxyToolArguments(existing string, incoming string) (string, string) {
 	if incoming == "" {
-		return existing
+		return existing, ""
 	}
 	if existing == "" {
-		return incoming
+		return incoming, incoming
 	}
 	switch {
 	case incoming == existing:
-		return existing
+		return existing, ""
 	case strings.HasPrefix(incoming, existing):
-		return incoming
+		return incoming, incoming[len(existing):]
+	case len(incoming) > len(existing) && json.Valid([]byte(existing)) && json.Valid([]byte(incoming)):
+		commonPrefixLength := longestCommonPrefixLength(existing, incoming)
+		if commonPrefixLength >= len(existing)-1 {
+			return incoming, incoming[commonPrefixLength:]
+		}
 	case strings.HasPrefix(existing, incoming):
-		return existing
+		return existing, ""
 	default:
-		return existing + incoming
+		return existing + incoming, incoming
 	}
+	return existing + incoming, incoming
 }
 
 func accumulateAdvancedProxyToolArguments(existing string, incoming string) string {
-	if incoming == "" {
-		return existing
-	}
-	if existing == "" {
-		return incoming
-	}
-	if json.Valid([]byte(existing)) && json.Valid([]byte(incoming)) {
-		return incoming
-	}
-	switch {
-	case incoming == existing:
-		return existing
-	case strings.HasPrefix(incoming, existing):
-		return incoming
-	case strings.HasPrefix(existing, incoming):
-		return existing
-	default:
-		return existing + incoming
-	}
+	updated, _ := extendAdvancedProxyToolArguments(existing, incoming)
+	return updated
 }
 
 func mapOpenAIStopReasonOptional(value string) any {
@@ -1810,6 +1824,7 @@ func writeAnthropicSSEFromOpenAIChatStream(writer http.ResponseWriter, streamBod
 	}
 	toolStates := map[int]*anthropicToolStreamState{}
 	openToolIndices := map[int]struct{}{}
+	var startToolState func(state *anthropicToolStreamState)
 
 	emitMessageStart := func() {
 		if messageStarted {
@@ -1827,6 +1842,57 @@ func writeAnthropicSSEFromOpenAIChatStream(writer http.ResponseWriter, streamBod
 		})
 		messageStarted = true
 	}
+	emitToolArguments := func(state *anthropicToolStreamState, incoming string) {
+		if state == nil || incoming == "" {
+			return
+		}
+		if !state.Started {
+			state.PendingArgs = accumulateAdvancedProxyToolArguments(state.PendingArgs, incoming)
+			return
+		}
+		next, delta := extendAdvancedProxyToolArguments(state.EmittedArgs, incoming)
+		if delta == "" {
+			return
+		}
+		writeEvent("content_block_delta", map[string]any{
+			"type":  "content_block_delta",
+			"index": state.Index,
+			"delta": map[string]any{
+				"type":         "input_json_delta",
+				"partial_json": delta,
+			},
+		})
+		state.EmittedArgs = next
+	}
+	startToolState = func(state *anthropicToolStreamState) {
+		if state == nil || state.Started || state.ID == "" || state.Name == "" {
+			return
+		}
+		emitMessageStart()
+		writeEvent("content_block_start", map[string]any{
+			"type":  "content_block_start",
+			"index": state.Index,
+			"content_block": map[string]any{
+				"type": "tool_use",
+				"id":   state.ID,
+				"name": state.Name,
+			},
+		})
+		openToolIndices[state.Index] = struct{}{}
+		state.Started = true
+		if state.PendingArgs != "" {
+			writeEvent("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": state.Index,
+				"delta": map[string]any{
+					"type":         "input_json_delta",
+					"partial_json": state.PendingArgs,
+				},
+			})
+			state.EmittedArgs = state.PendingArgs
+			state.PendingArgs = ""
+		}
+	}
 	closeCurrentBlock := func() {
 		if currentBlockIndex < 0 {
 			return
@@ -1839,6 +1905,28 @@ func writeAnthropicSSEFromOpenAIChatStream(writer http.ResponseWriter, streamBod
 		currentBlockIndex = -1
 	}
 	closeOpenToolBlocks := func() {
+		lateToolIndices := make([]int, 0, len(toolStates))
+		for toolIndex := range toolStates {
+			lateToolIndices = append(lateToolIndices, toolIndex)
+		}
+		sort.Ints(lateToolIndices)
+		for _, toolIndex := range lateToolIndices {
+			state := toolStates[toolIndex]
+			if state == nil || state.Started {
+				continue
+			}
+			hasPayload := state.PendingArgs != "" || state.ID != "" || state.Name != ""
+			if !hasPayload {
+				continue
+			}
+			if state.ID == "" {
+				state.ID = fmt.Sprintf("tool_call_%d", toolIndex)
+			}
+			if state.Name == "" {
+				state.Name = "unknown_tool"
+			}
+			startToolState(state)
+		}
 		if len(openToolIndices) == 0 {
 			return
 		}
@@ -1848,22 +1936,6 @@ func writeAnthropicSSEFromOpenAIChatStream(writer http.ResponseWriter, streamBod
 		}
 		sort.Ints(indices)
 		for _, index := range indices {
-			for _, state := range toolStates {
-				if state == nil || !state.Started || state.Index != index {
-					continue
-				}
-				if state.PendingArgs != "" && state.EmittedArgs != state.PendingArgs {
-					writeEvent("content_block_delta", map[string]any{
-						"type":  "content_block_delta",
-						"index": state.Index,
-						"delta": map[string]any{
-							"type":         "input_json_delta",
-							"partial_json": state.PendingArgs,
-						},
-					})
-					state.EmittedArgs = state.PendingArgs
-				}
-			}
 			writeEvent("content_block_stop", map[string]any{
 				"type":  "content_block_stop",
 				"index": index,
@@ -1899,12 +1971,6 @@ func writeAnthropicSSEFromOpenAIChatStream(writer http.ResponseWriter, streamBod
 			"index":         currentBlockIndex,
 			"content_block": payload,
 		})
-	}
-	emitToolArguments := func(state *anthropicToolStreamState, incoming string) {
-		if state == nil || incoming == "" {
-			return
-		}
-		state.PendingArgs = accumulateAdvancedProxyToolArguments(state.PendingArgs, incoming)
 	}
 
 	scanner := bufio.NewScanner(streamBody)
@@ -2020,22 +2086,11 @@ func writeAnthropicSSEFromOpenAIChatStream(writer http.ResponseWriter, streamBod
 					if name := strings.TrimSpace(toStringValue(functionMap["name"])); name != "" {
 						state.Name = name
 					}
+				}
+				startToolState(state)
+				if functionMap != nil {
 					args := toStringValue(functionMap["arguments"])
 					emitToolArguments(state, args)
-				}
-				if !state.Started && state.ID != "" && state.Name != "" {
-					emitMessageStart()
-					writeEvent("content_block_start", map[string]any{
-						"type":  "content_block_start",
-						"index": state.Index,
-						"content_block": map[string]any{
-							"type": "tool_use",
-							"id":   state.ID,
-							"name": state.Name,
-						},
-					})
-					openToolIndices[state.Index] = struct{}{}
-					state.Started = true
 				}
 			}
 		}
@@ -2049,6 +2104,7 @@ func writeAnthropicSSEFromOpenAIChatStream(writer http.ResponseWriter, streamBod
 	}
 	if err := scanner.Err(); err != nil {
 		appendAdvancedProxyLogf("chat stream scanner failed: %v", err)
+		return
 	}
 
 	closeCurrentBlock()
@@ -2072,8 +2128,9 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 	timeoutSeconds := computeAdvancedProxyTimeoutSeconds(stream, failoverActive, config.Failover)
 	requestFeatures := classifyClaudeRequestFeatures(requestBody)
 	capabilities := resolveAdvancedProxyProviderCapabilities(provider)
-	apiFormat := capabilities.APIFormat
-	if requestFeatures.HasAnthropicWebSearchTool && apiFormat == "openai_chat" {
+	originalAPIFormat := capabilities.APIFormat
+	apiFormat := originalAPIFormat
+	if apiFormat == "openai_chat" {
 		apiFormat = "openai_responses"
 	}
 	debugEnabled := advancedProxyDebugEnabled(config)
@@ -2193,6 +2250,15 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 				}
 				advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, true)
 				observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
+				if originalAPIFormat == "openai_chat" && apiFormat == "openai_responses" {
+					changed, persistErr := persistClaudeProviderAPIFormat(provider, "openai_responses")
+					if persistErr != nil && debugEnabled {
+						appendAdvancedProxyLogf("[CLAUDE_PROXY_PERSIST_ERROR] provider=%s from=%s to=openai_responses detail=%s", advancedProxyProviderLabel(provider), originalAPIFormat, previewAdvancedProxyText(persistErr.Error(), 220))
+					}
+					if changed && debugEnabled {
+						appendAdvancedProxyLogf("[CLAUDE_PROXY_PERSIST] provider=%s from=%s to=openai_responses", advancedProxyProviderLabel(provider), originalAPIFormat)
+					}
+				}
 				return providerAttemptResult{
 					StatusCode: http.StatusOK,
 					Headers:    responseHeaders,
@@ -2262,6 +2328,15 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 			}
 			advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, true)
 			observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
+			if originalAPIFormat == "openai_chat" && apiFormat == "openai_responses" {
+				changed, persistErr := persistClaudeProviderAPIFormat(provider, "openai_responses")
+				if persistErr != nil && debugEnabled {
+					appendAdvancedProxyLogf("[CLAUDE_PROXY_PERSIST_ERROR] provider=%s from=%s to=openai_responses detail=%s", advancedProxyProviderLabel(provider), originalAPIFormat, previewAdvancedProxyText(persistErr.Error(), 220))
+				}
+				if changed && debugEnabled {
+					appendAdvancedProxyLogf("[CLAUDE_PROXY_PERSIST] provider=%s from=%s to=openai_responses", advancedProxyProviderLabel(provider), originalAPIFormat)
+				}
+			}
 			return providerAttemptResult{Response: responseMap, StatusCode: http.StatusOK, Headers: responseHeaders}
 		}
 
