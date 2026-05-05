@@ -85,6 +85,13 @@ function readGitOutput(args) {
 }
 
 function resolveAppReleaseTag() {
+  const explicitTag = String(process.env.APP_RELEASE_TAG || '').trim();
+  if (explicitTag) return explicitTag;
+
+  const githubRefType = String(process.env.GITHUB_REF_TYPE || '').trim();
+  const githubRefName = String(process.env.GITHUB_REF_NAME || '').trim();
+  if (githubRefType === 'tag' && githubRefName) return githubRefName;
+
   const exactTag = readGitOutput(['describe', '--tags', '--exact-match']);
   if (exactTag) return exactTag;
 
