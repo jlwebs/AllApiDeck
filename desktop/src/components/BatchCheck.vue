@@ -733,6 +733,7 @@ import {
   mergeExtractedSitesIntoCache,
   normalizeSiteUrl,
   removeCustomKeyFromSiteCache,
+  setProfileRecoveryPending,
   setSiteCacheDisabled,
   updateSiteCacheTreeNodes,
   updateSiteCacheNote,
@@ -5287,6 +5288,7 @@ const processAccountsV2 = async (accounts, options = {}) => {
   browserSessionPolling.pending = 0;
   browserSessionPendingSiteNames.value = [];
   resetFetchKeysProgress();
+  setProfileRecoveryPending(false);
   if (isWailsRuntime) {
     fetchKeysProgress.total = accountsToFetch.length;
   }
@@ -6070,6 +6072,7 @@ const processAccountsV2 = async (accounts, options = {}) => {
     }
 
     if (PROFILE_FILE_MANUAL_RECOVERY_ENABLED && isWailsRuntime && extractionMode === 'profile_file' && stillFailedAccounts.length > 0) {
+      setProfileRecoveryPending(true);
       void (async () => {
         const profileRetryMessageKey = 'profile-file-retry';
         try {
@@ -6165,6 +6168,8 @@ const processAccountsV2 = async (accounts, options = {}) => {
             content: `Profile 文件重新读取失败: ${e?.message || String(e)}`,
             duration: 5,
           });
+        } finally {
+          setProfileRecoveryPending(false);
         }
       })();
     } else if (extractionMode === 'cdp_restart' && cdpModeContext && stillFailedAccounts.length > 0) {

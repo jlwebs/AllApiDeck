@@ -58,7 +58,17 @@
                 <div class="selection-header-row">
                   <h3 class="selection-title">请勾选需要测试的网站与模型</h3>
                   <div class="selection-header-tools">
-                    <a-tooltip :title="siteBridgeSilentModeTooltip">
+                    <a-tooltip
+                      placement="top"
+                      overlayClassName="site-bridge-import-guide-tooltip"
+                      :title="siteBridgeImportGuideOpen ? null : siteBridgeSilentModeTooltip"
+                      :open="siteBridgeImportGuideOpen ? true : undefined"
+                    >
+                      <template v-if="siteBridgeImportGuideOpen" #title>
+                        <div class="site-bridge-import-guide-tooltip-content">
+                          如遇到导入失败站点，可开启标签导入模式，然后点击站点名字，手动登录，即可补齐不兼容站点的采集~~
+                        </div>
+                      </template>
                       <button
                         type="button"
                         class="site-bridge-toggle-button"
@@ -347,11 +357,13 @@ import {
   syncBridgeSitesToKeyPanel,
 } from '../utils/siteBridgeImport.js';
 import {
+  SITE_CACHE_PROFILE_RECOVERY_EVENT,
   SITE_CACHE_SYNC_EVENT,
   appendCustomKeysToSiteCache,
   buildSiteCacheKey,
   consumePendingBatchStart,
   deleteSiteCacheRecord,
+  getProfileRecoveryPending,
   loadAllSiteCacheRecords,
   mergeExtractedSitesIntoTempCache,
   mergeExtractedSitesIntoCache,
@@ -399,6 +411,8 @@ const siteBridgeClientReady = ref(false);
 const siteBridgeLastClientPing = ref('');
 const siteBridgeNoticeItems = ref([]);
 const refreshFailureGuideSiteCacheKey = ref('');
+const siteBridgeImportGuideDismissedSignature = ref('');
+const profileRecoveryPending = ref(getProfileRecoveryPending());
 const stableSiteOrderMap = new Map();
 const siteBridgeProcessedRecordIds = new Set();
 let siteBridgePollTimer = null;
@@ -417,6 +431,39 @@ const siteBridgeSilentModeTooltip = computed(() => (
   siteBridgeSilentMode.value
     ? '关闭标签静默导入悬窗模式'
     : '开启标签静默导入悬窗模式：后台监听当前浏览器标签桥接提交，自动补齐站点与 key'
+));
+const siteBridgeImportGuideSourcePattern = /^(extension_import|json_backup)(?:_|$)/i;
+const siteBridgeImportGuideFailureNodeKeyPattern = /^(fail-site|no-usable-token-site|no-model-site)\|/i;
+const getSiteImportSource = record => String(record?._lastImportSource || record?.lastImportSource || '').trim();
+const getSiteRootNodeFromRecord = record => {
+  const cachedNodes = Array.isArray(record?.cachedTreeNodes) ? record.cachedTreeNodes : [];
+  return cachedNodes.find(node => node?.isSiteRoot) || cachedNodes[0] || null;
+};
+const isImportFailureGuideCandidate = record => {
+  if (!record || typeof record !== 'object') return false;
+  if (record.disabled === true) return false;
+  const importSource = getSiteImportSource(record);
+  if (!siteBridgeImportGuideSourcePattern.test(importSource)) return false;
+  const siteRootNode = getSiteRootNodeFromRecord(record);
+  const rootKey = String(siteRootNode?.key || '').trim();
+  const statusText = String(siteRootNode?.providerStatusText || '').trim();
+  if (siteBridgeImportGuideFailureNodeKeyPattern.test(rootKey)) return true;
+  if (/[❌⚠]/.test(statusText)) return true;
+  return getRecordManagedKeyCount(record) === 0;
+};
+const siteBridgeImportGuideRecords = computed(() => records.value.filter(isImportFailureGuideCandidate));
+const siteBridgeImportGuideSignature = computed(() => siteBridgeImportGuideRecords.value
+  .map(record => String(record?.siteCacheKey || '').trim())
+  .filter(Boolean)
+  .sort()
+  .join('|'));
+const siteBridgeImportGuideOpen = computed(() => (
+  !profileRecoveryPending.value &&
+  !siteBridgeSilentMode.value &&
+  !siteBridgeSessionOpening.value &&
+  !siteBridgeImporting.value &&
+  Boolean(siteBridgeImportGuideSignature.value) &&
+  siteBridgeImportGuideDismissedSignature.value !== siteBridgeImportGuideSignature.value
 ));
 const siteBridgeFloatVisible = computed(() => (
   siteBridgeSilentMode.value ||
@@ -1597,6 +1644,9 @@ const disableSilentBridgeImportMode = async () => {
 };
 
 const toggleSilentBridgeImportMode = async () => {
+  if (siteBridgeImportGuideSignature.value) {
+    siteBridgeImportGuideDismissedSignature.value = siteBridgeImportGuideSignature.value;
+  }
   if (siteBridgeSilentMode.value) {
     await disableSilentBridgeImportMode();
     return;
@@ -1656,17 +1706,28 @@ const closeRefreshFailureGuide = () => {
   refreshFailureGuideSiteCacheKey.value = '';
 };
 
+const closeSiteBridgeImportGuide = () => {
+  if (!siteBridgeImportGuideSignature.value) return;
+  siteBridgeImportGuideDismissedSignature.value = siteBridgeImportGuideSignature.value;
+};
+
 const handleRefreshFailureGuidePointerDown = event => {
-  if (!refreshFailureGuideSiteCacheKey.value) return;
   const target = event?.target;
-  if (target?.closest?.('.site-refresh-fail-guide-popover')) return;
-  if (target?.closest?.('.site-tree-action-btn-refresh')) return;
-  closeRefreshFailureGuide();
+  if (refreshFailureGuideSiteCacheKey.value) {
+    if (target?.closest?.('.site-refresh-fail-guide-popover')) return;
+    if (target?.closest?.('.site-tree-action-btn-refresh')) return;
+    closeRefreshFailureGuide();
+  }
+  if (siteBridgeImportGuideOpen.value) {
+    if (target?.closest?.('.site-bridge-import-guide-tooltip')) return;
+    if (target?.closest?.('.site-bridge-toggle-button')) return;
+    closeSiteBridgeImportGuide();
+  }
 };
 
 const handleRefreshFailureGuideScrollDismiss = () => {
-  if (!refreshFailureGuideSiteCacheKey.value) return;
-  closeRefreshFailureGuide();
+  if (refreshFailureGuideSiteCacheKey.value) closeRefreshFailureGuide();
+  if (siteBridgeImportGuideOpen.value) closeSiteBridgeImportGuide();
 };
 
 const handleSettings = () => {
@@ -1683,14 +1744,29 @@ const handleSync = () => {
   reloadRecords();
 };
 
+const handleProfileRecoveryPendingChange = () => {
+  profileRecoveryPending.value = getProfileRecoveryPending();
+};
+
 watch(treeData, () => {
   syncExpandedKeys();
   syncCheckedKeys();
 });
 
+watch(siteBridgeImportGuideSignature, (next, prev) => {
+  if (!next) {
+    siteBridgeImportGuideDismissedSignature.value = '';
+    return;
+  }
+  if (next !== prev) {
+    siteBridgeImportGuideDismissedSignature.value = '';
+  }
+});
+
 onMounted(() => {
   syncThemeState();
   reloadRecords();
+  handleProfileRecoveryPendingChange();
   const pendingBatchStart = consumePendingBatchStart();
   if (pendingBatchStart) {
     batchConcurrency.value = Number(pendingBatchStart?.batchConcurrency || batchConcurrency.value || 25);
@@ -1698,6 +1774,7 @@ onMounted(() => {
   }
   window.addEventListener(THEME_MODE_CHANGE_EVENT, syncThemeState);
   window.addEventListener(SITE_CACHE_SYNC_EVENT, handleSync);
+  window.addEventListener(SITE_CACHE_PROFILE_RECOVERY_EVENT, handleProfileRecoveryPendingChange);
   document.addEventListener('pointerdown', handleRefreshFailureGuidePointerDown, true);
   window.addEventListener('wheel', handleRefreshFailureGuideScrollDismiss, { capture: true, passive: true });
   window.addEventListener('scroll', handleRefreshFailureGuideScrollDismiss, true);
@@ -1707,6 +1784,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener(THEME_MODE_CHANGE_EVENT, syncThemeState);
   window.removeEventListener(SITE_CACHE_SYNC_EVENT, handleSync);
+  window.removeEventListener(SITE_CACHE_PROFILE_RECOVERY_EVENT, handleProfileRecoveryPendingChange);
   document.removeEventListener('pointerdown', handleRefreshFailureGuidePointerDown, true);
   window.removeEventListener('wheel', handleRefreshFailureGuideScrollDismiss, true);
   window.removeEventListener('scroll', handleRefreshFailureGuideScrollDismiss, true);
@@ -2541,6 +2619,13 @@ onBeforeUnmount(() => {
   color: #475569;
 }
 
+.site-bridge-import-guide-tooltip-content {
+  max-width: 320px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #ffffff;
+}
+
 .site-tree-action-btn.is-danger {
   background: rgba(255, 77, 79, 0.08);
   color: #ff4d4f;
@@ -2717,6 +2802,12 @@ onBeforeUnmount(() => {
 
 :deep(.site-refresh-fail-guide-popover .ant-popover-inner-content) {
   padding: 8px 10px;
+}
+
+:deep(.site-bridge-import-guide-tooltip .ant-tooltip-inner) {
+  max-width: 340px;
+  padding: 10px 12px;
+  border-radius: 14px;
 }
 
 :deep(body.dark-mode) .site-refresh-fail-guide-text,

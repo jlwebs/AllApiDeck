@@ -3,6 +3,8 @@ export const SITE_CACHE_TEMP_STORAGE_KEY = 'api_check_site_cache_temp_records_v1
 export const SITE_CACHE_PENDING_RESTORE_KEY = 'api_check_site_cache_pending_restore_v1';
 export const SITE_CACHE_PENDING_BATCH_START_KEY = 'api_check_site_cache_pending_batch_start_v1';
 export const SITE_CACHE_SYNC_EVENT = 'batch-api-check:site-cache-sync';
+export const SITE_CACHE_PROFILE_RECOVERY_PENDING_KEY = 'api_check_site_cache_profile_recovery_pending_v1';
+export const SITE_CACHE_PROFILE_RECOVERY_EVENT = 'batch-api-check:site-cache-profile-recovery';
 
 function safeJsonParse(raw, fallback) {
   try {
@@ -497,4 +499,26 @@ export function consumePendingBatchStart() {
   const parsed = safeJsonParse(storage.getItem(SITE_CACHE_PENDING_BATCH_START_KEY) || 'null', null);
   storage.removeItem(SITE_CACHE_PENDING_BATCH_START_KEY);
   return parsed && typeof parsed === 'object' ? parsed : null;
+}
+
+export function setProfileRecoveryPending(active) {
+  const storage = getStorage('persistent');
+  if (!storage) return false;
+  const nextActive = active === true;
+  storage.setItem(SITE_CACHE_PROFILE_RECOVERY_PENDING_KEY, nextActive ? '1' : '0');
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(SITE_CACHE_PROFILE_RECOVERY_EVENT, {
+      detail: {
+        active: nextActive,
+        updatedAt: Date.now(),
+      },
+    }));
+  }
+  return nextActive;
+}
+
+export function getProfileRecoveryPending() {
+  const storage = getStorage('persistent');
+  if (!storage) return false;
+  return storage.getItem(SITE_CACHE_PROFILE_RECOVERY_PENDING_KEY) === '1';
 }

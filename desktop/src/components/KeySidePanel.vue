@@ -66,7 +66,6 @@
           </span>
 
           <div class="panel-queue-signals" aria-hidden="true">
-            <span class="panel-queue-signal panel-queue-signal-red" :class="{ 'is-active': advancedProxyQueueTone === 'red' }"></span>
             <span class="panel-queue-signal panel-queue-signal-yellow" :class="{ 'is-active': advancedProxyQueueTone === 'yellow' }"></span>
             <span class="panel-queue-signal panel-queue-signal-green" :class="{ 'is-active': advancedProxyQueueTone === 'green' }"></span>
           </div>
@@ -184,8 +183,11 @@
           class="panel-record"
           :class="[
             `panel-record-${getQuickTestTone(record.quickTestStatus)}`,
+            { 'panel-record-queue-toggleable': canToggleAdvancedProxyQueueRecord(record) },
+            { 'panel-record-queue-selected': isRecordInAdvancedProxyQueue(record) },
             getAdvancedProxyCardStateClass(record),
           ]"
+          @click="handlePanelRecordCardClick(record, $event)"
         >
           <div class="panel-record-top">
             <div class="panel-record-sitebox">
@@ -204,8 +206,8 @@
                   <span v-if="isAdvancedProxyDispatching(record)" class="panel-record-dispatch-star">
                     ⭐ {{ getAdvancedProxyDispatchLabel(record) || '代理调用中' }}
                   </span>
-                  <span v-if="getAdvancedProxyQueueOrder(record)" class="panel-record-order">
-                    No.{{ getAdvancedProxyQueueOrder(record) }}
+                  <span v-if="getPanelRecordOrder(record)" class="panel-record-order">
+                    No.{{ getPanelRecordOrder(record) }}
                   </span>
                 </div>
               </a-tooltip>
@@ -214,8 +216,8 @@
                 <span v-if="isAdvancedProxyDispatching(record)" class="panel-record-dispatch-star">
                   ⭐ {{ getAdvancedProxyDispatchLabel(record) || '代理调用中' }}
                 </span>
-                <span v-if="getAdvancedProxyQueueOrder(record)" class="panel-record-order">
-                  No.{{ getAdvancedProxyQueueOrder(record) }}
+                <span v-if="getPanelRecordOrder(record)" class="panel-record-order">
+                  No.{{ getPanelRecordOrder(record) }}
                 </span>
               </div>
               <div class="panel-record-copy">
@@ -229,15 +231,23 @@
               </div>
             </div>
 
-            <span
-              class="panel-record-status"
-              :class="`panel-record-status-${record.status === 1 ? 'ok' : 'bad'}`"
-              :title="record.status === 1 ? '可用' : '异常'"
-              :aria-label="record.status === 1 ? '可用' : '异常'"
-            >
-              <span v-if="record.status === 1" class="panel-record-status-dot" aria-hidden="true"></span>
-              <span v-else>异常</span>
-            </span>
+            <div class="panel-record-top-right">
+              <span
+                v-if="getAdvancedProxyQueueOrder(record)"
+                class="panel-record-queue-badge"
+              >
+                P{{ getAdvancedProxyQueueOrder(record) }}
+              </span>
+              <span
+                class="panel-record-status"
+                :class="`panel-record-status-${record.status === 1 ? 'ok' : 'bad'}`"
+                :title="record.status === 1 ? '可用' : '异常'"
+                :aria-label="record.status === 1 ? '可用' : '异常'"
+              >
+                <span v-if="record.status === 1" class="panel-record-status-dot" aria-hidden="true"></span>
+                <span v-else>异常</span>
+              </span>
+            </div>
           </div>
 
           <div class="panel-record-metrics">
@@ -399,6 +409,7 @@ import {
   getAdvancedProxyRoutingSnapshot,
   getAdvancedProxyLocalSnapshot,
   getAdvancedProxyQueueProviders,
+  setAdvancedProxyConfig,
   getAdvancedProxyTakeoverMap,
 } from '../utils/advancedProxyBridge.js';
 import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
@@ -1921,11 +1932,15 @@ function getAdvancedProxyProviderRouteStatesForRecord(record) {
     });
 }
 
-const advancedProxyQueueProviders = computed(() =>
+const advancedProxyConfiguredQueueProviders = computed(() =>
   getAdvancedProxyQueueProviders(advancedProxyConfigSnapshot.value, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, {
     effective: false,
-    enabledOnly: true,
+    enabledOnly: false,
   })
+);
+
+const advancedProxyQueueProviders = computed(() =>
+  advancedProxyConfiguredQueueProviders.value.filter(provider => provider?.enabled !== false)
 );
 
 const advancedProxyQueueTitle = computed(() => DEFAULT_ADVANCED_PROXY_QUEUE_TITLE);
@@ -1967,7 +1982,7 @@ const advancedProxyQueueTone = computed(() => {
 });
 
 const advancedProxyQueueItems = computed(() => {
-  const orderMap = advancedProxyQueueOrderByApiKey.value;
+  const panelOrderMap = panelRecordOrderByKey.value;
   const recordRowKeyMap = new Map(
     records.value.map(record => [String(record?.rowKey || '').trim(), record]).filter(([key]) => key)
   );
@@ -2000,7 +2015,9 @@ const advancedProxyQueueItems = computed(() => {
     const queueScopeText = appIds.length > 0
       ? appIds.map(appId => ADVANCED_PROXY_APP_META[appId]?.label || appId).join(' / ')
       : '全局继承';
-    const order = skKey ? orderMap.get(skKey) || null : null;
+    const order = panelOrderMap.get(rowKey)
+      || panelOrderMap.get(skKey)
+      || null;
     const dispatchSource = record || {
       rowKey,
       siteName,
@@ -2064,15 +2081,39 @@ const advancedProxyQueueTitleDisplay = computed(() => {
   };
 });
 
-const advancedProxyQueueOrderByApiKey = computed(() => {
+const panelRecordOrderByKey = computed(() => {
   const orderMap = new Map();
   visibleRecords.value.forEach((record, index) => {
-    const skKey = String(record?.apiKey || '').trim();
-    if (skKey && !orderMap.has(skKey)) {
-      orderMap.set(skKey, index + 1);
+    const order = index + 1;
+    const rowKey = String(record?.rowKey || '').trim();
+    const apiKey = String(record?.apiKey || '').trim();
+    if (rowKey && !orderMap.has(rowKey)) {
+      orderMap.set(rowKey, order);
+    }
+    if (apiKey && !orderMap.has(apiKey)) {
+      orderMap.set(apiKey, order);
     }
   });
   return orderMap;
+});
+
+const advancedProxyQueueSelectionMetaByKey = computed(() => {
+  const metaMap = new Map();
+  advancedProxyConfiguredQueueProviders.value.forEach((provider, index) => {
+    const meta = {
+      order: index + 1,
+      providerId: String(provider?.id || provider?.rowKey || '').trim(),
+    };
+    const rowKey = String(provider?.rowKey || provider?.id || '').trim();
+    const apiKey = String(provider?.apiKey || '').trim();
+    if (rowKey && !metaMap.has(rowKey)) {
+      metaMap.set(rowKey, meta);
+    }
+    if (apiKey && !metaMap.has(apiKey)) {
+      metaMap.set(apiKey, meta);
+    }
+  });
+  return metaMap;
 });
 
 const showAdvancedProxyQueueCard = computed(() =>
@@ -2133,10 +2174,100 @@ function getQueueItemShortLabel(item) {
   return `${index ? `${index}.` : ''}${shortName}`;
 }
 
+function getAdvancedProxyQueueSelectionMeta(record) {
+  const rowKey = String(record?.rowKey || '').trim();
+  const apiKey = String(record?.apiKey || '').trim();
+  return advancedProxyQueueSelectionMetaByKey.value.get(rowKey)
+    || advancedProxyQueueSelectionMetaByKey.value.get(apiKey)
+    || null;
+}
+
+function getPanelRecordOrder(record, fallbackOrder = '') {
+  const rowKey = String(record?.rowKey || '').trim();
+  const apiKey = String(record?.apiKey || '').trim();
+  return panelRecordOrderByKey.value.get(rowKey)
+    ?? panelRecordOrderByKey.value.get(apiKey)
+    ?? fallbackOrder;
+}
+
 function getAdvancedProxyQueueOrder(record, fallbackOrder = '') {
-  const skKey = String(record?.apiKey || '').trim();
-  if (!skKey) return fallbackOrder;
-  return advancedProxyQueueOrderByApiKey.value.get(skKey) ?? fallbackOrder;
+  return getAdvancedProxyQueueSelectionMeta(record)?.order ?? fallbackOrder;
+}
+
+function isRecordInAdvancedProxyQueue(record) {
+  return Boolean(getAdvancedProxyQueueSelectionMeta(record));
+}
+
+function canToggleAdvancedProxyQueueRecord(record) {
+  return Boolean(
+    String(record?.rowKey || '').trim()
+    && String(record?.siteUrl || '').trim()
+    && String(record?.apiKey || '').trim()
+  );
+}
+
+function buildAdvancedProxyQueueProviderFromRecord(record, sortIndex) {
+  return {
+    id: record.rowKey,
+    rowKey: record.rowKey,
+    name: record.siteName || record.siteUrl || 'Provider',
+    baseUrl: record.siteUrl,
+    apiKey: record.apiKey,
+    model: record.selectedModel || record.quickTestModel || '',
+    apiFormat: 'openai_responses',
+    apiKeyField: 'ANTHROPIC_AUTH_TOKEN',
+    enabled: true,
+    sortIndex,
+    sourceType: record.sourceType || 'auto',
+  };
+}
+
+async function toggleRecordAdvancedProxyQueue(record) {
+  if (!canToggleAdvancedProxyQueueRecord(record)) return;
+  const providerId = String(record?.rowKey || '').trim();
+  const currentConfig = advancedProxyConfigSnapshot.value || getAdvancedProxyLocalSnapshot();
+  const nextConfig = JSON.parse(JSON.stringify(currentConfig || {}));
+  const queueProviders = getAdvancedProxyQueueProviders(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, {
+    effective: false,
+    enabledOnly: false,
+  }).map(provider => ({ ...provider }));
+  const existingIndex = queueProviders.findIndex(provider =>
+    String(provider?.id || provider?.rowKey || '').trim() === providerId
+  );
+
+  if (existingIndex >= 0) {
+    queueProviders.splice(existingIndex, 1);
+  } else {
+    queueProviders.push(buildAdvancedProxyQueueProviderFromRecord(record, queueProviders.length + 1));
+  }
+
+  nextConfig.queues = nextConfig?.queues && typeof nextConfig.queues === 'object' ? nextConfig.queues : {};
+  nextConfig.queues[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE] = {
+    ...(nextConfig.queues?.[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE] || {}),
+    inheritGlobal: false,
+    providers: queueProviders.map((provider, index) => ({
+      ...provider,
+      sortIndex: index + 1,
+    })),
+  };
+  nextConfig.claude = nextConfig?.claude && typeof nextConfig.claude === 'object' ? nextConfig.claude : {};
+  nextConfig.claude.providers = [...nextConfig.queues[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE].providers];
+
+  try {
+    const savedConfig = await setAdvancedProxyConfig(nextConfig);
+    advancedProxyConfigSnapshot.value = savedConfig;
+  } catch (error) {
+    message.error(error?.message || '更新全局队列失败');
+  }
+}
+
+function handlePanelRecordCardClick(record, event) {
+  if (!canToggleAdvancedProxyQueueRecord(record)) return;
+  const target = event?.target;
+  if (target instanceof Element && target.closest('button, a, input, textarea, select, label, .ant-select, .ant-popover, .ant-tooltip')) {
+    return;
+  }
+  void toggleRecordAdvancedProxyQueue(record);
 }
 
 function isAdvancedProxyDispatching(record) {
@@ -3293,7 +3424,8 @@ onBeforeUnmount(() => {
 
 .panel-queue-signal-red {
   background: #ef6a6a;
-  box-shadow: 0 0 12px rgba(239, 106, 106, 0.34);
+  background-image: none;
+  box-shadow: none;
 }
 
 .panel-queue-signal-yellow {
@@ -3747,6 +3879,29 @@ onBeforeUnmount(() => {
   background: linear-gradient(180deg, rgba(243, 251, 246, 0.96), rgba(228, 241, 233, 0.94));
 }
 
+.panel-record-queue-toggleable {
+  cursor: pointer;
+}
+
+.panel-record-queue-selected {
+  border-color: rgba(112, 189, 128, 0.76);
+  box-shadow:
+    0 0 0 1px rgba(171, 235, 178, 0.46),
+    0 14px 28px rgba(21, 22, 28, 0.13),
+    0 0 22px rgba(96, 196, 116, 0.22),
+    0 0 42px rgba(96, 196, 116, 0.12);
+}
+
+.panel-record-queue-selected::before {
+  background: rgba(231, 248, 233, 0.72);
+  opacity: 0.95;
+}
+
+.panel-record-queue-selected::after {
+  background: rgba(163, 227, 174, 0.22);
+  opacity: 0.8;
+}
+
 .panel-record-routing-active {
   border-color: rgba(255, 207, 92, 0.92);
   box-shadow:
@@ -3786,6 +3941,13 @@ onBeforeUnmount(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 6px;
+}
+
+.panel-record-top-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
 }
 
 .panel-record-sitebox {
@@ -4036,6 +4198,21 @@ onBeforeUnmount(() => {
   font-size: 9px;
   line-height: 1;
   font-weight: 700;
+}
+
+.panel-record-queue-badge {
+  width: fit-content;
+  padding: 3px 6px;
+  border-radius: 999px;
+  color: rgba(40, 58, 52, 0.66);
+  background: rgba(244, 249, 244, 0.56);
+  box-shadow:
+    0 4px 10px rgba(19, 28, 24, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .panel-record-status-ok {

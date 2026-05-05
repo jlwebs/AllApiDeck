@@ -11,6 +11,15 @@ function formatQuotaAmount(rawQuota) {
   return `$${amount.toFixed(3)}`;
 }
 
+function isMeaningfulQuotaLabel(label) {
+  const text = String(label || '').trim();
+  if (!text) return false;
+  if (text === '无限') return true;
+  const normalized = text.replace(/USD$/i, '').replace(/^\$/, '').trim();
+  const amount = Number(normalized);
+  return Number.isFinite(amount) && Math.abs(amount) > 0;
+}
+
 function formatQuotaLabelFromTokens(tokens) {
   const list = Array.isArray(tokens) ? tokens : [];
   if (!list.length) return '';
@@ -68,38 +77,56 @@ export async function fetchQuotaLabelWithBatchLogic({ apiFetch, site, siteUrl })
   try {
     const isSub2Api = site?.site_type === 'sub2api';
     const endpoints = isSub2Api ? ['/api/v1/auth/me', '/api/user/self'] : ['/api/user/self', '/api/v1/auth/me'];
-
-    let quota = null;
+    let lastKnownQuotaLabel = '';
     let finalResStatus = 200;
 
-    for (const endpoint of endpoints) {
-      const url = `${normalizedSiteUrl}${endpoint}`;
-      const proxyUrl = `/api/proxy-get?url=${encodeURIComponent(url)}&uid=${userId}`;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      let quota = null;
+      let shouldStop = false;
 
-      const res = await apiFetch(proxyUrl, {
-        headers: { Authorization: `Bearer ${auth}` },
-        signal: controller.signal,
-      });
+      for (const endpoint of endpoints) {
+        const url = `${normalizedSiteUrl}${endpoint}`;
+        const proxyUrl = `/api/proxy-get?url=${encodeURIComponent(url)}&uid=${userId}`;
 
-      finalResStatus = res.status;
-      if (res.ok) {
-        const json = await res.json();
-        quota = json?.data?.quota
-          ?? json?.quota
-          ?? json?.data?.user?.quota
-          ?? json?.user?.quota
-          ?? json?.data?.balance
-          ?? json?.balance
-          ?? json?.total_quota
-          ?? null;
-        if (quota !== null) break;
-      } else if ([401, 403].includes(res.status)) {
+        const res = await apiFetch(proxyUrl, {
+          headers: { Authorization: `Bearer ${auth}` },
+          signal: controller.signal,
+        });
+
+        finalResStatus = res.status;
+        if (res.ok) {
+          const json = await res.json();
+          quota = json?.data?.quota
+            ?? json?.quota
+            ?? json?.data?.user?.quota
+            ?? json?.user?.quota
+            ?? json?.data?.balance
+            ?? json?.balance
+            ?? json?.total_quota
+            ?? null;
+          if (quota !== null) {
+            const label = formatQuotaAmount(quota);
+            if (isDisplayableQuotaLabel(label)) {
+              lastKnownQuotaLabel = label;
+              if (isMeaningfulQuotaLabel(label)) {
+                return label;
+              }
+            }
+            break;
+          }
+        } else if ([401, 403].includes(res.status)) {
+          shouldStop = true;
+          break;
+        }
+      }
+
+      if (shouldStop) {
         break;
       }
     }
 
-    if (quota !== null) {
-      return formatQuotaAmount(quota);
+    if (lastKnownQuotaLabel) {
+      return lastKnownQuotaLabel;
     }
 
     if (tokenFallbackLabel) {

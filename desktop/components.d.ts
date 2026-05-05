@@ -61,7 +61,6 @@ declare module 'vue' {
     AUploadDragger: typeof import('ant-design-vue/es')['UploadDragger']
     BatchCheck: typeof import('./src/components/BatchCheck.vue')['default']
     BridgeImportWizardModal: typeof import('./src/components/BridgeImportWizardModal.vue')['default']
-    BugOutlined: typeof import('@ant-design/icons-vue')['BugOutlined']
     Check: typeof import('./src/components/Check.vue')['default']
     DesktopConfigDiffModal: typeof import('./src/components/DesktopConfigDiffModal.vue')['default']
     Experimental: typeof import('./src/components/Experimental.vue')['default']
