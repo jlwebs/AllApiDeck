@@ -897,18 +897,30 @@ const normalizeQuickFilterName = (name) => {
   return String(withoutVendor || '').trim();
 };
 
-const extractQuickFilterCategory = (name) => {
-  const normalized = normalizeQuickFilterName(name);
+const normalizeQuickFilterVersion = (version) => {
+  const normalized = String(version || '').trim();
   if (!normalized) return '';
+  return normalized
+    .replace(/(\.\d*?[1-9])0+$/u, '$1')
+    .replace(/\.0+$/u, '');
+};
+
+const extractQuickFilterCategory = (name) => {
+  const normalized = normalizeQuickFilterName(name).toLowerCase();
+  if (!normalized) return '';
+  if (/^gpt-image-\d+(?:\.\d+)?(?:$|[-_])/u.test(normalized)) return 'gpt-image';
+  if (/^gpt-img-\d+(?:\.\d+)?(?:$|[-_])/u.test(normalized)) return 'gpt-img';
   const match = normalized.match(/gpt|[a-zA-Z]{3,}/i);
   return match ? match[0].toLowerCase() : '';
 };
 
 const extractQuickFilterVersion = (name) => {
-  const normalized = normalizeQuickFilterName(name);
+  const normalized = normalizeQuickFilterName(name).toLowerCase();
   if (!normalized) return '';
+  const imageFamilyMatch = normalized.match(/^gpt-(?:image|img)-(\d+(?:\.\d+)?)(?:$|[-_])/u);
+  if (imageFamilyMatch) return normalizeQuickFilterVersion(imageFamilyMatch[1]);
   const match = normalized.match(/\d+(?:\.\d+)?/);
-  return match ? match[0] : '';
+  return match ? normalizeQuickFilterVersion(match[0]) : '';
 };
 
 const buildQuickFilterOptionLabel = (category, version, sampleName) => {

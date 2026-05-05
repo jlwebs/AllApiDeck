@@ -55,6 +55,10 @@
 <img src="./desktop/docs/images/all-api-deck-site-management.png" alt="All API Deck 站点管理" width="72%" />
 <img src="./desktop/docs/images/all-api-deck-sidebar.png" alt="侧边栏" width="24%" />
 
+## 高级代理流转图
+
+<img src="./desktop/docs/images/advanced-proxy-architecture-light.svg" alt="All API Deck 高级代理流转图" width="86%" />
+
 ## 主要功能
 
 ### 1. 多种导入方式支持

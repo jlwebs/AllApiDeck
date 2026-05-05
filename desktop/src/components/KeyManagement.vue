@@ -125,7 +125,7 @@
                   class="inventory-icon-button inventory-icon-button-provider-queue"
                   :disabled="true"
                 >
-                  <span class="inventory-emoji-icon" aria-hidden="true">💪</span>
+                  <QueueOrbitIcon class="provider-queue-icon" />
                 </button>
               </span>
             </a-tooltip>
@@ -150,7 +150,7 @@
                   class="inventory-icon-button inventory-icon-button-provider-queue"
                   aria-label="一键将当前分组密钥设置为provider队列"
                 >
-                  <span class="inventory-emoji-icon" aria-hidden="true">💪</span>
+                  <QueueOrbitIcon class="provider-queue-icon" />
                 </button>
               </a-popover>
             </a-tooltip>
@@ -239,6 +239,17 @@
                 <span>快捷分组</span>
               </button>
             </a-tooltip>
+          </div>
+          <div class="key-group-site-filter">
+            <a-input
+              v-model:value="keyGroupSiteFilterDisplayValue"
+              size="small"
+              allow-clear
+              class="key-group-site-filter-input"
+              placeholder="输入中转站名字筛选"
+              @focus="handleKeyGroupSiteFilterFocus"
+              @blur="handleKeyGroupSiteFilterBlur"
+            />
           </div>
         </div>
 
@@ -821,6 +832,7 @@ import { ClockCircleOutlined, DeleteOutlined, DownloadOutlined, FileTextOutlined
 import { ConfigProvider, message, Modal, theme } from 'ant-design-vue';
 import { useRoute } from 'vue-router';
 import AppHeader from './AppHeader.vue';
+import QueueOrbitIcon from './icons/QueueOrbitIcon.vue';
 import AdvancedProxyModal from './AdvancedProxyModal.vue';
 import DesktopConfigDiffModal from './DesktopConfigDiffModal.vue';
 import SystemSettingsModal from './SystemSettingsModal.vue';
@@ -1077,18 +1089,30 @@ function normalizeQuickFilterName(name) {
   return String(withoutVendor || '').trim();
 }
 
-function extractQuickFilterCategory(name) {
-  const normalized = normalizeQuickFilterName(name);
+function normalizeQuickFilterVersion(version) {
+  const normalized = String(version || '').trim();
   if (!normalized) return '';
+  return normalized
+    .replace(/(\.\d*?[1-9])0+$/u, '$1')
+    .replace(/\.0+$/u, '');
+}
+
+function extractQuickFilterCategory(name) {
+  const normalized = normalizeQuickFilterName(name).toLowerCase();
+  if (!normalized) return '';
+  if (/^gpt-image-\d+(?:\.\d+)?(?:$|[-_])/u.test(normalized)) return 'gpt-image';
+  if (/^gpt-img-\d+(?:\.\d+)?(?:$|[-_])/u.test(normalized)) return 'gpt-img';
   const match = normalized.match(/gpt|[a-zA-Z]{3,}/i);
   return match ? match[0].toLowerCase() : '';
 }
 
 function extractQuickFilterVersion(name) {
-  const normalized = normalizeQuickFilterName(name);
+  const normalized = normalizeQuickFilterName(name).toLowerCase();
   if (!normalized) return '';
+  const imageFamilyMatch = normalized.match(/^gpt-(?:image|img)-(\d+(?:\.\d+)?)(?:$|[-_])/u);
+  if (imageFamilyMatch) return normalizeQuickFilterVersion(imageFamilyMatch[1]);
   const match = normalized.match(/\d+(?:\.\d+)?/);
-  return match ? match[0] : '';
+  return match ? normalizeQuickFilterVersion(match[0]) : '';
 }
 
 function buildQuickFilterOptionLabel(category, version, sampleName) {
@@ -1604,7 +1628,36 @@ const activeColumns = computed(() => (isCompactMode.value
   : columns));
 const failedSites = computed(() => allResults.value.filter(result => !Array.isArray(result?.tokens) || result.tokens.length === 0));
 const failedSiteNames = computed(() => failedSites.value.map(site => site?.site_name || site?.id || '未命名站点').join('，'));
+const keyGroupSiteFilterQuery = ref('');
+const keyGroupSiteFilterDisplayValue = computed({
+  get() {
+    return keyGroupSiteFilterQuery.value;
+  },
+  set(value) {
+    const nextValue = String(value || '');
+    if (!nextValue) {
+      keyGroupSiteFilterQuery.value = '';
+      return;
+    }
+    keyGroupSiteFilterQuery.value = nextValue.startsWith(' ')
+      ? nextValue
+      : ` ${nextValue.trimStart()}`;
+  },
+});
 const allSortedRows = computed(() => sortManagedRecords(tableData.value));
+const normalizedKeyGroupSiteFilterQuery = computed(() => String(keyGroupSiteFilterQuery.value || '').trim().toLowerCase());
+function handleKeyGroupSiteFilterFocus() {
+  if (!keyGroupSiteFilterQuery.value) {
+    keyGroupSiteFilterQuery.value = ' ';
+  }
+}
+
+function handleKeyGroupSiteFilterBlur() {
+  if (!String(keyGroupSiteFilterQuery.value || '').trim()) {
+    keyGroupSiteFilterQuery.value = '';
+  }
+}
+
 const displayedRows = computed(() => {
   const filteredRows = hideInvalidKeys.value
     ? allSortedRows.value.filter(record => Number(record?.status || 0) === 1)
@@ -1612,11 +1665,20 @@ const displayedRows = computed(() => {
   const groupedRows = activeKeyGroupId.value === ALL_KEYS_GROUP_ID
     ? filteredRows
     : filteredRows.filter(record => normalizeRecordGroupIds(record?.groupIds).includes(activeKeyGroupId.value));
-  return sortManagedRecords(groupedRows);
+  const siteFilteredRows = !normalizedKeyGroupSiteFilterQuery.value
+    ? groupedRows
+    : groupedRows.filter(record => {
+      const siteName = String(record?.siteName || '').trim().toLowerCase();
+      return siteName.includes(normalizedKeyGroupSiteFilterQuery.value);
+    });
+  return sortManagedRecords(siteFilteredRows);
 });
 const keyManagementEmptyDescription = computed(() => {
   if (allSortedRows.value.length === 0) {
     return '暂无本地密钥记录，可从批量检测自动同步、剪贴板导入或手工添加。';
+  }
+  if (normalizedKeyGroupSiteFilterQuery.value) {
+    return '当前站点筛选条件下暂无可见密钥。';
   }
   if (activeKeyGroupId.value !== ALL_KEYS_GROUP_ID) {
     return '当前分组暂无密钥。';
@@ -1735,7 +1797,7 @@ const currentVisiblePageRows = computed(() => {
   const start = Math.max(0, (currentTablePage.value - 1) * currentTablePageSize.value);
   return displayedRows.value.slice(start, start + currentTablePageSize.value);
 });
-const batchQuickTestDisabled = computed(() => batchQuickTestRunning.value || tableData.value.length === 0);
+const batchQuickTestDisabled = computed(() => batchQuickTestRunning.value || displayedRows.value.length === 0);
 const batchDeleteAbnormalDisabled = computed(() => batchQuickTestRunning.value || abnormalKeyCount.value === 0);
 const batchDeleteQuickTestFailedDisabled = computed(() => batchQuickTestRunning.value || displayedRows.value.length === 0);
 const activeKeyGroupLabel = computed(() => {
@@ -1743,7 +1805,7 @@ const activeKeyGroupLabel = computed(() => {
   return keyGroups.value.find(group => group.id === activeKeyGroupId.value)?.name || '当前分组';
 });
 const providerQueueSourceRecords = computed(() => {
-  const source = activeKeyGroupId.value === ALL_KEYS_GROUP_ID ? allSortedRows.value : displayedRows.value;
+  const source = displayedRows.value;
   const seen = new Set();
   return source.filter(record => {
     const rowKey = String(record?.rowKey || '').trim();
@@ -1755,17 +1817,22 @@ const providerQueueSourceRecords = computed(() => {
 const currentGroupValidProviderQueueRecords = computed(() =>
   providerQueueSourceRecords.value.filter(record => isValidProviderQueueSourceRecord(record))
 );
+const providerQueueScopeText = computed(() =>
+  normalizedKeyGroupSiteFilterQuery.value
+    ? '当前筛选结果中的'
+    : `${activeKeyGroupLabel.value}中的`
+);
 const syncCurrentGroupProviderQueueDisabled = computed(() => currentGroupValidProviderQueueRecords.value.length === 0);
 const syncCurrentGroupProviderQueueTooltip = computed(() =>
   syncCurrentGroupProviderQueueDisabled.value
-    ? '当前分组没有可写入 provider 队列的状态正常密钥'
-    : `将${activeKeyGroupLabel.value}中的 ${currentGroupValidProviderQueueRecords.value.length} 条状态正常密钥设置为provider队列（用于本地Live高级代理）`
+    ? `${normalizedKeyGroupSiteFilterQuery.value ? '当前筛选结果' : '当前列表'}没有可写入 provider 队列的状态正常密钥`
+    : `将${providerQueueScopeText.value} ${currentGroupValidProviderQueueRecords.value.length} 条状态正常密钥设置为provider队列（用于本地Live高级代理）`
 );
 const batchQuickTestButtonTitle = computed(() => {
   if (batchQuickTestRunning.value) {
     return `批量快测进行中：已完成 ${batchQuickTestProgress.completed}/${batchQuickTestProgress.total}，并发 ${BATCH_QUICK_TEST_CONCURRENCY}，运行中 ${batchQuickTestProgress.active}`;
   }
-  return `按页面优先级批量触发“快速测”，并发 ${BATCH_QUICK_TEST_CONCURRENCY}，只测试每条当前已选择的模型`;
+  return `按当前列表顺序批量触发“快速测”，并发 ${BATCH_QUICK_TEST_CONCURRENCY}，只测试每条当前已选择的模型`;
 });
 const batchActionButtonTitle = computed(() => {
   if (batchQuickTestRunning.value) {
@@ -2223,9 +2290,7 @@ function buildBatchQuickTestQueue() {
 
   const otherVisibleRows = displayedRows.value.filter(record => !queued.has(record.rowKey));
   pushRecords(otherVisibleRows.filter(record => Number(record?.status || 0) === 1));
-
-  const remainingRows = allSortedRows.value.filter(record => !queued.has(record.rowKey));
-  pushRecords(remainingRows);
+  pushRecords(otherVisibleRows.filter(record => Number(record?.status || 0) !== 1));
 
   return queue;
 }
@@ -2367,7 +2432,7 @@ async function runBatchQuickTest() {
   await runBatchQuickTestWithQueue(queue, {
     emptyMessage: '当前没有可处理的密钥记录',
     messagePrefix: '批量快测完成：',
-    fallbackDescription: '已按当前页优先级完成整库快测。',
+    fallbackDescription: '已按当前列表顺序完成批量快测。',
   });
 }
 
@@ -2868,7 +2933,7 @@ function confirmDeleteAbnormalRecords() {
 async function syncCurrentGroupToAdvancedProxyQueue() {
   const validRecords = currentGroupValidProviderQueueRecords.value;
   if (!validRecords.length) {
-    message.warning('当前分组暂无可写入 provider 队列的状态正常密钥');
+    message.warning(`${normalizedKeyGroupSiteFilterQuery.value ? '当前筛选结果' : '当前列表'}暂无可写入 provider 队列的状态正常密钥`);
     return;
   }
 
@@ -2882,7 +2947,7 @@ async function syncCurrentGroupToAdvancedProxyQueue() {
     advancedProxyFocusQueueScope.value = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
     advancedProxyFocusQueueToken.value = Date.now();
     showExperimentalFeatures.value = true;
-    message.success(`已将 ${activeKeyGroupLabel.value} 的 ${validRecords.length} 条状态正常密钥写入 provider 队列`);
+    message.success(`已将${providerQueueScopeText.value} ${validRecords.length} 条状态正常密钥写入 provider 队列`);
   } catch (error) {
     message.error(error?.message || '写入全局 Provider 队列失败');
   }
@@ -4056,19 +4121,28 @@ function persistMeta() {
 .inventory-card :deep(.ant-card-extra){padding:8px 0 8px}
 .inventory-card :deep(.ant-card-body){display:flex;flex:1 1 auto;flex-direction:column;min-height:0;padding:6px 14px 6px}
 .inventory-card :deep(.ant-empty){margin-block:auto}
-.key-group-strip{margin:0 0 1px}
-.key-group-tabs{display:flex;align-items:center;gap:2px;min-width:0;overflow-x:auto;overflow-y:hidden;padding-bottom:0;scrollbar-width:none}
-.key-group-tabs::-webkit-scrollbar{display:none}
+.key-group-strip{margin:0 0 1px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;min-width:0}
+.key-group-tabs{display:flex;align-items:flex-start;align-content:flex-start;flex:0 1 80%;max-width:80%;flex-wrap:wrap;gap:6px 4px;min-width:0;overflow:visible;padding-bottom:0}
 .key-group-tab{height:28px;padding:0 10px;border:1px solid rgba(124,142,112,.18);border-radius:10px;background:linear-gradient(180deg,rgba(255,255,255,.9),rgba(241,245,239,.9));color:#314437;display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;font-size:11px;font-weight:500;line-height:1;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background .18s ease}
 .key-group-tab:hover{transform:translateY(-1px);border-color:rgba(91,125,88,.28);box-shadow:0 10px 24px rgba(72,102,70,.1)}
 .key-group-tab-active{border-color:rgba(106,144,88,.42);background:linear-gradient(180deg,#ffffff,#edf5df);box-shadow:0 12px 26px rgba(117,156,90,.16),inset 0 0 0 1px rgba(171,205,132,.25);color:#203226}
 .key-group-tab-count{min-width:14px;padding:1px 5px;border-radius:999px;background:rgba(69,102,59,.1);color:inherit;font-size:10px;font-weight:600;line-height:1.05}
 .key-group-tab-create{padding-inline:10px;color:#466846}
 .key-group-tab-create :deep(.anticon),.key-group-tab-create svg{font-size:11px}
+.key-group-site-filter{flex:1 1 220px;min-width:180px;max-width:320px}
+.key-group-site-filter-input :deep(.ant-input){height:26px;border-radius:10px;background:rgba(255,255,255,.88);border-color:rgba(124,142,112,.18);box-shadow:inset 0 1px 0 rgba(255,255,255,.72);font-size:12px}
+.key-group-site-filter-input :deep(.ant-input::placeholder){color:rgba(100,116,94,.72)}
+.key-group-site-filter-input :deep(.ant-input-affix-wrapper){height:26px;border-radius:10px;padding:0 10px;background:rgba(255,255,255,.88);border-color:rgba(124,142,112,.18);box-shadow:inset 0 1px 0 rgba(255,255,255,.72);font-size:12px}
+.key-group-site-filter-input :deep(.ant-input-affix-wrapper .ant-input){height:auto;padding:0;background:transparent;border:0;box-shadow:none}
+.key-group-site-filter-input :deep(.ant-input-affix-wrapper .ant-input::placeholder){color:rgba(100,116,94,.72)}
+.key-group-site-filter-input :deep(.ant-input-affix-wrapper-focused){border-color:rgba(106,144,88,.42);box-shadow:0 0 0 2px rgba(171,205,132,.18)}
 .key-management-gaia .key-group-tab{border-color:rgba(122,151,125,.18);background:linear-gradient(180deg,rgba(34,40,34,.94),rgba(26,31,27,.96));color:#d8e5d4}
 .key-management-gaia .key-group-tab:hover{border-color:rgba(138,176,131,.32);box-shadow:0 12px 28px rgba(0,0,0,.24)}
 .key-management-gaia .key-group-tab-active{border-color:rgba(157,208,128,.36);background:linear-gradient(180deg,rgba(58,78,45,.98),rgba(40,56,34,.98));color:#f1f7ea;box-shadow:0 14px 30px rgba(0,0,0,.26),inset 0 0 0 1px rgba(186,228,149,.16)}
 .key-management-gaia .key-group-tab-count{background:rgba(220,242,194,.12)}
+.key-management-gaia .key-group-site-filter-input :deep(.ant-input),.key-management-gaia .key-group-site-filter-input :deep(.ant-input-affix-wrapper){background:linear-gradient(180deg,rgba(34,40,34,.94),rgba(26,31,27,.96));border-color:rgba(122,151,125,.18);color:#d8e5d4;box-shadow:none}
+.key-management-gaia .key-group-site-filter-input :deep(.ant-input::placeholder),.key-management-gaia .key-group-site-filter-input :deep(.ant-input-affix-wrapper .ant-input::placeholder){color:rgba(216,229,212,.54)}
+.key-management-gaia .key-group-site-filter-input :deep(.ant-input-affix-wrapper-focused){border-color:rgba(157,208,128,.36);box-shadow:0 0 0 2px rgba(186,228,149,.12)}
 .key-group-context-menu{position:fixed;z-index:1405;display:flex;flex-direction:column;gap:8px;width:208px;padding:10px;border-radius:18px;background:rgba(255,255,255,.96);box-shadow:0 18px 48px rgba(15,23,42,.24);backdrop-filter:blur(14px)}
 .key-group-context-action{width:100%;padding:8px 12px;font-size:13px;line-height:1.35;border-radius:16px}
 .key-group-context-menu-dark{background:rgba(25,25,25,.96);box-shadow:0 18px 48px rgba(0,0,0,.4)}
@@ -4264,7 +4338,8 @@ function persistMeta() {
 .inventory-batch-quick-test-button:disabled{opacity:.55}
 .inventory-batch-quick-test-button :deep(.anticon),.inventory-batch-quick-test-button svg{font-size:16px;line-height:1}
 .inventory-icon-button-provider-queue{background:linear-gradient(135deg,#fff8e7,#f6d57d);color:#8a5a12;box-shadow:0 10px 24px rgba(234,179,8,.18),inset 0 0 0 1px rgba(234,179,8,.2)}
-.inventory-emoji-icon{font-size:18px;line-height:1}
+.inventory-icon-button-provider-queue .provider-queue-icon{display:block;transition:transform .26s ease,filter .26s ease}
+.inventory-icon-button-provider-queue:hover:not(:disabled) .provider-queue-icon{transform:rotate(24deg) scale(1.06);filter:saturate(1.12)}
 .inventory-icon-button-primary{background:linear-gradient(135deg,#eff6ff,#dbeafe);color:#1d4ed8;box-shadow:0 10px 24px rgba(96,165,250,.18),inset 0 0 0 1px rgba(96,165,250,.22)}
 .inventory-icon-button-danger{background:linear-gradient(135deg,#fff1f2,#ffe4e6);color:#be123c;box-shadow:0 10px 24px rgba(244,63,94,.12),inset 0 0 0 1px rgba(244,63,94,.18)}
 .batch-quick-test-alert{margin-bottom:12px;border-radius:14px}
@@ -4492,6 +4567,9 @@ function persistMeta() {
 :deep(body.dark-mode) .key-management :deep(.ant-table-thead > tr > th){background:rgba(255,255,255,.08);color:#edf5e6}
 :deep(body.dark-mode) .key-management :deep(.ant-table-tbody > tr > td){background:rgba(255,255,255,.03)}
 :deep(body.dark-mode) .key-management .desktop-app-panel,:deep(body.dark-mode) .key-management .desktop-form-panel{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(160,189,144,.06))}
+:deep(body.dark-mode) .key-management .key-group-site-filter-input :deep(.ant-input),:deep(body.dark-mode) .key-management .key-group-site-filter-input :deep(.ant-input-affix-wrapper){background:linear-gradient(180deg,rgba(31,42,33,.94),rgba(20,29,23,.96));border-color:rgba(160,189,144,.18);color:#edf5e6;box-shadow:none}
+:deep(body.dark-mode) .key-management .key-group-site-filter-input :deep(.ant-input::placeholder),:deep(body.dark-mode) .key-management .key-group-site-filter-input :deep(.ant-input-affix-wrapper .ant-input::placeholder){color:rgba(184,200,178,.56)}
+:deep(body.dark-mode) .key-management .key-group-site-filter-input :deep(.ant-input-affix-wrapper-focused){border-color:rgba(160,189,144,.32);box-shadow:0 0 0 2px rgba(160,189,144,.12)}
 :deep(body.dark-mode) .portable-settings-card{border-color:rgba(154,191,142,.18);background:rgba(24,32,25,.92)}
 :deep(body.dark-mode) .portable-settings-title{color:#ecf8e7}
 :deep(body.dark-mode) .portable-settings-desc,:deep(body.dark-mode) .portable-settings-hint,:deep(body.dark-mode) .portable-settings-meta{color:#b8cbb1}
@@ -4514,6 +4592,9 @@ function persistMeta() {
 .key-management-compact :deep(.ant-card-body){padding:12px}
 .key-management-compact :deep(.ant-card-extra){max-width:100%}
 .key-management-compact :deep(.ant-space){row-gap:8px}
+.key-management-compact .key-group-strip{align-items:stretch;flex-wrap:wrap}
+.key-management-compact .key-group-tabs{flex-basis:100%;max-width:100%}
+.key-management-compact .key-group-site-filter{min-width:0;max-width:100%;flex-basis:100%}
 .key-management-compact .site-main-block{min-width:0;max-width:none;flex:1 1 auto}
 .key-management-compact .compact-key-table :deep(.ant-table-thead > tr > th){padding:10px 8px;font-size:12px}
 .key-management-compact .compact-key-table :deep(.ant-table-tbody > tr > td){padding:8px 8px 0;vertical-align:top}

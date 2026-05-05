@@ -219,7 +219,12 @@
                 </span>
               </div>
               <div class="panel-record-copy">
-                <span class="panel-record-site">{{ getSiteShortName(record.siteName) }}</span>
+                <button
+                  type="button"
+                  class="panel-record-site panel-record-site-button"
+                  :title="record.siteUrl || getSiteShortName(record.siteName)"
+                  @click="openRecordSiteInSystemBrowser(record)"
+                >{{ getSiteShortName(record.siteName) }}</button>
                 <span class="panel-record-model" :title="getModelSummary(record)">{{ getModelSummary(record) }}</span>
               </div>
             </div>
@@ -402,6 +407,7 @@ import {
   extractPerformanceMetrics,
   hasPerformanceMetrics,
 } from '../utils/performanceMetrics.js';
+import { openUrlInSystemBrowser } from '../utils/runtimeApi.js';
 
 const SITE_EMOJI_LIST = [
   '🦊', '🦉', '🦋', '🦭', '🦜', '🪿', '🐬', '🦄', '🐿️', '🪼',
@@ -2151,6 +2157,12 @@ function getSiteShortName(siteName) {
   const text = String(siteName || '').trim();
   if (!text) return '未命名';
   return text.length > 6 ? text.slice(0, 6) : text;
+}
+
+function openRecordSiteInSystemBrowser(record) {
+  const targetUrl = String(record?.siteUrl || '').trim();
+  if (!/^https?:\/\//i.test(targetUrl)) return;
+  openUrlInSystemBrowser(targetUrl);
 }
 
 function getQueueTooltipOverlayStyle(item) {
@@ -3992,6 +4004,20 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.panel-record-site-button {
+  appearance: none;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.panel-record-site-button:hover {
+  color: #1d4ed8;
 }
 
 .panel-record-model {

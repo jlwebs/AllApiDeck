@@ -11,30 +11,101 @@
     <a-spin :spinning="loading || saving">
       <div ref="shellScrollRef" class="advanced-proxy-shell">
         <section class="advanced-proxy-hero">
-          <div class="advanced-proxy-hero-copy">
-            <a-tag color="green">本地代理接管</a-tag>
-            <h3>兼容 OpenAI vendor，并为 Claude / Codex / OpenCode / OpenClaw 提供统一接管入口</h3>
-            <p>涉及本地应用配置文件的变更会先弹出 diff 预览；仅修改高级代理自身配置时，会直接写入并立即生效。</p>
-          </div>
-
-          <div class="advanced-proxy-master-row">
-            <div class="advanced-proxy-master-copy">
-              <strong>代理总开关</strong>
-              <small>{{ proxyMasterEnabled ? (enabledAppLabels || '已启用') : '关闭后不会接管任何本地应用' }}</small>
+          <div class="advanced-proxy-master-strip">
+            <div class="advanced-proxy-master-row">
+              <div class="advanced-proxy-master-copy">
+                <strong>代理总开关</strong>
+                <small>{{ proxyMasterEnabled ? (enabledAppLabels || '已启用') : '统一接管 Claude / Codex / OpenCode / OpenClaw' }}</small>
+              </div>
+              <a-switch
+                :checked="proxyMasterEnabled"
+                checked-children="开启"
+                un-checked-children="关闭"
+                @change="handleProxyMasterToggle"
+              />
             </div>
-            <a-switch
-              :checked="proxyMasterEnabled"
-              checked-children="开启"
-              un-checked-children="关闭"
-              @change="handleProxyMasterToggle"
-            />
+            <div class="advanced-proxy-master-debug">
+              <div class="advanced-proxy-master-debug-group">
+                <a-tooltip
+                  placement="top"
+                  overlayClassName="advanced-proxy-master-help-tooltip"
+                  trigger="click"
+                  :open="masterHelpTooltipOpen"
+                  :arrow="false"
+                  :overlayStyle="{ position: 'fixed', top: '72px', right: '16px' }"
+                  :overlayInnerStyle="{ maxWidth: 'min(50vw, 640px)', width: 'min(50vw, 640px)' }"
+                  @openChange="handleMasterHelpTooltipOpenChange"
+                >
+                  <template #title>
+                    <div class="advanced-proxy-master-help-tooltip-copy">
+                      <img
+                        :src="advancedProxyArchitectureLightSvg"
+                        alt="高级代理架构图"
+                        class="advanced-proxy-master-help-tooltip-image"
+                      />
+                      <div><code>claude</code> 入口会把 Anthropic Messages 请求转换到上游 Provider 定义的格式。</div>
+                      <div><code>codex</code> / <code>opencode</code> / <code>openclaw</code> 入口会直接代理 OpenAI 兼容请求，并按各自的有效队列执行重试与熔断。</div>
+                      <div>接管打开后，本地应用配置会写入本地代理地址；真实反代目标只保存在这里的 Provider 列表中。</div>
+                      <div>如果要接管 Codex，请至少准备一条可用的 OpenAI 兼容上游，最好支持 <code>/v1/responses</code>。</div>
+                    </div>
+                  </template>
+                  <button
+                    type="button"
+                    class="advanced-proxy-master-debug-button advanced-proxy-master-help-button"
+                    :class="{ 'advanced-proxy-master-debug-button-active': masterHelpTooltipOpen }"
+                    aria-label="查看使用说明"
+                  >
+                    <QuestionCircleOutlined />
+                  </button>
+                </a-tooltip>
+                <a-tooltip :title="draft.debugLogging ? '调试日志已开启，写入 advanced-proxy.log' : '开启调试日志，写入 advanced-proxy.log'">
+                  <button
+                    type="button"
+                    class="advanced-proxy-master-debug-button"
+                    :class="{ 'advanced-proxy-master-debug-button-active': draft.debugLogging }"
+                    aria-label="切换调试日志"
+                    @click="handleConfigMutation(next => { next.debugLogging = !next.debugLogging; }, draft.debugLogging ? '高级代理调试日志已关闭' : '高级代理调试日志已开启')"
+                  >
+                    <BugOutlined />
+                  </button>
+                </a-tooltip>
+              </div>
+            </div>
+            <div class="advanced-proxy-master-placeholder">
+              <div class="advanced-proxy-master-stats-grid">
+                <article class="advanced-proxy-master-stat">
+                  <a-tooltip :title="enabledAppLabels || '当前未启用'">
+                    <span>应用</span>
+                  </a-tooltip>
+                  <strong>{{ enabledAppCount }}</strong>
+                </article>
+                <article class="advanced-proxy-master-stat">
+                  <a-tooltip :title="`${selectedQueueLabel}队列启用 ${enabledProviderCount} 条`">
+                    <span>队列</span>
+                  </a-tooltip>
+                  <strong>{{ providerCount }}</strong>
+                </article>
+                <article class="advanced-proxy-master-stat">
+                  <a-tooltip :title="selectedQueueScope === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE ? '未覆盖应用默认继承全局' : `${selectedQueueAppLabel} 当前有效兼容数`">
+                    <span>兼容</span>
+                  </a-tooltip>
+                  <strong>{{ openAIProviderCount }}</strong>
+                </article>
+                <article class="advanced-proxy-master-stat">
+                  <a-tooltip :title="`故障自动转移 ${unifiedFailoverEnabled ? '已开启' : '未开启'}`">
+                    <span>熔断打开数</span>
+                  </a-tooltip>
+                  <strong>{{ openCircuitCount }}</strong>
+                </article>
+              </div>
+            </div>
           </div>
 
           <div class="advanced-proxy-app-strip">
             <a-tooltip v-for="app in appCards" :key="app.id" placement="top">
               <template #title>
                 <div class="advanced-proxy-app-tooltip">
-                  <div>{{ app.label }} · {{ app.modeLabel }}</div>
+                  <div>{{ app.modeLabel }}</div>
                   <div v-if="app.tooltipDetail">{{ app.tooltipDetail }}</div>
                 </div>
               </template>
@@ -50,29 +121,6 @@
               </button>
             </a-tooltip>
           </div>
-        </section>
-
-        <section class="advanced-proxy-summary-grid">
-          <article class="advanced-proxy-summary-card">
-            <span>已启用应用</span>
-            <strong>{{ enabledAppCount }}</strong>
-            <small>{{ enabledAppLabels || '当前未启用' }}</small>
-          </article>
-          <article class="advanced-proxy-summary-card">
-            <span>当前队列 Provider</span>
-            <strong>{{ providerCount }}</strong>
-            <small>{{ selectedQueueLabel }}队列启用 {{ enabledProviderCount }} 条</small>
-          </article>
-          <article class="advanced-proxy-summary-card">
-            <span>当前队列 OpenAI 兼容</span>
-            <strong>{{ openAIProviderCount }}</strong>
-            <small>{{ selectedQueueScope === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE ? '未覆盖应用默认继承全局' : `${selectedQueueAppLabel} 当前有效兼容数` }}</small>
-          </article>
-          <article class="advanced-proxy-summary-card">
-            <span>熔断打开数</span>
-            <strong>{{ openCircuitCount }}</strong>
-            <small>故障自动转移 {{ unifiedFailoverEnabled ? '已开启' : '未开启' }}</small>
-          </article>
         </section>
 
         <div class="advanced-proxy-layout">
@@ -91,12 +139,12 @@
                 />
                 <a-tooltip :title="quickSetupTooltipText">
                   <a-button
-                    class="advanced-proxy-toolbar-icon-button"
+                    class="advanced-proxy-toolbar-icon-button advanced-proxy-toolbar-icon-button-provider-queue"
                     :disabled="!validProviderCandidateCards.length"
                     @click="handleQuickSelectValidProviders"
                   >
                     <template #icon>
-                      <span class="advanced-proxy-toolbar-emoji-icon" aria-hidden="true">💪</span>
+                      <QueueOrbitIcon class="provider-queue-icon" />
                     </template>
                   </a-button>
                 </a-tooltip>
@@ -310,25 +358,6 @@
             <section class="advanced-proxy-section">
               <div class="advanced-proxy-section-head">
                 <div>
-                  <h4>调试日志</h4>
-                  <p>打开后会把高级代理请求转换、上游拒绝和流式异常详细写入 <code>advanced-proxy.log</code>。</p>
-                </div>
-              </div>
-
-              <div class="advanced-proxy-toggle-list">
-                <div class="advanced-proxy-toggle-row">
-                  <span>写入详细调试日志</span>
-                  <a-switch
-                    :checked="draft.debugLogging"
-                    @change="value => handleConfigMutation(next => { next.debugLogging = value; }, value ? '高级代理调试日志已开启' : '高级代理调试日志已关闭')"
-                  />
-                </div>
-              </div>
-            </section>
-
-            <section class="advanced-proxy-section">
-              <div class="advanced-proxy-section-head">
-                <div>
                   <h4>错误修正</h4>
                   <p>仅作用于 Claude 兼容链路，用来最小化修正常见的 thinking 签名和预算错误。</p>
                 </div>
@@ -359,17 +388,6 @@
               </div>
             </section>
 
-            <section class="advanced-proxy-section">
-              <div class="advanced-proxy-section-head">
-                <h4>使用说明</h4>
-              </div>
-              <ul class="advanced-proxy-notes">
-                <li><code>claude</code> 入口会把 Anthropic Messages 请求转换到上游 Provider 定义的格式。</li>
-                <li><code>codex</code> / <code>opencode</code> / <code>openclaw</code> 入口会直接代理 OpenAI 兼容请求，并按各自的有效队列执行重试与熔断。</li>
-                <li>接管打开后，本地应用配置会写入本地代理地址；真实反代目标只保存在这里的 Provider 列表中。</li>
-                <li>如果要接管 Codex，请至少准备一条可用的 OpenAI 兼容上游，最好支持 <code>/v1/responses</code>。</li>
-              </ul>
-            </section>
           </aside>
         </div>
       </div>
@@ -381,13 +399,15 @@
 
 <script setup>
 import { computed, nextTick, reactive, ref, watch } from 'vue';
-import { CloudSyncOutlined, ReloadOutlined } from '@ant-design/icons-vue';
+import { BugOutlined, CloudSyncOutlined, QuestionCircleOutlined, ReloadOutlined } from '@ant-design/icons-vue';
 import { message } from 'ant-design-vue';
+import advancedProxyArchitectureLightSvg from '../../docs/images/advanced-proxy-architecture-light.svg';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
 import opencodeAppIcon from '../assets/app-icons/opencode.svg';
 import openclawAppIcon from '../assets/app-icons/openclaw-fallback.svg';
 import DesktopConfigDiffModal from './DesktopConfigDiffModal.vue';
+import QueueOrbitIcon from './icons/QueueOrbitIcon.vue';
 import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManagedAppConfigFiles } from '../utils/desktopConfigBridge.js';
 import { buildDesktopConfigPreview, createDesktopConfigDraft } from '../utils/desktopConfigTransform.js';
 import { loadPanelRecords } from '../utils/keyPanelStore.js';
@@ -441,6 +461,7 @@ const emit = defineEmits(['update:open']);
 const loading = ref(false);
 const saving = ref(false);
 const previewOpen = ref(false);
+const masterHelpTooltipOpen = ref(false);
 const shellScrollRef = ref(null);
 const queuePanelRef = ref(null);
 const selectedQueueScope = ref(ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
@@ -638,7 +659,15 @@ const appCards = computed(() =>
       ...app,
       enabled,
       icon: ADVANCED_PROXY_APP_ICONS[app.id],
-      modeLabel: app.mode === 'anthropic' ? 'Anthropic Messages 入口' : 'OpenAI Compatible 入口',
+      modeLabel: app.mode === 'anthropic'
+        ? 'Anthropic Messages 入口'
+        : app.id === 'codex'
+          ? 'Codex 客户端 · OpenAI Compatible 入口'
+          : app.id === 'opencode'
+            ? 'OpenCode 客户端 · OpenAI Compatible 入口'
+            : app.id === 'openclaw'
+              ? 'OpenClaw 客户端 · OpenAI Compatible 入口'
+          : 'OpenAI Compatible 入口',
       tooltipDetail: app.id === 'claude'
         ? '已支持：Claude 客户端 -> 8888 -> OpenAI 上游。Claude 请求会自动转成 OpenAI 上游请求，并把返回结果转回 Claude 格式。'
         : '',
@@ -1413,6 +1442,10 @@ async function loadData() {
 watch(
   () => props.open,
   async value => {
+    if (!value) {
+      masterHelpTooltipOpen.value = false;
+      return;
+    }
     if (value) {
       await loadData();
       focusQueuePanel();
@@ -1600,8 +1633,13 @@ function cancelPreview() {
 }
 
 function handleCancel() {
+  masterHelpTooltipOpen.value = false;
   cancelPreview();
   emit('update:open', false);
+}
+
+function handleMasterHelpTooltipOpenChange(open) {
+  masterHelpTooltipOpen.value = open;
 }
 </script>
 
@@ -1703,6 +1741,8 @@ function handleCancel() {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  width: 100%;
+  max-width: 100%;
   gap: 12px;
   padding: 9px 10px;
   border-radius: 14px;
@@ -1710,10 +1750,173 @@ function handleCancel() {
   background: rgba(255, 255, 255, 0.84);
 }
 
+.advanced-proxy-master-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 60%) minmax(84px, 10%) minmax(0, 30%);
+  justify-content: start;
+  align-items: stretch;
+  column-gap: 12px;
+}
+
 .advanced-proxy-master-copy {
   min-width: 0;
   display: grid;
   gap: 3px;
+}
+
+.advanced-proxy-master-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 8px;
+  min-width: 0;
+  min-height: 100%;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px dashed rgba(90, 117, 79, 0.18);
+  background: rgba(255, 255, 255, 0.42);
+  color: rgba(77, 97, 66, 0.72);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-align: left;
+}
+
+.advanced-proxy-master-debug {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+}
+
+.advanced-proxy-master-debug-group {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px;
+  border: 1px dashed rgba(90, 117, 79, 0.18);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.advanced-proxy-master-debug-button {
+  flex: 1 1 0;
+  min-width: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #6a7867;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color .18s ease, color .18s ease;
+  padding: 0;
+}
+
+.advanced-proxy-master-debug-button:hover {
+  background: rgba(90, 117, 79, 0.06);
+  color: #22311c;
+}
+
+.advanced-proxy-master-help-button {
+  background: transparent;
+}
+
+.advanced-proxy-master-help-tooltip-copy {
+  display: grid;
+  gap: 6px;
+  max-width: min(50vw, 640px);
+  line-height: 1.5;
+}
+
+.advanced-proxy-master-help-tooltip-image {
+  display: block;
+  width: 100%;
+  max-width: min(50vw, 640px);
+  height: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(90, 117, 79, 0.12);
+  background: rgba(255, 255, 255, 0.88);
+}
+
+:deep(.advanced-proxy-master-help-tooltip) {
+  position: fixed !important;
+  top: 72px !important;
+  right: 16px !important;
+  left: auto !important;
+  inset-inline-start: auto !important;
+  inset-inline-end: 16px !important;
+  transform: none !important;
+  margin: 0 !important;
+}
+
+:deep(.advanced-proxy-master-help-tooltip .ant-tooltip-content) {
+  width: min(50vw, 640px);
+  max-width: min(50vw, 640px);
+}
+
+@media (max-width: 900px) {
+  :deep(.advanced-proxy-master-help-tooltip) {
+    top: 56px !important;
+    right: 12px !important;
+    inset-inline-end: 12px !important;
+  }
+
+  :deep(.advanced-proxy-master-help-tooltip .ant-tooltip-content) {
+    width: min(560px, calc(100vw - 24px));
+    max-width: min(560px, calc(100vw - 24px));
+  }
+
+  .advanced-proxy-master-help-tooltip-copy,
+  .advanced-proxy-master-help-tooltip-image {
+    max-width: min(560px, calc(100vw - 24px));
+  }
+}
+
+
+.advanced-proxy-master-debug-button :deep(svg) {
+  width: 22px;
+  height: 22px;
+}
+
+.advanced-proxy-master-debug-button-active {
+  background: transparent;
+  color: #c83d34;
+}
+
+.advanced-proxy-master-debug-button-active:hover {
+  background: rgba(200, 61, 52, 0.06);
+  color: #c83d34;
+}
+
+.advanced-proxy-master-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+}
+
+.advanced-proxy-master-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.advanced-proxy-master-stat span {
+  color: #5f6f5a;
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: help;
+}
+
+.advanced-proxy-master-stat strong {
+  color: #22311c;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .advanced-proxy-master-copy strong,
@@ -1800,21 +2003,29 @@ function handleCancel() {
   height: 40px;
   padding: 0;
   border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .advanced-proxy-toolbar-icon-button :deep(.ant-btn-icon) {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
+  margin: 0 !important;
+  line-height: 0;
   font-size: 16px;
 }
 
-.advanced-proxy-toolbar-emoji-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  line-height: 1;
+.advanced-proxy-toolbar-icon-button-provider-queue :deep(.ant-btn-icon) {
+  transition: transform .26s ease, filter .26s ease;
+  margin-inline-end: 0;
+}
+
+.advanced-proxy-toolbar-icon-button-provider-queue:hover:not(:disabled) :deep(.ant-btn-icon) {
+  transform: rotate(24deg) scale(1.06);
+  filter: saturate(1.12);
 }
 
 .advanced-proxy-queue-mode {
@@ -1834,7 +2045,7 @@ function handleCancel() {
 
 .advanced-proxy-provider-panel-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 

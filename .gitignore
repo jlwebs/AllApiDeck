@@ -48,6 +48,7 @@ test_output.txt
 .temp
 venv
 temp
+/temp/GPT_Image_Playground/
 tmp
 tput
 backup/
