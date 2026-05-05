@@ -163,7 +163,7 @@
                   </a-button>
                 </a-tooltip>
                 <a-tooltip title="刷新记录">
-                  <a-button class="advanced-proxy-toolbar-icon-button" @click="reloadContext">
+                  <a-button class="advanced-proxy-toolbar-icon-button" @click="handleRefreshQueueContext">
                     <template #icon>
                       <ReloadOutlined />
                     </template>
@@ -566,7 +566,7 @@ const openCircuitCount = computed(() =>
 const queuePanelTitle = computed(() => `[${selectedQueueLabel.value}]上游 Provider 队列`);
 const queuePanelDescription = computed(() => {
   if (selectedQueueScope.value === ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
-    return '点击卡片即可维护默认全局队列。未单独覆盖的应用，都会继承这条全局队列。';
+    return '点击卡片配置代理全局队列和调度优先级。';
   }
   if (selectedQueueInheritGlobal.value) {
     return `${selectedQueueAppLabel.value} 当前继承全局队列。点击卡片后会自动复制出独立队列，并按点击顺序维护优先级。`;
@@ -1088,6 +1088,40 @@ function buildProviderFromRecord(record, sortIndex) {
   };
 }
 
+function buildManagedProviderIdentityKey(baseUrl, apiKey) {
+  const normalizedBaseUrl = normalizeComparableUrl(baseUrl);
+  const normalizedApiKey = String(apiKey || '').trim();
+  if (!normalizedBaseUrl || !normalizedApiKey) return '';
+  return `${normalizedBaseUrl}|${normalizedApiKey}`;
+}
+
+function createManagedProviderMatcher(records) {
+  const rowKeys = new Set();
+  const identities = new Set();
+
+  (Array.isArray(records) ? records : []).forEach(record => {
+    const rowKey = String(record?.rowKey || '').trim();
+    if (rowKey) {
+      rowKeys.add(rowKey);
+    }
+    const identity = buildManagedProviderIdentityKey(record?.siteUrl, record?.apiKey);
+    if (identity) {
+      identities.add(identity);
+    }
+  });
+
+  return { rowKeys, identities };
+}
+
+function isQueueProviderManaged(provider, matcher) {
+  const providerId = String(provider?.rowKey || provider?.id || '').trim();
+  if (providerId && matcher.rowKeys.has(providerId)) {
+    return true;
+  }
+  const identity = buildManagedProviderIdentityKey(provider?.baseUrl, provider?.apiKey);
+  return Boolean(identity) && matcher.identities.has(identity);
+}
+
 function isValidProviderSourceRecord(record) {
   if (!record?.rowKey || !record?.siteUrl || !record?.apiKey) return false;
   const quickTestStatus = String(record?.quickTestStatus || '').trim().toLowerCase();
@@ -1423,6 +1457,32 @@ function handleFollowGlobalQueue() {
 async function reloadContext() {
   const { records } = loadPanelRecords();
   availableRecords.value = records;
+}
+
+function pruneOrphanedQueueProviders(config, records) {
+  const matcher = createManagedProviderMatcher(records);
+  const nextConfig = createPendingConfig(config);
+  let removedCount = 0;
+
+  ADVANCED_PROXY_QUEUE_SCOPES.forEach(item => {
+    const queue = ensureQueueSection(nextConfig, item.id);
+    const beforeCount = Array.isArray(queue.providers) ? queue.providers.length : 0;
+    queue.providers = (queue.providers || []).filter(provider => isQueueProviderManaged(provider, matcher));
+    removedCount += Math.max(0, beforeCount - queue.providers.length);
+  });
+
+  nextConfig.claude.providers = [...(nextConfig.queues?.global?.providers || [])];
+  return {
+    removedCount,
+    nextConfig,
+  };
+}
+
+async function handleRefreshQueueContext() {
+  await reloadContext();
+  const { removedCount, nextConfig } = pruneOrphanedQueueProviders(draft, availableRecords.value);
+  if (!removedCount) return;
+  await saveConfigImmediately(nextConfig, `已自动清除 ${removedCount} 条已不在密钥管理中的队列 Provider`);
 }
 
 async function loadData() {
