@@ -587,8 +587,19 @@ const filteredRecords = computed(() => {
   const text = String(keyword.value || '').trim().toLowerCase();
   const siteNameFilter = normalizedSiteGroupSiteFilterQuery.value;
   const probeSiteCacheKey = String(modelProbeContext.value?.siteCacheKey || '').trim();
+  const probeSiteCacheKeys = new Set(
+    (Array.isArray(modelProbeContext.value?.siteCacheKeys) ? modelProbeContext.value.siteCacheKeys : [])
+      .map(item => String(item || '').trim())
+      .filter(Boolean)
+  );
+  const hasProbeSiteCacheKeys = probeSiteCacheKeys.size > 0;
   return records.value.filter(record => {
-    if (probeSiteCacheKey && String(record?.siteCacheKey || '').trim() !== probeSiteCacheKey) return false;
+    const currentSiteCacheKey = String(record?.siteCacheKey || '').trim();
+    if (hasProbeSiteCacheKeys) {
+      if (!probeSiteCacheKeys.has(currentSiteCacheKey)) return false;
+    } else if (probeSiteCacheKey && currentSiteCacheKey !== probeSiteCacheKey) {
+      return false;
+    }
     if (hideDisabled.value && record.disabled) return false;
     const keywordMatched = !text || [
       record.siteName,
@@ -2026,12 +2037,35 @@ onMounted(async () => {
     modelTimeout.value = Number(pendingBatchStart?.modelTimeout || modelTimeout.value || 15);
   }
   if (modelProbeContext.value?.siteCacheKey) {
-    const probeRecord = records.value.find(record => String(record?.siteCacheKey || '').trim() === String(modelProbeContext.value?.siteCacheKey || '').trim()) || null;
-    if (probeRecord) {
+    const probeSiteCacheKeys = Array.from(new Set([
+      ...(Array.isArray(modelProbeContext.value?.siteCacheKeys) ? modelProbeContext.value.siteCacheKeys : []),
+      String(modelProbeContext.value?.siteCacheKey || '').trim(),
+    ].map(item => String(item || '').trim()).filter(Boolean)));
+    const probeRecords = records.value.filter(record => probeSiteCacheKeys.includes(String(record?.siteCacheKey || '').trim()));
+    for (const probeRecord of probeRecords) {
       await refreshSiteTreeModels(probeRecord, { strict: true });
+    }
+    if (probeRecords.length > 0) {
       reloadRecords();
     }
-    selectChatModelsOnly();
+    checkedKeys.value = treeData.value
+      .flatMap(node => {
+        const leafKeys = [];
+        const walk = nodes => {
+          (Array.isArray(nodes) ? nodes : []).forEach(item => {
+            const key = String(item?.key || '').trim();
+            if (item?.isLeaf === true && isSelectableModelKey(key)) {
+              leafKeys.push(key);
+              return;
+            }
+            if (Array.isArray(item?.children) && item.children.length > 0) {
+              walk(item.children);
+            }
+          });
+        };
+        walk([node]);
+        return leafKeys;
+      });
     emitModelProbeSelectionSnapshot('on_mounted_after_select_chat_only');
   }
   window.addEventListener(THEME_MODE_CHANGE_EVENT, syncThemeState);

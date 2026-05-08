@@ -599,14 +599,19 @@
       </a-card>
 
       <div
-        v-if="rowContextMenu.open && rowContextMenu.record"
+        v-if="rowContextMenu.open && (rowContextMenu.record || rowContextMenu.records.length)"
         ref="rowContextMenuRef"
         class="key-row-context-menu"
         :class="{ 'key-row-context-menu-dark': isDarkMode }"
         :style="{ left: `${rowContextMenu.x}px`, top: `${rowContextMenu.y}px` }"
         @mouseleave="closeRowContextGroupSubmenu"
       >
-        <button type="button" class="import-export-menu-item key-row-context-action" @click="handleRowContextEdit">
+        <button
+          v-if="!rowContextMenu.batch"
+          type="button"
+          class="import-export-menu-item key-row-context-action"
+          @click="handleRowContextEdit"
+        >
           编辑密钥
         </button>
         <button
@@ -614,16 +619,17 @@
           class="import-export-menu-item import-export-menu-item-danger key-row-context-action"
           @click="handleRowContextDelete"
         >
-          删除记录
+          {{ rowContextMenu.batch ? `批量删除记录（${rowContextMenu.records.length}）` : '删除记录' }}
         </button>
         <button
           type="button"
           class="import-export-menu-item key-row-context-action"
           @click="handleRowContextModelProbe"
         >
-          探测可用模型
+          {{ rowContextMenu.batch ? `批量探测可用模型（${rowContextMenu.records.length}）` : '探测可用模型' }}
         </button>
         <button
+          v-if="!rowContextMenu.batch"
           type="button"
           class="import-export-menu-item key-row-context-action"
           @click="handleRowContextAIImage"
@@ -636,7 +642,7 @@
           :class="{ 'key-row-context-submenu-trigger-active': rowContextMenu.groupSubmenuOpen }"
           @mouseenter="openRowContextGroupSubmenu"
         >
-          <span>分配到分组</span>
+          <span>{{ rowContextMenu.batch ? `批量分配到分组（${rowContextMenu.records.length}）` : '分配到分组' }}</span>
           <span class="key-row-context-submenu-arrow">›</span>
         </button>
 
@@ -658,18 +664,20 @@
               :key="group.id"
               type="button"
               class="key-row-group-chip"
-              :class="{ 'key-row-group-chip-active': isRecordInGroup(rowContextMenu.record, group.id) }"
-              @click="toggleRecordGroupMembership(rowContextMenu.record, group.id)"
+              :class="{ 'key-row-group-chip-active': isRowContextGroupActive(group.id) }"
+              @click="toggleRowContextGroupMembership(group.id)"
             >
-              <span class="key-row-group-chip-mark">{{ isRecordInGroup(rowContextMenu.record, group.id) ? '✓' : '' }}</span>
+              <span class="key-row-group-chip-mark">{{ getRowContextGroupMark(group.id) }}</span>
               <span class="key-row-group-chip-name">{{ group.name }}</span>
             </button>
           </div>
           <div v-else class="key-row-action-empty">暂无自定义分组</div>
         </div>
         <div class="key-row-action-info">
-          <span class="key-row-action-label">最近同步</span>
-          <span class="key-row-action-value">{{ formatDateTime(rowContextMenu.record.updatedAt) }}</span>
+          <span class="key-row-action-label">{{ rowContextMenu.batch ? '批量选中' : '最近同步' }}</span>
+          <span class="key-row-action-value">
+            {{ rowContextMenu.batch ? `${rowContextMenu.records.length} 条记录` : formatDateTime(rowContextMenu.record?.updatedAt) }}
+          </span>
         </div>
       </div>
 
@@ -1056,8 +1064,11 @@ const rowContextMenu = reactive({
   x: 0,
   y: 0,
   record: null,
+  records: [],
+  batch: false,
   groupSubmenuOpen: false,
 });
+const selectedRowKeys = ref([]);
 const providerQueueInlineConfirmOpen = ref(false);
 const keyGroupContextMenu = reactive({
   open: false,
@@ -1718,7 +1729,34 @@ function selectQuickGroupFilterFamily(family) {
 function closeRowContextMenu() {
   rowContextMenu.open = false;
   rowContextMenu.record = null;
+  rowContextMenu.records = [];
+  rowContextMenu.batch = false;
   rowContextMenu.groupSubmenuOpen = false;
+}
+
+function normalizeRowKeyValue(value) {
+  return String(value || '').trim();
+}
+
+function isRowSelected(record) {
+  const rowKey = normalizeRowKeyValue(record?.rowKey);
+  if (!rowKey) return false;
+  return selectedRowKeys.value.includes(rowKey);
+}
+
+function toggleRowSelected(record) {
+  const rowKey = normalizeRowKeyValue(record?.rowKey);
+  if (!rowKey) return;
+  const next = new Set(selectedRowKeys.value.map(item => normalizeRowKeyValue(item)).filter(Boolean));
+  if (next.has(rowKey)) next.delete(rowKey);
+  else next.add(rowKey);
+  selectedRowKeys.value = Array.from(next);
+}
+
+function getSelectedRecords() {
+  const selectedSet = new Set(selectedRowKeys.value.map(item => normalizeRowKeyValue(item)).filter(Boolean));
+  if (!selectedSet.size) return [];
+  return displayedRows.value.filter(record => selectedSet.has(normalizeRowKeyValue(record?.rowKey)));
 }
 
 function resolveContextMenuPosition(anchorX, anchorY, menuWidth, menuHeight, edgePadding = 12, gap = 8) {
@@ -1751,7 +1789,18 @@ async function openRowContextMenu(record, event) {
   if (!record || !event) return;
   event.preventDefault();
   event.stopPropagation();
-  rowContextMenu.record = record;
+  const recordKey = normalizeRowKeyValue(record?.rowKey);
+  const selectedRecords = getSelectedRecords();
+  const isBatch = selectedRecords.length > 1 && selectedRecords.some(item => normalizeRowKeyValue(item?.rowKey) === recordKey);
+  if (isBatch) {
+    rowContextMenu.record = selectedRecords[0] || record;
+    rowContextMenu.records = selectedRecords;
+    rowContextMenu.batch = true;
+  } else {
+    rowContextMenu.record = record;
+    rowContextMenu.records = [record];
+    rowContextMenu.batch = false;
+  }
   rowContextMenu.groupSubmenuOpen = false;
   const anchorX = Number(event.clientX) || 0;
   const anchorY = Number(event.clientY) || 0;
@@ -1769,16 +1818,71 @@ async function openRowContextMenu(record, event) {
   rowContextMenu.y = resolvedPosition.y;
 }
 
+function handleManagedRecordRowClick(record, event) {
+  const target = event?.target;
+  if (target?.closest?.('.ant-btn') || target?.closest?.('.ant-select') || target?.closest?.('.ant-dropdown') || target?.closest?.('.ant-popover') || target?.closest?.('.ant-tag') || target?.closest?.('.ant-switch') || target?.closest?.('.ant-checkbox') || target?.closest?.('.ant-typography-copy') || target?.closest?.('.site-title-link') || target?.closest?.('a') || target?.closest?.('input') || target?.closest?.('textarea') || target?.closest?.('button')) {
+    return;
+  }
+  toggleRowSelected(record);
+}
+
 function getManagedRecordRowProps(record) {
   const isContextTarget = Boolean(
     rowContextMenu.open &&
     rowContextMenu.record &&
     String(rowContextMenu.record?.rowKey || '').trim() === String(record?.rowKey || '').trim()
   );
+  const isSelected = isRowSelected(record);
+  const classList = [];
+  if (isContextTarget) classList.push('key-row-context-target');
+  if (isSelected) classList.push('key-row-selected');
   return {
-    class: isContextTarget ? 'key-row-context-target' : '',
+    class: classList.join(' '),
+    onClick: event => handleManagedRecordRowClick(record, event),
     onContextmenu: event => openRowContextMenu(record, event),
   };
+}
+
+function getRowContextRecords() {
+  if (rowContextMenu.batch) {
+    return Array.isArray(rowContextMenu.records) ? rowContextMenu.records.filter(Boolean) : [];
+  }
+  return rowContextMenu.record ? [rowContextMenu.record] : [];
+}
+
+function isRowContextGroupActive(groupId) {
+  const records = getRowContextRecords();
+  if (!records.length) return false;
+  return records.every(record => isRecordInGroup(record, groupId));
+}
+
+function getRowContextGroupMark(groupId) {
+  const records = getRowContextRecords();
+  if (!records.length) return '';
+  const includedCount = records.filter(record => isRecordInGroup(record, groupId)).length;
+  if (includedCount <= 0) return '';
+  if (includedCount >= records.length) return '✓';
+  return '—';
+}
+
+function toggleRowContextGroupMembership(groupId) {
+  const records = getRowContextRecords();
+  if (!records.length || !groupId) return;
+  if (rowContextMenu.batch) {
+    const shouldAdd = !records.every(record => isRecordInGroup(record, groupId));
+    records.forEach(record => {
+      const current = normalizeRecordGroupIds(record?.groupIds);
+      const hasGroup = current.includes(groupId);
+      if (shouldAdd && !hasGroup) {
+        record.groupIds = [...current, groupId];
+      } else if (!shouldAdd && hasGroup) {
+        record.groupIds = current.filter(id => id !== groupId);
+      }
+    });
+    persistRecords();
+    return;
+  }
+  toggleRecordGroupMembership(rowContextMenu.record, groupId);
 }
 
 function handleGlobalRowContextMenuDismiss(event) {
@@ -1821,8 +1925,27 @@ function handleRowContextEdit() {
 }
 
 function handleRowContextDelete() {
+  const batch = rowContextMenu.batch;
+  const records = getRowContextRecords();
   const record = rowContextMenu.record;
   closeRowContextMenu();
+  if (batch) {
+    if (!records.length) return;
+    const rowKeySet = new Set(records.map(item => normalizeRowKeyValue(item?.rowKey)).filter(Boolean));
+    Modal.confirm({
+      title: `确认批量删除 ${rowKeySet.size} 条记录？`,
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: () => {
+        tableData.value = tableData.value.filter(item => !rowKeySet.has(normalizeRowKeyValue(item?.rowKey)));
+        selectedRowKeys.value = selectedRowKeys.value.filter(key => !rowKeySet.has(normalizeRowKeyValue(key)));
+        persistRecords();
+        message.success(`已批量删除 ${rowKeySet.size} 条记录`);
+      },
+    });
+    return;
+  }
   if (!record) return;
   Modal.confirm({
     title: '确认删除这条记录？',
@@ -1897,108 +2020,195 @@ function buildModelProbeSiteCacheRecord(record) {
   };
 }
 
-async function handleRowContextModelProbe() {
-  const record = rowContextMenu.record;
-  closeRowContextMenu();
-  if (!record?.rowKey) return;
-  const initialSiteCacheRecord = buildModelProbeSiteCacheRecord(record);
-  if (!initialSiteCacheRecord) {
-    message.warning('当前密钥缺少站点地址或 SK，无法探测模型');
-    return;
-  }
-
-  const probeMessageKey = `key-model-probe-prefetch::${String(record.rowKey || '').trim()}`;
-  message.loading({
-    key: probeMessageKey,
-    content: '正在初始化模型探测并实时刷新模型列表...',
-    duration: 0,
-  });
-
-  const warmupStartedAt = Date.now();
-  let siteCacheRecord = initialSiteCacheRecord;
-  try {
-    const modelResponse = await fetchModelList(siteCacheRecord.siteUrl, siteCacheRecord.resolvedAccessToken);
-    const rawCandidates = modelResponse?.data || modelResponse?.models || [];
-    const normalizedCandidates = normalizeModels(rawCandidates);
-    if (!normalizedCandidates.length) {
-      throw new Error('未获取到可用模型列表');
+function mergeModelProbeSiteCacheRecords(records) {
+  const mergedMap = new Map();
+  (Array.isArray(records) ? records : []).forEach(item => {
+    const normalized = item && typeof item === 'object' ? { ...item } : null;
+    if (!normalized) return;
+    const apiKey = normalizeApiKey(normalized?.resolvedAccessToken || normalized?.accountInfo?.access_token || normalized?.tokens?.[0]?.access_token || normalized?.tokens?.[0]?.key);
+    if (!apiKey) return;
+    const existing = mergedMap.get(apiKey);
+    const incomingModels = normalizeModels(
+      Array.isArray(normalized?.tokens)
+        ? normalized.tokens.flatMap(token => [token?.models, token?.model, token?.selectedModel, token?.modelsText])
+        : []
+    );
+    if (!existing) {
+      const now = Date.now();
+      const primaryToken = Array.isArray(normalized.tokens) && normalized.tokens.length > 0
+        ? { ...normalized.tokens[0] }
+        : {
+          key: apiKey,
+          access_token: apiKey,
+          name: 'Probe SK',
+          status: 1,
+          source: 'model_probe',
+          updatedAt: now,
+        };
+      mergedMap.set(apiKey, {
+        ...normalized,
+        resolvedAccessToken: apiKey,
+        accountInfo: {
+          ...(normalized.accountInfo || {}),
+          access_token: apiKey,
+        },
+        tokens: [{
+          ...primaryToken,
+          key: apiKey,
+          access_token: apiKey,
+          models: incomingModels,
+          updatedAt: now,
+        }],
+        sourceRowKeys: [String(normalized?.rowKey || '').trim()].filter(Boolean),
+        sourceSiteNames: [String(normalized?.siteName || '').trim()].filter(Boolean),
+      });
+      return;
     }
-
+    const nextSourceRowKeys = Array.from(new Set([
+      ...((Array.isArray(existing?.sourceRowKeys) ? existing.sourceRowKeys : []).map(item => String(item || '').trim()).filter(Boolean)),
+      String(normalized?.rowKey || '').trim(),
+    ].filter(Boolean)));
+    const nextSourceSiteNames = Array.from(new Set([
+      ...((Array.isArray(existing?.sourceSiteNames) ? existing.sourceSiteNames : []).map(item => String(item || '').trim()).filter(Boolean)),
+      String(normalized?.siteName || '').trim(),
+    ].filter(Boolean)));
+    const mergedModels = Array.from(new Set([
+      ...normalizeModels(existing?.tokens?.[0]?.models || []),
+      ...incomingModels,
+    ]));
     const now = Date.now();
-    const currentToken = Array.isArray(siteCacheRecord.tokens) && siteCacheRecord.tokens.length > 0
-      ? siteCacheRecord.tokens[0]
-      : {
-        key: siteCacheRecord.resolvedAccessToken,
-        access_token: siteCacheRecord.resolvedAccessToken,
-        name: 'Probe SK',
-        status: 1,
-        source: 'model_probe',
-      };
-
-    siteCacheRecord = {
-      ...siteCacheRecord,
+    const primarySiteName = nextSourceSiteNames[0] || String(existing?.siteName || '未命名站点').trim() || '未命名站点';
+    const mergedSiteName = nextSourceSiteNames.length > 1
+      ? `${primarySiteName} 等${nextSourceSiteNames.length}项`
+      : primarySiteName;
+    mergedMap.set(apiKey, {
+      ...existing,
+      siteName: mergedSiteName,
+      sourceRowKeys: nextSourceRowKeys,
+      sourceSiteNames: nextSourceSiteNames,
       tokens: [{
-        ...currentToken,
-        key: siteCacheRecord.resolvedAccessToken,
-        access_token: siteCacheRecord.resolvedAccessToken,
-        models: normalizedCandidates,
+        ...(existing?.tokens?.[0] || {}),
+        key: apiKey,
+        access_token: apiKey,
+        models: mergedModels,
         updatedAt: now,
       }],
       updatedAt: now,
       lastSyncedAt: now,
       lastRefreshAt: now,
-      lastImportSource: 'key_model_probe',
-    };
+    });
+  });
+  return Array.from(mergedMap.values());
+}
 
-    mergeExtractedSitesIntoTempCache([siteCacheRecord], {
-      importSource: 'key_model_probe',
-      refreshedAt: now,
-    });
-    mergeExtractedSitesIntoCache([siteCacheRecord], {
-      importSource: 'key_model_probe',
-      refreshedAt: now,
-    });
+async function handleRowContextModelProbe() {
+  const batch = rowContextMenu.batch;
+  const records = getRowContextRecords();
+  const record = rowContextMenu.record;
+  closeRowContextMenu();
+  if (batch) {
+    if (!records.length) return;
+    await handleBatchRowContextModelProbe(records);
+    return;
+  }
+  await handleBatchRowContextModelProbe(record ? [record] : []);
+}
 
-    message.success({
-      key: probeMessageKey,
-      content: `模型列表已刷新（${normalizedCandidates.length} 个），正在打开探测窗口...`,
-      duration: 1.6,
-    });
-  } catch (error) {
-    const detail = String(error?.message || error || '').trim() || '未知错误';
-    const now = Date.now();
-    mergeExtractedSitesIntoTempCache([siteCacheRecord], {
-      importSource: 'key_model_probe',
-      refreshedAt: now,
-    });
-    mergeExtractedSitesIntoCache([siteCacheRecord], {
-      importSource: 'key_model_probe',
-      refreshedAt: now,
-    });
-    message.warning({
-      key: probeMessageKey,
-      content: `模型预刷新失败：${detail}，将继续打开探测窗口`,
-      duration: 2.4,
-    });
+async function handleBatchRowContextModelProbe(records) {
+  const sourceRecords = Array.isArray(records) ? records.filter(Boolean) : [];
+  if (!sourceRecords.length) return;
+  const siteCacheRecords = mergeModelProbeSiteCacheRecords(
+    sourceRecords
+      .map(item => buildModelProbeSiteCacheRecord(item))
+      .filter(Boolean)
+  );
+  if (!siteCacheRecords.length) {
+    message.warning('当前选中密钥缺少站点地址或 SK，无法探测模型');
+    return;
   }
 
-  if (Date.now() - warmupStartedAt > 12000) {
-    message.info('模型预刷新耗时较长，探测窗口已使用当前可用缓存继续。');
+  const probeMessageKey = `key-model-probe-prefetch::batch::${Date.now()}`;
+  const batchLabel = siteCacheRecords.length > 1 ? `${siteCacheRecords.length} 个站点` : '1 个站点';
+  message.loading({
+    key: probeMessageKey,
+    content: `正在初始化批量模型探测（${batchLabel}）...`,
+    duration: 0,
+  });
+
+  const warmedRecords = [];
+  let successCount = 0;
+  let failedCount = 0;
+  for (const rawRecord of siteCacheRecords) {
+    let siteCacheRecord = { ...rawRecord };
+    try {
+      const modelResponse = await fetchModelList(siteCacheRecord.siteUrl, siteCacheRecord.resolvedAccessToken);
+      const rawCandidates = modelResponse?.data || modelResponse?.models || [];
+      const normalizedCandidates = normalizeModels(rawCandidates);
+      if (normalizedCandidates.length > 0) {
+        const now = Date.now();
+        const mergedModels = Array.from(new Set([
+          ...normalizeModels(siteCacheRecord?.tokens?.[0]?.models || []),
+          ...normalizedCandidates,
+        ]));
+        siteCacheRecord = {
+          ...siteCacheRecord,
+          tokens: [{
+            ...(siteCacheRecord?.tokens?.[0] || {}),
+            key: siteCacheRecord.resolvedAccessToken,
+            access_token: siteCacheRecord.resolvedAccessToken,
+            models: mergedModels,
+            updatedAt: now,
+          }],
+          updatedAt: now,
+          lastSyncedAt: now,
+          lastRefreshAt: now,
+          lastImportSource: 'key_model_probe',
+        };
+        successCount += 1;
+      } else {
+        failedCount += 1;
+      }
+    } catch {
+      failedCount += 1;
+    }
+    warmedRecords.push(siteCacheRecord);
   }
 
+  const refreshedAt = Date.now();
+  mergeExtractedSitesIntoTempCache(warmedRecords, {
+    importSource: 'key_model_probe',
+    refreshedAt,
+  });
+  mergeExtractedSitesIntoCache(warmedRecords, {
+    importSource: 'key_model_probe',
+    refreshedAt,
+  });
+
+  const primaryRecord = warmedRecords[0];
   const probeId = writeModelProbeContext({
-    rowKey: String(record.rowKey || '').trim(),
-    siteCacheKey: siteCacheRecord.siteCacheKey,
-    siteCacheRecord,
-    siteName: siteCacheRecord.siteName,
-    siteUrl: siteCacheRecord.siteUrl,
-    apiKey: siteCacheRecord.resolvedAccessToken,
-    suggestedGroupName: `${siteCacheRecord.siteName} 可用模型`,
+    rowKey: String(sourceRecords[0]?.rowKey || '').trim(),
+    siteCacheKey: primaryRecord?.siteCacheKey,
+    siteCacheKeys: warmedRecords.map(item => String(item?.siteCacheKey || '').trim()).filter(Boolean),
+    siteCacheRecord: primaryRecord,
+    siteCacheRecords: warmedRecords,
+    siteName: primaryRecord?.siteName,
+    siteUrl: primaryRecord?.siteUrl,
+    apiKey: primaryRecord?.resolvedAccessToken,
+    suggestedGroupName: `${String(primaryRecord?.siteName || '模型探测').trim()} 可用模型`,
+  });
+
+  const summary = failedCount > 0
+    ? `模型预刷新完成：成功 ${successCount}，失败 ${failedCount}，正在打开探测窗口...`
+    : `模型预刷新完成：${successCount} 个站点，正在打开探测窗口...`;
+  message.success({
+    key: probeMessageKey,
+    content: summary,
+    duration: 2.2,
   });
 
   if (isWailsRuntime && typeof OpenModelProbeWindow === 'function') {
     try {
-      await OpenModelProbeWindow(probeId || String(record.rowKey || ''));
+      await OpenModelProbeWindow(probeId || String(sourceRecords[0]?.rowKey || ''));
       return;
     } catch (error) {
       message.error(error?.message || '打开模型探测窗口失败');
@@ -4787,6 +4997,8 @@ function persistMeta() {
 .key-row-context-submenu{position:absolute;left:calc(100% - 6px);top:118px;z-index:2;display:flex;flex-direction:column;gap:8px;width:196px;padding:10px;border-radius:16px;background:rgba(255,255,255,.98);box-shadow:0 18px 48px rgba(15,23,42,.2);backdrop-filter:blur(14px)}
 .key-management :deep(.compact-key-table .ant-table-tbody > tr.key-row-context-target > td){background:rgba(15,23,42,.085) !important;transition:background .16s ease}
 .key-management :deep(.compact-key-table .ant-table-tbody > tr.key-row-context-target:hover > td){background:rgba(15,23,42,.11) !important}
+.key-management :deep(.compact-key-table .ant-table-tbody > tr.key-row-selected > td){background:rgba(15,23,42,.085) !important;transition:background .16s ease}
+.key-management :deep(.compact-key-table .ant-table-tbody > tr.key-row-selected:hover > td){background:rgba(15,23,42,.11) !important}
 .key-row-context-menu-dark{background:rgba(25,25,25,.96);box-shadow:0 18px 48px rgba(0,0,0,.4)}
 .key-row-context-submenu-dark{background:rgba(25,25,25,.98);box-shadow:0 18px 48px rgba(0,0,0,.4)}
 .key-row-context-menu-dark .import-export-menu-item{background:rgba(255,255,255,.08);color:#f8fafc}
@@ -5117,6 +5329,8 @@ function persistMeta() {
 .key-management-gaia .sync-title-wrap{border-right-color:rgba(101,129,138,.16)}
 .key-management-gaia :deep(.compact-key-table .ant-table-tbody > tr.key-row-context-target > td){background:rgba(186,228,149,.14) !important}
 .key-management-gaia :deep(.compact-key-table .ant-table-tbody > tr.key-row-context-target:hover > td){background:rgba(186,228,149,.18) !important}
+.key-management-gaia :deep(.compact-key-table .ant-table-tbody > tr.key-row-selected > td){background:rgba(186,228,149,.14) !important}
+.key-management-gaia :deep(.compact-key-table .ant-table-tbody > tr.key-row-selected:hover > td){background:rgba(186,228,149,.18) !important}
 .key-management-gaia .sync-title-text{color:#e7f1ef}
 .key-management-gaia .sync-meta,.key-management-gaia .subtle-text{color:#a9bcbd}
 .key-management-gaia .sync-card :deep(.ant-alert){border-color:rgba(101,129,138,.16);background:rgba(8,14,18,.34)}
