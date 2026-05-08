@@ -191,7 +191,7 @@
                 <a-empty v-if="!treeData.length" description="当前没有可展示的站点缓存" />
                 <a-tree
                   v-else
-                  v-model:checkedKeys="checkedKeys"
+                  :checked-keys="treeCheckedKeysBinding"
                   :expanded-keys="expandedKeys"
                   :tree-data="treeData"
                   checkable
@@ -409,6 +409,7 @@ const keyword = ref('');
 const hideDisabled = ref(false);
 const records = ref([]);
 const checkedKeys = ref([]);
+const halfCheckedKeys = ref([]);
 const expandedKeys = ref([]);
 const batchConcurrency = ref(25);
 const modelTimeout = ref(15);
@@ -432,7 +433,16 @@ const refreshFailureGuideSiteCacheKey = ref('');
 const siteBridgeImportGuideDismissedSignature = ref('');
 const modelProbeContext = ref(null);
 const profileRecoveryPending = ref(getProfileRecoveryPending());
+
+const normalizeTreeKeyArray = (values) => Array.from(new Set(
+  (Array.isArray(values) ? values : [])
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+));
 const isModelProbeWindow = computed(() => Boolean(String(modelProbeContext.value?.siteCacheKey || '').trim()));
+const treeCheckedKeysBinding = computed(() => {
+  return normalizeTreeKeyArray(checkedKeys.value);
+});
 const stableSiteOrderMap = new Map();
 const siteBridgeProcessedRecordIds = new Set();
 let siteBridgePollTimer = null;
@@ -542,6 +552,101 @@ const cloneNodeList = value => {
   }
 };
 
+const normalizeProbeTokenTreeNodes = nodes => (
+  (Array.isArray(nodes) ? nodes : []).map(node => {
+    const next = node && typeof node === 'object' ? { ...node } : node;
+    if (!next || typeof next !== 'object') return next;
+    if (Array.isArray(next.children) && next.children.length > 0) {
+      next.children = normalizeProbeTokenTreeNodes(next.children);
+    }
+    const key = String(next?.key || '').trim();
+    const hasChildren = Array.isArray(next.children) && next.children.length > 0;
+    const hasSelectableModelLeaf = hasChildren && next.children.some(child => {
+      const childKey = String(child?.key || '').trim();
+      if (child?.isLeaf === true && isSelectableModelKey(childKey)) return true;
+      if (Array.isArray(child?.children) && child.children.length > 0) {
+        return child.children.some(grandChild => {
+          const grandChildKey = String(grandChild?.key || '').trim();
+          return grandChild?.isLeaf === true && isSelectableModelKey(grandChildKey);
+        });
+      }
+      return false;
+    });
+    if (isModelProbeWindow.value && (key.startsWith('token|') || (!next?.isSiteRoot && hasSelectableModelLeaf))) {
+      const rawTitle = String(next?.title || '').trim();
+      const titleParts = rawTitle
+        .split(/\s*[|·]\s*/)
+        .map(item => String(item || '').trim())
+        .filter(Boolean);
+      if (titleParts.length >= 2) {
+        next.title = `${titleParts[0]} | ${titleParts[1]}`;
+      } else if (titleParts.length === 1) {
+        next.title = titleParts[0];
+      }
+      next.disableCheckbox = false;
+      next.checkable = true;
+      next.selectable = false;
+      next.titleClass = '';
+    }
+    return next;
+  })
+);
+
+const collectTreeCheckboxDiagnostics = (nodes) => {
+  const stats = {
+    total: 0,
+    root: 0,
+    token: 0,
+    tokenGroup: 0,
+    modelLeaf: 0,
+    checkableTrue: 0,
+    checkableFalse: 0,
+    disableCheckboxTrue: 0,
+    disableCheckboxFalse: 0,
+    sample: [],
+  };
+  const walk = (list, depth = 0) => {
+    (Array.isArray(list) ? list : []).forEach(node => {
+      const key = String(node?.key || '').trim();
+      const children = Array.isArray(node?.children) ? node.children : [];
+      const isLeaf = node?.isLeaf === true;
+      const isModelLeaf = isLeaf && isSelectableModelKey(key);
+      const isToken = key.startsWith('token|');
+      const isRoot = Boolean(node?.isSiteRoot);
+      const isTokenGroup = !isRoot && !isToken && children.some(child => {
+        const childKey = String(child?.key || '').trim();
+        return (child?.isLeaf === true && isSelectableModelKey(childKey)) || childKey.startsWith('token|');
+      });
+      stats.total += 1;
+      if (isRoot) stats.root += 1;
+      if (isToken) stats.token += 1;
+      if (isTokenGroup) stats.tokenGroup += 1;
+      if (isModelLeaf) stats.modelLeaf += 1;
+      const checkable = node?.checkable !== false;
+      const disableCheckbox = node?.disableCheckbox === true;
+      if (checkable) stats.checkableTrue += 1;
+      else stats.checkableFalse += 1;
+      if (disableCheckbox) stats.disableCheckboxTrue += 1;
+      else stats.disableCheckboxFalse += 1;
+      if (stats.sample.length < 20) {
+        stats.sample.push({
+          key,
+          depth,
+          checkable,
+          disableCheckbox,
+          isRoot,
+          isToken,
+          isTokenGroup,
+          isModelLeaf,
+        });
+      }
+      if (children.length > 0) walk(children, depth + 1);
+    });
+  };
+  walk(nodes, 0);
+  return stats;
+};
+
 const extractSiteOrderFromText = value => {
   const match = String(value || '').trim().match(/^(\d+)\./);
   return match ? Number(match[1]) : 0;
@@ -639,15 +744,38 @@ const selectedModelKeys = computed(() => checkedKeys.value
   .map(key => String(key || '').trim())
   .filter(isSelectableModelKey));
 
-const selectedSiteCacheKeys = computed(() => Array.from(new Set(
-  selectedModelKeys.value
+const selectedSiteCacheKeys = computed(() => {
+  const fromTreeStateKeys = [...checkedKeys.value, ...halfCheckedKeys.value]
+    .map(key => String(key || '').trim())
+    .map(key => {
+      if (key.startsWith('site-root|')) {
+        return key.split('|')[1] || '';
+      }
+      if (key.startsWith('token|')) {
+        return key.split('|')[1] || '';
+      }
+      if (isSelectableModelKey(key)) {
+        return key.split('|')[0] || '';
+      }
+      return '';
+    })
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+
+  const fromSelectedModelKeys = selectedModelKeys.value
     .map(key => key.split('|')[0])
     .map(value => String(value || '').trim())
-    .filter(Boolean)
-)));
+    .filter(Boolean);
+
+  return Array.from(new Set([
+    ...fromTreeStateKeys,
+    ...fromSelectedModelKeys,
+  ]));
+});
 
 const emitModelProbeSelectionSnapshot = (stage, extra = {}) => {
   const safeChecked = checkedKeys.value.map(key => String(key || '').trim()).filter(Boolean);
+  const safeHalfChecked = halfCheckedKeys.value.map(key => String(key || '').trim()).filter(Boolean);
   const safeSelected = selectedModelKeys.value.map(key => String(key || '').trim()).filter(Boolean);
   const rootKeys = treeData.value
     .filter(node => node?.isSiteRoot)
@@ -671,9 +799,13 @@ const emitModelProbeSelectionSnapshot = (stage, extra = {}) => {
     treeRootCount: rootKeys.length,
     treeTokenNodeCount: tokenNodeKeys.length,
     checkedCount: safeChecked.length,
+    halfCheckedCount: safeHalfChecked.length,
     selectedModelCount: safeSelected.length,
     checkedPreview: safeChecked.slice(0, 12),
+    halfCheckedPreview: safeHalfChecked.slice(0, 12),
     selectedPreview: safeSelected.slice(0, 12),
+    selectedSiteCacheKeyCount: selectedSiteCacheKeys.value.length,
+    selectedSiteCacheKeysPreview: selectedSiteCacheKeys.value.slice(0, 12),
     ...extra,
   };
   logClientDiagnostic('model_probe.selection', JSON.stringify(payload));
@@ -767,8 +899,12 @@ const buildSiteTokenNodes = (record, mergedTokens = [], tokenModelsByKey = new M
   return mergedTokens.map((token, tokenIndex) => {
     const tokenKey = String(token?.key || token?.access_token || `token-${tokenIndex + 1}`).trim();
     const tokenName = String(token?.name || `Token ${tokenIndex + 1}`).trim();
+    const showProbeTokenMeta = !isModelProbeWindow.value;
     const sourceLabel = token?._origin === 'manual' ? 'manual' : 'built-in';
     const statusLabel = Number(token?.status ?? 1) === 1 ? 'ready' : 'error';
+    const tokenTitle = showProbeTokenMeta
+      ? `${tokenName} | ${maskValue(tokenKey)} | ${sourceLabel} | ${statusLabel}`
+      : `${tokenName} | ${maskValue(tokenKey)}`;
     const tokenModels = normalizeSiteModelList([
       tokenModelsByKey.get(tokenKey),
       fallbackTokenModels.get(tokenKey),
@@ -781,11 +917,12 @@ const buildSiteTokenNodes = (record, mergedTokens = [], tokenModelsByKey = new M
     return {
       key: `token|${record.siteCacheKey}|${tokenKey}|${tokenIndex}`,
       siteCacheKey: record.siteCacheKey,
-      title: `${tokenName} | ${maskValue(tokenKey)} | ${sourceLabel} | ${statusLabel}`,
-      disableCheckbox: true,
+      title: tokenTitle,
+      checkable: false,
+      disableCheckbox: false,
       selectable: false,
       isManualToken: token?._origin === 'manual',
-      titleClass: Number(token?.status ?? 1) === 1 ? '' : 'tree-site-disabled',
+      titleClass: '',
       children: buildTokenModelChildren(record, tokenKey, tokenModels),
     };
   });
@@ -831,7 +968,8 @@ const buildManualTokenNode = (record, displayOrder, token, tokenIndex, siteModel
     title: `${displayOrder}. [${record.siteName}] ${tokenName} (${maskValue(tokenKey)})`,
     key: `token|${record.siteCacheKey}|${tokenKey}`,
     siteCacheKey: record.siteCacheKey,
-    disableCheckbox: true,
+    checkable: false,
+    disableCheckbox: false,
     selectable: false,
     isManualToken: true,
     children: buildTokenModelChildren(record, tokenKey, siteModels),
@@ -869,16 +1007,21 @@ const buildFallbackTree = (record, displayOrder) => {
     children: mergedTokens.map((token, tokenIndex) => {
       const tokenKey = String(token?.key || token?.access_token || `token-${tokenIndex + 1}`).trim();
       const tokenName = String(token?.name || `Token ${tokenIndex + 1}`).trim();
+      const showProbeTokenMeta = !isModelProbeWindow.value;
       const sourceLabel = token?._origin === 'manual' ? '手工' : '内置';
       const statusLabel = Number(token?.status ?? 1) === 1 ? '可用' : '异常';
+      const tokenTitle = showProbeTokenMeta
+        ? `${tokenName} · ${maskValue(tokenKey)} · ${sourceLabel} · ${statusLabel}`
+        : `${tokenName} · ${maskValue(tokenKey)}`;
       return {
         key: `token|${record.siteCacheKey}|${tokenKey}|${tokenIndex}`,
         siteCacheKey: record.siteCacheKey,
-        title: `${tokenName} · ${maskValue(tokenKey)} · ${sourceLabel} · ${statusLabel}`,
-        disableCheckbox: true,
+        title: tokenTitle,
+        checkable: false,
+        disableCheckbox: false,
         selectable: false,
         isManualToken: token?._origin === 'manual',
-        titleClass: Number(token?.status ?? 1) === 1 ? '' : 'tree-site-disabled',
+        titleClass: '',
         children: buildTokenModelChildren(record, tokenKey, siteModels),
       };
     }),
@@ -887,7 +1030,10 @@ const buildFallbackTree = (record, displayOrder) => {
 
 const treeData = computed(() => filteredRecords.value.flatMap(record => {
   const displayOrder = getStableSiteOrder(record) || 0;
-  const cachedNodes = cloneNodeList(record.cachedTreeNodes);
+  const cachedNodesRaw = cloneNodeList(record.cachedTreeNodes);
+  const cachedNodes = isModelProbeWindow.value
+    ? normalizeProbeTokenTreeNodes(cachedNodesRaw)
+    : cachedNodesRaw;
   if (!cachedNodes.length) {
     return buildFallbackTree(record, displayOrder);
   }
@@ -935,8 +1081,13 @@ const syncExpandedKeys = () => {
 const syncCheckedKeys = () => {
   const allowed = new Set(collectSelectableModelKeysFromTreeNodes(treeData.value, []));
   checkedKeys.value = checkedKeys.value.filter(key => allowed.has(String(key || '').trim()));
+  halfCheckedKeys.value = halfCheckedKeys.value.filter(key => {
+    const text = String(key || '').trim();
+    return text.startsWith('site-root|') || text.startsWith('token|') || allowed.has(text);
+  });
   if (modelProbeContext.value && checkedKeys.value.length === 0 && allowed.size > 0) {
     checkedKeys.value = Array.from(allowed);
+    halfCheckedKeys.value = [];
   }
   emitModelProbeSelectionSnapshot('sync_checked_keys', {
     allowedCount: allowed.size,
@@ -946,17 +1097,39 @@ const syncCheckedKeys = () => {
 const reloadRecords = () => {
   modelProbeContext.value = getModelProbeContext();
   const probeRecord = modelProbeContext.value?.siteCacheRecord || null;
-  const probeSiteCacheKey = String(modelProbeContext.value?.siteCacheKey || probeRecord?.siteCacheKey || '').trim();
-  const latestProbeRecord = probeSiteCacheKey
-    ? (loadAllSiteCacheRecords().find(item => String(item?.siteCacheKey || '').trim() === probeSiteCacheKey) || null)
-    : null;
-  const nextRecords = latestProbeRecord
-    ? [latestProbeRecord]
-    : (probeRecord ? [probeRecord] : loadAllSiteCacheRecords());
+  const probeSiteCacheKeys = Array.from(new Set([
+    ...(Array.isArray(modelProbeContext.value?.siteCacheKeys) ? modelProbeContext.value.siteCacheKeys : []),
+    String(modelProbeContext.value?.siteCacheKey || '').trim(),
+    String(probeRecord?.siteCacheKey || '').trim(),
+  ].map(item => String(item || '').trim()).filter(Boolean)));
+  const allSiteCacheRecords = loadAllSiteCacheRecords();
+  const probeSiteCacheKeySet = new Set(probeSiteCacheKeys);
+  const contextProbeRecords = Array.isArray(modelProbeContext.value?.siteCacheRecords)
+    ? modelProbeContext.value.siteCacheRecords
+      .map(item => item && typeof item === 'object' ? item : null)
+      .filter(Boolean)
+    : [];
+  let nextRecords = allSiteCacheRecords;
+  if (probeSiteCacheKeySet.size > 0) {
+    const matched = allSiteCacheRecords.filter(item => probeSiteCacheKeySet.has(String(item?.siteCacheKey || '').trim()));
+    nextRecords = matched.length > 0
+      ? matched
+      : (contextProbeRecords.length > 0 ? contextProbeRecords : (probeRecord ? [probeRecord] : []));
+  }
+  logClientDiagnostic('model_probe.reload_records', JSON.stringify({
+    hasProbeContext: Boolean(modelProbeContext.value),
+    probeSiteCacheKeyCount: probeSiteCacheKeys.length,
+    contextProbeRecordCount: contextProbeRecords.length,
+    loadedRecordCount: nextRecords.length,
+  }));
   ensureStableSiteOrders(nextRecords);
   records.value = nextRecords;
   syncExpandedKeys();
   syncCheckedKeys();
+  if (isModelProbeWindow.value) {
+    const stats = collectTreeCheckboxDiagnostics(treeData.value);
+    logClientDiagnostic('model_probe.tree_checkbox_stats', JSON.stringify(stats));
+  }
 };
 
 const formatTime = value => {
@@ -1926,6 +2099,8 @@ const startBatchCheckFromSiteManagement = async () => {
     modelTimeout: Number(modelTimeout.value || 15),
   });
   logClientDiagnostic('model_probe.pending_batch_start', JSON.stringify({
+    selectedSiteCacheKeyCount: selectedSiteCacheKeys.value.length,
+    selectedSiteCacheKeysPreview: selectedSiteCacheKeys.value.slice(0, 12),
     checkedKeysCount: modelKeys.length,
     checkedKeysPreview: modelKeys.slice(0, 16),
     selectChatOnly: Boolean(modelProbeContext.value?.siteCacheKey),
@@ -1943,24 +2118,49 @@ const openSiteUrl = url => {
 
 const selectAllSites = () => {
   checkedKeys.value = [...rootSiteKeys.value];
+  halfCheckedKeys.value = [];
 };
 
 const invertSelectedSites = () => {
   const current = new Set(checkedKeys.value.map(key => String(key || '').trim()));
   checkedKeys.value = rootSiteKeys.value.filter(key => !current.has(key));
+  halfCheckedKeys.value = [];
 };
 
 const handleTreeExpand = keys => {
   expandedKeys.value = Array.isArray(keys) ? [...keys] : [];
 };
 
-const handleTreeCheck = keys => {
-  const normalizedKeys = Array.isArray(keys) ? [...keys] : [];
-  checkedKeys.value = normalizedKeys;
+const handleTreeCheck = (keys, info) => {
+  const normalizedChecked = normalizeTreeKeyArray(Array.isArray(keys) ? keys : []);
+  const normalizedHalfChecked = normalizeTreeKeyArray([
+    ...(Array.isArray(keys?.halfChecked) ? keys.halfChecked : []),
+    ...(Array.isArray(info?.halfCheckedKeys) ? info.halfCheckedKeys : []),
+  ]);
+  checkedKeys.value = normalizedChecked;
+  halfCheckedKeys.value = normalizedHalfChecked;
+  const checkedKeyKinds = {
+    siteRoot: normalizedChecked.filter(key => key.startsWith('site-root|')).length,
+    token: normalizedChecked.filter(key => key.startsWith('token|')).length,
+    modelLeaf: normalizedChecked.filter(key => isSelectableModelKey(key)).length,
+    other: normalizedChecked.filter(key => !key.startsWith('site-root|') && !key.startsWith('token|') && !isSelectableModelKey(key)).length,
+  };
+  const halfCheckedKeyKinds = {
+    siteRoot: normalizedHalfChecked.filter(key => key.startsWith('site-root|')).length,
+    token: normalizedHalfChecked.filter(key => key.startsWith('token|')).length,
+    modelLeaf: normalizedHalfChecked.filter(key => isSelectableModelKey(key)).length,
+    other: normalizedHalfChecked.filter(key => !key.startsWith('site-root|') && !key.startsWith('token|') && !isSelectableModelKey(key)).length,
+  };
   emitModelProbeSelectionSnapshot('tree_check', {
     rawType: Array.isArray(keys) ? 'array' : typeof keys,
-    rawCount: Array.isArray(keys) ? keys.length : 0,
-    rawPreview: Array.isArray(keys) ? keys.map(item => String(item || '').trim()).slice(0, 12) : [],
+    rawCount: normalizedChecked.length,
+    rawPreview: normalizedChecked.slice(0, 12),
+    rawHalfCount: normalizedHalfChecked.length,
+    rawHalfPreview: normalizedHalfChecked.slice(0, 12),
+    checkedKeyKinds,
+    halfCheckedKeyKinds,
+    eventNodeKey: String(info?.node?.key || '').trim(),
+    eventChecked: Boolean(info?.checked),
   });
 };
 

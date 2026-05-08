@@ -2732,21 +2732,52 @@ onMounted(() => {
   }
   const pendingBatchStart = consumePendingBatchStart();
   const pendingRestoreKeys = consumePendingSiteRestore();
+  logClientDiagnostic(
+    'batch.pending.restore.keys',
+    `pendingRestoreKeyCount=${Array.isArray(pendingRestoreKeys) ? pendingRestoreKeys.length : 0} preview=${(Array.isArray(pendingRestoreKeys) ? pendingRestoreKeys.slice(0, 8) : []).join('|')}`
+  );
   if (pendingRestoreKeys.length > 0) {
     const modelProbeContext = getModelProbeContext();
-    const sourceRecords = modelProbeContext?.siteCacheRecord
+    const pendingRestoreKeySet = new Set(
+      (Array.isArray(pendingRestoreKeys) ? pendingRestoreKeys : [])
+        .map(item => String(item || '').trim())
+        .filter(Boolean)
+    );
+    const contextRecords = Array.isArray(modelProbeContext?.siteCacheRecords)
+      ? modelProbeContext.siteCacheRecords.filter(item => item && typeof item === 'object')
+      : [];
+    const fallbackContextRecord = modelProbeContext?.siteCacheRecord && typeof modelProbeContext.siteCacheRecord === 'object'
       ? [modelProbeContext.siteCacheRecord]
-      : loadAllSiteCacheRecords();
+      : [];
+    const allRecords = loadAllSiteCacheRecords();
+    const selectedFromAll = allRecords.filter(record => pendingRestoreKeySet.has(String(record?.siteCacheKey || '').trim()));
+    const selectedFromContext = contextRecords.filter(record => pendingRestoreKeySet.has(String(record?.siteCacheKey || '').trim()));
+    const selectedFromFallback = fallbackContextRecord.filter(record => pendingRestoreKeySet.has(String(record?.siteCacheKey || '').trim()));
+    const sourceRecords = selectedFromAll.length > 0
+      ? selectedFromAll
+      : (selectedFromContext.length > 0 ? selectedFromContext : (selectedFromFallback.length > 0 ? selectedFromFallback : allRecords));
+    logClientDiagnostic(
+      'batch.pending.restore.source',
+      `pendingKeys=${pendingRestoreKeySet.size} selectedFromAll=${selectedFromAll.length} selectedFromContext=${selectedFromContext.length} selectedFromFallback=${selectedFromFallback.length} sourceRecords=${sourceRecords.length}`
+    );
     const cachedSites = buildBatchSitesFromCache(sourceRecords, {
       siteCacheKeys: pendingRestoreKeys,
       includeDisabled: true,
     });
+    logClientDiagnostic(
+      'batch.pending.restore.sites',
+      `cachedSites=${cachedSites.length} siteKeys=${cachedSites.map(site => String(site?._siteCacheKey || site?.siteCacheKey || buildSiteCacheKey(site)).trim()).slice(0, 12).join('|')}`
+    );
     if (cachedSites.length > 0) {
       void maximiseMainWindow();
       void processAccountsV2([], {
         importSource: 'site_cache_restore',
         prefetchedSites: cachedSites,
       }).then(async () => {
+        logClientDiagnostic(
+          'batch.pending.restore.accounts',
+          `validAccounts=${validAccounts.value.length} siteIds=${validAccounts.value.map(site => String(site?.id || '').trim()).slice(0, 12).join('|')}`
+        );
         if (!pendingBatchStart?.autoStart) return;
         batchConcurrency.value = Number(pendingBatchStart?.batchConcurrency || batchConcurrency.value || 25);
         modelTimeout.value = Number(pendingBatchStart?.modelTimeout || modelTimeout.value || 15);
@@ -6547,6 +6578,7 @@ const startBatchCheck = async () => {
   
   // Build task queue
   const tasksQueue = [];
+  const missingSiteIds = new Set();
   selectedModelKeys.forEach((keyStr, idx) => {
     // 格式: siteId|tokenKey|modelName
     const parts = keyStr.split('|');
@@ -6554,7 +6586,7 @@ const startBatchCheck = async () => {
     
     const [siteId, tokenKey, modelName] = parts;
     const site = validAccounts.value.find(s => s.id === siteId);
-    
+
     if (site) {
       // 增强逻辑：对 api_key 进行清洗，优先从中提取 API 基址
       let effectiveUrl = site.site_url;
@@ -6579,8 +6611,15 @@ const startBatchCheck = async () => {
       };
       tasksQueue.push(task);
       testResults.value.push(task);
+    } else {
+      missingSiteIds.add(siteId);
     }
   });
+  const queuedSiteIds = Array.from(new Set(tasksQueue.map(task => String(task?.siteId || '').trim()).filter(Boolean)));
+  logClientDiagnostic(
+    'batch.start.task_sites',
+    `selectedModelKeys=${selectedModelKeys.length} queuedTasks=${tasksQueue.length} queuedSites=${queuedSiteIds.length} queuedSiteIds=${queuedSiteIds.slice(0, 12).join('|')} missingSiteIds=${Array.from(missingSiteIds).slice(0, 12).join('|')}`
+  );
 
   if (tasksQueue.length === 0) {
     step.value = 2;
