@@ -70,7 +70,6 @@
       <a-card title="本地密钥管理" class="inventory-card">
         <template #extra>
           <a-space wrap>
-            <a-checkbox v-model:checked="hideInvalidKeys">隐藏无效密钥</a-checkbox>
             <a-popover
               trigger="hover"
               placement="bottomRight"
@@ -138,17 +137,22 @@
                 :getPopupContainer="getSidebarPopupContainer"
               >
                 <template #content>
-                  <div class="provider-queue-inline-confirm">
-                    <span class="provider-queue-inline-confirm-text">应用到 Provider 队列？</span>
-                    <a-button type="primary" size="small" @click="handleConfirmSyncCurrentGroupToAdvancedProxyQueue">
-                      应用
+                  <div class="provider-queue-inline-actions">
+                    <a-button type="primary" size="small" block class="provider-queue-inline-action-button" @click="handleReplaceCurrentGroupToAdvancedProxyQueue">
+                      应用当前组的密钥为Provider队列
+                    </a-button>
+                    <a-button size="small" block class="provider-queue-inline-action-button" @click="handleAppendCurrentGroupToAdvancedProxyQueue">
+                      追加当前组进入Provider队列
+                    </a-button>
+                    <a-button danger size="small" block class="provider-queue-inline-action-button" @click="handleClearAdvancedProxyQueue">
+                      清空全部Provider队列
                     </a-button>
                   </div>
                 </template>
                 <button
                   type="button"
                   class="inventory-icon-button inventory-icon-button-provider-queue"
-                  aria-label="一键将当前分组密钥设置为provider队列"
+                  aria-label="Provider队列操作"
                 >
                   <QueueOrbitIcon class="provider-queue-icon" />
                 </button>
@@ -241,6 +245,19 @@
             </a-tooltip>
           </div>
           <div class="key-group-site-filter">
+            <a-tooltip :title="hideInvalidKeys ? '隐藏无效密钥（点击显示全部）' : '显示全部密钥（点击仅看有效）'">
+              <button
+                type="button"
+                class="key-group-site-filter-toggle"
+                :class="{ 'key-group-site-filter-toggle-active': hideInvalidKeys }"
+                :aria-pressed="hideInvalidKeys ? 'true' : 'false'"
+                :aria-label="hideInvalidKeys ? '隐藏无效密钥已开启' : '隐藏无效密钥已关闭'"
+                @click="toggleHideInvalidKeys"
+              >
+                <EyeInvisibleOutlined v-if="hideInvalidKeys" />
+                <EyeOutlined v-else />
+              </button>
+            </a-tooltip>
             <a-input
               v-model:value="keyGroupSiteFilterDisplayValue"
               size="small"
@@ -370,6 +387,42 @@
             :class="{ 'key-group-context-menu-dark': isDarkMode }"
             :style="{ left: `${keyGroupContextMenu.x}px`, top: `${keyGroupContextMenu.y}px` }"
           >
+            <button type="button" class="import-export-menu-item key-group-context-action" @click="openRenameKeyGroupModalFromContext">
+              <EditOutlined />
+              <span>重命名</span>
+            </button>
+            <button
+              type="button"
+              class="import-export-menu-item key-group-context-action key-group-context-submenu-trigger"
+              :class="{ 'key-group-context-submenu-trigger-active': keyGroupContextMenu.mergeSubmenuOpen }"
+              @mouseenter="openKeyGroupMergeSubmenu"
+            >
+              <span>合并到分组</span>
+              <span class="key-row-context-submenu-arrow">›</span>
+            </button>
+            <div
+              v-if="keyGroupContextMenu.mergeSubmenuOpen"
+              class="key-group-context-submenu"
+              :class="{ 'key-group-context-submenu-dark': isDarkMode }"
+              @mouseenter="openKeyGroupMergeSubmenu"
+            >
+              <div class="key-row-group-heading">
+                <span class="key-row-action-label">目标分组</span>
+              </div>
+              <div v-if="mergeTargetKeyGroups.length" class="key-row-group-list">
+                <button
+                  v-for="group in mergeTargetKeyGroups"
+                  :key="group.id"
+                  type="button"
+                  class="key-row-group-chip"
+                  @click="handleMergeKeyGroupInto(group)"
+                >
+                  <span class="key-row-group-chip-mark">→</span>
+                  <span class="key-row-group-chip-name">{{ group.name }}</span>
+                </button>
+              </div>
+              <div v-else class="key-row-action-empty">暂无可合并的目标分组</div>
+            </div>
             <button type="button" class="import-export-menu-item key-group-context-action import-export-menu-item-danger" @click="handleKeyGroupContextDelete">
               <DeleteOutlined />
               <span>删除该组</span>
@@ -639,6 +692,24 @@
       </a-modal>
 
       <a-modal
+        v-model:open="renameKeyGroupModalOpen"
+        title="重命名密钥分组"
+        ok-text="保存"
+        cancel-text="取消"
+        :confirm-loading="renameKeyGroupSaving"
+        @ok="submitRenameKeyGroup"
+        @cancel="closeRenameKeyGroupModal"
+      >
+        <a-input
+          v-model:value="renameKeyGroupDraftName"
+          :maxlength="18"
+          show-count
+          placeholder="输入新的分组名称"
+          @pressEnter="submitRenameKeyGroup"
+        />
+      </a-modal>
+
+      <a-modal
         v-model:open="manualRecordModalOpen"
         :title="null"
         :closable="false"
@@ -835,7 +906,7 @@
 
 <script setup>
 import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { ClockCircleOutlined, DeleteOutlined, DownloadOutlined, FileTextOutlined, ImportOutlined, MenuFoldOutlined, PlusOutlined, ReloadOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
+import { ClockCircleOutlined, DeleteOutlined, DownloadOutlined, EyeInvisibleOutlined, EyeOutlined, FileTextOutlined, ImportOutlined, MenuFoldOutlined, PlusOutlined, ReloadOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import { ConfigProvider, message, Modal, theme } from 'ant-design-vue';
 import { useRoute } from 'vue-router';
 import AppHeader from './AppHeader.vue';
@@ -867,9 +938,11 @@ import {
   HISTORY_SNAPSHOT_SYNC_EVENT,
   getCachedLastResultsSnapshotRaw,
 } from '../utils/historySnapshotStore.js';
-import { ExportTextFile, OpenAIImageWindow } from '../../wailsjs/go/main/App.js';
+import { ExportTextFile, OpenAIImageWindow, OpenModelProbeWindow } from '../../wailsjs/go/main/App.js';
 import {
   buildSiteCacheKey,
+  mergeExtractedSitesIntoCache,
+  mergeExtractedSitesIntoTempCache,
   writeModelProbeContext,
 } from '../utils/siteCacheStore.js';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
@@ -973,6 +1046,10 @@ const quickGroupDraftNameMode = ref('auto');
 const createKeyGroupModalOpen = ref(false);
 const createKeyGroupSaving = ref(false);
 const createKeyGroupDraftName = ref('');
+const renameKeyGroupModalOpen = ref(false);
+const renameKeyGroupSaving = ref(false);
+const renameKeyGroupDraftName = ref('');
+const renameKeyGroupTargetId = ref('');
 const rowContextMenuRef = ref(null);
 const rowContextMenu = reactive({
   open: false,
@@ -987,6 +1064,7 @@ const keyGroupContextMenu = reactive({
   x: 0,
   y: 0,
   group: null,
+  mergeSubmenuOpen: false,
 });
 const PERSIST_DEBOUNCE_MS = 240;
 let persistRecordsTimer = null;
@@ -1187,7 +1265,10 @@ function toggleQuickGroupPopover() {
 
 function closeKeyGroupContextMenu() {
   keyGroupContextMenu.open = false;
+  keyGroupContextMenu.x = 0;
+  keyGroupContextMenu.y = 0;
   keyGroupContextMenu.group = null;
+  keyGroupContextMenu.mergeSubmenuOpen = false;
 }
 
 function closeAllContextMenus() {
@@ -1208,6 +1289,7 @@ function openKeyGroupContextMenu(group, event) {
   const anchorX = triggerRect ? triggerRect.left : event.clientX;
   const anchorY = triggerRect ? (triggerRect.bottom + 6) : event.clientY;
   keyGroupContextMenu.group = group;
+  keyGroupContextMenu.mergeSubmenuOpen = false;
   keyGroupContextMenu.x = viewportWidth > 0
     ? Math.max(edgePadding, Math.min(anchorX, viewportWidth - menuWidth - edgePadding))
     : anchorX;
@@ -1247,6 +1329,103 @@ function handleKeyGroupContextDelete() {
     onOk: () => {
       deleteKeyGroup(group.id);
       message.success(`已删除分组：${group.name}`);
+    },
+  });
+}
+
+function openRenameKeyGroupModalFromContext() {
+  const group = keyGroupContextMenu.group;
+  if (!group?.id) return;
+  renameKeyGroupTargetId.value = String(group.id || '').trim();
+  renameKeyGroupDraftName.value = String(group.name || '').trim();
+  closeKeyGroupContextMenu();
+  renameKeyGroupModalOpen.value = true;
+}
+
+function closeRenameKeyGroupModal() {
+  renameKeyGroupModalOpen.value = false;
+  renameKeyGroupSaving.value = false;
+  renameKeyGroupDraftName.value = '';
+  renameKeyGroupTargetId.value = '';
+}
+
+async function submitRenameKeyGroup() {
+  const targetId = String(renameKeyGroupTargetId.value || '').trim();
+  const nextName = String(renameKeyGroupDraftName.value || '').trim();
+  if (!targetId) {
+    closeRenameKeyGroupModal();
+    return;
+  }
+  if (!nextName) {
+    message.warning('请先输入分组名称');
+    return;
+  }
+  if (nextName === '全部密钥') {
+    message.warning('该名称已被默认分组占用');
+    return;
+  }
+  const currentGroup = keyGroups.value.find(group => String(group?.id || '').trim() === targetId);
+  if (!currentGroup) {
+    closeRenameKeyGroupModal();
+    return;
+  }
+  if (keyGroups.value.some(group => String(group?.id || '').trim() !== targetId && group.name === nextName)) {
+    message.warning('分组名称已存在');
+    return;
+  }
+  renameKeyGroupSaving.value = true;
+  try {
+    currentGroup.name = nextName;
+    persistKeyGroups();
+    closeRenameKeyGroupModal();
+    message.success(`已重命名分组为：${nextName}`);
+  } finally {
+    renameKeyGroupSaving.value = false;
+  }
+}
+
+function mergeKeyGroupIntoTarget(sourceGroupId, targetGroupId) {
+  const sourceId = String(sourceGroupId || '').trim();
+  const targetId = String(targetGroupId || '').trim();
+  if (!sourceId || !targetId || sourceId === targetId) return;
+  tableData.value.forEach(record => {
+    const currentGroupIds = normalizeRecordGroupIds(record.groupIds);
+    if (!currentGroupIds.includes(sourceId)) return;
+    record.groupIds = currentGroupIds.includes(targetId)
+      ? currentGroupIds.filter(id => id !== sourceId)
+      : currentGroupIds.map(id => (id === sourceId ? targetId : id));
+    const nextGroupSelectedModels = normalizeGroupSelectedModels(record.groupSelectedModels);
+    const sourceModel = String(nextGroupSelectedModels[sourceId] || '').trim();
+    const targetModel = String(nextGroupSelectedModels[targetId] || '').trim();
+    if (!targetModel && sourceModel) {
+      nextGroupSelectedModels[targetId] = sourceModel;
+    }
+    delete nextGroupSelectedModels[sourceId];
+    record.groupSelectedModels = nextGroupSelectedModels;
+  });
+  keyGroups.value = keyGroups.value.filter(group => String(group?.id || '').trim() !== sourceId);
+  if (activeKeyGroupId.value === sourceId) {
+    activeKeyGroupId.value = targetId;
+    currentTablePage.value = 1;
+  }
+  persistKeyGroups();
+  persistRecords();
+}
+
+function handleMergeKeyGroupInto(targetGroup) {
+  const sourceGroup = keyGroupContextMenu.group;
+  const sourceId = String(sourceGroup?.id || '').trim();
+  const targetId = String(targetGroup?.id || '').trim();
+  if (!sourceId || !targetId || sourceId === targetId) return;
+  closeKeyGroupContextMenu();
+  Modal.confirm({
+    title: `是否确认合并进入目标分组「${targetGroup.name}」？`,
+    content: `将把分组「${sourceGroup.name}」的成员关系与独立模型选择并入「${targetGroup.name}」，随后删除原分组。`,
+    okText: '确认合并',
+    cancelText: '取消',
+    onOk: () => {
+      mergeKeyGroupIntoTarget(sourceId, targetId);
+      message.success(`已将分组「${sourceGroup.name}」合并到「${targetGroup.name}」`);
     },
   });
 }
@@ -1365,6 +1544,51 @@ function replaceAdvancedProxyQueueProviders(config, scope, providers) {
     enabled: provider?.enabled !== false,
     sortIndex: index + 1,
   }));
+  if (scope !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
+    queue.inheritGlobal = false;
+  }
+}
+
+function appendAdvancedProxyQueueProviders(config, scope, providers) {
+  const queue = ensureAdvancedProxyQueueSection(config, scope);
+  const existingProviders = Array.isArray(queue.providers) ? queue.providers : [];
+  const dedupe = new Map();
+  existingProviders.forEach(provider => {
+    const id = String(provider?.id || provider?.rowKey || '').trim();
+    const apiKey = String(provider?.apiKey || '').trim();
+    const model = String(provider?.model || '').trim();
+    const dedupeKey = `${id}::${apiKey}::${model}`;
+    if (!dedupe.has(dedupeKey)) {
+      dedupe.set(dedupeKey, {
+        ...provider,
+        enabled: provider?.enabled !== false,
+      });
+    }
+  });
+  providers.forEach(provider => {
+    const id = String(provider?.id || provider?.rowKey || '').trim();
+    const apiKey = String(provider?.apiKey || '').trim();
+    const model = String(provider?.model || '').trim();
+    const dedupeKey = `${id}::${apiKey}::${model}`;
+    if (!dedupe.has(dedupeKey)) {
+      dedupe.set(dedupeKey, {
+        ...provider,
+        enabled: provider?.enabled !== false,
+      });
+    }
+  });
+  queue.providers = Array.from(dedupe.values()).map((provider, index) => ({
+    ...provider,
+    sortIndex: index + 1,
+  }));
+  if (scope !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
+    queue.inheritGlobal = false;
+  }
+}
+
+function clearAdvancedProxyQueueProviders(config, scope) {
+  const queue = ensureAdvancedProxyQueueSection(config, scope);
+  queue.providers = [];
   if (scope !== ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
     queue.inheritGlobal = false;
   }
@@ -1564,7 +1788,7 @@ function handleGlobalRowContextMenuDismiss(event) {
     closeRowContextMenu();
   }
   if (keyGroupContextMenu.open) {
-    if (target?.closest?.('.key-group-context-menu')) return;
+    if (target?.closest?.('.key-group-context-menu') || target?.closest?.('.key-group-context-submenu')) return;
     closeKeyGroupContextMenu();
   }
 }
@@ -1575,6 +1799,10 @@ function openRowContextGroupSubmenu() {
 
 function closeRowContextGroupSubmenu() {
   rowContextMenu.groupSubmenuOpen = false;
+}
+
+function openKeyGroupMergeSubmenu() {
+  keyGroupContextMenu.mergeSubmenuOpen = true;
 }
 
 function handleGlobalRowContextEscape(event) {
@@ -1673,10 +1901,89 @@ async function handleRowContextModelProbe() {
   const record = rowContextMenu.record;
   closeRowContextMenu();
   if (!record?.rowKey) return;
-  const siteCacheRecord = buildModelProbeSiteCacheRecord(record);
-  if (!siteCacheRecord) {
+  const initialSiteCacheRecord = buildModelProbeSiteCacheRecord(record);
+  if (!initialSiteCacheRecord) {
     message.warning('当前密钥缺少站点地址或 SK，无法探测模型');
     return;
+  }
+
+  const probeMessageKey = `key-model-probe-prefetch::${String(record.rowKey || '').trim()}`;
+  message.loading({
+    key: probeMessageKey,
+    content: '正在初始化模型探测并实时刷新模型列表...',
+    duration: 0,
+  });
+
+  const warmupStartedAt = Date.now();
+  let siteCacheRecord = initialSiteCacheRecord;
+  try {
+    const modelResponse = await fetchModelList(siteCacheRecord.siteUrl, siteCacheRecord.resolvedAccessToken);
+    const rawCandidates = modelResponse?.data || modelResponse?.models || [];
+    const normalizedCandidates = normalizeModels(rawCandidates);
+    if (!normalizedCandidates.length) {
+      throw new Error('未获取到可用模型列表');
+    }
+
+    const now = Date.now();
+    const currentToken = Array.isArray(siteCacheRecord.tokens) && siteCacheRecord.tokens.length > 0
+      ? siteCacheRecord.tokens[0]
+      : {
+        key: siteCacheRecord.resolvedAccessToken,
+        access_token: siteCacheRecord.resolvedAccessToken,
+        name: 'Probe SK',
+        status: 1,
+        source: 'model_probe',
+      };
+
+    siteCacheRecord = {
+      ...siteCacheRecord,
+      tokens: [{
+        ...currentToken,
+        key: siteCacheRecord.resolvedAccessToken,
+        access_token: siteCacheRecord.resolvedAccessToken,
+        models: normalizedCandidates,
+        updatedAt: now,
+      }],
+      updatedAt: now,
+      lastSyncedAt: now,
+      lastRefreshAt: now,
+      lastImportSource: 'key_model_probe',
+    };
+
+    mergeExtractedSitesIntoTempCache([siteCacheRecord], {
+      importSource: 'key_model_probe',
+      refreshedAt: now,
+    });
+    mergeExtractedSitesIntoCache([siteCacheRecord], {
+      importSource: 'key_model_probe',
+      refreshedAt: now,
+    });
+
+    message.success({
+      key: probeMessageKey,
+      content: `模型列表已刷新（${normalizedCandidates.length} 个），正在打开探测窗口...`,
+      duration: 1.6,
+    });
+  } catch (error) {
+    const detail = String(error?.message || error || '').trim() || '未知错误';
+    const now = Date.now();
+    mergeExtractedSitesIntoTempCache([siteCacheRecord], {
+      importSource: 'key_model_probe',
+      refreshedAt: now,
+    });
+    mergeExtractedSitesIntoCache([siteCacheRecord], {
+      importSource: 'key_model_probe',
+      refreshedAt: now,
+    });
+    message.warning({
+      key: probeMessageKey,
+      content: `模型预刷新失败：${detail}，将继续打开探测窗口`,
+      duration: 2.4,
+    });
+  }
+
+  if (Date.now() - warmupStartedAt > 12000) {
+    message.info('模型预刷新耗时较长，探测窗口已使用当前可用缓存继续。');
   }
 
   const probeId = writeModelProbeContext({
@@ -1689,17 +1996,16 @@ async function handleRowContextModelProbe() {
     suggestedGroupName: `${siteCacheRecord.siteName} 可用模型`,
   });
 
-  const openModelProbeWindow = window?.go?.main?.App?.OpenModelProbeWindow;
-  if (isWailsRuntime && typeof openModelProbeWindow === 'function') {
+  if (isWailsRuntime && typeof OpenModelProbeWindow === 'function') {
     try {
-      await openModelProbeWindow(probeId || String(record.rowKey || ''));
+      await OpenModelProbeWindow(probeId || String(record.rowKey || ''));
       return;
     } catch (error) {
       message.error(error?.message || '打开模型探测窗口失败');
       return;
     }
   }
-  window.open('/sites', '_blank', 'noopener');
+  message.error('当前环境不支持原生模型探测窗口，请在桌面端使用该功能');
 }
 
 const refreshManualSidebarBridgeReady = () => {
@@ -1762,6 +2068,10 @@ function handleKeyGroupSiteFilterBlur() {
   if (!String(keyGroupSiteFilterQuery.value || '').trim()) {
     keyGroupSiteFilterQuery.value = '';
   }
+}
+
+function toggleHideInvalidKeys() {
+  hideInvalidKeys.value = !hideInvalidKeys.value;
 }
 
 const displayedRows = computed(() => {
@@ -1909,6 +2219,10 @@ const batchDeleteQuickTestFailedDisabled = computed(() => batchQuickTestRunning.
 const activeKeyGroupLabel = computed(() => {
   if (activeKeyGroupId.value === ALL_KEYS_GROUP_ID) return '全部密钥';
   return keyGroups.value.find(group => group.id === activeKeyGroupId.value)?.name || '当前分组';
+});
+const mergeTargetKeyGroups = computed(() => {
+  const currentGroupId = String(keyGroupContextMenu.group?.id || '').trim();
+  return keyGroups.value.filter(group => String(group?.id || '').trim() && String(group.id).trim() !== currentGroupId);
 });
 const providerQueueSourceRecords = computed(() => {
   const source = displayedRows.value;
@@ -2158,6 +2472,13 @@ const loadLocalRecord = (id) => {
 function refreshManagedRecordsFromStorage() {
   recordRenderMetaCache.clear();
   batchHistoryContextMap.value = loadBatchHistoryContextMap();
+  keyGroups.value = loadStoredKeyGroups();
+  if (activeKeyGroupId.value !== ALL_KEYS_GROUP_ID) {
+    const exists = keyGroups.value.some(group => String(group?.id || '').trim() === String(activeKeyGroupId.value || '').trim());
+    if (!exists) {
+      activeKeyGroupId.value = ALL_KEYS_GROUP_ID;
+    }
+  }
   tableData.value = loadStoredRecords();
   syncMeta.value = loadStoredMeta();
   void autoRefreshKeyBalancesOnce();
@@ -2168,7 +2489,7 @@ function handleManagedRecordSyncEvent() {
 }
 
 function handleManagedRecordStorageEvent(event) {
-  const watchedKeys = [STORAGE_KEY, MANUAL_STORAGE_KEY, META_STORAGE_KEY, LAST_RESULTS_STORAGE_KEY];
+  const watchedKeys = [STORAGE_KEY, MANUAL_STORAGE_KEY, META_STORAGE_KEY, KEY_GROUPS_STORAGE_KEY, LAST_RESULTS_STORAGE_KEY];
   if (event?.key && !watchedKeys.includes(event.key)) return;
   refreshManagedRecordsFromStorage();
 }
@@ -3059,9 +3380,58 @@ async function syncCurrentGroupToAdvancedProxyQueue() {
   }
 }
 
-async function handleConfirmSyncCurrentGroupToAdvancedProxyQueue() {
+async function appendCurrentGroupToAdvancedProxyQueue() {
+  const validRecords = currentGroupValidProviderQueueRecords.value;
+  if (!validRecords.length) {
+    message.warning(`${normalizedKeyGroupSiteFilterQuery.value ? '当前筛选结果' : '当前列表'}暂无可写入 provider 队列的状态正常密钥`);
+    return;
+  }
+
+  try {
+    const savedConfig = await getAdvancedProxyConfig();
+    const nextConfig = normalizeAdvancedProxyConfig(savedConfig || {});
+    const providers = validRecords.map((record, index) => buildProviderFromManagedRecord(record, index + 1));
+    appendAdvancedProxyQueueProviders(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, providers);
+    nextConfig.claude.providers = [...(nextConfig.queues?.[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE]?.providers || [])];
+    await setAdvancedProxyConfig(nextConfig);
+    advancedProxyFocusQueueScope.value = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
+    advancedProxyFocusQueueToken.value = Date.now();
+    showExperimentalFeatures.value = true;
+    message.success(`已追加${providerQueueScopeText.value} ${validRecords.length} 条状态正常密钥到 Provider 队列`);
+  } catch (error) {
+    message.error(error?.message || '追加全局 Provider 队列失败');
+  }
+}
+
+async function clearAdvancedProxyQueue() {
+  try {
+    const savedConfig = await getAdvancedProxyConfig();
+    const nextConfig = normalizeAdvancedProxyConfig(savedConfig || {});
+    clearAdvancedProxyQueueProviders(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
+    nextConfig.claude.providers = [...(nextConfig.queues?.[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE]?.providers || [])];
+    await setAdvancedProxyConfig(nextConfig);
+    advancedProxyFocusQueueScope.value = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
+    advancedProxyFocusQueueToken.value = Date.now();
+    showExperimentalFeatures.value = true;
+    message.success('已清空全部 Provider 队列');
+  } catch (error) {
+    message.error(error?.message || '清空全局 Provider 队列失败');
+  }
+}
+
+async function handleReplaceCurrentGroupToAdvancedProxyQueue() {
   providerQueueInlineConfirmOpen.value = false;
   await syncCurrentGroupToAdvancedProxyQueue();
+}
+
+async function handleAppendCurrentGroupToAdvancedProxyQueue() {
+  providerQueueInlineConfirmOpen.value = false;
+  await appendCurrentGroupToAdvancedProxyQueue();
+}
+
+async function handleClearAdvancedProxyQueue() {
+  providerQueueInlineConfirmOpen.value = false;
+  await clearAdvancedProxyQueue();
 }
 
 function getCurrentGroupFailedQuickTestRecords() {
@@ -4235,7 +4605,12 @@ function persistMeta() {
 .key-group-tab-count{min-width:14px;padding:1px 5px;border-radius:999px;background:rgba(69,102,59,.1);color:inherit;font-size:10px;font-weight:600;line-height:1.05}
 .key-group-tab-create{padding-inline:10px;color:#466846}
 .key-group-tab-create :deep(.anticon),.key-group-tab-create svg{font-size:11px}
-.key-group-site-filter{flex:1 1 220px;min-width:180px;max-width:320px}
+.key-group-site-filter{flex:1 1 220px;min-width:180px;max-width:320px;display:flex;align-items:center;gap:5px;height:26px}
+.key-group-site-filter-toggle{width:18px;height:18px;min-width:18px;min-height:18px;padding:0;border:0 !important;border-radius:999px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;align-self:center;background:transparent !important;box-shadow:none !important}
+.key-group-site-filter-toggle :deep(.anticon),.key-group-site-filter-toggle svg{font-size:12px;line-height:1;display:block;color:rgba(15,23,42,.42)}
+.key-group-site-filter-toggle:hover{transform:none !important}
+.key-group-site-filter-toggle-active{background:transparent !important;box-shadow:none !important}
+.key-group-site-filter-toggle-active :deep(.anticon),.key-group-site-filter-toggle-active svg{color:rgba(15,23,42,.82)}
 .key-group-site-filter-input :deep(.ant-input){height:26px;border-radius:10px;background:rgba(255,255,255,.88);border-color:rgba(124,142,112,.18);box-shadow:inset 0 1px 0 rgba(255,255,255,.72);font-size:12px}
 .key-group-site-filter-input :deep(.ant-input::placeholder){color:rgba(100,116,94,.72)}
 .key-group-site-filter-input :deep(.ant-input-affix-wrapper){height:26px;border-radius:10px;padding:0 10px;background:rgba(255,255,255,.88);border-color:rgba(124,142,112,.18);box-shadow:inset 0 1px 0 rgba(255,255,255,.72);font-size:12px}
@@ -4249,13 +4624,26 @@ function persistMeta() {
 .key-management-gaia .key-group-site-filter-input :deep(.ant-input),.key-management-gaia .key-group-site-filter-input :deep(.ant-input-affix-wrapper){background:linear-gradient(180deg,rgba(34,40,34,.94),rgba(26,31,27,.96));border-color:rgba(122,151,125,.18);color:#d8e5d4;box-shadow:none}
 .key-management-gaia .key-group-site-filter-input :deep(.ant-input::placeholder),.key-management-gaia .key-group-site-filter-input :deep(.ant-input-affix-wrapper .ant-input::placeholder){color:rgba(216,229,212,.54)}
 .key-management-gaia .key-group-site-filter-input :deep(.ant-input-affix-wrapper-focused){border-color:rgba(157,208,128,.36);box-shadow:0 0 0 2px rgba(186,228,149,.12)}
+.key-management-gaia .key-group-site-filter-toggle :deep(.anticon),.key-management-gaia .key-group-site-filter-toggle svg{color:rgba(216,229,212,.5)}
+.key-management-gaia .key-group-site-filter-toggle-active{background:transparent !important;box-shadow:none !important}
+.key-management-gaia .key-group-site-filter-toggle-active :deep(.anticon),.key-management-gaia .key-group-site-filter-toggle-active svg{color:rgba(216,229,212,.92)}
 .key-group-context-menu{position:fixed;z-index:1405;display:flex;flex-direction:column;gap:8px;width:208px;padding:10px;border-radius:18px;background:rgba(255,255,255,.96);box-shadow:0 18px 48px rgba(15,23,42,.24);backdrop-filter:blur(14px)}
 .key-group-context-action{width:100%;padding:8px 12px;font-size:13px;line-height:1.35;border-radius:16px}
+.key-group-context-submenu-trigger{justify-content:space-between}
+.key-group-context-submenu-trigger-active{background:rgba(224,236,255,.9);color:#1d4ed8}
+.key-group-context-submenu{position:absolute;left:calc(100% - 6px);top:54px;z-index:2;display:flex;flex-direction:column;gap:8px;width:196px;padding:10px;border-radius:16px;background:rgba(255,255,255,.98);box-shadow:0 18px 48px rgba(15,23,42,.2);backdrop-filter:blur(14px)}
 .key-group-context-menu-dark{background:rgba(25,25,25,.96);box-shadow:0 18px 48px rgba(0,0,0,.4)}
 .key-group-context-menu-dark .import-export-menu-item{background:rgba(255,255,255,.08);color:#f8fafc}
 .key-group-context-menu-dark .import-export-menu-item:hover:not(:disabled){background:rgba(96,165,250,.2);color:#dbeafe}
 .key-group-context-menu-dark .import-export-menu-item-danger{background:rgba(190,24,93,.16);color:#fda4af}
 .key-group-context-menu-dark .import-export-menu-item-danger:hover:not(:disabled){background:rgba(190,24,93,.24);color:#fecdd3}
+.key-group-context-menu-dark .key-group-context-submenu-trigger-active{background:rgba(186,228,149,.12);color:#e2e8f0}
+.key-group-context-submenu-dark{background:rgba(25,25,25,.98);box-shadow:0 18px 48px rgba(0,0,0,.4)}
+.key-group-context-submenu-dark .key-row-action-label{color:#94a3b8}
+.key-group-context-submenu-dark .key-row-action-empty{color:#94a3b8}
+.key-group-context-submenu-dark .key-row-group-chip{border-color:rgba(122,151,125,.18);background:rgba(255,255,255,.06);color:#e2e8f0}
+.key-group-context-submenu-dark .key-row-group-chip:hover{border-color:rgba(157,208,128,.28);background:rgba(186,228,149,.08)}
+.key-group-context-submenu-dark .key-row-group-chip-mark{color:#cfe8bb}
 .key-quick-group-overlay{position:fixed;inset:0;z-index:1400;background:transparent}
 .key-quick-group-floating-panel{position:fixed;top:18vh;left:50%;transform:translateX(-50%);width:min(960px,78vw);max-width:min(960px,78vw);padding:16px 18px 18px;border-radius:22px;background:rgba(255,255,255,.98);box-shadow:0 24px 64px rgba(15,23,42,.18),0 10px 28px rgba(15,23,42,.1)}
 .key-quick-group-floating-panel-gaia{background:linear-gradient(180deg,rgba(28,35,30,.98),rgba(22,27,24,.98));box-shadow:0 28px 72px rgba(0,0,0,.42),0 12px 32px rgba(0,0,0,.26)}
@@ -4466,9 +4854,9 @@ function persistMeta() {
 :global(.key-management-import-popover .ant-popover-inner){max-width:calc(100vw - 24px)}
 :global(.key-management-import-popover .ant-popover-inner-content){padding:8px}
 :global(.provider-queue-inline-popover .ant-popover-inner){border-radius:12px}
-:global(.provider-queue-inline-popover .ant-popover-inner-content){padding:8px 10px}
-.provider-queue-inline-confirm{display:flex;align-items:center;gap:8px;white-space:nowrap}
-.provider-queue-inline-confirm-text{font-size:12px;line-height:1.2;color:#475569}
+:global(.provider-queue-inline-popover .ant-popover-inner-content){padding:10px}
+.provider-queue-inline-actions{display:flex;flex-direction:column;gap:8px;min-width:248px}
+.provider-queue-inline-action-button{justify-content:center;height:32px;border-radius:10px;white-space:nowrap}
 .quick-test-tag{width:fit-content}
 .quick-test-cell{gap:6px;min-width:0;align-items:flex-start;padding-left:0}
 .export-quick-test-row{width:100%;flex-direction:row;align-items:center;gap:8px;flex-wrap:nowrap}
@@ -4676,6 +5064,9 @@ function persistMeta() {
 :deep(body.dark-mode) .key-management .key-group-site-filter-input :deep(.ant-input),:deep(body.dark-mode) .key-management .key-group-site-filter-input :deep(.ant-input-affix-wrapper){background:linear-gradient(180deg,rgba(31,42,33,.94),rgba(20,29,23,.96));border-color:rgba(160,189,144,.18);color:#edf5e6;box-shadow:none}
 :deep(body.dark-mode) .key-management .key-group-site-filter-input :deep(.ant-input::placeholder),:deep(body.dark-mode) .key-management .key-group-site-filter-input :deep(.ant-input-affix-wrapper .ant-input::placeholder){color:rgba(184,200,178,.56)}
 :deep(body.dark-mode) .key-management .key-group-site-filter-input :deep(.ant-input-affix-wrapper-focused){border-color:rgba(160,189,144,.32);box-shadow:0 0 0 2px rgba(160,189,144,.12)}
+:deep(body.dark-mode) .key-management .key-group-site-filter-toggle :deep(.anticon),:deep(body.dark-mode) .key-management .key-group-site-filter-toggle svg{color:rgba(237,245,230,.5)}
+:deep(body.dark-mode) .key-management .key-group-site-filter-toggle-active{background:transparent !important;box-shadow:none !important}
+:deep(body.dark-mode) .key-management .key-group-site-filter-toggle-active :deep(.anticon),:deep(body.dark-mode) .key-management .key-group-site-filter-toggle-active svg{color:rgba(237,245,230,.92)}
 :deep(body.dark-mode) .portable-settings-card{border-color:rgba(154,191,142,.18);background:rgba(24,32,25,.92)}
 :deep(body.dark-mode) .portable-settings-title{color:#ecf8e7}
 :deep(body.dark-mode) .portable-settings-desc,:deep(body.dark-mode) .portable-settings-hint,:deep(body.dark-mode) .portable-settings-meta{color:#b8cbb1}
@@ -4735,4 +5126,5 @@ function persistMeta() {
 @keyframes sync-trigger-orbit{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 @keyframes sync-trigger-pulse{0%{transform:scale(.98);filter:saturate(1)}100%{transform:scale(1.05);filter:saturate(1.16)}}
 </style>
+
 

@@ -154,6 +154,10 @@ export function OpenManualSidebarPanel() {
   return window['go']['main']['App']['OpenManualSidebarPanel']();
 }
 
+export function OpenModelProbeWindow(arg1) {
+  return window['go']['main']['App']['OpenModelProbeWindow'](arg1);
+}
+
 export function PackagePortableData(arg1) {
   return window['go']['main']['App']['PackagePortableData'](arg1);
 }

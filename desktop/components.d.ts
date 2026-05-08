@@ -63,6 +63,7 @@ declare module 'vue' {
     BridgeImportWizardModal: typeof import('./src/components/BridgeImportWizardModal.vue')['default']
     Check: typeof import('./src/components/Check.vue')['default']
     DesktopConfigDiffModal: typeof import('./src/components/DesktopConfigDiffModal.vue')['default']
+    EditOutlined: typeof import('@ant-design/icons-vue')['EditOutlined']
     Experimental: typeof import('./src/components/Experimental.vue')['default']
     FileTextOutlined: typeof import('@ant-design/icons-vue')['FileTextOutlined']
     KeyManagement: typeof import('./src/components/KeyManagement.vue')['default']

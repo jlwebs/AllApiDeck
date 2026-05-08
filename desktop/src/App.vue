@@ -54,7 +54,7 @@ export default {
       const normalizedMode = String(mode || '').trim();
       const body = document.body;
       const root = document.documentElement;
-      const modeClasses = ['launch-mode-main-window', 'launch-mode-panel-window', 'launch-mode-editor-window', 'launch-mode-ai-image-window', 'launch-mode-desktop-config-window'];
+      const modeClasses = ['launch-mode-main-window', 'launch-mode-panel-window', 'launch-mode-editor-window', 'launch-mode-ai-image-window', 'launch-mode-desktop-config-window', 'launch-mode-model-probe-window'];
       body?.classList?.remove(...modeClasses);
       root?.classList?.remove(...modeClasses);
       if (!normalizedMode) return;
@@ -65,7 +65,7 @@ export default {
 
     const clearLaunchModeClasses = () => {
       if (typeof document === 'undefined') return;
-      const modeClasses = ['launch-mode-main-window', 'launch-mode-panel-window', 'launch-mode-editor-window', 'launch-mode-ai-image-window', 'launch-mode-desktop-config-window'];
+      const modeClasses = ['launch-mode-main-window', 'launch-mode-panel-window', 'launch-mode-editor-window', 'launch-mode-ai-image-window', 'launch-mode-desktop-config-window', 'launch-mode-model-probe-window'];
       document.body?.classList?.remove(...modeClasses);
       document.documentElement?.classList?.remove(...modeClasses);
     };
@@ -142,6 +142,8 @@ export default {
           await router.replace('/ai-image');
         } else if (mode === 'desktop-config' && router.currentRoute.value.path !== '/desktop-config') {
           await router.replace('/desktop-config');
+        } else if (mode === 'model-probe' && router.currentRoute.value.path !== '/sites') {
+          await router.replace('/sites');
         }
         if (mode !== 'panel') {
           installSidebarRoutingDiagnostics(mode || 'main');

@@ -78,6 +78,20 @@ function normalizeModelListPayload(payload) {
     };
   }
 
+  if (Array.isArray(payload?.data?.models)) {
+    return {
+      ...payload,
+      data: payload.data.models,
+    };
+  }
+
+  if (Array.isArray(payload?.result?.data)) {
+    return {
+      ...payload,
+      data: payload.result.data,
+    };
+  }
+
   if (Array.isArray(payload?.models)) {
     return {
       ...payload,

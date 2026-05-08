@@ -16,6 +16,7 @@
         <div class="page-content batch-page-content">
           <div class="container batch-page-container">
             <AppHeader
+              v-if="!isModelProbeWindow"
               current-page="sites"
               :is-dark-mode="isDarkMode"
               @experimental="handleExperimental"
@@ -305,8 +306,11 @@
                   <a-input-number v-model:value="modelTimeout" :min="1" />
                 </div>
                 <div class="actions">
-                  <a-button @click="goBackToImport" style="margin-right: 10px;">重新导入</a-button>
-                  <a-button type="primary" size="large" @click="startBatchCheckFromSiteManagement">
+                  <a-button class="site-secondary-action-button" @click="goBackToImport">重新导入</a-button>
+                  <a-tooltip title="不检测有效性，只导入勾选的密钥">
+                    <a-button class="site-secondary-action-button site-import-only-button" @click="importSelectedKeysOnly">只导入密钥</a-button>
+                  </a-tooltip>
+                  <a-button class="site-primary-action-button" type="primary" size="large" @click="startBatchCheckFromSiteManagement">
                     开始检测
                   </a-button>
                 </div>
@@ -387,6 +391,7 @@ import {
   writePendingBatchStart,
   writePendingSiteRestore,
 } from '../utils/siteCacheStore.js';
+import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
 
 const SITE_NOTE_MAX_LENGTH = 10;
 
@@ -427,6 +432,7 @@ const refreshFailureGuideSiteCacheKey = ref('');
 const siteBridgeImportGuideDismissedSignature = ref('');
 const modelProbeContext = ref(null);
 const profileRecoveryPending = ref(getProfileRecoveryPending());
+const isModelProbeWindow = computed(() => Boolean(String(modelProbeContext.value?.siteCacheKey || '').trim()));
 const stableSiteOrderMap = new Map();
 const siteBridgeProcessedRecordIds = new Set();
 let siteBridgePollTimer = null;
@@ -628,6 +634,39 @@ const selectedSiteCacheKeys = computed(() => Array.from(new Set(
     .map(value => String(value || '').trim())
     .filter(Boolean)
 )));
+
+const emitModelProbeSelectionSnapshot = (stage, extra = {}) => {
+  const safeChecked = checkedKeys.value.map(key => String(key || '').trim()).filter(Boolean);
+  const safeSelected = selectedModelKeys.value.map(key => String(key || '').trim()).filter(Boolean);
+  const rootKeys = treeData.value
+    .filter(node => node?.isSiteRoot)
+    .map(node => String(node?.key || '').trim())
+    .filter(Boolean);
+  const tokenNodeKeys = [];
+  const walk = (nodes) => {
+    (Array.isArray(nodes) ? nodes : []).forEach(node => {
+      const key = String(node?.key || '').trim();
+      if (key.startsWith('token|')) tokenNodeKeys.push(key);
+      if (Array.isArray(node?.children) && node.children.length > 0) walk(node.children);
+    });
+  };
+  walk(treeData.value);
+  const payload = {
+    stage,
+    probe: Boolean(modelProbeContext.value?.siteCacheKey),
+    probeSiteCacheKey: String(modelProbeContext.value?.siteCacheKey || '').trim(),
+    quickFilterCount: Array.isArray(activeQuickFilters.value) ? activeQuickFilters.value.length : 0,
+    quickMode: quickFilterSelectionMode.value ? 1 : 0,
+    treeRootCount: rootKeys.length,
+    treeTokenNodeCount: tokenNodeKeys.length,
+    checkedCount: safeChecked.length,
+    selectedModelCount: safeSelected.length,
+    checkedPreview: safeChecked.slice(0, 12),
+    selectedPreview: safeSelected.slice(0, 12),
+    ...extra,
+  };
+  logClientDiagnostic('model_probe.selection', JSON.stringify(payload));
+};
 
 const extractTokenKeyFromNode = node => {
   const key = String(node?.key || '').trim();
@@ -888,14 +927,21 @@ const syncCheckedKeys = () => {
   if (modelProbeContext.value && checkedKeys.value.length === 0 && allowed.size > 0) {
     checkedKeys.value = Array.from(allowed);
   }
+  emitModelProbeSelectionSnapshot('sync_checked_keys', {
+    allowedCount: allowed.size,
+  });
 };
 
 const reloadRecords = () => {
   modelProbeContext.value = getModelProbeContext();
   const probeRecord = modelProbeContext.value?.siteCacheRecord || null;
-  const nextRecords = probeRecord
-    ? [probeRecord]
-    : loadAllSiteCacheRecords();
+  const probeSiteCacheKey = String(modelProbeContext.value?.siteCacheKey || probeRecord?.siteCacheKey || '').trim();
+  const latestProbeRecord = probeSiteCacheKey
+    ? (loadAllSiteCacheRecords().find(item => String(item?.siteCacheKey || '').trim() === probeSiteCacheKey) || null)
+    : null;
+  const nextRecords = latestProbeRecord
+    ? [latestProbeRecord]
+    : (probeRecord ? [probeRecord] : loadAllSiteCacheRecords());
   ensureStableSiteOrders(nextRecords);
   records.value = nextRecords;
   syncExpandedKeys();
@@ -932,7 +978,8 @@ const extractModelNamesFromPayload = payload => normalizeSiteModelList(
   })
 );
 
-const refreshSiteTreeModels = async record => {
+const refreshSiteTreeModels = async (record, options = {}) => {
+  const strict = options?.strict === true;
   const siteCacheKey = String(record?.siteCacheKey || '').trim();
   if (!siteCacheKey) return;
 
@@ -946,6 +993,7 @@ const refreshSiteTreeModels = async record => {
   const apiBaseUrl = resolveSiteModelApiBaseUrl(record);
 
   if (apiBaseUrl) {
+    const failedDetails = [];
     await Promise.all(mergedTokens.map(async token => {
       const tokenKey = String(token?.key || token?.access_token || '').trim();
       if (!tokenKey) return;
@@ -954,9 +1002,22 @@ const refreshSiteTreeModels = async record => {
         const modelNames = extractModelNamesFromPayload(payload);
         if (modelNames.length > 0) {
           tokenModelsByKey.set(tokenKey, modelNames);
+          return;
         }
-      } catch {}
+        if (strict) {
+          failedDetails.push(`${maskValue(tokenKey)}: empty models`);
+        }
+      } catch (error) {
+        if (strict) {
+          failedDetails.push(`${maskValue(tokenKey)}: ${String(error?.message || error || 'request failed')}`);
+        }
+      }
     }));
+    if (strict && tokenModelsByKey.size <= 0) {
+      throw new Error(failedDetails.length > 0
+        ? `模型探测失败：${failedDetails.slice(0, 3).join(' | ')}`
+        : '模型探测失败：未获取到可用模型');
+    }
   }
 
   const displayOrder = getStableSiteOrder(record) || getCachedSitePreferredOrder(record) || 0;
@@ -1228,10 +1289,17 @@ const activeQuickFilterModelSet = computed(() => {
 watch(activeQuickFilterModelSet, currentModelSet => {
   if (!(currentModelSet instanceof Set) || currentModelSet.size === 0) {
     if (quickFilterSelectionMode.value) checkedKeys.value = [];
+    emitModelProbeSelectionSnapshot('quick_filter_watch_empty', {
+      currentModelSetSize: currentModelSet instanceof Set ? currentModelSet.size : -1,
+    });
     return;
   }
   const selectableKeys = collectSelectableModelKeysFromTreeNodes(treeData.value, []);
   checkedKeys.value = selectableKeys.filter(key => currentModelSet.has(getModelNameFromSelectableKey(key)));
+  emitModelProbeSelectionSnapshot('quick_filter_watch_apply', {
+    currentModelSetSize: currentModelSet.size,
+    selectableCount: selectableKeys.length,
+  });
 });
 
 const activeQuickFilterSummary = computed(() => {
@@ -1756,8 +1824,80 @@ const goBackToImport = async () => {
   await router.push('/');
 };
 
-const startBatchCheckFromSiteManagement = async () => {
+const importSelectedKeysOnly = async () => {
   const modelKeys = selectedModelKeys.value;
+  if (!modelKeys.length) {
+    message.warning('请至少勾选一个模型进行导入');
+    return;
+  }
+  if (!selectedSiteCacheKeys.value.length) {
+    message.warning('请至少勾选一个站点');
+    return;
+  }
+  const selectedModelMap = new Map();
+  modelKeys.forEach(key => {
+    const parts = String(key || '').split('|');
+    if (parts.length < 3) return;
+    const siteCacheKey = String(parts[0] || '').trim();
+    const tokenKey = String(parts[1] || '').trim();
+    const modelName = String(parts.slice(2).join('|') || '').trim();
+    if (!siteCacheKey || !tokenKey || !modelName) return;
+    const tokenMap = selectedModelMap.get(siteCacheKey) || new Map();
+    const modelSet = tokenMap.get(tokenKey) || new Set();
+    modelSet.add(modelName);
+    tokenMap.set(tokenKey, modelSet);
+    selectedModelMap.set(siteCacheKey, tokenMap);
+  });
+
+  const importSites = records.value
+    .filter(record => selectedModelMap.has(String(record?.siteCacheKey || '').trim()))
+    .map(record => {
+      const siteCacheKey = String(record?.siteCacheKey || '').trim();
+      const tokenSelectionMap = selectedModelMap.get(siteCacheKey) || new Map();
+      const filterTokenList = (list, originTag) => (Array.isArray(list) ? list : [])
+        .map(token => {
+          const tokenKey = String(token?.key || token?.access_token || '').trim();
+          const selectedModels = Array.from(tokenSelectionMap.get(tokenKey) || []);
+          if (!tokenKey || selectedModels.length === 0) return null;
+          return {
+            ...token,
+            _origin: originTag,
+            models: selectedModels,
+            model: selectedModels[0] || String(token?.model || '').trim(),
+            selectedModel: selectedModels[0] || String(token?.selectedModel || '').trim(),
+          };
+        })
+        .filter(Boolean);
+
+      const tokens = filterTokenList(record?.tokens, 'remote');
+      const customTokens = filterTokenList(record?.customTokens, 'manual');
+      return {
+        ...record,
+        siteUrl: record?.siteUrl,
+        siteName: record?.siteName,
+        tokens,
+        customTokens,
+        cachedTreeNodes: [],
+        _cachedTreeNodes: [],
+      };
+    })
+    .filter(site => (Array.isArray(site.tokens) && site.tokens.length > 0) || (Array.isArray(site.customTokens) && site.customTokens.length > 0));
+
+  const importedCount = syncBridgeSitesToKeyPanel(importSites);
+  if (importedCount <= 0) {
+    message.warning('当前勾选项没有可导入到密钥面板的 key');
+    return;
+  }
+  message.success(`已导入 ${importedCount} 个密钥到密钥管理面板`);
+};
+
+const startBatchCheckFromSiteManagement = async () => {
+  emitModelProbeSelectionSnapshot('start_click_before_compute');
+  const modelKeys = selectedModelKeys.value;
+  emitModelProbeSelectionSnapshot('start_click_after_compute', {
+    modelKeysCount: modelKeys.length,
+    modelKeysPreview: modelKeys.slice(0, 16),
+  });
   if (!modelKeys.length) {
     message.warning('请至少勾选一个模型进行测试');
     return;
@@ -1774,6 +1914,13 @@ const startBatchCheckFromSiteManagement = async () => {
     batchConcurrency: Number(batchConcurrency.value || 25),
     modelTimeout: Number(modelTimeout.value || 15),
   });
+  logClientDiagnostic('model_probe.pending_batch_start', JSON.stringify({
+    checkedKeysCount: modelKeys.length,
+    checkedKeysPreview: modelKeys.slice(0, 16),
+    selectChatOnly: Boolean(modelProbeContext.value?.siteCacheKey),
+    batchConcurrency: Number(batchConcurrency.value || 25),
+    modelTimeout: Number(modelTimeout.value || 15),
+  }));
   await router.push('/');
 };
 
@@ -1797,7 +1944,13 @@ const handleTreeExpand = keys => {
 };
 
 const handleTreeCheck = keys => {
-  checkedKeys.value = Array.isArray(keys) ? [...keys] : [];
+  const normalizedKeys = Array.isArray(keys) ? [...keys] : [];
+  checkedKeys.value = normalizedKeys;
+  emitModelProbeSelectionSnapshot('tree_check', {
+    rawType: Array.isArray(keys) ? 'array' : typeof keys,
+    rawCount: Array.isArray(keys) ? keys.length : 0,
+    rawPreview: Array.isArray(keys) ? keys.map(item => String(item || '').trim()).slice(0, 12) : [],
+  });
 };
 
 const closeRefreshFailureGuide = () => {
@@ -1863,7 +2016,9 @@ watch(siteBridgeImportGuideSignature, (next, prev) => {
 
 onMounted(async () => {
   syncThemeState();
+  logClientDiagnostic('model_probe.lifecycle', 'SiteManagement mounted');
   reloadRecords();
+  emitModelProbeSelectionSnapshot('on_mounted_after_reload');
   handleProfileRecoveryPendingChange();
   const pendingBatchStart = consumePendingBatchStart();
   if (pendingBatchStart) {
@@ -1872,11 +2027,12 @@ onMounted(async () => {
   }
   if (modelProbeContext.value?.siteCacheKey) {
     const probeRecord = records.value.find(record => String(record?.siteCacheKey || '').trim() === String(modelProbeContext.value?.siteCacheKey || '').trim()) || null;
-    if (probeRecord && collectSelectableModelKeysFromTreeNodes(treeData.value, []).length === 0) {
-      await refreshSiteTreeModels(probeRecord);
+    if (probeRecord) {
+      await refreshSiteTreeModels(probeRecord, { strict: true });
       reloadRecords();
     }
     selectChatModelsOnly();
+    emitModelProbeSelectionSnapshot('on_mounted_after_select_chat_only');
   }
   window.addEventListener(THEME_MODE_CHANGE_EVENT, syncThemeState);
   window.addEventListener(SITE_CACHE_SYNC_EVENT, handleSync);
@@ -2612,14 +2768,13 @@ onBeforeUnmount(() => {
   transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease, border-color 0.18s ease;
 }
 
-.actions > .ant-btn:first-child {
-  margin-right: 0 !important;
+.site-secondary-action-button {
   border-color: rgba(116, 144, 104, 0.18) !important;
   color: #4a5b46 !important;
   background: rgba(255, 255, 255, 0.8) !important;
 }
 
-.actions > .ant-btn:last-child {
+.site-primary-action-button {
   border: 0 !important;
   min-width: 132px;
   background: linear-gradient(135deg, #4f6e49, #7b9a5d) !important;
@@ -2630,7 +2785,7 @@ onBeforeUnmount(() => {
   transform: translateY(-1px);
 }
 
-.actions > .ant-btn:last-child:hover {
+.site-primary-action-button:hover {
   background: linear-gradient(135deg, #4e7a43, #86a860) !important;
 }
 
@@ -2935,13 +3090,13 @@ onBeforeUnmount(() => {
   color: #edf6e9;
 }
 
-:deep(body.dark-mode) .actions > .ant-btn:first-child {
+:deep(body.dark-mode) .site-secondary-action-button {
   border-color: rgba(154, 191, 142, 0.18) !important;
   color: #e4f1df !important;
   background: rgba(28, 35, 27, 0.94) !important;
 }
 
-:deep(body.dark-mode) .actions > .ant-btn:last-child {
+:deep(body.dark-mode) .site-primary-action-button {
   background: linear-gradient(135deg, #5d8255, #89a864) !important;
   box-shadow: 0 10px 20px rgba(0, 0, 0, 0.22) !important;
 }

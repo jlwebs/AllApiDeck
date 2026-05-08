@@ -2,6 +2,7 @@ export const SITE_CACHE_STORAGE_KEY = 'api_check_site_cache_records_v1';
 export const SITE_CACHE_TEMP_STORAGE_KEY = 'api_check_site_cache_temp_records_v1';
 export const SITE_CACHE_PENDING_RESTORE_KEY = 'api_check_site_cache_pending_restore_v1';
 export const SITE_CACHE_PENDING_BATCH_START_KEY = 'api_check_site_cache_pending_batch_start_v1';
+export const SITE_CACHE_MODEL_PROBE_CONTEXT_KEY = 'api_check_site_cache_model_probe_context_v1';
 export const SITE_CACHE_SYNC_EVENT = 'batch-api-check:site-cache-sync';
 export const SITE_CACHE_PROFILE_RECOVERY_PENDING_KEY = 'api_check_site_cache_profile_recovery_pending_v1';
 export const SITE_CACHE_PROFILE_RECOVERY_EVENT = 'batch-api-check:site-cache-profile-recovery';
@@ -499,6 +500,37 @@ export function consumePendingBatchStart() {
   const parsed = safeJsonParse(storage.getItem(SITE_CACHE_PENDING_BATCH_START_KEY) || 'null', null);
   storage.removeItem(SITE_CACHE_PENDING_BATCH_START_KEY);
   return parsed && typeof parsed === 'object' ? parsed : null;
+}
+
+export function writeModelProbeContext(payload) {
+  const storage = getStorage('persistent');
+  if (!storage) return '';
+  const probeId = String(payload?.probeId || `probe::${Date.now()}::${Math.random().toString(36).slice(2, 8)}`).trim();
+  const nextPayload = {
+    ...(payload && typeof payload === 'object' ? payload : {}),
+    probeId,
+    updatedAt: Date.now(),
+  };
+  storage.setItem(SITE_CACHE_MODEL_PROBE_CONTEXT_KEY, JSON.stringify(nextPayload));
+  return probeId;
+}
+
+export function getModelProbeContext() {
+  const storage = getStorage('persistent');
+  if (!storage) return null;
+  const parsed = safeJsonParse(storage.getItem(SITE_CACHE_MODEL_PROBE_CONTEXT_KEY) || 'null', null);
+  return parsed && typeof parsed === 'object' ? parsed : null;
+}
+
+export function clearModelProbeContext(probeId = '') {
+  const storage = getStorage('persistent');
+  if (!storage) return false;
+  if (probeId) {
+    const current = getModelProbeContext();
+    if (String(current?.probeId || '').trim() !== String(probeId || '').trim()) return false;
+  }
+  storage.removeItem(SITE_CACHE_MODEL_PROBE_CONTEXT_KEY);
+  return true;
 }
 
 export function setProfileRecoveryPending(active) {

@@ -1459,6 +1459,33 @@ func (a *App) OpenDesktopConfigWindow(rowKey string) error {
 	return nil
 }
 
+func (a *App) OpenModelProbeWindow(rowKey string) error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve executable failed: %w", err)
+	}
+
+	args := []string{"--model-probe"}
+	if rowKey != "" {
+		args = append(args, "--row-key", rowKey)
+	}
+
+	cmd := exec.Command(exePath, args...)
+	configureWindowedAppCmd(cmd)
+	cmd.Dir = filepath.Dir(exePath)
+	cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%s", webviewGroupPIDEnvKey, strconv.Itoa(resolveWebviewGroupPID(a.mode))))
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start model probe window failed: %w", err)
+	}
+	debugLogf("model probe child launched pid=%d rowKey=%q", cmd.Process.Pid, rowKey)
+
+	go func(process *exec.Cmd) {
+		_ = process.Wait()
+	}(cmd)
+
+	return nil
+}
+
 func (a *App) stopPanelProcess() {
 	a.panelMu.Lock()
 	defer a.panelMu.Unlock()

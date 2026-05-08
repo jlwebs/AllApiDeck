@@ -16,12 +16,16 @@
           <div class="container batch-page-container">
             <!-- Header section, similar to Check.vue for consistency -->
             <AppHeader
+              v-if="!isModelProbeWindow"
               current-page="batch":is-dark-mode="isDarkMode"
               @experimental="showExperimentalFeatures = true"
               @settings="openSettingsModal"
             />
 
-            <section class="batch-hero":class="{ 'batch-hero-compact': step !== 1 }">
+            <section
+              v-if="!isModelProbeWindow"
+              class="batch-hero":class="{ 'batch-hero-compact': step !== 1 }"
+            >
               <div class="batch-hero-motion" aria-hidden="true">
                 <span class="leaf leaf-a"></span>
                 <span class="leaf leaf-b"></span>
@@ -234,8 +238,12 @@
 
               <div class="tree-wrapper">
                 <a-tree
-                  v-model:checkedKeys="checkedKeys":expanded-keys="selectionExpandedKeys":tree-data="treeData"
+                  :checked-keys="checkedKeys"
+                  :expanded-keys="selectionExpandedKeys"
+                  :tree-data="treeData"
                   checkable
+                  checkStrictly
+                  @check="handleSelectionTreeCheck"
                   @expand="handleSelectionTreeExpand"
                 >
                   <template #title="node">
@@ -748,6 +756,8 @@ const { t
 } = useI18n();
 const router = useRouter();
 const isDarkMode = ref(false);
+const modelProbeContext = ref(getModelProbeContext());
+const isModelProbeWindow = computed(() => Boolean(String(modelProbeContext.value?.siteCacheKey || '').trim()));
 const configProviderTheme = computed(() => ({
   algorithm: isDarkMode.value ? theme.darkAlgorithm : theme.defaultAlgorithm,
 }));
@@ -1692,6 +1702,19 @@ const toggleExpandAll = () => {
 const handleSelectionTreeExpand = (keys) => {
   selectionExpandedKeys.value = ensureSelectionRootExpanded(keys);
 };
+const normalizeCheckedLeafKeys = (keys) => {
+  const source = Array.isArray(keys) ? keys : [];
+  return source
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+    .filter(isSelectableModelKey);
+};
+const handleSelectionTreeCheck = (nextCheckedKeys) => {
+  const raw = Array.isArray(nextCheckedKeys)
+    ? nextCheckedKeys
+    : (Array.isArray(nextCheckedKeys?.checked) ? nextCheckedKeys.checked : []);
+  checkedKeys.value = normalizeCheckedLeafKeys(raw);
+};
 const testResults = ref([]); // all tasks
 const totalTasks = ref(0);
 const completedTasks = ref(0);
@@ -1730,6 +1753,8 @@ const filterOnlySuccess = ref(false);
 // 快捷筛选：按系列分组，悬浮展开版本/子类
 const activeQuickFilters = ref([]);
 const quickFilterSelectionMode = ref(false);
+const runtimeQuickFilterModelSet = ref(new Set());
+const runtimeQuickFilterSource = ref('');
 
 const normalizeQuickFilterName = (name) => {
   const normalized = String(name || '').trim();
@@ -1932,6 +1957,27 @@ const applyActiveQuickFilters = (nextOptionKeys) => {
 
   activeQuickFilters.value = normalized;
 
+  if (normalized.length === 0) {
+    runtimeQuickFilterModelSet.value = new Set();
+    runtimeQuickFilterSource.value = '';
+  } else {
+    const lockedModels = new Set();
+    const optionSet = new Set(normalized);
+    quickFilters.value.forEach(family => {
+      (Array.isArray(family?.options) ? family.options : []).forEach(option => {
+        if (!optionSet.has(option.key)) return;
+        (Array.isArray(option?.models) ? option.models : []).forEach(model => {
+          const name = String(model || '').trim();
+          if (name) lockedModels.add(name);
+        });
+      });
+    });
+    if (lockedModels.size > 0) {
+      runtimeQuickFilterModelSet.value = lockedModels;
+      runtimeQuickFilterSource.value = 'apply';
+    }
+  }
+
   if (step.value === 2 && normalized.length === 0 && quickFilterSelectionMode.value) {
     checkedKeys.value = [];
     quickFilterSelectionMode.value = false;
@@ -1982,6 +2028,20 @@ const activeQuickFilterModelSet = computed(() => {
   });
   return selectedModels;
 });
+
+const shouldRunTaskForActiveQuickFilters = (modelName) => {
+  const liveModelSet = activeQuickFilterModelSet.value instanceof Set
+    ? activeQuickFilterModelSet.value
+    : new Set();
+  const lockedModelSet = runtimeQuickFilterModelSet.value instanceof Set
+    ? runtimeQuickFilterModelSet.value
+    : new Set();
+  const modelSet = liveModelSet.size > 0 ? liveModelSet : lockedModelSet;
+  if (modelSet.size <= 0) return true;
+  const normalizedModelName = String(modelName || '').trim();
+  if (!normalizedModelName) return false;
+  return modelSet.has(normalizedModelName);
+};
 
 watch([activeQuickFilterModelSet, allKeys], ([currentModelSet], [previousModelSet]) => {
   if (step.value !== 2) return;
@@ -2690,13 +2750,25 @@ onMounted(() => {
         if (!pendingBatchStart?.autoStart) return;
         batchConcurrency.value = Number(pendingBatchStart?.batchConcurrency || batchConcurrency.value || 25);
         modelTimeout.value = Number(pendingBatchStart?.modelTimeout || modelTimeout.value || 15);
-        if (Array.isArray(pendingBatchStart?.checkedKeys) && pendingBatchStart.checkedKeys.length > 0) {
-          checkedKeys.value = pendingBatchStart.checkedKeys.map(item => String(item || '').trim()).filter(Boolean);
+        const pendingCheckedKeys = Array.isArray(pendingBatchStart?.checkedKeys)
+          ? pendingBatchStart.checkedKeys.map(item => String(item || '').trim()).filter(Boolean)
+          : [];
+        const hasExplicitPendingCheckedKeys = pendingCheckedKeys.length > 0;
+        if (hasExplicitPendingCheckedKeys) {
+          checkedKeys.value = pendingCheckedKeys;
         }
         await nextTick();
-        if (pendingBatchStart?.selectChatOnly) {
+        let pendingRestoreMode = 'default';
+        if (hasExplicitPendingCheckedKeys) {
+          pendingRestoreMode = 'pending_keys';
+        } else if (pendingBatchStart?.selectChatOnly) {
+          pendingRestoreMode = 'chat_only';
           selectChatModelsOnly();
         }
+        logClientDiagnostic(
+          'batch.pending.restore',
+          `checkedKeysFromPendingCount=${pendingCheckedKeys.length} selectChatOnlyFlag=${pendingBatchStart?.selectChatOnly ? '1' : '0'} appliedMode=${pendingRestoreMode} checkedAfterRestore=${checkedKeys.value.length}`
+        );
         await startBatchCheck();
       });
     }
@@ -5302,7 +5374,7 @@ const processAccounts = async (accounts) => {
 
     treeData.value = siteNodes.flat().filter(Boolean);
     allKeys.value = fullAllKeys;
-    checkedKeys.value = fullCheckedKeys;
+    checkedKeys.value = normalizeCheckedLeafKeys(fullCheckedKeys);
     isLoadingModels.value = false;
     step.value = 2; // 进入树形选择器
   };
@@ -5869,7 +5941,12 @@ const processAccountsV2 = async (accounts, options = {}) => {
     selectionExpandedKeys.value = ensureSelectionRootExpanded(selectionExpandedKeys.value, treeData.value);
     const nextSelectableKeys = fullAllKeys.filter(isSelectableModelKey);
     let nextCheckedKeys = [];
-    if (!initialDiscoveryCompleted || prevAllSelected) {
+    if (quickFilterSelectionMode.value) {
+      const activeModelSet = activeQuickFilterModelSet.value instanceof Set
+        ? activeQuickFilterModelSet.value
+        : new Set();
+      nextCheckedKeys = nextSelectableKeys.filter(key => activeModelSet.has(getModelNameFromSelectableKey(key)));
+    } else if (!initialDiscoveryCompleted || prevAllSelected) {
       // 首次默认全选；若上次是“全选”，增量刷新后继续保持全选（避免新模型漏选）
       nextCheckedKeys = [...nextSelectableKeys];
     } else {
@@ -5877,7 +5954,7 @@ const processAccountsV2 = async (accounts, options = {}) => {
       nextCheckedKeys = nextSelectableKeys.filter(key => prevCheckedSelectableSet.has(key));
     }
     allKeys.value = [...nextSelectableKeys];
-    checkedKeys.value = [...new Set(nextCheckedKeys)];
+    checkedKeys.value = normalizeCheckedLeafKeys([...new Set(nextCheckedKeys)]);
     initialDiscoveryCompleted = true;
     isDiscoveringModels.value = false;
 
@@ -6443,14 +6520,20 @@ const selectChatModelsOnly = () => {
 // --- Testing Logic ---
 const startBatchCheck = async () => {
   // Extract selected tasks
-  const selectedModelKeys = checkedKeys.value.filter(k =>
-    k.includes('|') &&
-    !k.startsWith('token|') &&
-    !k.startsWith('fail-site|') &&
-    !k.startsWith('no-model-site|') &&
-    !k.startsWith('no-usable-token-site|') &&
-    !k.startsWith('discover-loading|')
-  );
+  let selectedModelKeys = checkedKeys.value.filter(isSelectableModelKey);
+  const activeModelSet = activeQuickFilterModelSet.value instanceof Set
+    ? activeQuickFilterModelSet.value
+    : new Set();
+  const lockedModelSet = runtimeQuickFilterModelSet.value instanceof Set
+    ? runtimeQuickFilterModelSet.value
+    : new Set();
+  const effectiveModelSet = activeModelSet.size > 0 ? activeModelSet : lockedModelSet;
+  if (effectiveModelSet.size > 0) {
+    selectedModelKeys = allKeys.value
+      .filter(isSelectableModelKey)
+      .filter(key => effectiveModelSet.has(getModelNameFromSelectableKey(key)));
+  }
+  logClientDiagnostic('batch.start.selection', `quickFilters=${activeQuickFilters.value.length} quickMode=${quickFilterSelectionMode.value ? '1' : '0'} checked=${checkedKeys.value.length} selectable=${allKeys.value.length} activeModels=${activeModelSet.size} lockedModels=${lockedModelSet.size} selected=${selectedModelKeys.length} source=${runtimeQuickFilterSource.value || 'none'}`);
   if (selectedModelKeys.length === 0) {
     message.warning('请至少勾选一个模型进行测试');
     return;
@@ -6522,6 +6605,15 @@ const startBatchCheck = async () => {
     while (currentIndex < tasksQueue.length && testing.value) {
       const taskIndex = currentIndex++;
       const task = tasksQueue[taskIndex];
+      if (!shouldRunTaskForActiveQuickFilters(task?.modelName)) {
+        task.status = 'skipped';
+        task.statusText = '按快捷筛选跳过';
+        task.responseTime = '-';
+        task.remark = 'Filtered by quick filters';
+        completedTasks.value++;
+        scheduleOrganizedSourceRefresh();
+        continue;
+      }
       task.status = 'testing';
       task.statusText = '测试中';
       
@@ -6660,32 +6752,58 @@ async function maybeOfferModelProbeGroupAggregation() {
       };
       const records = loadAllKeyManagementRecords();
       const targetRowKey = String(context.rowKey || '').trim();
-      const updatedRecords = records.map(record => {
+      const targetRecord = records.find(record => {
         const rowKey = String(record?.rowKey || buildKeyManagementRowKey(record?.siteUrl, record?.apiKey)).trim();
-        if (rowKey !== targetRowKey) return record;
-        const groupIds = normalizeKeyManagementGroupIds(record?.groupIds);
-        const groupSelectedModels = normalizeKeyManagementGroupSelectedModels(record?.groupSelectedModels);
+        return rowKey === targetRowKey;
+      }) || null;
+      if (!targetRecord) {
+        clearModelProbeContext(context.probeId);
+        message.warning('未找到待聚合的原始密钥记录');
+        return;
+      }
+      const normalizedModels = Array.from(new Set((Array.isArray(models) ? models : [])
+        .map(item => String(item || '').trim())
+        .filter(Boolean)));
+      const baseSiteName = String(targetRecord?.siteName || context?.siteName || '未命名站点').trim() || '未命名站点';
+      const now = Date.now();
+      const fissionRecords = normalizedModels.map((model, index) => {
+        const sequence = index + 1;
+        const sourceGroupSelectedModels = normalizeKeyManagementGroupSelectedModels(targetRecord?.groupSelectedModels);
         return {
-          ...record,
-          rowKey,
-          modelsList: Array.from(new Set([...(Array.isArray(record?.modelsList) ? record.modelsList : []), ...models])),
-          modelsText: Array.from(new Set([...(Array.isArray(record?.modelsList) ? record.modelsList : []), ...models])).join(', '),
-          selectedModel: models[0] || String(record?.selectedModel || '').trim(),
-          groupIds: groupIds.includes(targetGroup.id) ? groupIds : [...groupIds, targetGroup.id],
+          ...targetRecord,
+          rowKey: `${targetRowKey}::fission::${targetGroup.id}::${sequence}`,
+          siteName: `${baseSiteName}-裂变${sequence}`,
+          modelsList: [model],
+          modelsText: model,
+          siteName: `${baseSiteName}-\u88c2\u53d8${sequence}`,
+          selectedModel: model,
+          quickTestStatus: '',
+          quickTestLabel: '',
+          quickTestModel: model,
+          quickTestRemark: '',
+          quickTestAt: null,
+          quickTestResponseTime: '',
+          quickTestTtftMs: '',
+          quickTestTps: '',
+          quickTestResponseContent: '',
+          groupIds: [targetGroup.id],
           groupSelectedModels: {
-            ...groupSelectedModels,
-            [targetGroup.id]: models[0] || '',
+            ...sourceGroupSelectedModels,
+            [targetGroup.id]: model,
           },
-          updatedAt: Date.now(),
+          createdAt: now,
+          updatedAt: now,
         };
       });
+      const updatedRecords = [...records, ...fissionRecords];
       localStorage.setItem(KEY_MANAGEMENT_GROUPS_STORAGE_KEY, JSON.stringify([...groups, targetGroup]));
       persistAllKeyManagementRecords(updatedRecords);
       window.dispatchEvent(new CustomEvent(KEY_MANAGEMENT_SYNC_EVENT, {
         detail: {
           source: 'model-probe-group',
           groupId: targetGroup.id,
-          modelCount: models.length,
+          modelCount: normalizedModels.length,
+          fissionCount: normalizedModels.length,
           syncedAt: Date.now(),
         },
       }));
@@ -6935,7 +7053,7 @@ const retestAllFromResults = async () => {
     return;
   }
 
-  const tasksQueue = testResults.value
+  let tasksQueue = testResults.value
     .map((task, index) => ({
       ...task,
       id: String(task?.id || `history_task_${index}`),
@@ -6950,6 +7068,18 @@ const retestAllFromResults = async () => {
       remark: '-',
     }))
     .filter(task => task.siteUrl && task.apiKey && task.modelName);
+
+  const activeModelSet = activeQuickFilterModelSet.value instanceof Set
+    ? activeQuickFilterModelSet.value
+    : new Set();
+  const lockedModelSet = runtimeQuickFilterModelSet.value instanceof Set
+    ? runtimeQuickFilterModelSet.value
+    : new Set();
+  const effectiveModelSet = activeModelSet.size > 0 ? activeModelSet : lockedModelSet;
+  if (effectiveModelSet.size > 0) {
+    tasksQueue = tasksQueue.filter(task => effectiveModelSet.has(String(task.modelName || '').trim()));
+  }
+  logClientDiagnostic('batch.retest.selection', `quickFilters=${activeQuickFilters.value.length} quickMode=${quickFilterSelectionMode.value ? '1' : '0'} activeModels=${activeModelSet.size} lockedModels=${lockedModelSet.size} retest=${tasksQueue.length} source=${runtimeQuickFilterSource.value || 'none'}`);
 
   if (tasksQueue.length === 0) {
     message.warning('历史结果缺少可重测的完整请求参数');
@@ -6972,6 +7102,15 @@ const retestAllFromResults = async () => {
     while (currentIndex < tasksQueue.length && testing.value) {
       const taskIndex = currentIndex++;
       const task = tasksQueue[taskIndex];
+      if (!shouldRunTaskForActiveQuickFilters(task?.modelName)) {
+        task.status = 'skipped';
+        task.statusText = '按快捷筛选跳过';
+        task.responseTime = '-';
+        task.remark = 'Filtered by quick filters';
+        completedTasks.value++;
+        scheduleOrganizedSourceRefresh();
+        continue;
+      }
       task.status = 'testing';
       task.statusText = '测试中';
       await runSingleTest(task);

@@ -29,6 +29,7 @@ const (
 	launchModeEditor        launchMode     = "editor"
 	launchModeAIImage       launchMode     = "ai-image"
 	launchModeDesktopConfig launchMode     = "desktop-config"
+	launchModeModelProbe    launchMode     = "model-probe"
 	webviewGroupPIDEnvKey   string         = "BATCH_API_CHECK_WEBVIEW_GROUP_PID"
 	panelStartAuto          panelStartMode = "auto"
 	panelStartManual        panelStartMode = "manual"
@@ -67,6 +68,10 @@ func resolveLaunchContext(args []string) (launchMode, string, panelStartMode) {
 		}
 		if strings.EqualFold(arg, "--desktop-config") {
 			mode = launchModeDesktopConfig
+			continue
+		}
+		if strings.EqualFold(arg, "--model-probe") {
+			mode = launchModeModelProbe
 			continue
 		}
 		if strings.EqualFold(arg, "--panel-manual") {
@@ -169,6 +174,14 @@ func buildAppOptions(app *App, mode launchMode) *options.App {
 		appOptions.MinHeight = 760
 		appOptions.HideWindowOnClose = false
 		appOptions.AlwaysOnTop = true
+	}
+	if mode == launchModeModelProbe {
+		appOptions.Title = "Model Probe"
+		appOptions.Width = 1180
+		appOptions.Height = 860
+		appOptions.MinWidth = 960
+		appOptions.MinHeight = 720
+		appOptions.HideWindowOnClose = false
 	}
 
 	return appOptions
