@@ -726,8 +726,10 @@ import {
   buildBatchSitesFromCache,
   consumePendingBatchStart,
   consumePendingSiteRestore,
+  clearModelProbeContext,
   deleteSiteCacheRecord,
   findAnySiteCacheRecord,
+  getModelProbeContext,
   loadAllSiteCacheRecords,
   mergeExtractedSitesIntoTempCache,
   mergeExtractedSitesIntoCache,
@@ -808,6 +810,8 @@ const pendingKeySyncExistingCount = ref(0);
 const pendingKeySyncIncomingCount = ref(0);
 
 const KEY_MANAGEMENT_STORAGE_KEY = 'api_check_key_management_records_v1';
+const KEY_MANAGEMENT_MANUAL_STORAGE_KEY = 'api_check_key_management_manual_records_v1';
+const KEY_MANAGEMENT_GROUPS_STORAGE_KEY = 'api_check_key_management_groups_v1';
 const KEY_MANAGEMENT_META_STORAGE_KEY = 'api_check_key_management_meta_v1';
 const KEY_MANAGEMENT_SYNC_EVENT = 'batch-api-check:key-management-sync';
 const SITE_NOTE_MAX_LENGTH = 10;
@@ -1742,11 +1746,22 @@ const normalizeQuickFilterVersion = (version) => {
     .replace(/\.0+$/u, '');
 };
 
+const extractGptSubfamilyMeta = (normalizedName) => {
+  const normalized = String(normalizedName || '').trim().toLowerCase();
+  if (!normalized) return null;
+  const match = normalized.match(/^gpt-([a-z][a-z0-9-]*)[:_-](\d+(?:\.\d+)?[a-z]?)(?:$|[-_:])/u);
+  if (!match) return null;
+  return {
+    category: `gpt-${match[1]}`,
+    version: normalizeQuickFilterVersion(match[2]),
+  };
+};
+
 const extractQuickFilterCategory = (name) => {
   const normalized = normalizeQuickFilterName(name).toLowerCase();
   if (!normalized) return '';
-  if (/^gpt-image-\d+(?:\.\d+)?(?:$|[-_])/u.test(normalized)) return 'gpt-image';
-  if (/^gpt-img-\d+(?:\.\d+)?(?:$|[-_])/u.test(normalized)) return 'gpt-img';
+  const gptSubfamily = extractGptSubfamilyMeta(normalized);
+  if (gptSubfamily?.category) return gptSubfamily.category;
   const match = normalized.match(/gpt|[a-zA-Z]{3,}/i);
   return match ? match[0].toLowerCase() : '';
 };
@@ -1754,10 +1769,17 @@ const extractQuickFilterCategory = (name) => {
 const extractQuickFilterVersion = (name) => {
   const normalized = normalizeQuickFilterName(name).toLowerCase();
   if (!normalized) return '';
-  const imageFamilyMatch = normalized.match(/^gpt-(?:image|img)-(\d+(?:\.\d+)?)(?:$|[-_])/u);
-  if (imageFamilyMatch) return normalizeQuickFilterVersion(imageFamilyMatch[1]);
+  const gptSubfamily = extractGptSubfamilyMeta(normalized);
+  if (gptSubfamily?.version) return gptSubfamily.version;
   const match = normalized.match(/\d+(?:\.\d+)?/);
   return match ? normalizeQuickFilterVersion(match[0]) : '';
+};
+
+const resolveQuickFilterFamilyKey = (category) => {
+  const normalized = String(category || '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized.startsWith('gpt-')) return 'gpt';
+  return normalized;
 };
 
 const buildQuickFilterOptionLabel = (category, version, sampleName) => {
@@ -1783,13 +1805,14 @@ const quickFilterSourceModels = computed(() => {
 const quickFilters = computed(() => {
   const models = quickFilterSourceModels.value;
   const familyMap = new Map();
+  const priority = ['gpt', 'claude', 'gemini', 'deepseek', 'llama', 'minimax', 'grok', 'kimi', 'glm'];
 
   models.forEach(model => {
     const category = extractQuickFilterCategory(model);
     if (!category) return;
     const version = extractQuickFilterVersion(model);
-    const familyKey = category;
-    const optionKey = `${familyKey}:${version || normalizeQuickFilterName(model).toLowerCase()}`;
+    const familyKey = resolveQuickFilterFamilyKey(category);
+    const optionKey = `${category}:${version || normalizeQuickFilterName(model).toLowerCase()}`;
     if (!familyMap.has(familyKey)) {
       familyMap.set(familyKey, {
         key: familyKey,
@@ -1803,7 +1826,7 @@ const quickFilters = computed(() => {
     if (!family.optionsMap.has(optionKey)) {
       family.optionsMap.set(optionKey, {
         key: optionKey,
-        label: buildQuickFilterOptionLabel(familyKey, version, model),
+        label: buildQuickFilterOptionLabel(category, version, model),
         version,
         models: [],
       });
@@ -1828,13 +1851,38 @@ const quickFilters = computed(() => {
       options,
     };
 
-    if (options.length <= 1) {
+    if (options.length <= 1 && !priority.includes(nextFamily.category)) {
       rareOptions.push(...options);
       return;
     }
 
     regularFamilies.push(nextFamily);
   });
+
+  const microRareOptions = [];
+  if (regularFamilies.length > 25) {
+    const retainedFamilies = [];
+    regularFamilies.forEach(family => {
+      const optionCount = Array.isArray(family?.options) ? family.options.length : 0;
+      if (optionCount > 1 && optionCount <= 3) {
+        microRareOptions.push(...family.options);
+        return;
+      }
+      retainedFamilies.push(family);
+    });
+    regularFamilies.length = 0;
+    regularFamilies.push(...retainedFamilies);
+  }
+
+  if (microRareOptions.length > 0) {
+    microRareOptions.sort((a, b) => a.label.localeCompare(b.label));
+    regularFamilies.push({
+      key: 'micro-rare',
+      label: '微冷门组模型',
+      category: 'micro-rare',
+      options: microRareOptions,
+    });
+  }
 
   if (rareOptions.length > 0) {
     rareOptions.sort((a, b) => a.label.localeCompare(b.label));
@@ -1846,7 +1894,6 @@ const quickFilters = computed(() => {
     });
   }
 
-  const priority = ['gpt', 'claude', 'gemini', 'deepseek', 'llama', 'minimax', 'grok', 'kimi', 'glm'];
   regularFamilies.sort((a, b) => {
     const idxA = priority.indexOf(a.category);
     const idxB = priority.indexOf(b.category);
@@ -2626,7 +2673,11 @@ onMounted(() => {
   const pendingBatchStart = consumePendingBatchStart();
   const pendingRestoreKeys = consumePendingSiteRestore();
   if (pendingRestoreKeys.length > 0) {
-    const cachedSites = buildBatchSitesFromCache(loadAllSiteCacheRecords(), {
+    const modelProbeContext = getModelProbeContext();
+    const sourceRecords = modelProbeContext?.siteCacheRecord
+      ? [modelProbeContext.siteCacheRecord]
+      : loadAllSiteCacheRecords();
+    const cachedSites = buildBatchSitesFromCache(sourceRecords, {
       siteCacheKeys: pendingRestoreKeys,
       includeDisabled: true,
     });
@@ -2643,6 +2694,9 @@ onMounted(() => {
           checkedKeys.value = pendingBatchStart.checkedKeys.map(item => String(item || '').trim()).filter(Boolean);
         }
         await nextTick();
+        if (pendingBatchStart?.selectChatOnly) {
+          selectChatModelsOnly();
+        }
         await startBatchCheck();
       });
     }
@@ -6489,10 +6543,13 @@ const startBatchCheck = async () => {
   if (testing.value) {
     testing.value = false;
     scheduleOrganizedSourceRefresh(true);
-    await syncDetectedKeysToLocalStorage({ silent: true });
+    if (!getModelProbeContext()?.rowKey) {
+      await syncDetectedKeysToLocalStorage({ silent: true });
+    }
     message.success('批量检测完成！');
     // Save to history
     saveLastResultsSnapshot();
+    await maybeOfferModelProbeGroupAggregation();
   }
 };
 
@@ -6509,6 +6566,136 @@ function normalizeKeyManagementSiteUrl(rawUrl) {
 
 function buildKeyManagementRowKey(siteUrl, apiKey) {
   return `${normalizeKeyManagementSiteUrl(siteUrl)}::${String(apiKey || '').trim()}`;
+}
+
+function safeParseJsonArray(raw) {
+  try {
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeKeyManagementGroupIds(value) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.map(item => String(item || '').trim()).filter(Boolean)));
+}
+
+function normalizeKeyManagementGroupSelectedModels(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([groupId, model]) => [String(groupId || '').trim(), String(model || '').trim()])
+      .filter(([groupId, model]) => groupId && model)
+  );
+}
+
+function buildModelProbeGroupId() {
+  return `group::probe::${Date.now()}::${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function loadKeyManagementGroups() {
+  return safeParseJsonArray(localStorage.getItem(KEY_MANAGEMENT_GROUPS_STORAGE_KEY));
+}
+
+function loadAllKeyManagementRecords() {
+  return [
+    ...safeParseJsonArray(localStorage.getItem(KEY_MANAGEMENT_STORAGE_KEY)),
+    ...safeParseJsonArray(localStorage.getItem(KEY_MANAGEMENT_MANUAL_STORAGE_KEY)),
+  ];
+}
+
+function persistAllKeyManagementRecords(records) {
+  const autoRecords = [];
+  const manualRecords = [];
+  (Array.isArray(records) ? records : []).forEach(record => {
+    const normalized = {
+      ...record,
+      groupIds: normalizeKeyManagementGroupIds(record?.groupIds),
+      groupSelectedModels: normalizeKeyManagementGroupSelectedModels(record?.groupSelectedModels),
+    };
+    if (String(normalized.sourceType || '').trim() === 'manual') manualRecords.push(normalized);
+    else autoRecords.push({ ...normalized, sourceType: normalized.sourceType || 'auto' });
+  });
+  localStorage.setItem(KEY_MANAGEMENT_STORAGE_KEY, JSON.stringify(autoRecords));
+  localStorage.setItem(KEY_MANAGEMENT_MANUAL_STORAGE_KEY, JSON.stringify(manualRecords));
+}
+
+function getSuccessfulModelProbeModels(context) {
+  const rowKey = String(context?.rowKey || '').trim();
+  const siteUrl = normalizeKeyManagementSiteUrl(context?.siteUrl);
+  const apiKey = String(context?.apiKey || '').trim();
+  return Array.from(new Set((Array.isArray(testResults.value) ? testResults.value : [])
+    .filter(task => String(task?.status || '').trim() === 'success' || String(task?.status || '').trim() === 'warning')
+    .filter(task => {
+      const taskRowKey = buildKeyManagementRowKey(task?.siteUrl, task?.apiKey);
+      if (rowKey && taskRowKey === rowKey) return true;
+      return normalizeKeyManagementSiteUrl(task?.siteUrl) === siteUrl && String(task?.apiKey || '').trim() === apiKey;
+    })
+    .map(task => String(task?.modelName || '').trim())
+    .filter(Boolean)));
+}
+
+async function maybeOfferModelProbeGroupAggregation() {
+  const context = getModelProbeContext();
+  if (!context?.rowKey) return;
+  const models = getSuccessfulModelProbeModels(context);
+  if (!models.length) {
+    clearModelProbeContext(context.probeId);
+    return;
+  }
+  const groupName = String(context?.suggestedGroupName || `${context?.siteName || '模型探测'} 可用模型`).trim();
+  Modal.confirm({
+    title: `是否将可用模型转入新的分组聚合「${groupName}」中？`,
+    content: `本次探测到 ${models.length} 个可用模型。确认后会在密钥管理中创建新分组，并把当前密钥加入该分组。`,
+    okText: '转入分组',
+    cancelText: '不处理',
+    onOk() {
+      const groups = loadKeyManagementGroups();
+      const targetGroup = {
+        id: buildModelProbeGroupId(),
+        name: groupName,
+        createdAt: Date.now(),
+      };
+      const records = loadAllKeyManagementRecords();
+      const targetRowKey = String(context.rowKey || '').trim();
+      const updatedRecords = records.map(record => {
+        const rowKey = String(record?.rowKey || buildKeyManagementRowKey(record?.siteUrl, record?.apiKey)).trim();
+        if (rowKey !== targetRowKey) return record;
+        const groupIds = normalizeKeyManagementGroupIds(record?.groupIds);
+        const groupSelectedModels = normalizeKeyManagementGroupSelectedModels(record?.groupSelectedModels);
+        return {
+          ...record,
+          rowKey,
+          modelsList: Array.from(new Set([...(Array.isArray(record?.modelsList) ? record.modelsList : []), ...models])),
+          modelsText: Array.from(new Set([...(Array.isArray(record?.modelsList) ? record.modelsList : []), ...models])).join(', '),
+          selectedModel: models[0] || String(record?.selectedModel || '').trim(),
+          groupIds: groupIds.includes(targetGroup.id) ? groupIds : [...groupIds, targetGroup.id],
+          groupSelectedModels: {
+            ...groupSelectedModels,
+            [targetGroup.id]: models[0] || '',
+          },
+          updatedAt: Date.now(),
+        };
+      });
+      localStorage.setItem(KEY_MANAGEMENT_GROUPS_STORAGE_KEY, JSON.stringify([...groups, targetGroup]));
+      persistAllKeyManagementRecords(updatedRecords);
+      window.dispatchEvent(new CustomEvent(KEY_MANAGEMENT_SYNC_EVENT, {
+        detail: {
+          source: 'model-probe-group',
+          groupId: targetGroup.id,
+          modelCount: models.length,
+          syncedAt: Date.now(),
+        },
+      }));
+      clearModelProbeContext(context.probeId);
+      message.success(`已创建分组：${groupName}`);
+    },
+    onCancel() {
+      clearModelProbeContext(context.probeId);
+    },
+  });
 }
 
 function loadStoredAutoKeyManagementRecords() {

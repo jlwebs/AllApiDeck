@@ -566,6 +566,13 @@
         <button
           type="button"
           class="import-export-menu-item key-row-context-action"
+          @click="handleRowContextModelProbe"
+        >
+          探测可用模型
+        </button>
+        <button
+          type="button"
+          class="import-export-menu-item key-row-context-action"
           @click="handleRowContextAIImage"
         >
           发起AI绘图
@@ -861,6 +868,10 @@ import {
   getCachedLastResultsSnapshotRaw,
 } from '../utils/historySnapshotStore.js';
 import { ExportTextFile, OpenAIImageWindow } from '../../wailsjs/go/main/App.js';
+import {
+  buildSiteCacheKey,
+  writeModelProbeContext,
+} from '../utils/siteCacheStore.js';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
 import geminiAppIcon from '../assets/app-icons/gemini.svg';
@@ -1097,11 +1108,22 @@ function normalizeQuickFilterVersion(version) {
     .replace(/\.0+$/u, '');
 }
 
+function extractGptSubfamilyMeta(normalizedName) {
+  const normalized = String(normalizedName || '').trim().toLowerCase();
+  if (!normalized) return null;
+  const match = normalized.match(/^gpt-([a-z][a-z0-9-]*)[:_-](\d+(?:\.\d+)?[a-z]?)(?:$|[-_:])/u);
+  if (!match) return null;
+  return {
+    category: `gpt-${match[1]}`,
+    version: normalizeQuickFilterVersion(match[2]),
+  };
+}
+
 function extractQuickFilterCategory(name) {
   const normalized = normalizeQuickFilterName(name).toLowerCase();
   if (!normalized) return '';
-  if (/^gpt-image-\d+(?:\.\d+)?(?:$|[-_])/u.test(normalized)) return 'gpt-image';
-  if (/^gpt-img-\d+(?:\.\d+)?(?:$|[-_])/u.test(normalized)) return 'gpt-img';
+  const gptSubfamily = extractGptSubfamilyMeta(normalized);
+  if (gptSubfamily?.category) return gptSubfamily.category;
   const match = normalized.match(/gpt|[a-zA-Z]{3,}/i);
   return match ? match[0].toLowerCase() : '';
 }
@@ -1109,10 +1131,17 @@ function extractQuickFilterCategory(name) {
 function extractQuickFilterVersion(name) {
   const normalized = normalizeQuickFilterName(name).toLowerCase();
   if (!normalized) return '';
-  const imageFamilyMatch = normalized.match(/^gpt-(?:image|img)-(\d+(?:\.\d+)?)(?:$|[-_])/u);
-  if (imageFamilyMatch) return normalizeQuickFilterVersion(imageFamilyMatch[1]);
+  const gptSubfamily = extractGptSubfamilyMeta(normalized);
+  if (gptSubfamily?.version) return gptSubfamily.version;
   const match = normalized.match(/\d+(?:\.\d+)?/);
   return match ? normalizeQuickFilterVersion(match[0]) : '';
+}
+
+function resolveQuickFilterFamilyKey(category) {
+  const normalized = String(category || '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized.startsWith('gpt-')) return 'gpt';
+  return normalized;
 }
 
 function buildQuickFilterOptionLabel(category, version, sampleName) {
@@ -1596,6 +1625,83 @@ async function handleRowContextAIImage() {
   window.open(targetUrl, '_blank', 'noopener');
 }
 
+function buildModelProbeSiteCacheRecord(record) {
+  const siteUrl = normalizeSiteUrl(record?.siteUrl);
+  const apiKey = normalizeApiKey(record?.apiKey);
+  if (!siteUrl || !apiKey) return null;
+  const siteName = String(record?.siteName || '未命名站点').trim() || '未命名站点';
+  const siteCacheKey = buildSiteCacheKey({
+    site_url: siteUrl,
+    site_name: siteName,
+    resolved_user_id: 'model-probe',
+  });
+  const modelsList = normalizeModels([
+    record?.modelsList,
+    record?.modelsText,
+    record?.selectedModel,
+    record?.quickTestModel,
+  ]);
+  const now = Date.now();
+  return {
+    siteCacheKey,
+    siteName,
+    siteUrl,
+    siteType: String(record?.siteType || '').trim(),
+    apiBaseUrl: siteUrl,
+    accountInfo: { id: 'model-probe', access_token: apiKey },
+    resolvedAccessToken: apiKey,
+    resolvedUserId: 'model-probe',
+    tokens: [{
+      key: apiKey,
+      access_token: apiKey,
+      name: String(record?.tokenName || 'Probe SK').trim() || 'Probe SK',
+      status: 1,
+      source: 'model_probe',
+      models: modelsList,
+      updatedAt: now,
+    }],
+    customTokens: [],
+    endpoint: siteUrl,
+    cachedTreeNodes: [],
+    lastImportSource: 'key_model_probe',
+    updatedAt: now,
+    lastSyncedAt: now,
+  };
+}
+
+async function handleRowContextModelProbe() {
+  const record = rowContextMenu.record;
+  closeRowContextMenu();
+  if (!record?.rowKey) return;
+  const siteCacheRecord = buildModelProbeSiteCacheRecord(record);
+  if (!siteCacheRecord) {
+    message.warning('当前密钥缺少站点地址或 SK，无法探测模型');
+    return;
+  }
+
+  const probeId = writeModelProbeContext({
+    rowKey: String(record.rowKey || '').trim(),
+    siteCacheKey: siteCacheRecord.siteCacheKey,
+    siteCacheRecord,
+    siteName: siteCacheRecord.siteName,
+    siteUrl: siteCacheRecord.siteUrl,
+    apiKey: siteCacheRecord.resolvedAccessToken,
+    suggestedGroupName: `${siteCacheRecord.siteName} 可用模型`,
+  });
+
+  const openModelProbeWindow = window?.go?.main?.App?.OpenModelProbeWindow;
+  if (isWailsRuntime && typeof openModelProbeWindow === 'function') {
+    try {
+      await openModelProbeWindow(probeId || String(record.rowKey || ''));
+      return;
+    } catch (error) {
+      message.error(error?.message || '打开模型探测窗口失败');
+      return;
+    }
+  }
+  window.open('/sites', '_blank', 'noopener');
+}
+
 const refreshManualSidebarBridgeReady = () => {
   manualSidebarBridgeReady.value = isManualSidebarBridgeAvailable();
   if (manualSidebarBridgeReady.value && manualSidebarBridgeProbeTimer) {
@@ -1702,8 +1808,8 @@ const quickGroupFilters = computed(() => {
     const category = extractQuickFilterCategory(model);
     if (!category) return;
     const version = extractQuickFilterVersion(model);
-    const familyKey = category;
-    const optionKey = `${familyKey}:${version || normalizeQuickFilterName(model).toLowerCase()}`;
+    const familyKey = resolveQuickFilterFamilyKey(category);
+    const optionKey = `${category}:${version || normalizeQuickFilterName(model).toLowerCase()}`;
     if (!familyMap.has(familyKey)) {
       familyMap.set(familyKey, {
         key: familyKey,
@@ -1716,7 +1822,7 @@ const quickGroupFilters = computed(() => {
     if (!family.optionsMap.has(optionKey)) {
       family.optionsMap.set(optionKey, {
         key: optionKey,
-        label: buildQuickFilterOptionLabel(familyKey, version, model),
+        label: buildQuickFilterOptionLabel(category, version, model),
         version,
         models: [],
       });

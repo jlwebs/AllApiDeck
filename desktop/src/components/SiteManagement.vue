@@ -79,6 +79,17 @@
                         <span v-if="siteBridgeSilentMode" class="site-bridge-toggle-dot" aria-hidden="true"></span>
                       </button>
                     </a-tooltip>
+                    <div class="site-group-site-filter site-group-site-filter-header">
+                      <a-input
+                        v-model:value="siteGroupSiteFilterDisplayValue"
+                        size="small"
+                        allow-clear
+                        class="site-group-site-filter-input"
+                        placeholder="输入中转站名字筛选"
+                        @focus="handleSiteGroupSiteFilterFocus"
+                        @blur="handleSiteGroupSiteFilterBlur"
+                      />
+                    </div>
                     <a-space class="selection-action-group">
                       <a-button @click="selectAllNodes" size="small">全部全选</a-button>
                       <a-button @click="unselectAllNodes" size="small">全部反选</a-button>
@@ -363,6 +374,7 @@ import {
   buildSiteCacheKey,
   consumePendingBatchStart,
   deleteSiteCacheRecord,
+  getModelProbeContext,
   getProfileRecoveryPending,
   loadAllSiteCacheRecords,
   mergeExtractedSitesIntoTempCache,
@@ -397,6 +409,7 @@ const batchConcurrency = ref(25);
 const modelTimeout = ref(15);
 const activeQuickFilters = ref([]);
 const quickFilterSelectionMode = ref(false);
+const siteGroupSiteFilterQuery = ref('');
 const siteBridgeSilentMode = ref(false);
 const siteBridgeSessionOpening = ref(false);
 const siteBridgePolling = ref(false);
@@ -412,6 +425,7 @@ const siteBridgeLastClientPing = ref('');
 const siteBridgeNoticeItems = ref([]);
 const refreshFailureGuideSiteCacheKey = ref('');
 const siteBridgeImportGuideDismissedSignature = ref('');
+const modelProbeContext = ref(null);
 const profileRecoveryPending = ref(getProfileRecoveryPending());
 const stableSiteOrderMap = new Map();
 const siteBridgeProcessedRecordIds = new Set();
@@ -427,6 +441,22 @@ const syncThemeState = () => {
 
 const disabledCount = computed(() => records.value.filter(item => item.disabled).length);
 const customTokenCount = computed(() => records.value.reduce((sum, item) => sum + (item.customTokens?.length || 0), 0));
+const siteGroupSiteFilterDisplayValue = computed({
+  get() {
+    return siteGroupSiteFilterQuery.value;
+  },
+  set(value) {
+    const nextValue = String(value || '');
+    if (!nextValue) {
+      siteGroupSiteFilterQuery.value = '';
+      return;
+    }
+    siteGroupSiteFilterQuery.value = nextValue.startsWith(' ')
+      ? nextValue
+      : ` ${nextValue.trimStart()}`;
+  },
+});
+const normalizedSiteGroupSiteFilterQuery = computed(() => String(siteGroupSiteFilterQuery.value || '').trim().toLowerCase());
 const siteBridgeSilentModeTooltip = computed(() => (
   siteBridgeSilentMode.value
     ? '关闭标签静默导入悬窗模式'
@@ -549,15 +579,20 @@ const getStableSiteOrder = record => {
 
 const filteredRecords = computed(() => {
   const text = String(keyword.value || '').trim().toLowerCase();
+  const siteNameFilter = normalizedSiteGroupSiteFilterQuery.value;
+  const probeSiteCacheKey = String(modelProbeContext.value?.siteCacheKey || '').trim();
   return records.value.filter(record => {
+    if (probeSiteCacheKey && String(record?.siteCacheKey || '').trim() !== probeSiteCacheKey) return false;
     if (hideDisabled.value && record.disabled) return false;
-    if (!text) return true;
-    return [
+    const keywordMatched = !text || [
       record.siteName,
       record.siteUrl,
       record.note,
       record.resolvedUserId,
     ].some(value => String(value || '').toLowerCase().includes(text));
+    if (!keywordMatched) return false;
+    if (!siteNameFilter) return true;
+    return String(record?.siteName || '').trim().toLowerCase().includes(siteNameFilter);
   }).sort((left, right) => {
     const leftOrder = getStableSiteOrder(left);
     const rightOrder = getStableSiteOrder(right);
@@ -570,6 +605,18 @@ const rootSiteKeys = computed(() => treeData.value
   .filter(node => node?.isSiteRoot)
   .map(node => String(node?.key || '').trim())
   .filter(Boolean));
+
+function handleSiteGroupSiteFilterFocus() {
+  if (!siteGroupSiteFilterQuery.value) {
+    siteGroupSiteFilterQuery.value = ' ';
+  }
+}
+
+function handleSiteGroupSiteFilterBlur() {
+  if (!String(siteGroupSiteFilterQuery.value || '').trim()) {
+    siteGroupSiteFilterQuery.value = '';
+  }
+}
 
 const selectedModelKeys = computed(() => checkedKeys.value
   .map(key => String(key || '').trim())
@@ -838,10 +885,17 @@ const syncExpandedKeys = () => {
 const syncCheckedKeys = () => {
   const allowed = new Set(collectSelectableModelKeysFromTreeNodes(treeData.value, []));
   checkedKeys.value = checkedKeys.value.filter(key => allowed.has(String(key || '').trim()));
+  if (modelProbeContext.value && checkedKeys.value.length === 0 && allowed.size > 0) {
+    checkedKeys.value = Array.from(allowed);
+  }
 };
 
 const reloadRecords = () => {
-  const nextRecords = loadAllSiteCacheRecords();
+  modelProbeContext.value = getModelProbeContext();
+  const probeRecord = modelProbeContext.value?.siteCacheRecord || null;
+  const nextRecords = probeRecord
+    ? [probeRecord]
+    : loadAllSiteCacheRecords();
   ensureStableSiteOrders(nextRecords);
   records.value = nextRecords;
   syncExpandedKeys();
@@ -952,11 +1006,22 @@ const normalizeQuickFilterVersion = (version) => {
     .replace(/\.0+$/u, '');
 };
 
+const extractGptSubfamilyMeta = (normalizedName) => {
+  const normalized = String(normalizedName || '').trim().toLowerCase();
+  if (!normalized) return null;
+  const match = normalized.match(/^gpt-([a-z][a-z0-9-]*)[:_-](\d+(?:\.\d+)?[a-z]?)(?:$|[-_:])/u);
+  if (!match) return null;
+  return {
+    category: `gpt-${match[1]}`,
+    version: normalizeQuickFilterVersion(match[2]),
+  };
+};
+
 const extractQuickFilterCategory = (name) => {
   const normalized = normalizeQuickFilterName(name).toLowerCase();
   if (!normalized) return '';
-  if (/^gpt-image-\d+(?:\.\d+)?(?:$|[-_])/u.test(normalized)) return 'gpt-image';
-  if (/^gpt-img-\d+(?:\.\d+)?(?:$|[-_])/u.test(normalized)) return 'gpt-img';
+  const gptSubfamily = extractGptSubfamilyMeta(normalized);
+  if (gptSubfamily?.category) return gptSubfamily.category;
   const match = normalized.match(/gpt|[a-zA-Z]{3,}/i);
   return match ? match[0].toLowerCase() : '';
 };
@@ -964,10 +1029,17 @@ const extractQuickFilterCategory = (name) => {
 const extractQuickFilterVersion = (name) => {
   const normalized = normalizeQuickFilterName(name).toLowerCase();
   if (!normalized) return '';
-  const imageFamilyMatch = normalized.match(/^gpt-(?:image|img)-(\d+(?:\.\d+)?)(?:$|[-_])/u);
-  if (imageFamilyMatch) return normalizeQuickFilterVersion(imageFamilyMatch[1]);
+  const gptSubfamily = extractGptSubfamilyMeta(normalized);
+  if (gptSubfamily?.version) return gptSubfamily.version;
   const match = normalized.match(/\d+(?:\.\d+)?/);
   return match ? normalizeQuickFilterVersion(match[0]) : '';
+};
+
+const resolveQuickFilterFamilyKey = (category) => {
+  const normalized = String(category || '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized.startsWith('gpt-')) return 'gpt';
+  return normalized;
 };
 
 const buildQuickFilterOptionLabel = (category, version, sampleName) => {
@@ -991,13 +1063,14 @@ const quickFilterSourceModels = computed(() => Array.from(new Set(
 const quickFilters = computed(() => {
   const models = quickFilterSourceModels.value;
   const familyMap = new Map();
+  const priority = ['gpt', 'claude', 'gemini', 'deepseek', 'llama', 'minimax', 'grok', 'kimi', 'glm'];
 
   models.forEach(model => {
     const category = extractQuickFilterCategory(model);
     if (!category) return;
     const version = extractQuickFilterVersion(model);
-    const familyKey = category;
-    const optionKey = `${familyKey}:${version || normalizeQuickFilterName(model).toLowerCase()}`;
+    const familyKey = resolveQuickFilterFamilyKey(category);
+    const optionKey = `${category}:${version || normalizeQuickFilterName(model).toLowerCase()}`;
     if (!familyMap.has(familyKey)) {
       familyMap.set(familyKey, {
         key: familyKey,
@@ -1011,7 +1084,7 @@ const quickFilters = computed(() => {
     if (!family.optionsMap.has(optionKey)) {
       family.optionsMap.set(optionKey, {
         key: optionKey,
-        label: buildQuickFilterOptionLabel(familyKey, version, model),
+        label: buildQuickFilterOptionLabel(category, version, model),
         version,
         models: [],
       });
@@ -1033,12 +1106,37 @@ const quickFilters = computed(() => {
       category: family.category,
       options,
     };
-    if (options.length <= 1) {
+    if (options.length <= 1 && !priority.includes(nextFamily.category)) {
       rareOptions.push(...options);
       return;
     }
     regularFamilies.push(nextFamily);
   });
+
+  const microRareOptions = [];
+  if (regularFamilies.length > 25) {
+    const retainedFamilies = [];
+    regularFamilies.forEach(family => {
+      const optionCount = Array.isArray(family?.options) ? family.options.length : 0;
+      if (optionCount > 1 && optionCount <= 3) {
+        microRareOptions.push(...family.options);
+        return;
+      }
+      retainedFamilies.push(family);
+    });
+    regularFamilies.length = 0;
+    regularFamilies.push(...retainedFamilies);
+  }
+
+  if (microRareOptions.length > 0) {
+    microRareOptions.sort((a, b) => a.label.localeCompare(b.label));
+    regularFamilies.push({
+      key: 'micro-rare',
+      label: '微冷门组模型',
+      category: 'micro-rare',
+      options: microRareOptions,
+    });
+  }
 
   if (rareOptions.length > 0) {
     rareOptions.sort((a, b) => a.label.localeCompare(b.label));
@@ -1050,7 +1148,6 @@ const quickFilters = computed(() => {
     });
   }
 
-  const priority = ['gpt', 'claude', 'gemini', 'deepseek', 'llama', 'minimax', 'grok', 'kimi', 'glm'];
   regularFamilies.sort((a, b) => {
     const idxA = priority.indexOf(a.category);
     const idxB = priority.indexOf(b.category);
@@ -1672,6 +1769,7 @@ const startBatchCheckFromSiteManagement = async () => {
   writePendingSiteRestore(selectedSiteCacheKeys.value);
   writePendingBatchStart({
     autoStart: true,
+    selectChatOnly: Boolean(modelProbeContext.value?.siteCacheKey),
     checkedKeys: modelKeys,
     batchConcurrency: Number(batchConcurrency.value || 25),
     modelTimeout: Number(modelTimeout.value || 15),
@@ -1763,7 +1861,7 @@ watch(siteBridgeImportGuideSignature, (next, prev) => {
   }
 });
 
-onMounted(() => {
+onMounted(async () => {
   syncThemeState();
   reloadRecords();
   handleProfileRecoveryPendingChange();
@@ -1771,6 +1869,14 @@ onMounted(() => {
   if (pendingBatchStart) {
     batchConcurrency.value = Number(pendingBatchStart?.batchConcurrency || batchConcurrency.value || 25);
     modelTimeout.value = Number(pendingBatchStart?.modelTimeout || modelTimeout.value || 15);
+  }
+  if (modelProbeContext.value?.siteCacheKey) {
+    const probeRecord = records.value.find(record => String(record?.siteCacheKey || '').trim() === String(modelProbeContext.value?.siteCacheKey || '').trim()) || null;
+    if (probeRecord && collectSelectableModelKeysFromTreeNodes(treeData.value, []).length === 0) {
+      await refreshSiteTreeModels(probeRecord);
+      reloadRecords();
+    }
+    selectChatModelsOnly();
   }
   window.addEventListener(THEME_MODE_CHANGE_EVENT, syncThemeState);
   window.addEventListener(SITE_CACHE_SYNC_EVENT, handleSync);
@@ -2126,6 +2232,59 @@ onBeforeUnmount(() => {
   color: #64748b;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.site-group-site-filter {
+  flex: 1 1 220px;
+  min-width: 180px;
+  max-width: 360px;
+}
+
+.site-group-site-filter-header {
+  flex: 0 0 232px;
+  width: 232px;
+  min-width: 180px;
+  max-width: min(232px, 24vw);
+}
+
+.site-group-site-filter-input :deep(.ant-input) {
+  height: 26px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.88);
+  border-color: rgba(124, 142, 112, 0.18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+}
+
+.site-group-site-filter-input :deep(.ant-input::placeholder) {
+  color: rgba(100, 116, 94, 0.72);
+}
+
+.site-group-site-filter-input :deep(.ant-input-affix-wrapper) {
+  height: 26px;
+  border-radius: 10px;
+  padding: 0 10px;
+  background: rgba(255, 255, 255, 0.88);
+  border-color: rgba(124, 142, 112, 0.18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+}
+
+.site-group-site-filter-input :deep(.ant-input-affix-wrapper .ant-input) {
+  height: auto;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.site-group-site-filter-input :deep(.ant-input-affix-wrapper .ant-input::placeholder) {
+  color: rgba(100, 116, 94, 0.72);
+}
+
+.site-group-site-filter-input :deep(.ant-input-affix-wrapper-focused) {
+  border-color: rgba(106, 144, 88, 0.42);
+  box-shadow: 0 0 0 2px rgba(171, 205, 132, 0.18);
 }
 
 .quick-filter-family-panel {
@@ -2947,6 +3106,24 @@ onBeforeUnmount(() => {
   color: #e6f2f0;
 }
 
+:deep(body.gaia-dark) .site-group-site-filter-input :deep(.ant-input),
+:deep(body.gaia-dark) .site-group-site-filter-input :deep(.ant-input-affix-wrapper) {
+  background: linear-gradient(180deg, rgba(31, 42, 33, 0.94), rgba(20, 29, 23, 0.96));
+  border-color: rgba(160, 189, 144, 0.18);
+  color: #edf5e6;
+  box-shadow: none;
+}
+
+:deep(body.gaia-dark) .site-group-site-filter-input :deep(.ant-input::placeholder),
+:deep(body.gaia-dark) .site-group-site-filter-input :deep(.ant-input-affix-wrapper .ant-input::placeholder) {
+  color: rgba(184, 200, 178, 0.56);
+}
+
+:deep(body.gaia-dark) .site-group-site-filter-input :deep(.ant-input-affix-wrapper-focused) {
+  border-color: rgba(160, 189, 144, 0.32);
+  box-shadow: 0 0 0 2px rgba(160, 189, 144, 0.12);
+}
+
 :deep(body.gaia-dark) .settings-action-bar {
   border-color: rgba(101, 129, 138, 0.16);
   background: linear-gradient(180deg, rgba(12, 20, 25, 0.96), rgba(9, 16, 20, 0.92));
@@ -3001,6 +3178,19 @@ onBeforeUnmount(() => {
     flex-direction: column;
     align-items: flex-start;
   }
+
+  .site-group-site-filter {
+    min-width: 0;
+    max-width: 100%;
+    width: 100%;
+    flex-basis: 100%;
+  }
+
+  .site-group-site-filter-header {
+    flex: 0 0 180px;
+    width: 180px;
+    max-width: 180px;
+  }
 }
 
 .site-wrapper-gaia .batch-hero {
@@ -3051,6 +3241,24 @@ onBeforeUnmount(() => {
   border-color: rgba(122, 155, 166, 0.3);
   background: rgba(16, 28, 34, 0.98);
   color: #f4faf8;
+}
+
+.site-wrapper-gaia .site-group-site-filter-input :deep(.ant-input),
+.site-wrapper-gaia .site-group-site-filter-input :deep(.ant-input-affix-wrapper) {
+  background: linear-gradient(180deg, rgba(34, 40, 34, 0.94), rgba(26, 31, 27, 0.96));
+  border-color: rgba(122, 151, 125, 0.18);
+  color: #d8e5d4;
+  box-shadow: none;
+}
+
+.site-wrapper-gaia .site-group-site-filter-input :deep(.ant-input::placeholder),
+.site-wrapper-gaia .site-group-site-filter-input :deep(.ant-input-affix-wrapper .ant-input::placeholder) {
+  color: rgba(216, 229, 212, 0.54);
+}
+
+.site-wrapper-gaia .site-group-site-filter-input :deep(.ant-input-affix-wrapper-focused) {
+  border-color: rgba(157, 208, 128, 0.36);
+  box-shadow: 0 0 0 2px rgba(186, 228, 149, 0.12);
 }
 
 .site-wrapper-gaia .settings-action-bar {
