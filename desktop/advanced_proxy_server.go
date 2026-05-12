@@ -249,6 +249,28 @@ func mapOpenAIResponsesStopReason(status string, hasToolUse bool, incompleteReas
 	}
 }
 
+func appendToolArgumentsParseFailure(contentBlocks *[]map[string]any, toolName string, rawArguments any, parseErr error) {
+	if contentBlocks == nil || parseErr == nil {
+		return
+	}
+	resolvedToolName := firstNonEmpty(strings.TrimSpace(toolName), "unknown_tool")
+	preview := previewAdvancedProxyText(stringifyJSON(rawArguments), 240)
+	message := fmt.Sprintf("Tool `%s` arguments were invalid and were skipped. Please retry the action.", resolvedToolName)
+	if preview != "" {
+		message += "\n\nArguments preview: " + preview
+	}
+	*contentBlocks = append(*contentBlocks, map[string]any{
+		"type": "text",
+		"text": message,
+	})
+	appendAdvancedProxyLogf(
+		"[CLAUDE_PROXY_TOOL_ARGUMENTS_INVALID] tool=%s reason=%s arguments=%s",
+		resolvedToolName,
+		parseErr.Error(),
+		preview,
+	)
+}
+
 func openAIUsageToAnthropic(response map[string]any) map[string]any {
 	usage := map[string]any{
 		"input_tokens":  0,
@@ -312,21 +334,45 @@ func openAIChatToAnthropic(response map[string]any, fallbackModel string, includ
 				continue
 			}
 			functionMap, _ := toolCallMap["function"].(map[string]any)
+			toolName := strings.TrimSpace(toStringValue(functionMap["name"]))
+			toolInput, parseErr := parseToolInputMap(functionMap["arguments"])
+			if parseErr != nil {
+				appendToolArgumentsParseFailure(&contentBlocks, toolName, functionMap["arguments"], parseErr)
+				continue
+			}
 			contentBlocks = append(contentBlocks, map[string]any{
 				"type":  "tool_use",
 				"id":    firstNonEmpty(strings.TrimSpace(toStringValue(toolCallMap["id"])), fmt.Sprintf("tool_%d", len(contentBlocks)+1)),
-				"name":  strings.TrimSpace(toStringValue(functionMap["name"])),
-				"input": parseJSONStringMap(functionMap["arguments"]),
+				"name":  toolName,
+				"input": toolInput,
 			})
 		}
 	}
 	if functionMap, ok := message["function_call"].(map[string]any); ok && functionMap != nil {
-		contentBlocks = append(contentBlocks, map[string]any{
-			"type":  "tool_use",
-			"id":    fmt.Sprintf("tool_%d", len(contentBlocks)+1),
-			"name":  strings.TrimSpace(toStringValue(functionMap["name"])),
-			"input": parseJSONStringMap(functionMap["arguments"]),
-		})
+		toolName := strings.TrimSpace(toStringValue(functionMap["name"]))
+		toolInput, parseErr := parseToolInputMap(functionMap["arguments"])
+		if parseErr != nil {
+			appendToolArgumentsParseFailure(&contentBlocks, toolName, functionMap["arguments"], parseErr)
+		} else {
+			contentBlocks = append(contentBlocks, map[string]any{
+				"type":  "tool_use",
+				"id":    fmt.Sprintf("tool_%d", len(contentBlocks)+1),
+				"name":  toolName,
+				"input": toolInput,
+			})
+		}
+	}
+	if finishReason == "tool_use" {
+		hasToolUse := false
+		for _, block := range contentBlocks {
+			if strings.TrimSpace(toStringValue(block["type"])) == "tool_use" {
+				hasToolUse = true
+				break
+			}
+		}
+		if !hasToolUse {
+			finishReason = "end_turn"
+		}
 	}
 	if len(contentBlocks) == 0 {
 		contentBlocks = append(contentBlocks, map[string]any{"type": "text", "text": ""})
@@ -393,12 +439,18 @@ func openAIResponsesToAnthropic(response map[string]any, fallbackModel string) m
 					}
 				}
 			case "function_call":
+				toolName := strings.TrimSpace(toStringValue(outputMap["name"]))
+				toolInput, parseErr := parseToolInputMap(outputMap["arguments"])
+				if parseErr != nil {
+					appendToolArgumentsParseFailure(&contentBlocks, toolName, outputMap["arguments"], parseErr)
+					continue
+				}
 				hasToolUse = true
 				contentBlocks = append(contentBlocks, map[string]any{
 					"type":  "tool_use",
 					"id":    firstNonEmpty(strings.TrimSpace(toStringValue(outputMap["call_id"])), fmt.Sprintf("tool_%d", len(contentBlocks)+1)),
-					"name":  strings.TrimSpace(toStringValue(outputMap["name"])),
-					"input": parseJSONStringMap(outputMap["arguments"]),
+					"name":  toolName,
+					"input": toolInput,
 				})
 			case "web_search_call":
 				webSearchRequests++
@@ -1384,12 +1436,36 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 		})
 		state.EmittedArgs = next
 	}
+	stringifyToolArgumentsForStream := func(value any) (string, error) {
+		switch typed := value.(type) {
+		case nil:
+			return "", nil
+		case string:
+			trimmed := strings.TrimSpace(typed)
+			if trimmed == "" {
+				return "", nil
+			}
+			return trimmed, nil
+		default:
+			return normalizeToolArgumentsJSON(typed)
+		}
+	}
 	extractResponsesToolArguments := func(data map[string]any) string {
-		if args := strings.TrimSpace(toStringValue(data["arguments"])); args != "" {
+		args, err := stringifyToolArgumentsForStream(data["arguments"])
+		if err != nil {
+			appendAdvancedProxyLogf("[CLAUDE_PROXY_TOOL_ARGUMENTS_INVALID_STREAM] reason=%s arguments=%s", err.Error(), previewAdvancedProxyText(stringifyJSON(data["arguments"]), 240))
+			return ""
+		}
+		if args != "" {
 			return args
 		}
 		itemMap, _ := data["item"].(map[string]any)
-		if args := strings.TrimSpace(toStringValue(itemMap["arguments"])); args != "" {
+		args, err = stringifyToolArgumentsForStream(itemMap["arguments"])
+		if err != nil {
+			appendAdvancedProxyLogf("[CLAUDE_PROXY_TOOL_ARGUMENTS_INVALID_STREAM] reason=%s arguments=%s", err.Error(), previewAdvancedProxyText(stringifyJSON(itemMap["arguments"]), 240))
+			return ""
+		}
+		if args != "" {
 			return args
 		}
 		return ""
@@ -1496,7 +1572,7 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 			state.ID = firstNonEmpty(strings.TrimSpace(toStringValue(itemMap["call_id"])), state.ID, strings.TrimSpace(toStringValue(itemMap["id"])))
 			state.Name = firstNonEmpty(strings.TrimSpace(toStringValue(itemMap["name"])), state.Name)
 			startToolState(state)
-			emitToolArguments(state, strings.TrimSpace(toStringValue(itemMap["arguments"])))
+			emitToolArguments(state, extractResponsesToolArguments(map[string]any{"item": itemMap}))
 		case "response.function_call_arguments.delta":
 			hasToolUse = true
 			closeIndex(&currentTextIndex)
@@ -1641,6 +1717,16 @@ func writeAnthropicSSEFromOpenAIResponsesStream(writer http.ResponseWriter, stre
 	}
 	if err := scanner.Err(); err != nil {
 		appendAdvancedProxyLogf("responses stream scanner failed: %v", err)
+		index := ensureTextBlock("text")
+		writeEvent("content_block_delta", map[string]any{
+			"type":  "content_block_delta",
+			"index": index,
+			"delta": map[string]any{
+				"type": "text_delta",
+				"text": "Advanced proxy stream interrupted before tool conversion completed. Please retry the previous action.",
+			},
+		})
+		emitMessageStop("end_turn")
 		return
 	}
 	emitMessageStop(mapOpenAIResponsesStopReason("completed", hasToolUse, ""))

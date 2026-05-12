@@ -165,6 +165,34 @@ func TestOpenAIResponsesToAnthropicMarksToolUseStopReason(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponsesToAnthropicSurfacesInvalidToolArgumentsAsText(t *testing.T) {
+	response := map[string]any{
+		"id":     "resp_tool_invalid",
+		"model":  "gpt-5.4",
+		"status": "completed",
+		"output": []any{
+			map[string]any{
+				"type":      "function_call",
+				"call_id":   "call_bad",
+				"name":      "Read",
+				"arguments": `{"file_path":`,
+			},
+		},
+	}
+
+	result := openAIResponsesToAnthropic(response, "gpt-5.4")
+	content := contentBlocksOf(t, result["content"])
+	if len(content) != 1 || content[0]["type"] != "text" {
+		t.Fatalf("expected invalid tool args to become assistant text, got %#v", content)
+	}
+	if !strings.Contains(toStringValue(content[0]["text"]), "invalid") {
+		t.Fatalf("expected error text to mention invalid arguments, got %#v", content[0]["text"])
+	}
+	if got := result["stop_reason"]; got != "end_turn" {
+		t.Fatalf("expected stop_reason end_turn without valid tool_use, got %#v", got)
+	}
+}
+
 func TestOpenAIResponsesToAnthropicMapsWebSearchBlocksAndUsage(t *testing.T) {
 	response := map[string]any{
 		"id":     "resp_search_123",
@@ -1238,6 +1266,51 @@ func TestWriteAnthropicSSEFromOpenAIResponsesStreamSupportsLargeToolArgs(t *test
 	}
 	if !strings.Contains(body, `/tmp/large.txt`) || !strings.Contains(body, `export const value0000`) || !strings.Contains(body, `export const value1999`) {
 		t.Fatalf("expected large tool args to survive SSE scanning, got body length=%d", len(body))
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIResponsesStreamNormalizesObjectToolArgs(t *testing.T) {
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"resp_tool_object","model":"gpt-5.4"}}`,
+		"",
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","item_id":"fc_obj","item":{"id":"fc_obj","type":"function_call","call_id":"call_obj","name":"Read"}}`,
+		"",
+		`event: response.output_item.done`,
+		`data: {"type":"response.output_item.done","item_id":"fc_obj","item":{"id":"fc_obj","type":"function_call","call_id":"call_obj","name":"Read","arguments":{"file_path":"C:/tmp/log.jsonl","offset":120,"limit":60,"pages":""}}}`,
+		"",
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":9,"output_tokens":5}}}`,
+		"",
+	}, "\n")))
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIResponsesStream(recorder, streamBody, "gpt-5.4")
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"partial_json":"{\"file_path\":\"C:/tmp/log.jsonl\",\"limit\":60,\"offset\":120}"`) {
+		t.Fatalf("expected object tool args normalized into JSON without empty optional pages, got %q", body)
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIResponsesStreamEmitsStopOnScannerError(t *testing.T) {
+	streamBody := &failingReadCloser{
+		chunks: [][]byte{
+			[]byte("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_err\",\"model\":\"gpt-5.4\"}}\n\n"),
+		},
+		err: errors.New("stream interrupted"),
+	}
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIResponsesStream(recorder, streamBody, "gpt-5.4")
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"type":"message_stop"`) {
+		t.Fatalf("expected message_stop on responses scanner error, got %q", body)
+	}
+	if !strings.Contains(body, "stream interrupted before tool conversion completed") {
+		t.Fatalf("expected user-visible stream interruption message, got %q", body)
 	}
 }
 

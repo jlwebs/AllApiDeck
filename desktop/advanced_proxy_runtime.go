@@ -1450,22 +1450,105 @@ func stringifyJSON(value any) string {
 	}
 }
 
-func parseJSONStringMap(value any) map[string]any {
-	switch typed := value.(type) {
-	case map[string]any:
-		return typed
-	case string:
-		if strings.TrimSpace(typed) == "" {
-			return map[string]any{}
-		}
-		var decoded map[string]any
-		if err := json.Unmarshal([]byte(typed), &decoded); err == nil {
-			return decoded
-		}
-		return map[string]any{}
-	default:
+var optionalEmptyStringToolInputKeys = map[string]struct{}{
+	"after":        {},
+	"before":       {},
+	"cursor":       {},
+	"end_cursor":   {},
+	"limit":        {},
+	"next_cursor":  {},
+	"offset":       {},
+	"page":         {},
+	"pages":        {},
+	"start_cursor": {},
+}
+
+func cloneAndSanitizeToolInputMap(source map[string]any) map[string]any {
+	if source == nil {
 		return map[string]any{}
 	}
+	cleaned := make(map[string]any, len(source))
+	for key, value := range source {
+		if value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case map[string]any:
+			cleaned[key] = cloneAndSanitizeToolInputMap(typed)
+		case []any:
+			items := make([]any, len(typed))
+			for index, item := range typed {
+				if itemMap, ok := item.(map[string]any); ok {
+					items[index] = cloneAndSanitizeToolInputMap(itemMap)
+				} else {
+					items[index] = item
+				}
+			}
+			cleaned[key] = items
+		case string:
+			if typed == "" {
+				if _, drop := optionalEmptyStringToolInputKeys[strings.ToLower(strings.TrimSpace(key))]; drop {
+					continue
+				}
+			}
+			cleaned[key] = typed
+		default:
+			cleaned[key] = value
+		}
+	}
+	return cleaned
+}
+
+func parseToolInputMap(value any) (map[string]any, error) {
+	switch typed := value.(type) {
+	case nil:
+		return map[string]any{}, nil
+	case map[string]any:
+		return cloneAndSanitizeToolInputMap(typed), nil
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return map[string]any{}, nil
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
+			return nil, fmt.Errorf("invalid tool arguments JSON: %w", err)
+		}
+		return cloneAndSanitizeToolInputMap(decoded), nil
+	default:
+		return nil, fmt.Errorf("unsupported tool arguments type %T", value)
+	}
+}
+
+func normalizeToolArgumentsJSON(value any) (string, error) {
+	switch typed := value.(type) {
+	case nil:
+		return "", nil
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return "", nil
+		}
+		parsed, err := parseToolInputMap(trimmed)
+		if err != nil {
+			return "", err
+		}
+		return stringifyJSON(parsed), nil
+	default:
+		parsed, err := parseToolInputMap(typed)
+		if err != nil {
+			return "", err
+		}
+		return stringifyJSON(parsed), nil
+	}
+}
+
+func parseJSONStringMap(value any) map[string]any {
+	parsed, err := parseToolInputMap(value)
+	if err != nil {
+		return map[string]any{}
+	}
+	return parsed
 }
 
 func cleanJSONSchema(value any) any {

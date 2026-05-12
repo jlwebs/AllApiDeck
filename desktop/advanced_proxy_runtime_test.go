@@ -12,6 +12,19 @@ func TestParseJSONStringMapReturnsEmptyMapOnInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestParseToolInputMapDropsOptionalEmptyPaginationFields(t *testing.T) {
+	parsed, err := parseToolInputMap(`{"file_path":"C:/tmp/test.txt","limit":60,"offset":2900,"pages":""}`)
+	if err != nil {
+		t.Fatalf("expected valid tool arguments, got error: %v", err)
+	}
+	if _, exists := parsed["pages"]; exists {
+		t.Fatalf("expected optional empty pages field removed, got %#v", parsed)
+	}
+	if parsed["file_path"] != "C:/tmp/test.txt" || toIntValue(parsed["limit"]) != 60 || toIntValue(parsed["offset"]) != 2900 {
+		t.Fatalf("expected remaining tool args preserved, got %#v", parsed)
+	}
+}
+
 func TestAnthropicRequestToOpenAIChatMapsImagesStopAndCleansSchema(t *testing.T) {
 	request := anthropicRequestToOpenAIChat(map[string]any{
 		"model": "gpt-5.4",
