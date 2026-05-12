@@ -20,6 +20,7 @@ import {
   setAdvancedProxyConfig,
 } from './utils/advancedProxyBridge.js';
 import { installSidebarRoutingDiagnostics } from './utils/clientDiagnostics.js';
+import { clearCurrentLaunchMode, setCurrentLaunchMode } from './utils/launchModeState.js';
 import {
   applyThemeMode,
   getStoredThemeMode,
@@ -133,6 +134,7 @@ export default {
       try {
         mode = await GetLaunchMode();
         launchMode.value = String(mode || '').trim();
+        setCurrentLaunchMode(launchMode.value);
         syncLaunchModeClasses(launchMode.value);
         if (mode === 'panel' && router.currentRoute.value.path !== '/panel') {
           await router.replace('/panel');
@@ -157,6 +159,7 @@ export default {
     });
 
     onBeforeUnmount(() => {
+      clearCurrentLaunchMode();
       if (themeModeListener) {
         window.removeEventListener(THEME_MODE_CHANGE_EVENT, themeModeListener);
         themeModeListener = null;

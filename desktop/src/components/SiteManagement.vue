@@ -392,6 +392,7 @@ import {
   writePendingSiteRestore,
 } from '../utils/siteCacheStore.js';
 import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
+import { isCurrentLaunchMode } from '../utils/launchModeState.js';
 
 const SITE_NOTE_MAX_LENGTH = 10;
 
@@ -439,7 +440,7 @@ const normalizeTreeKeyArray = (values) => Array.from(new Set(
     .map(item => String(item || '').trim())
     .filter(Boolean)
 ));
-const isModelProbeWindow = computed(() => Boolean(String(modelProbeContext.value?.siteCacheKey || '').trim()));
+const isModelProbeWindow = computed(() => isCurrentLaunchMode('model-probe'));
 const treeCheckedKeysBinding = computed(() => {
   return normalizeTreeKeyArray(checkedKeys.value);
 });
@@ -691,9 +692,9 @@ const getStableSiteOrder = record => {
 const filteredRecords = computed(() => {
   const text = String(keyword.value || '').trim().toLowerCase();
   const siteNameFilter = normalizedSiteGroupSiteFilterQuery.value;
-  const probeSiteCacheKey = String(modelProbeContext.value?.siteCacheKey || '').trim();
+  const probeSiteCacheKey = isModelProbeWindow.value ? String(modelProbeContext.value?.siteCacheKey || '').trim() : '';
   const probeSiteCacheKeys = new Set(
-    (Array.isArray(modelProbeContext.value?.siteCacheKeys) ? modelProbeContext.value.siteCacheKeys : [])
+    (isModelProbeWindow.value && Array.isArray(modelProbeContext.value?.siteCacheKeys) ? modelProbeContext.value.siteCacheKeys : [])
       .map(item => String(item || '').trim())
       .filter(Boolean)
   );
@@ -1085,7 +1086,7 @@ const syncCheckedKeys = () => {
     const text = String(key || '').trim();
     return text.startsWith('site-root|') || text.startsWith('token|') || allowed.has(text);
   });
-  if (modelProbeContext.value && checkedKeys.value.length === 0 && allowed.size > 0) {
+  if (isModelProbeWindow.value && modelProbeContext.value && checkedKeys.value.length === 0 && allowed.size > 0) {
     checkedKeys.value = Array.from(allowed);
     halfCheckedKeys.value = [];
   }
@@ -1095,7 +1096,7 @@ const syncCheckedKeys = () => {
 };
 
 const reloadRecords = () => {
-  modelProbeContext.value = getModelProbeContext();
+  modelProbeContext.value = isModelProbeWindow.value ? getModelProbeContext() : null;
   const probeRecord = modelProbeContext.value?.siteCacheRecord || null;
   const probeSiteCacheKeys = Array.from(new Set([
     ...(Array.isArray(modelProbeContext.value?.siteCacheKeys) ? modelProbeContext.value.siteCacheKeys : []),
@@ -1110,7 +1111,7 @@ const reloadRecords = () => {
       .filter(Boolean)
     : [];
   let nextRecords = allSiteCacheRecords;
-  if (probeSiteCacheKeySet.size > 0) {
+  if (isModelProbeWindow.value && probeSiteCacheKeySet.size > 0) {
     const matched = allSiteCacheRecords.filter(item => probeSiteCacheKeySet.has(String(item?.siteCacheKey || '').trim()));
     nextRecords = matched.length > 0
       ? matched
@@ -2093,7 +2094,7 @@ const startBatchCheckFromSiteManagement = async () => {
   writePendingSiteRestore(selectedSiteCacheKeys.value);
   writePendingBatchStart({
     autoStart: true,
-    selectChatOnly: Boolean(modelProbeContext.value?.siteCacheKey),
+    selectChatOnly: isModelProbeWindow.value,
     checkedKeys: modelKeys,
     batchConcurrency: Number(batchConcurrency.value || 25),
     modelTimeout: Number(modelTimeout.value || 15),
@@ -2103,7 +2104,7 @@ const startBatchCheckFromSiteManagement = async () => {
     selectedSiteCacheKeysPreview: selectedSiteCacheKeys.value.slice(0, 12),
     checkedKeysCount: modelKeys.length,
     checkedKeysPreview: modelKeys.slice(0, 16),
-    selectChatOnly: Boolean(modelProbeContext.value?.siteCacheKey),
+    selectChatOnly: isModelProbeWindow.value,
     batchConcurrency: Number(batchConcurrency.value || 25),
     modelTimeout: Number(modelTimeout.value || 15),
   }));
@@ -2236,7 +2237,7 @@ onMounted(async () => {
     batchConcurrency.value = Number(pendingBatchStart?.batchConcurrency || batchConcurrency.value || 25);
     modelTimeout.value = Number(pendingBatchStart?.modelTimeout || modelTimeout.value || 15);
   }
-  if (modelProbeContext.value?.siteCacheKey) {
+  if (isModelProbeWindow.value && modelProbeContext.value?.siteCacheKey) {
     const probeSiteCacheKeys = Array.from(new Set([
       ...(Array.isArray(modelProbeContext.value?.siteCacheKeys) ? modelProbeContext.value.siteCacheKeys : []),
       String(modelProbeContext.value?.siteCacheKey || '').trim(),

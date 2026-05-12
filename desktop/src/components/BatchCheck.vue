@@ -750,14 +750,14 @@ import {
   writePendingBatchStart,
   writePendingSiteRestore,
 } from '../utils/siteCacheStore.js';
+import { isCurrentLaunchMode } from '../utils/launchModeState.js';
 
 const isWailsRuntime = isProbablyWailsRuntime();
 const { t
 } = useI18n();
 const router = useRouter();
 const isDarkMode = ref(false);
-const modelProbeContext = ref(getModelProbeContext());
-const isModelProbeWindow = computed(() => Boolean(String(modelProbeContext.value?.siteCacheKey || '').trim()));
+const isModelProbeWindow = computed(() => isCurrentLaunchMode('model-probe'));
 const configProviderTheme = computed(() => ({
   algorithm: isDarkMode.value ? theme.darkAlgorithm : theme.defaultAlgorithm,
 }));
@@ -6674,13 +6674,15 @@ const startBatchCheck = async () => {
   if (testing.value) {
     testing.value = false;
     scheduleOrganizedSourceRefresh(true);
-    if (!getModelProbeContext()?.rowKey) {
+    if (!(isModelProbeWindow.value && getModelProbeContext()?.rowKey)) {
       await syncDetectedKeysToLocalStorage({ silent: true });
     }
     message.success('批量检测完成！');
     // Save to history
     saveLastResultsSnapshot();
-    await maybeOfferModelProbeGroupAggregation();
+    if (isModelProbeWindow.value) {
+      await maybeOfferModelProbeGroupAggregation();
+    }
   }
 };
 
@@ -6769,6 +6771,7 @@ function getSuccessfulModelProbeModels(context) {
 }
 
 async function maybeOfferModelProbeGroupAggregation() {
+  if (!isModelProbeWindow.value) return;
   const context = getModelProbeContext();
   if (!context?.rowKey) return;
   const models = getSuccessfulModelProbeModels(context);
