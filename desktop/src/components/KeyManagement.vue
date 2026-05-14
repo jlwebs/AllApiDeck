@@ -936,6 +936,7 @@ import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APP
 import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils/balance.js';
 import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
 import { normalizeCCSwitchEndpoint } from '../utils/ccSwitch.js';
+import { resolveOpenAIExportBaseUrl } from '../utils/exportEndpoint.js';
 import { getAppliedThemeMode, isDarkThemeMode, THEME_MODE_CHANGE_EVENT } from '../utils/theme.js';
 import { exitSidebarMode, isManualSidebarBridgeAvailable, isSidebarBridgeAvailable, openManualSidebarPanel } from '../utils/windowMode.js';
 import { loadDesktopTokenSourceMode, loadTreeExpandedSetting } from '../utils/systemSettings.js';
@@ -1850,6 +1851,15 @@ function getRowContextRecords() {
   return rowContextMenu.record ? [rowContextMenu.record] : [];
 }
 
+function isTargetWithinKeyManagementContextMenu(target) {
+  return Boolean(
+    target?.closest?.('.key-row-context-menu') ||
+    target?.closest?.('.key-row-context-submenu') ||
+    target?.closest?.('.key-group-context-menu') ||
+    target?.closest?.('.key-group-context-submenu')
+  );
+}
+
 function isRowContextGroupActive(groupId) {
   const records = getRowContextRecords();
   if (!records.length) return false;
@@ -1888,13 +1898,19 @@ function toggleRowContextGroupMembership(groupId) {
 function handleGlobalRowContextMenuDismiss(event) {
   const target = event?.target;
   if (rowContextMenu.open) {
-    if (target?.closest?.('.key-row-context-menu') || target?.closest?.('.key-row-context-submenu')) return;
+    if (isTargetWithinKeyManagementContextMenu(target)) return;
     closeRowContextMenu();
   }
   if (keyGroupContextMenu.open) {
-    if (target?.closest?.('.key-group-context-menu') || target?.closest?.('.key-group-context-submenu')) return;
+    if (isTargetWithinKeyManagementContextMenu(target)) return;
     closeKeyGroupContextMenu();
   }
+}
+
+function handleGlobalContextMenuScroll(event) {
+  if (!rowContextMenu.open && !keyGroupContextMenu.open) return;
+  if (isTargetWithinKeyManagementContextMenu(event?.target)) return;
+  closeAllContextMenus();
 }
 
 function openRowContextGroupSubmenu() {
@@ -2496,7 +2512,7 @@ onMounted(() => {
   if (typeof window !== 'undefined') {
     window.addEventListener('pointerdown', handleGlobalRowContextMenuDismiss, true);
     window.addEventListener('resize', closeAllContextMenus);
-    window.addEventListener('scroll', closeAllContextMenus, true);
+    window.addEventListener('scroll', handleGlobalContextMenuScroll, true);
     window.addEventListener('keydown', handleGlobalRowContextEscape);
     window.addEventListener('contextmenu', handleGlobalRowContextMenuDismiss, true);
   }
@@ -2522,7 +2538,7 @@ onBeforeUnmount(() => {
   if (typeof window !== 'undefined') {
     window.removeEventListener('pointerdown', handleGlobalRowContextMenuDismiss, true);
     window.removeEventListener('resize', closeAllContextMenus);
-    window.removeEventListener('scroll', closeAllContextMenus, true);
+    window.removeEventListener('scroll', handleGlobalContextMenuScroll, true);
     window.removeEventListener('keydown', handleGlobalRowContextEscape);
     window.removeEventListener('contextmenu', handleGlobalRowContextMenuDismiss, true);
   }
@@ -2846,6 +2862,7 @@ function mergeStoredRecords(incomingRows) {
       quickTestTtftMs: previous?.quickTestTtftMs || '',
       quickTestTps: previous?.quickTestTps || '',
       quickTestResponseContent: previous?.quickTestResponseContent || '',
+      quickTestResolvedEndpoint: previous?.quickTestResolvedEndpoint || '',
       quickTestLoading: false,
     }));
   });
@@ -2869,6 +2886,7 @@ async function runQuickTest(record, options = {}) {
     record.quickTestTtftMs = testResult.ttftMs || '';
     record.quickTestTps = testResult.tps || '';
     record.quickTestResponseContent = testResult.responseContent || '';
+    record.quickTestResolvedEndpoint = String(testResult.resolvedEndpoint || '').trim();
     persistRecords();
     if (!silent) {
       const messageMethod = testResult.status === 'success' ? 'success' : testResult.status === 'warning' ? 'warning' : 'error';
@@ -2893,6 +2911,7 @@ async function runQuickTest(record, options = {}) {
     const detail = String(error?.detail || error?.message || '快速测试失败').trim();
     record.quickTestRemark = detail;
     record.quickTestResponseContent = detail;
+    record.quickTestResolvedEndpoint = extractResolvedEndpointFromDiagnosticText(detail);
     persistRecords();
     if (!silent) {
       showQuickTestErrorDialog(detail);
@@ -3185,6 +3204,7 @@ async function executeQuickTest({ apiKey, siteUrl, model }) {
   }
 
   const returnedModel = String(data?.model || 'unknown');
+  const resolvedEndpoint = String(data?.diagnostics?.resolvedEndpoint || '').trim();
   const messageObj = data?.choices?.[0]?.message;
   const hasContent = Boolean(messageObj?.content || messageObj?.reasoning_content || messageObj?.thinking);
   const responseContent = extractQuickTestResponseContent(messageObj);
@@ -3200,11 +3220,26 @@ async function executeQuickTest({ apiKey, siteUrl, model }) {
         ttftMs: performance.ttftMs,
         tps: performance.tps,
         responseContent,
+        resolvedEndpoint,
       };
     }
-    return { status: 'warning', label: '结构异常', remark: '接口响应成功，但未检测到有效消息内容', responseTime, responseContent };
+    return {
+      status: 'warning',
+      label: '结构异常',
+      remark: '接口响应成功，但未检测到有效消息内容',
+      responseTime,
+      responseContent,
+      resolvedEndpoint,
+    };
   }
-  return { status: 'warning', label: '模型映射', remark: `平台返回模型 ${returnedModel}，请求模型为 ${model}`, responseTime, responseContent };
+  return {
+    status: 'warning',
+    label: '模型映射',
+    remark: `平台返回模型 ${returnedModel}，请求模型为 ${model}`,
+    responseTime,
+    responseContent,
+    resolvedEndpoint,
+  };
 }
 
 async function exportAllValidKeysPackage() {
@@ -3255,20 +3290,39 @@ async function importFromClipboardPackage() {
       throw new Error('导入包中没有记录');
     }
 
+    const scopedImportGroupId = getScopedGroupId();
+    const scopedImportGroupName = scopedImportGroupId
+      ? (keyGroups.value.find(group => group.id === scopedImportGroupId)?.name || '当前分组')
+      : '';
     const merged = new Map(tableData.value.map(record => [record.rowKey, { ...record }]));
     importedRecords.forEach(rawRecord => {
       const modelsList = normalizeModels(rawRecord.modelsList || rawRecord.modelsText);
+      const siteUrl = normalizeSiteUrl(rawRecord.siteUrl);
+      const apiKey = normalizeApiKey(rawRecord.apiKey);
+      const rowKey = rawRecord.rowKey || (rawRecord.sourceType === 'manual' ? buildManualRowKey() : buildRowKey(siteUrl, apiKey));
+      const existingRecord = merged.get(rowKey) || null;
+      const nextGroupIds = normalizeRecordGroupIds([
+        ...normalizeRecordGroupIds(existingRecord?.groupIds),
+        ...normalizeRecordGroupIds(rawRecord.groupIds),
+        ...(scopedImportGroupId ? [scopedImportGroupId] : []),
+      ]);
+      const nextGroupSelectedModels = {
+        ...normalizeGroupSelectedModels(existingRecord?.groupSelectedModels),
+        ...normalizeGroupSelectedModels(rawRecord.groupSelectedModels),
+      };
       const record = hydrateRecordModelSelection({
+        ...existingRecord,
         ...rawRecord,
         sourceType: rawRecord.sourceType || 'auto',
         siteName: String(rawRecord.siteName || '未命名站点').trim() || '未命名站点',
         tokenName: String(rawRecord.tokenName || '').trim(),
-        siteUrl: normalizeSiteUrl(rawRecord.siteUrl),
-        apiKey: normalizeApiKey(rawRecord.apiKey),
+        siteUrl,
+        apiKey,
         modelsList,
         modelsText: modelsList.join(', ') || '未提供模型信息',
         selectedModel: String(rawRecord.selectedModel || '').trim(),
-        groupSelectedModels: normalizeGroupSelectedModels(rawRecord.groupSelectedModels),
+        groupIds: nextGroupIds,
+        groupSelectedModels: nextGroupSelectedModels,
         status: Number(rawRecord.status || 1),
         quickTestStatus: rawRecord.quickTestStatus || '',
         quickTestLabel: rawRecord.quickTestLabel || '',
@@ -3279,9 +3333,10 @@ async function importFromClipboardPackage() {
         quickTestTtftMs: rawRecord.quickTestTtftMs || '',
         quickTestTps: rawRecord.quickTestTps || '',
         quickTestResponseContent: rawRecord.quickTestResponseContent || '',
+        quickTestResolvedEndpoint: String(rawRecord.quickTestResolvedEndpoint || existingRecord?.quickTestResolvedEndpoint || '').trim(),
         quickTestLoading: false,
       });
-      record.rowKey = rawRecord.rowKey || (record.sourceType === 'manual' ? buildManualRowKey() : buildRowKey(record.siteUrl, record.apiKey));
+      record.rowKey = rowKey;
       if (record.siteUrl && record.apiKey) {
         merged.set(record.rowKey, record);
       }
@@ -3295,7 +3350,11 @@ async function importFromClipboardPackage() {
     };
     persistRecords();
     persistMeta();
-    message.success(`已从剪贴板导入 ${importedRecords.length} 条记录`);
+    message.success(
+      scopedImportGroupName
+        ? `已从剪贴板导入 ${importedRecords.length} 条记录，并追加到分组「${scopedImportGroupName}」`
+        : `已从剪贴板导入 ${importedRecords.length} 条记录`
+    );
   } catch (error) {
     console.error(error);
     message.error(`导入失败：${error.message || '未知错误'}`);
@@ -3304,18 +3363,20 @@ async function importFromClipboardPackage() {
 
 async function copySingleImportCommand(record) {
   try {
+    const smartOpenAIBaseUrl = resolveOpenAIExportBaseUrl(record, record.siteUrl);
     const normalizedRecord = {
       ...record,
       sourceType: record.sourceType || 'auto',
       rowKey: record.rowKey || (record.sourceType === 'manual' ? buildManualRowKey() : buildRowKey(record.siteUrl, record.apiKey)),
       siteName: String(record.siteName || '未命名站点').trim() || '未命名站点',
       tokenName: String(record.tokenName || '').trim(),
-      siteUrl: normalizeSiteUrl(record.siteUrl),
+      siteUrl: smartOpenAIBaseUrl || normalizeSiteUrl(record.siteUrl),
       apiKey: normalizeApiKey(record.apiKey),
       modelsList: normalizeModels(record.modelsList || record.modelsText),
       modelsText: normalizeModels(record.modelsList || record.modelsText).join(', ') || '未提供模型信息',
       selectedModel: String(record.selectedModel || '').trim(),
       quickTestResponseContent: record.quickTestResponseContent || '',
+      quickTestResolvedEndpoint: String(record.quickTestResolvedEndpoint || '').trim(),
     };
     const payload = {
       format: 'api-check-key-export-v1',
@@ -3750,7 +3811,12 @@ function launchCherryStudio(record) {
     message.warning('配置不完整，无法导出');
     return;
   }
-  const payload = { id: `key-${record.rowKey}`, baseUrl: normalizeSiteUrl(record.siteUrl), apiKey: record.apiKey, name: `${record.siteName}${record.quickTestModel ? ` (${record.quickTestModel})` : ''}` };
+  const payload = {
+    id: `key-${record.rowKey}`,
+    baseUrl: resolveOpenAIExportBaseUrl(record, record.siteUrl) || normalizeSiteUrl(record.siteUrl),
+    apiKey: record.apiKey,
+    name: `${record.siteName}${record.quickTestModel ? ` (${record.quickTestModel})` : ''}`,
+  };
   try {
     const encoded = btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(payload))));
     window.open(`cherrystudio://providers/api-keys?v=1&data=${encoded}`, '_blank');
@@ -3766,12 +3832,17 @@ function launchCCSwitch(record, targetApp = 'claude') {
     message.warning('配置不完整，无法导出');
     return;
   }
+  const smartOpenAIBaseUrl = resolveOpenAIExportBaseUrl(record, record.siteUrl);
+  const exportSiteUrl = normalizeSiteUrl(record.siteUrl);
+  const endpointBaseUrl = String(targetApp || '').toLowerCase() === 'claude'
+    ? exportSiteUrl
+    : (smartOpenAIBaseUrl || exportSiteUrl);
   const params = new URLSearchParams();
   params.set('resource', 'provider');
   params.set('app', targetApp);
   params.set('name', `${record.siteName}${record.quickTestModel ? ` - ${record.quickTestModel}` : ''}`);
-  params.set('homepage', normalizeSiteUrl(record.siteUrl));
-  params.set('endpoint', normalizeCCSwitchEndpoint(record.siteUrl, targetApp));
+  params.set('homepage', exportSiteUrl);
+  params.set('endpoint', normalizeCCSwitchEndpoint(endpointBaseUrl, targetApp));
   params.set('apiKey', record.apiKey);
   if (record.quickTestModel) params.set('model', record.quickTestModel);
   const schemaUrl = `ccswitch://v1/import?${params.toString()}`;
@@ -4145,6 +4216,7 @@ function createRecordFromDraft(draft, existingRecord = null) {
     quickTestTtftMs: existingRecord?.quickTestTtftMs || '',
     quickTestTps: existingRecord?.quickTestTps || '',
     quickTestResponseContent: existingRecord?.quickTestResponseContent || '',
+    quickTestResolvedEndpoint: existingRecord?.quickTestResolvedEndpoint || '',
     groupIds: normalizeRecordGroupIds(existingRecord?.groupIds || draft.groupIds),
     quickTestLoading: false,
   };
@@ -4270,6 +4342,17 @@ function createQuickTestError(payload, statusCode, requestMeta = {}) {
   return error;
 }
 
+function extractResolvedEndpointFromDiagnosticText(text) {
+  const source = String(text || '');
+  if (!source.trim()) return '';
+  const directMatch = source.match(/命中端点:\s*(https?:\/\/[^\s]+)/i);
+  if (directMatch?.[1]) {
+    return normalizeSiteUrl(directMatch[1]);
+  }
+  const urlMatch = source.match(/https?:\/\/[^\s]+/i);
+  return normalizeSiteUrl(urlMatch?.[0] || '');
+}
+
 function showQuickTestErrorDialog(detailText) {
   Modal.error({
     title: '快速测活失败',
@@ -4345,6 +4428,7 @@ function loadStoredRecords() {
       quickTestTtftMs: record.quickTestTtftMs || '',
       quickTestTps: record.quickTestTps || '',
       quickTestResponseContent: record.quickTestResponseContent || '',
+      quickTestResolvedEndpoint: String(record.quickTestResolvedEndpoint || '').trim(),
       groupIds: normalizeRecordGroupIds(record.groupIds),
       balanceLabel: record.balanceLabel || '',
       balanceUpdatedAt: record.balanceUpdatedAt || null,
@@ -4376,6 +4460,7 @@ function loadStoredRecords() {
       quickTestTtftMs: record.quickTestTtftMs || '',
       quickTestTps: record.quickTestTps || '',
       quickTestResponseContent: record.quickTestResponseContent || '',
+      quickTestResolvedEndpoint: String(record.quickTestResolvedEndpoint || '').trim(),
       groupIds: normalizeRecordGroupIds(record.groupIds),
       balanceLabel: record.balanceLabel || '',
       balanceUpdatedAt: record.balanceUpdatedAt || null,

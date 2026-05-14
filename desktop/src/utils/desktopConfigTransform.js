@@ -3,6 +3,7 @@ import {
   getAdvancedProxyLocalSnapshot,
   isAdvancedProxyAppReady,
 } from './advancedProxyBridge.js';
+import { resolveOpenAIExportBaseUrl } from './exportEndpoint.js';
 
 const OPENCLAW_DEFAULT_CONFIG = {
   models: {
@@ -28,9 +29,8 @@ export function createDesktopConfigDraft(record) {
     pickFallbackModel(record?.modelsList, record?.modelsText);
   const providerName = String(record?.siteName || 'Custom Provider').trim() || 'Custom Provider';
   const endpoint = String(record?.siteUrl || '').trim();
+  const smartOpenAIBaseUrl = resolveOpenAIExportBaseUrl(record, endpoint) || endpoint;
   const apiKey = String(record?.apiKey || '').trim();
-  const advancedProxySnapshot = getAdvancedProxyLocalSnapshot();
-
   return {
     selectedApps: [],
     providerName,
@@ -41,14 +41,14 @@ export function createDesktopConfigDraft(record) {
     model: defaultModel || 'gpt-4o-mini',
     claudeBaseUrl: endpoint,
     claudeApiKeyField: 'ANTHROPIC_AUTH_TOKEN',
-    claudeUseAdvancedProxy: isAdvancedProxyAppReady('claude', advancedProxySnapshot),
-    codexBaseUrl: endpoint,
-    codexUseAdvancedProxy: isAdvancedProxyAppReady('codex', advancedProxySnapshot),
-    opencodeBaseUrl: endpoint,
-    opencodeUseAdvancedProxy: isAdvancedProxyAppReady('opencode', advancedProxySnapshot),
+    claudeUseAdvancedProxy: false,
+    codexBaseUrl: smartOpenAIBaseUrl,
+    codexUseAdvancedProxy: false,
+    opencodeBaseUrl: smartOpenAIBaseUrl,
+    opencodeUseAdvancedProxy: false,
     opencodeNpm: '@ai-sdk/openai-compatible',
-    openclawBaseUrl: endpoint,
-    openclawUseAdvancedProxy: isAdvancedProxyAppReady('openclaw', advancedProxySnapshot),
+    openclawBaseUrl: smartOpenAIBaseUrl,
+    openclawUseAdvancedProxy: false,
     openclawApi: 'openai-completions',
   };
 }
