@@ -395,10 +395,18 @@ func scoreReleaseAsset(asset githubReleaseAsset) int {
 	score := 0
 	switch runtime.GOOS {
 	case "windows":
-		if !strings.Contains(name, "windows") || !strings.HasSuffix(name, ".exe") {
+		if !strings.Contains(name, "windows") {
 			return -1
 		}
 		score += 100
+		switch {
+		case strings.HasSuffix(name, ".msi"):
+			score += 40
+		case strings.HasSuffix(name, ".exe"):
+			score += 20
+		default:
+			return -1
+		}
 		if strings.Contains(name, runtime.GOARCH) {
 			score += 20
 		}
