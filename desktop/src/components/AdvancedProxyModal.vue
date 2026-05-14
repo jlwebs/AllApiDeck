@@ -669,7 +669,7 @@ const appCards = computed(() =>
               ? 'OpenClaw 客户端 · OpenAI Compatible 入口'
           : 'OpenAI Compatible 入口',
       tooltipDetail: app.id === 'claude'
-        ? '已支持：Claude 客户端 -> 8888 -> OpenAI 上游。Claude 请求会自动转成 OpenAI 上游请求，并把返回结果转回 Claude 格式。'
+        ? '已支持：Claude 客户端 -> 本地自动探测端口 -> OpenAI 上游。Claude 请求会自动转成 OpenAI 上游请求，并把返回结果转回 Claude 格式。'
         : '',
     };
   })
@@ -874,25 +874,38 @@ function isManagedProxyToken(value) {
   return String(value || '').trim() === PROXY_MANAGED_TOKEN;
 }
 
-function escapeRegExp(value) {
-  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function extractCodexActiveProviderKey(text) {
+  const match = String(text || '').match(/^\s*model_provider\s*=\s*(?:"([^"\n]+)"|'([^'\n]+)'|([^\s#]+))/m);
+  return String(match?.[1] || match?.[2] || match?.[3] || '').trim();
 }
 
-function extractCodexActiveProviderKey(text) {
-  const match = String(text || '').match(/^\s*model_provider\s*=\s*["']([^"'\n]+)["']/m);
-  return String(match?.[1] || '').trim();
+function extractCodexProviderSectionKey(header) {
+  const normalized = String(header || '').trim();
+  const match = normalized.match(/^model_providers\.(?:"([^"]+)"|'([^']+)'|([^\s]+))$/);
+  if (!match) return '';
+  return String(match[1] || match[2] || match[3] || '').trim();
 }
 
 function extractCodexProviderBaseUrl(text, providerKey) {
   const normalizedProviderKey = String(providerKey || '').trim();
   if (!normalizedProviderKey) return '';
-  const sectionPattern = new RegExp(
-    `^\\s*\\[model_providers\\.${escapeRegExp(normalizedProviderKey)}\\]\\s*$([\\s\\S]*?)(?=^\\s*\\[|\\s*$)`,
-    'm'
-  );
-  const sectionMatch = String(text || '').match(sectionPattern);
-  if (!sectionMatch?.[1]) return '';
-  const baseUrlMatch = sectionMatch[1].match(/^\s*base_url\s*=\s*["']([^"'\n]+)["']/m);
+  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+  let inTargetSection = false;
+  const sectionLines = [];
+  for (const line of lines) {
+    const sectionHeader = line.match(/^\s*\[([^\]]+)\]\s*$/);
+    if (sectionHeader) {
+      if (inTargetSection) break;
+      const sectionKey = extractCodexProviderSectionKey(sectionHeader[1]);
+      inTargetSection = sectionKey === normalizedProviderKey;
+      continue;
+    }
+    if (inTargetSection) {
+      sectionLines.push(line);
+    }
+  }
+  if (!sectionLines.length) return '';
+  const baseUrlMatch = sectionLines.join('\n').match(/^\s*base_url\s*=\s*["']([^"'\n]+)["']/m);
   return String(baseUrlMatch?.[1] || '').trim();
 }
 
@@ -1302,6 +1315,9 @@ async function handleAppTakeoverToggle(appId, value) {
     nextConfig[appId] = {};
   }
   nextConfig[appId].enabled = value;
+  if (value) {
+    nextConfig.enabled = true;
+  }
 
   try {
     const desktopDraft = createTakeoverDesktopDraft(appId, value, nextConfig);
@@ -1322,6 +1338,7 @@ async function handleAppTakeoverToggle(appId, value) {
 function handleProxyMasterToggle(value) {
   if (value) {
     handleConfigMutation(next => {
+      next.enabled = true;
       const restoreIds = lastEnabledAppIds.value.length ? [...lastEnabledAppIds.value] : ['claude'];
       ADVANCED_PROXY_APPS.forEach(app => {
         if (!next[app.id]) {
@@ -1338,6 +1355,7 @@ function handleProxyMasterToggle(value) {
     lastEnabledAppIds.value = [...currentEnabledIds];
   }
   handleConfigMutation(next => {
+    next.enabled = false;
     ADVANCED_PROXY_APPS.forEach(app => {
       if (!next[app.id]) {
         next[app.id] = {};

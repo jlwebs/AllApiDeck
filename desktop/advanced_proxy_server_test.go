@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -455,6 +456,10 @@ func resetAdvancedProxyRuntimeForTest(t *testing.T) string {
 	advancedProxyRuntime.rpmDispatchHistory = map[string][]time.Time{}
 	advancedProxyRuntime.logs = map[string]time.Time{}
 	advancedProxyRuntime.mu.Unlock()
+
+	advancedProxyEncryptedContentHealState.mu.Lock()
+	advancedProxyEncryptedContentHealState.sessions = map[string]int{}
+	advancedProxyEncryptedContentHealState.mu.Unlock()
 
 	if _, err := saveOutboundProxyConfig(OutboundProxyConfig{Mode: outboundProxyModeDirect}); err != nil {
 		t.Fatalf("save outbound proxy config: %v", err)
@@ -1568,6 +1573,192 @@ func TestAdvancedProxyRoutingSnapshotSupportsConcurrentApps(t *testing.T) {
 		if state.Status != "success" {
 			t.Fatalf("unexpected %s route status: %#v", appType, state)
 		}
+	}
+}
+
+func TestExtractEncryptedContentHealingSessionKeyFromEmbeddedMetadata(t *testing.T) {
+	body := map[string]any{
+		"metadata": map[string]any{
+			"user_id": `{"session_id":"sess-embedded-123"}`,
+		},
+	}
+
+	got := extractEncryptedContentHealingSessionKey(body, "codex")
+	if got != "codex|sess-embedded-123" {
+		t.Fatalf("expected embedded session key to be extracted, got %q", got)
+	}
+}
+
+func TestPrepareOpenAIRequestForEncryptedContentHealingStripsRecordedHistory(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	sessionKey := "codex|sess-prepare-123"
+	advancedProxyEncryptedContentHealState.record(sessionKey, 3)
+
+	rawBody := []byte(`{
+		"metadata":{"user_id":"{\"session_id\":\"sess-prepare-123\"}"},
+		"messages":[
+			{"role":"assistant","content":[{"type":"input_text","text":"1","encrypted_content":"enc-1"}]},
+			{"role":"user","content":[{"type":"input_text","text":"2","encrypted_content":"enc-2"}]},
+			{"role":"assistant","content":[{"type":"input_text","text":"3","encrypted_content":"enc-3"}]},
+			{"role":"user","content":[{"type":"input_text","text":"4","encrypted_content":"enc-4"}]}
+		]
+	}`)
+
+	sanitizedBody, healingContext, err := prepareOpenAIRequestForEncryptedContentHealing(rawBody, "codex")
+	if err != nil {
+		t.Fatalf("prepare request: %v", err)
+	}
+	if healingContext.SessionKey != sessionKey {
+		t.Fatalf("unexpected session key: %#v", healingContext)
+	}
+	if healingContext.OriginalCount != 4 {
+		t.Fatalf("expected original encrypted count 4, got %#v", healingContext)
+	}
+	if healingContext.AppliedHistoricalCut != 3 {
+		t.Fatalf("expected 3 historical encrypted_content entries to be stripped, got %#v", healingContext)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(sanitizedBody, &decoded); err != nil {
+		t.Fatalf("decode sanitized body: %v", err)
+	}
+
+	if remaining := countEncryptedContentEntries(decoded); remaining != 1 {
+		t.Fatalf("expected one encrypted_content entry to remain, got %d", remaining)
+	}
+
+	messages, ok := decoded["messages"].([]any)
+	if !ok || len(messages) != 4 {
+		t.Fatalf("unexpected messages payload: %#v", decoded["messages"])
+	}
+
+	for index := 0; index < 3; index++ {
+		message, _ := messages[index].(map[string]any)
+		content, _ := message["content"].([]any)
+		block, _ := content[0].(map[string]any)
+		if _, exists := block["encrypted_content"]; exists {
+			t.Fatalf("expected historical encrypted_content to be removed at message %d: %#v", index, block)
+		}
+	}
+
+	lastMessage, _ := messages[3].(map[string]any)
+	lastContent, _ := lastMessage["content"].([]any)
+	lastBlock, _ := lastContent[0].(map[string]any)
+	if got := toStringValue(lastBlock["encrypted_content"]); got != "enc-4" {
+		t.Fatalf("expected latest encrypted_content to remain, got %#v", lastBlock)
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderHealsInvalidEncryptedContentAcrossRequests(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	var mu sync.Mutex
+	requestBodies := make([]map[string]any, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost {
+			t.Fatalf("unexpected method: %s", request.Method)
+		}
+		if request.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+
+		mu.Lock()
+		requestBodies = append(requestBodies, body)
+		callIndex := len(requestBodies)
+		mu.Unlock()
+
+		writer.Header().Set("Content-Type", "application/json")
+		if callIndex == 1 {
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = writer.Write([]byte(`{
+				"error": {
+					"message": "The encrypted content QVhO...FQ== could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
+					"type": "invalid_request_error",
+					"param": null,
+					"code": "invalid_encrypted_content"
+				}
+			}`))
+			return
+		}
+
+		_, _ = writer.Write([]byte(`{"id":"chatcmpl_test","choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "codex-heal-provider",
+		RowKey:    "row-codex-heal",
+		Name:      "Codex Heal Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test",
+		APIFormat: "openai_chat",
+	}
+
+	firstBody := []byte(`{
+		"metadata":{"user_id":"{\"session_id\":\"sess-heal-123\"}"},
+		"messages":[
+			{"role":"assistant","content":[{"type":"input_text","text":"1","encrypted_content":"enc-1"}]},
+			{"role":"user","content":[{"type":"input_text","text":"2","encrypted_content":"enc-2"}]},
+			{"role":"assistant","content":[{"type":"input_text","text":"3","encrypted_content":"enc-3"}]}
+		]
+	}`)
+	firstResult := forwardOpenAIRequestViaProvider("codex", provider, "chat", firstBody, false, AdvancedProxyConfig{})
+	if firstResult.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected first call to fail with upstream invalid_encrypted_content, got %#v", firstResult)
+	}
+	if firstResult.ErrorCode != "invalid_encrypted_content" || firstResult.ErrorType != "invalid_request_error" {
+		t.Fatalf("expected upstream error metadata to be preserved, got %#v", firstResult)
+	}
+	if !strings.Contains(firstResult.Message, encryptedContentHealingNotice) {
+		t.Fatalf("expected healing notice to be appended, got %q", firstResult.Message)
+	}
+
+	sessionKey := "codex|sess-heal-123"
+	if cutoff := advancedProxyEncryptedContentHealState.get(sessionKey); cutoff != 3 {
+		t.Fatalf("expected recorded cutoff 3, got %d", cutoff)
+	}
+
+	secondBody := []byte(`{
+		"metadata":{"user_id":"{\"session_id\":\"sess-heal-123\"}"},
+		"messages":[
+			{"role":"assistant","content":[{"type":"input_text","text":"1","encrypted_content":"enc-1"}]},
+			{"role":"user","content":[{"type":"input_text","text":"2","encrypted_content":"enc-2"}]},
+			{"role":"assistant","content":[{"type":"input_text","text":"3","encrypted_content":"enc-3"}]},
+			{"role":"user","content":[{"type":"input_text","text":"4","encrypted_content":"enc-4"}]}
+		]
+	}`)
+	secondResult := forwardOpenAIRequestViaProvider("codex", provider, "chat", secondBody, false, AdvancedProxyConfig{})
+	if secondResult.StatusCode != http.StatusOK {
+		t.Fatalf("expected healed follow-up call to succeed, got %#v", secondResult)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requestBodies) != 2 {
+		t.Fatalf("expected two upstream requests, got %d", len(requestBodies))
+	}
+	if count := countEncryptedContentEntries(requestBodies[0]); count != 3 {
+		t.Fatalf("expected first upstream body to retain 3 encrypted_content entries, got %d", count)
+	}
+	if count := countEncryptedContentEntries(requestBodies[1]); count != 1 {
+		t.Fatalf("expected second upstream body to retain only latest encrypted_content entry, got %d", count)
+	}
+
+	messages, ok := requestBodies[1]["messages"].([]any)
+	if !ok || len(messages) != 4 {
+		t.Fatalf("unexpected second request messages: %#v", requestBodies[1]["messages"])
+	}
+	lastMessage, _ := messages[3].(map[string]any)
+	lastContent, _ := lastMessage["content"].([]any)
+	lastBlock, _ := lastContent[0].(map[string]any)
+	if got := toStringValue(lastBlock["encrypted_content"]); got != "enc-4" {
+		t.Fatalf("expected only latest encrypted_content to remain in healed request, got %#v", lastBlock)
 	}
 }
 

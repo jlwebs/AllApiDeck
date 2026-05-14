@@ -184,7 +184,7 @@ func defaultAdvancedProxyConfig() AdvancedProxyConfig {
 		Enabled:      false,
 		DebugLogging: false,
 		ListenHost:   bridgeServerHost,
-		ListenPort:   bridgeServerPort,
+		ListenPort:   bridgeServerPortStart,
 		Queues:       defaultAdvancedProxyQueuesConfig(),
 		Claude: ClaudeProxyCompatConfig{
 			Enabled:      false,
@@ -713,6 +713,8 @@ func (a *App) GetAdvancedProxyConfig() (*AdvancedProxyConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	config.ListenHost = bridgeServerHost
+	config.ListenPort = currentBridgeServerPort()
 	return &config, nil
 }
 
@@ -721,10 +723,17 @@ func (a *App) GetAdvancedProxyConfigFilePath() string {
 }
 
 func (a *App) SetAdvancedProxyConfig(config AdvancedProxyConfig) (*AdvancedProxyConfig, error) {
+	current, err := loadAdvancedProxyConfig()
+	if err == nil {
+		config.ListenHost = current.ListenHost
+		config.ListenPort = current.ListenPort
+	}
 	saved, err := saveAdvancedProxyConfig(config)
 	if err != nil {
 		return nil, err
 	}
+	saved.ListenHost = bridgeServerHost
+	saved.ListenPort = currentBridgeServerPort()
 	return &saved, nil
 }
 

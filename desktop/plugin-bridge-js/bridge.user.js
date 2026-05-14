@@ -15,7 +15,7 @@
 (function () {
   'use strict';
 
-  const receiverBase = 'http://127.0.0.1:8888';
+  const receiverBase = '__RECEIVER_BASE__';
   const bridgeVersion = '0.2.11';
   const executionId = `bridge-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
   const SECURITY_VERIFICATION_MARKER = '正在进行安全验证';

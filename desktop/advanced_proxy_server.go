@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,6 +35,8 @@ type providerAttemptResult struct {
 type rawProviderAttemptResult struct {
 	StatusCode int
 	Message    string
+	ErrorCode  string
+	ErrorType  string
 	Body       []byte
 	Headers    http.Header
 	StreamBody io.ReadCloser
@@ -41,6 +44,23 @@ type rawProviderAttemptResult struct {
 	Provider   string
 	TargetURL  string
 	RouteKind  string
+}
+
+type encryptedContentHealingContext struct {
+	SessionKey           string
+	OriginalCount        int
+	AppliedHistoricalCut int
+}
+
+type advancedProxyEncryptedContentHealStore struct {
+	mu       sync.Mutex
+	sessions map[string]int
+}
+
+const encryptedContentHealingNotice = "【ALL-API-Deck 网关已探测到，将自动愈合，请继续对话】"
+
+var advancedProxyEncryptedContentHealState = advancedProxyEncryptedContentHealStore{
+	sessions: map[string]int{},
 }
 
 func resolveAdvancedProxyLogPath() string {
@@ -82,6 +102,277 @@ func previewAdvancedProxyText(raw string, limit int) string {
 		return normalized
 	}
 	return string(runes[:limit]) + "..."
+}
+
+func (s *advancedProxyEncryptedContentHealStore) get(sessionKey string) int {
+	if strings.TrimSpace(sessionKey) == "" {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessions[sessionKey]
+}
+
+func (s *advancedProxyEncryptedContentHealStore) record(sessionKey string, encryptedCount int) int {
+	if strings.TrimSpace(sessionKey) == "" || encryptedCount <= 0 {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.sessions[sessionKey]
+	if encryptedCount > previous {
+		s.sessions[sessionKey] = encryptedCount
+		return encryptedCount
+	}
+	return previous
+}
+
+func appendEncryptedContentHealingNotice(message string) string {
+	resolved := strings.TrimSpace(message)
+	if strings.Contains(resolved, encryptedContentHealingNotice) {
+		return resolved
+	}
+	if resolved == "" {
+		return encryptedContentHealingNotice
+	}
+	return resolved + " " + encryptedContentHealingNotice
+}
+
+func parseEmbeddedJSONObject(raw string) map[string]any {
+	text := strings.TrimSpace(raw)
+	if text == "" || (!strings.HasPrefix(text, "{") && !strings.HasPrefix(text, "[")) {
+		return nil
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(text), &decoded); err != nil {
+		return nil
+	}
+	return decoded
+}
+
+func extractEncryptedContentHealingSessionKey(body map[string]any, appType string) string {
+	if body == nil {
+		return ""
+	}
+
+	var search func(any) string
+	search = func(value any) string {
+		switch typed := value.(type) {
+		case map[string]any:
+			for _, key := range []string{"session_id", "sessionId", "conversation_id", "conversationId", "thread_id", "threadId", "resume_id", "resumeId"} {
+				if candidate := strings.TrimSpace(toStringValue(typed[key])); candidate != "" {
+					return candidate
+				}
+			}
+			for _, key := range []string{"metadata", "user", "context", "client"} {
+				if candidate := search(typed[key]); candidate != "" {
+					return candidate
+				}
+			}
+			for _, key := range orderedJSONMapKeys(typed) {
+				if key == "metadata" || key == "user" || key == "context" || key == "client" {
+					continue
+				}
+				if candidate := search(typed[key]); candidate != "" {
+					return candidate
+				}
+			}
+		case []any:
+			for _, item := range typed {
+				if candidate := search(item); candidate != "" {
+					return candidate
+				}
+			}
+		case string:
+			if decoded := parseEmbeddedJSONObject(typed); decoded != nil {
+				return search(decoded)
+			}
+		}
+		return ""
+	}
+
+	sessionID := search(body)
+	if sessionID == "" {
+		return ""
+	}
+	return strings.TrimSpace(appType) + "|" + sessionID
+}
+
+func orderedJSONMapKeys(source map[string]any) []string {
+	if len(source) == 0 {
+		return nil
+	}
+
+	prioritized := []string{
+		"metadata",
+		"input",
+		"messages",
+		"content",
+		"items",
+		"output",
+		"previous_response",
+		"conversation",
+		"history",
+		"encrypted_content",
+	}
+	keys := make([]string, 0, len(source))
+	seen := make(map[string]struct{}, len(source))
+	for _, key := range prioritized {
+		if _, exists := source[key]; exists {
+			keys = append(keys, key)
+			seen[key] = struct{}{}
+		}
+	}
+	rest := make([]string, 0, len(source)-len(keys))
+	for key := range source {
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		rest = append(rest, key)
+	}
+	sort.Strings(rest)
+	return append(keys, rest...)
+}
+
+func countEncryptedContentEntries(value any) int {
+	count := 0
+	var walk func(any)
+	walk = func(node any) {
+		switch typed := node.(type) {
+		case []any:
+			for _, item := range typed {
+				walk(item)
+			}
+		case map[string]any:
+			if encrypted := strings.TrimSpace(toStringValue(typed["encrypted_content"])); encrypted != "" {
+				count += 1
+			}
+			for _, key := range orderedJSONMapKeys(typed) {
+				if key == "encrypted_content" {
+					continue
+				}
+				walk(typed[key])
+			}
+		}
+	}
+	walk(value)
+	return count
+}
+
+func stripHistoricalEncryptedContent(value any, remaining *int) int {
+	if remaining == nil || *remaining <= 0 {
+		return 0
+	}
+
+	stripped := 0
+	var walk func(any)
+	walk = func(node any) {
+		if *remaining <= 0 {
+			return
+		}
+		switch typed := node.(type) {
+		case []any:
+			for _, item := range typed {
+				walk(item)
+				if *remaining <= 0 {
+					return
+				}
+			}
+		case map[string]any:
+			if encrypted := strings.TrimSpace(toStringValue(typed["encrypted_content"])); encrypted != "" && *remaining > 0 {
+				delete(typed, "encrypted_content")
+				*remaining -= 1
+				stripped += 1
+			}
+			for _, key := range orderedJSONMapKeys(typed) {
+				if key == "encrypted_content" {
+					continue
+				}
+				walk(typed[key])
+				if *remaining <= 0 {
+					return
+				}
+			}
+		}
+	}
+	walk(value)
+	return stripped
+}
+
+func prepareOpenAIRequestForEncryptedContentHealing(rawBody []byte, appType string) ([]byte, encryptedContentHealingContext, error) {
+	context := encryptedContentHealingContext{}
+	if len(rawBody) == 0 {
+		return rawBody, context, nil
+	}
+	if !bytes.Contains(rawBody, []byte(`"encrypted_content"`)) {
+		return rawBody, context, nil
+	}
+
+	var requestBody map[string]any
+	if err := json.Unmarshal(rawBody, &requestBody); err != nil {
+		return rawBody, context, err
+	}
+
+	context.SessionKey = extractEncryptedContentHealingSessionKey(requestBody, appType)
+	context.OriginalCount = countEncryptedContentEntries(requestBody)
+	if context.SessionKey == "" || context.OriginalCount == 0 {
+		return rawBody, context, nil
+	}
+
+	historicalCut := advancedProxyEncryptedContentHealState.get(context.SessionKey)
+	if historicalCut <= 0 {
+		return rawBody, context, nil
+	}
+
+	remaining := historicalCut
+	context.AppliedHistoricalCut = stripHistoricalEncryptedContent(requestBody, &remaining)
+	if context.AppliedHistoricalCut <= 0 {
+		return rawBody, context, nil
+	}
+
+	sanitizedBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return rawBody, context, err
+	}
+	return sanitizedBody, context, nil
+}
+
+func isInvalidEncryptedContentError(statusCode int, body []byte) (string, string, string, bool) {
+	if statusCode >= 200 && statusCode < 300 || len(body) == 0 {
+		return "", "", "", false
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		message := normalizeAnthropicErrorMessage(body)
+		lower := strings.ToLower(message)
+		if strings.Contains(lower, "encrypted content") && (strings.Contains(lower, "could not be verified") || strings.Contains(lower, "decrypted") || strings.Contains(lower, "parsed")) {
+			return message, "invalid_encrypted_content", "invalid_request_error", true
+		}
+		return "", "", "", false
+	}
+
+	message := firstNonEmpty(
+		getNestedString(decoded, "error", "message"),
+		strings.TrimSpace(toStringValue(decoded["message"])),
+	)
+	code := firstNonEmpty(
+		getNestedString(decoded, "error", "code"),
+		strings.TrimSpace(toStringValue(decoded["code"])),
+	)
+	errorType := firstNonEmpty(
+		getNestedString(decoded, "error", "type"),
+		strings.TrimSpace(toStringValue(decoded["type"])),
+	)
+	lowerMessage := strings.ToLower(strings.TrimSpace(message))
+	lowerCode := strings.ToLower(strings.TrimSpace(code))
+	if lowerCode == "invalid_encrypted_content" {
+		return message, code, firstNonEmpty(errorType, "invalid_request_error"), true
+	}
+	if strings.Contains(lowerMessage, "encrypted content") && (strings.Contains(lowerMessage, "could not be verified") || strings.Contains(lowerMessage, "decrypted") || strings.Contains(lowerMessage, "parsed")) {
+		return message, firstNonEmpty(code, "invalid_encrypted_content"), firstNonEmpty(errorType, "invalid_request_error"), true
+	}
+	return "", "", "", false
 }
 
 func advancedProxyProviderLabel(provider AdvancedProxyProvider) string {
@@ -2439,6 +2730,8 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 		return rawProviderAttemptResult{
 			StatusCode: http.StatusBadGateway,
 			Message:    formatAdvancedProxyFailure(appType, routeKind, provider, provider.BaseURL, "provider does not support OpenAI-compatible proxy routes"),
+			ErrorCode:  "advanced_proxy_error",
+			ErrorType:  "invalid_request_error",
 			ProviderID: strings.TrimSpace(provider.ID),
 			Provider:   providerLabel,
 			TargetURL:  strings.TrimSpace(provider.BaseURL),
@@ -2471,6 +2764,8 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 		return rawProviderAttemptResult{
 			StatusCode: http.StatusBadGateway,
 			Message:    formatAdvancedProxyFailure(appType, routeKind, provider, provider.BaseURL, "provider endpoint is empty"),
+			ErrorCode:  "advanced_proxy_error",
+			ErrorType:  "invalid_request_error",
 			ProviderID: strings.TrimSpace(provider.ID),
 			Provider:   providerLabel,
 			TargetURL:  strings.TrimSpace(provider.BaseURL),
@@ -2478,8 +2773,25 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 		}
 	}
 
+	preparedBody, healingContext, prepareErr := prepareOpenAIRequestForEncryptedContentHealing(rawBody, appType)
+	if prepareErr != nil {
+		preparedBody = rawBody
+	}
+	if healingContext.AppliedHistoricalCut > 0 {
+		appendAdvancedProxyLogf(
+			"[OPENAI_PROXY_HEAL_APPLY] app=%s route=%s session=%s stripped=%d cutoff=%d",
+			appType,
+			routeKind,
+			previewAdvancedProxyText(healingContext.SessionKey, 80),
+			healingContext.AppliedHistoricalCut,
+			advancedProxyEncryptedContentHealState.get(healingContext.SessionKey),
+		)
+	}
+
 	lastStatus := http.StatusBadGateway
 	lastMessage := formatAdvancedProxyFailure(appType, routeKind, provider, "", "no compatible upstream endpoint found")
+	lastErrorCode := "advanced_proxy_error"
+	lastErrorType := "invalid_request_error"
 	for _, targetURL := range targets {
 		advancedProxyRuntime.MarkDispatch(appType, provider, routeKind, targetURL)
 		appendAdvancedProxyLogf(
@@ -2492,7 +2804,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 			timeoutSeconds,
 			describeOutboundProxyMode(),
 		)
-		statusCode, headers, body, streamBody, elapsed, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildOpenAIProviderHeaders(provider), rawBody, timeoutSeconds, stream)
+		statusCode, headers, body, streamBody, elapsed, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildOpenAIProviderHeaders(provider), preparedBody, timeoutSeconds, stream)
 		if err != nil {
 			advancedProxyRuntime.MarkResult(appType, provider, routeKind, targetURL, false)
 			observeAdvancedProxyAttempt(appType, provider, statusCode, elapsed, err)
@@ -2501,6 +2813,8 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 			return rawProviderAttemptResult{
 				StatusCode: http.StatusBadGateway,
 				Message:    message,
+				ErrorCode:  "advanced_proxy_error",
+				ErrorType:  "invalid_request_error",
 				ProviderID: strings.TrimSpace(provider.ID),
 				Provider:   providerLabel,
 				TargetURL:  targetURL,
@@ -2512,6 +2826,25 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 			observeAdvancedProxyAttempt(appType, provider, statusCode, elapsed, nil)
 			lastStatus = statusCode
 			lastMessage = formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, firstNonEmpty(summarizeAdvancedProxyBody(body), fmt.Sprintf("HTTP %d", statusCode)))
+			lastErrorCode = "advanced_proxy_error"
+			lastErrorType = "invalid_request_error"
+			if healingMessage, healingCode, healingType, ok := isInvalidEncryptedContentError(statusCode, body); ok {
+				if healingContext.SessionKey != "" && healingContext.OriginalCount > 0 {
+					recordedCutoff := advancedProxyEncryptedContentHealState.record(healingContext.SessionKey, healingContext.OriginalCount)
+					appendAdvancedProxyLogf(
+						"[OPENAI_PROXY_HEAL_RECORD] app=%s route=%s session=%s cutoff=%d encrypted=%d stripped=%d",
+						appType,
+						routeKind,
+						previewAdvancedProxyText(healingContext.SessionKey, 80),
+						recordedCutoff,
+						healingContext.OriginalCount,
+						healingContext.AppliedHistoricalCut,
+					)
+				}
+				lastMessage = appendEncryptedContentHealingNotice(formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, healingMessage))
+				lastErrorCode = healingCode
+				lastErrorType = healingType
+			}
 			appendAdvancedProxyLogf("[OPENAI_PROXY_FAIL] status=%d app=%s route=%s provider=%s endpoint=%s detail=%s", statusCode, appType, routeKind, providerLabel, targetURL, previewAdvancedProxyText(lastMessage, 260))
 			if isRetryableCheckStatus(statusCode) {
 				continue
@@ -2519,6 +2852,8 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 			return rawProviderAttemptResult{
 				StatusCode: statusCode,
 				Message:    lastMessage,
+				ErrorCode:  lastErrorCode,
+				ErrorType:  lastErrorType,
 				Body:       body,
 				Headers:    headers,
 				ProviderID: strings.TrimSpace(provider.ID),
@@ -2545,6 +2880,8 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 	return rawProviderAttemptResult{
 		StatusCode: lastStatus,
 		Message:    lastMessage,
+		ErrorCode:  lastErrorCode,
+		ErrorType:  lastErrorType,
 		ProviderID: strings.TrimSpace(provider.ID),
 		Provider:   providerLabel,
 		RouteKind:  routeKind,
@@ -2682,8 +3019,10 @@ func writeAnthropicProxyError(writer http.ResponseWriter, status int, message st
 	})
 }
 
-func writeOpenAIProxyError(writer http.ResponseWriter, status int, message string) {
+func writeOpenAIProxyError(writer http.ResponseWriter, status int, message string, errorCode string, errorType string) {
 	resolvedMessage := firstNonEmpty(strings.TrimSpace(message), "advanced proxy request failed")
+	resolvedCode := firstNonEmpty(strings.TrimSpace(errorCode), "advanced_proxy_error")
+	resolvedType := firstNonEmpty(strings.TrimSpace(errorType), "invalid_request_error")
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(status)
@@ -2691,8 +3030,8 @@ func writeOpenAIProxyError(writer http.ResponseWriter, status int, message strin
 		"message": resolvedMessage,
 		"detail":  resolvedMessage,
 		"error": map[string]any{
-			"type":    "invalid_request_error",
-			"code":    "advanced_proxy_error",
+			"type":    resolvedType,
+			"code":    resolvedCode,
 			"message": resolvedMessage,
 		},
 	})
@@ -2741,8 +3080,8 @@ func (a *App) handleAdvancedProxyPing(writer http.ResponseWriter, request *http.
 	_ = json.NewEncoder(writer).Encode(map[string]any{
 		"ok":            true,
 		"enabled":       config.Enabled,
-		"listenHost":    config.ListenHost,
-		"listenPort":    config.ListenPort,
+		"listenHost":    bridgeServerHost,
+		"listenPort":    currentBridgeServerPort(),
 		"providerCount": len(config.Queues.Global.Providers),
 		"apps": map[string]any{
 			"claude": map[string]any{
@@ -2904,13 +3243,13 @@ func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWrit
 		return
 	}
 	if request.Method != http.MethodPost {
-		writeOpenAIProxyError(writer, http.StatusMethodNotAllowed, "method not allowed")
+		writeOpenAIProxyError(writer, http.StatusMethodNotAllowed, "method not allowed", "advanced_proxy_error", "invalid_request_error")
 		return
 	}
 
 	remoteIP := extractBridgeRemoteIP(request.RemoteAddr)
 	if !isLoopbackBridgeRemote(remoteIP) {
-		writeOpenAIProxyError(writer, http.StatusForbidden, "advanced proxy only accepts loopback requests")
+		writeOpenAIProxyError(writer, http.StatusForbidden, "advanced proxy only accepts loopback requests", "advanced_proxy_error", "invalid_request_error")
 		return
 	}
 
@@ -2924,30 +3263,30 @@ func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWrit
 	case strings.HasSuffix(path, "/chat/completions"):
 		routeKind = "chat"
 	default:
-		writeOpenAIProxyError(writer, http.StatusNotFound, "unsupported advanced proxy path")
+		writeOpenAIProxyError(writer, http.StatusNotFound, "unsupported advanced proxy path", "advanced_proxy_error", "invalid_request_error")
 		return
 	}
 
 	config, err := loadAdvancedProxyConfig()
 	if err != nil {
-		writeOpenAIProxyError(writer, http.StatusInternalServerError, err.Error())
+		writeOpenAIProxyError(writer, http.StatusInternalServerError, err.Error(), "advanced_proxy_error", "invalid_request_error")
 		return
 	}
 	providers := resolveAdvancedProxyEffectiveProviders(config, appType)
 	providers = advancedProxyRuntime.OrderProvidersForDispatch(config, appType, providers)
 	if !config.Enabled || !advancedProxyAppEnabled(config, appType) || len(providers) == 0 {
-		writeOpenAIProxyError(writer, http.StatusServiceUnavailable, "advanced proxy is disabled or has no providers")
+		writeOpenAIProxyError(writer, http.StatusServiceUnavailable, "advanced proxy is disabled or has no providers", "advanced_proxy_error", "invalid_request_error")
 		return
 	}
 
 	rawBody, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, 4*1024*1024))
 	if err != nil {
-		writeOpenAIProxyError(writer, http.StatusBadRequest, "failed to read request body")
+		writeOpenAIProxyError(writer, http.StatusBadRequest, "failed to read request body", "advanced_proxy_error", "invalid_request_error")
 		return
 	}
 	requestBody := map[string]any{}
 	if err := json.Unmarshal(rawBody, &requestBody); err != nil {
-		writeOpenAIProxyError(writer, http.StatusBadRequest, "invalid JSON request body")
+		writeOpenAIProxyError(writer, http.StatusBadRequest, "invalid JSON request body", "advanced_proxy_error", "invalid_request_error")
 		return
 	}
 	stream := truthy(requestBody["stream"])
@@ -2961,6 +3300,8 @@ func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWrit
 
 	lastStatus := http.StatusBadGateway
 	lastMessage := "no provider succeeded"
+	lastErrorCode := "advanced_proxy_error"
+	lastErrorType := "invalid_request_error"
 	attempted := 0
 	for _, provider := range providers {
 		if attempted >= maxAttempts {
@@ -2991,8 +3332,14 @@ func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWrit
 		if strings.TrimSpace(result.Message) != "" {
 			lastMessage = result.Message
 		}
+		if strings.TrimSpace(result.ErrorCode) != "" {
+			lastErrorCode = result.ErrorCode
+		}
+		if strings.TrimSpace(result.ErrorType) != "" {
+			lastErrorType = result.ErrorType
+		}
 	}
 
 	appendAdvancedProxyLogf("[OPENAI_PROXY_FINAL_FAIL] status=%d app=%s route=%s detail=%s", lastStatus, appType, routeKind, previewAdvancedProxyText(lastMessage, 260))
-	writeOpenAIProxyError(writer, lastStatus, lastMessage)
+	writeOpenAIProxyError(writer, lastStatus, lastMessage, lastErrorCode, lastErrorType)
 }

@@ -318,7 +318,11 @@ export function normalizeAdvancedProxyConfig(input) {
   next.highAvailability.rpm = normalizeRpmSection(next.highAvailability.rpm);
   next.optimizer.cacheTtl = String(next.optimizer.cacheTtl || defaults.optimizer.cacheTtl).trim() || defaults.optimizer.cacheTtl;
 
-  next.enabled = ADVANCED_PROXY_APPS.some(app => next?.[app.id]?.enabled === true);
+  if (typeof input?.enabled === 'boolean') {
+    next.enabled = input.enabled;
+  } else {
+    next.enabled = ADVANCED_PROXY_APPS.some(app => next?.[app.id]?.enabled === true);
+  }
   return next;
 }
 

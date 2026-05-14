@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -24,11 +27,14 @@ var embeddedBridgeUserScript string
 
 const (
 	bridgeServerHost               = "127.0.0.1"
-	bridgeServerPort               = 8888
+	bridgeServerPortStart          = 8888
+	bridgeServerPortScanLimit      = 200
 	bridgeServerVersion            = "0.2.11"
 	bridgeScriptManagerExtensionID = "gcalenpjmijncebpfijmoaglllgpjagf"
 	bridgeScriptManagerInstallURL  = "https://chrome.google.com/webstore/detail/tampermonkey/gcalenpjmijncebpfijmoaglllgpjagf"
 )
+
+var bridgeResolvedPort atomic.Int64
 
 type bridgeScriptManagerInstallStatus struct {
 	Installed    bool     `json:"installed"`
@@ -98,6 +104,78 @@ func resolveBridgeImportLogPath() string {
 
 func appendBridgeImportLogf(format string, args ...any) {
 	appendLine(resolveBridgeImportLogPath(), fmt.Sprintf(format, args...))
+}
+
+func resolveConfiguredBridgePortStart() int {
+	config, err := loadAdvancedProxyConfig()
+	if err == nil && config.ListenPort > 0 {
+		return config.ListenPort
+	}
+	return bridgeServerPortStart
+}
+
+func currentBridgeServerPort() int {
+	if port := int(bridgeResolvedPort.Load()); port > 0 {
+		return port
+	}
+	return resolveConfiguredBridgePortStart()
+}
+
+func setCurrentBridgeServerPort(port int) {
+	if port > 0 {
+		bridgeResolvedPort.Store(int64(port))
+		return
+	}
+	bridgeResolvedPort.Store(0)
+}
+
+func currentBridgeServerURL() string {
+	return fmt.Sprintf("http://%s:%d", bridgeServerHost, currentBridgeServerPort())
+}
+
+func currentBridgeServerURLWithPath(path string) string {
+	resolvedPath := strings.TrimSpace(path)
+	if resolvedPath == "" {
+		return currentBridgeServerURL()
+	}
+	if !strings.HasPrefix(resolvedPath, "/") {
+		resolvedPath = "/" + resolvedPath
+	}
+	return currentBridgeServerURL() + resolvedPath
+}
+
+func isBridgePortInUseError(err error) bool {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(lower, "address already in use") || strings.Contains(lower, "only one usage")
+}
+
+func listenBridgeServerWithFallback(host string, startPort int) (net.Listener, int, error) {
+	preferredPort := startPort
+	if preferredPort <= 0 {
+		preferredPort = bridgeServerPortStart
+	}
+	lastErr := error(nil)
+	for attempt := 0; attempt < bridgeServerPortScanLimit; attempt++ {
+		port := preferredPort + attempt
+		address := fmt.Sprintf("%s:%d", host, port)
+		listener, err := net.Listen("tcp4", address)
+		if err == nil {
+			return listener, port, nil
+		}
+		lastErr = err
+		if !isBridgePortInUseError(err) {
+			return nil, 0, fmt.Errorf("listen %s failed: %w", address, err)
+		}
+	}
+	return nil, 0, fmt.Errorf(
+		"no available bridge port in range %d-%d: %w",
+		preferredPort,
+		preferredPort+bridgeServerPortScanLimit-1,
+		lastErr,
+	)
 }
 
 func previewBridgeText(raw string, limit int) string {
@@ -403,11 +481,13 @@ func (a *App) ensureBridgeServer() error {
 		return nil
 	}
 
-	address := fmt.Sprintf("%s:%d", bridgeServerHost, bridgeServerPort)
-	listener, err := net.Listen("tcp4", address)
+	preferredPort := resolveConfiguredBridgePortStart()
+	listener, resolvedPort, err := listenBridgeServerWithFallback(bridgeServerHost, preferredPort)
 	if err != nil {
-		return fmt.Errorf("listen %s failed: %w", address, err)
+		return err
 	}
+	address := fmt.Sprintf("%s:%d", bridgeServerHost, resolvedPort)
+	setCurrentBridgeServerPort(resolvedPort)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/bridge/ping", a.handleBridgePing)
@@ -438,6 +518,9 @@ func (a *App) ensureBridgeServer() error {
 	a.bridgeServer = server
 
 	appendBridgeImportLogf("[BRIDGE_START] addr=%s mode=%s", address, a.mode)
+	if resolvedPort != preferredPort {
+		appendBridgeImportLogf("[BRIDGE_PORT_FALLBACK] preferred=%d resolved=%d", preferredPort, resolvedPort)
+	}
 
 	go func(server *http.Server, listener net.Listener) {
 		if serveErr := server.Serve(listener); serveErr != nil && serveErr != http.ErrServerClosed {
@@ -456,7 +539,7 @@ func (a *App) OpenBridgeScriptInstallPage() error {
 	if a.ctx == nil {
 		return fmt.Errorf("wails context not ready")
 	}
-	wruntime.BrowserOpenURL(a.ctx, fmt.Sprintf("http://%s:%d/bridge/install", bridgeServerHost, bridgeServerPort))
+	wruntime.BrowserOpenURL(a.ctx, currentBridgeServerURLWithPath("/bridge/install"))
 	return nil
 }
 
@@ -480,7 +563,14 @@ func (a *App) ResetBridgeImportSession() (*BridgeImportSnapshot, error) {
 	a.bridgeSessionActive.Store(true)
 	a.bridgeClientPingAt.Store(0)
 	appendBridgeImportLogf("[SESSION_RESET] cleared bridge import session")
-	return &BridgeImportSnapshot{Records: []BridgeImportRecord{}, SessionActive: true}, nil
+	return &BridgeImportSnapshot{
+		Records:       []BridgeImportRecord{},
+		SessionActive: true,
+		ServerURL:     currentBridgeServerURL(),
+		LogPath:       resolveBridgeImportLogPath(),
+		LastStoredAt:  resolveBridgeImportLastPath(),
+		LastLogs:      []string{},
+	}, nil
 }
 
 func (a *App) GetBridgeImportSnapshot() (*BridgeImportSnapshot, error) {
@@ -526,6 +616,7 @@ func (a *App) stopBridgeServer() {
 	_ = a.bridgeServer.Shutdown(ctx)
 	a.bridgeServer = nil
 	a.bridgeListener = nil
+	setCurrentBridgeServerPort(0)
 }
 
 func (a *App) handleBridgePing(writer http.ResponseWriter, request *http.Request) {
@@ -562,10 +653,10 @@ func (a *App) handleBridgePing(writer http.ResponseWriter, request *http.Request
 	writeBridgeJSON(writer, http.StatusOK, map[string]any{
 		"ok":            true,
 		"host":          bridgeServerHost,
-		"port":          bridgeServerPort,
+		"port":          currentBridgeServerPort(),
 		"mode":          string(a.mode),
 		"version":       bridgeServerVersion,
-		"serverUrl":     fmt.Sprintf("http://%s:%d", bridgeServerHost, bridgeServerPort),
+		"serverUrl":     currentBridgeServerURL(),
 		"sessionActive": sessionActive,
 	})
 }
@@ -1313,10 +1404,10 @@ func renderBridgeInstallPageHTML() string {
 
 	return strings.NewReplacer(
 		"__VERSION__", bridgeServerVersion,
-		"__PING_URL__", fmt.Sprintf("http://%s:%d/bridge/ping", bridgeServerHost, bridgeServerPort),
-		"__EXTENSION_STATUS_URL__", fmt.Sprintf("http://%s:%d/bridge/install/status", bridgeServerHost, bridgeServerPort),
-		"__IMPORT_URL__", fmt.Sprintf("http://%s:%d/bridge/import", bridgeServerHost, bridgeServerPort),
-		"__SCRIPT_URL__", fmt.Sprintf("http://%s:%d/bridge/script.user.js", bridgeServerHost, bridgeServerPort),
+		"__PING_URL__", currentBridgeServerURLWithPath("/bridge/ping"),
+		"__EXTENSION_STATUS_URL__", currentBridgeServerURLWithPath("/bridge/install/status"),
+		"__IMPORT_URL__", currentBridgeServerURLWithPath("/bridge/import"),
+		"__SCRIPT_URL__", currentBridgeServerURLWithPath("/bridge/script.user.js"),
 		"__SCRIPT_MANAGER_EXTENSION_ID__", bridgeScriptManagerExtensionID,
 		"__SCRIPT_MANAGER_URL__", bridgeScriptManagerInstallURL,
 	).Replace(html)
@@ -1353,6 +1444,10 @@ func (a *App) handleBridgeUserScript(writer http.ResponseWriter, request *http.R
 		http.Error(writer, "bridge script not found", http.StatusInternalServerError)
 		return
 	}
+	raw = strings.NewReplacer(
+		"__RECEIVER_BASE__", currentBridgeServerURL(),
+		"http://127.0.0.1:8888", currentBridgeServerURL(),
+	).Replace(raw)
 
 	writer.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
@@ -1428,7 +1523,7 @@ func readBridgeImportSnapshot() (*BridgeImportSnapshot, error) {
 	historyPath := resolveBridgeImportHistoryPath()
 	snapshot.LastStoredAt = lastPath
 	snapshot.LogPath = resolveBridgeImportLogPath()
-	snapshot.ServerURL = fmt.Sprintf("http://%s:%d", bridgeServerHost, bridgeServerPort)
+	snapshot.ServerURL = currentBridgeServerURL()
 	snapshot.LastLogs = readBridgeLogTail(24)
 
 	raw, err := os.ReadFile(historyPath)
