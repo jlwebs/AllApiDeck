@@ -1589,6 +1589,20 @@ func TestExtractEncryptedContentHealingSessionKeyFromEmbeddedMetadata(t *testing
 	}
 }
 
+func TestExtractEncryptedContentHealingSessionKeyFromPromptCacheKey(t *testing.T) {
+	body := map[string]any{
+		"prompt_cache_key": "pcache-123",
+		"client_metadata": map[string]any{
+			"x-codex-installation-id": "install-123",
+		},
+	}
+
+	got := extractEncryptedContentHealingSessionKey(body, "codex")
+	if got != "codex|pcache-123" {
+		t.Fatalf("expected prompt cache key to be extracted, got %q", got)
+	}
+}
+
 func TestPrepareOpenAIRequestForEncryptedContentHealingStripsRecordedHistory(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 
@@ -1647,6 +1661,87 @@ func TestPrepareOpenAIRequestForEncryptedContentHealingStripsRecordedHistory(t *
 	lastBlock, _ := lastContent[0].(map[string]any)
 	if got := toStringValue(lastBlock["encrypted_content"]); got != "enc-4" {
 		t.Fatalf("expected latest encrypted_content to remain, got %#v", lastBlock)
+	}
+}
+
+func TestPrepareOpenAIRequestForEncryptedContentHealingStripsIncludeOnlyPayloads(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	sessionKey := "codex|sess-include-only-123"
+	advancedProxyEncryptedContentHealState.record(sessionKey, 3)
+
+	rawBody := []byte(`{
+		"metadata":{"user_id":"{\"session_id\":\"sess-include-only-123\"}"},
+		"include":["reasoning.encrypted_content"],
+		"messages":[
+			{"role":"assistant","content":[{"type":"input_text","text":"1"}]},
+			{"role":"user","content":[{"type":"input_text","text":"2"}]}
+		]
+	}`)
+
+	sanitizedBody, healingContext, err := prepareOpenAIRequestForEncryptedContentHealing(rawBody, "codex")
+	if err != nil {
+		t.Fatalf("prepare request: %v", err)
+	}
+	if healingContext.SessionKey != sessionKey {
+		t.Fatalf("unexpected session key: %#v", healingContext)
+	}
+	if healingContext.OriginalCount != 0 {
+		t.Fatalf("expected zero encrypted content fields in include-only payload, got %#v", healingContext)
+	}
+	if healingContext.RemovedIncludeRefs != 1 {
+		t.Fatalf("expected one include reference to be stripped, got %#v", healingContext)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(sanitizedBody, &decoded); err != nil {
+		t.Fatalf("decode sanitized body: %v", err)
+	}
+
+	includeItems, ok := decoded["include"].([]any)
+	if !ok {
+		t.Fatalf("expected include array to remain decodable, got %#v", decoded["include"])
+	}
+	if len(includeItems) != 0 {
+		t.Fatalf("expected include array to have encrypted references stripped, got %#v", includeItems)
+	}
+}
+
+func TestFinalizeOpenAIRequestForEncryptedContentHealingRemovesAllResidualHits(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	sessionKey := "codex|sess-finalize-123"
+	advancedProxyEncryptedContentHealState.record(sessionKey, 1)
+
+	rawBody := []byte(`{
+		"metadata":{"user_id":"{\"session_id\":\"sess-finalize-123\"}"},
+		"include":["reasoning.encrypted_content"],
+		"input":[
+			{"type":"reasoning","encrypted_content":"enc-1"},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"please remove encrypted_content mention"}]}
+		]
+	}`)
+
+	sanitizedBody, stats, err := finalizeOpenAIRequestForEncryptedContentHealing(rawBody, sessionKey)
+	if err != nil {
+		t.Fatalf("finalize request: %v", err)
+	}
+	if stats.RemovedFields != 1 || stats.RemovedIncludeRefs != 1 || stats.ScrubbedStrings != 1 {
+		t.Fatalf("unexpected final sanitization stats: %#v", stats)
+	}
+	if stats.ResidualHits != 0 {
+		t.Fatalf("expected zero residual hits, got %#v", stats)
+	}
+	if containsEncryptedContentNeedle(sanitizedBody) {
+		t.Fatalf("expected sanitized body to remove encrypted_content entirely: %s", sanitizedBody)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(sanitizedBody, &decoded); err != nil {
+		t.Fatalf("decode sanitized body: %v", err)
+	}
+	if count := countEncryptedContentEntries(decoded); count != 0 {
+		t.Fatalf("expected zero encrypted_content fields after finalize, got %d", count)
 	}
 }
 
@@ -1746,19 +1841,190 @@ func TestForwardOpenAIRequestViaProviderHealsInvalidEncryptedContentAcrossReques
 	if count := countEncryptedContentEntries(requestBodies[0]); count != 3 {
 		t.Fatalf("expected first upstream body to retain 3 encrypted_content entries, got %d", count)
 	}
-	if count := countEncryptedContentEntries(requestBodies[1]); count != 1 {
-		t.Fatalf("expected second upstream body to retain only latest encrypted_content entry, got %d", count)
+	if count := countEncryptedContentEntries(requestBodies[1]); count != 0 {
+		t.Fatalf("expected second upstream body to remove all encrypted_content entries after heal activation, got %d", count)
 	}
 
-	messages, ok := requestBodies[1]["messages"].([]any)
-	if !ok || len(messages) != 4 {
-		t.Fatalf("unexpected second request messages: %#v", requestBodies[1]["messages"])
+	secondRaw, err := json.Marshal(requestBodies[1])
+	if err != nil {
+		t.Fatalf("marshal second request body: %v", err)
 	}
-	lastMessage, _ := messages[3].(map[string]any)
-	lastContent, _ := lastMessage["content"].([]any)
-	lastBlock, _ := lastContent[0].(map[string]any)
-	if got := toStringValue(lastBlock["encrypted_content"]); got != "enc-4" {
-		t.Fatalf("expected only latest encrypted_content to remain in healed request, got %#v", lastBlock)
+	if containsEncryptedContentNeedle(secondRaw) {
+		t.Fatalf("expected healed request to strip encrypted_content completely, got %s", secondRaw)
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderFinalGateStripsReasoningPayloads(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	var mu sync.Mutex
+	requestBodies := make([]map[string]any, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+
+		mu.Lock()
+		requestBodies = append(requestBodies, body)
+		callIndex := len(requestBodies)
+		mu.Unlock()
+
+		writer.Header().Set("Content-Type", "application/json")
+		if callIndex == 1 {
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = writer.Write([]byte(`{
+				"error": {
+					"message": "The encrypted content QVhO...FQ== could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
+					"type": "invalid_request_error",
+					"code": "invalid_encrypted_content"
+				}
+			}`))
+			return
+		}
+
+		_, _ = writer.Write([]byte(`{"id":"resp_test","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "codex-heal-provider",
+		RowKey:    "row-codex-heal",
+		Name:      "Codex Heal Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test",
+		APIFormat: "openai_chat",
+	}
+
+	firstBody := []byte(`{
+		"metadata":{"user_id":"{\"session_id\":\"sess-final-gate-123\"}"},
+		"input":[
+			{"type":"reasoning","encrypted_content":"enc-1"},
+			{"type":"reasoning","encrypted_content":"enc-2"}
+		]
+	}`)
+	firstResult := forwardOpenAIRequestViaProvider("codex", provider, "chat", firstBody, false, AdvancedProxyConfig{})
+	if firstResult.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected first call to fail with upstream invalid_encrypted_content, got %#v", firstResult)
+	}
+
+	secondBody := []byte(`{
+		"metadata":{"user_id":"{\"session_id\":\"sess-final-gate-123\"}"},
+		"include":["reasoning.encrypted_content"],
+		"input":[
+			{"type":"reasoning","encrypted_content":"enc-1"},
+			{"type":"reasoning","encrypted_content":"enc-2"},
+			{"type":"reasoning","encrypted_content":"enc-3"},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"encrypted_content should be scrubbed"}]}
+		]
+	}`)
+	secondResult := forwardOpenAIRequestViaProvider("codex", provider, "chat", secondBody, false, AdvancedProxyConfig{})
+	if secondResult.StatusCode != http.StatusOK {
+		t.Fatalf("expected healed follow-up call to succeed, got %#v", secondResult)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requestBodies) != 2 {
+		t.Fatalf("expected two upstream requests, got %d", len(requestBodies))
+	}
+
+	secondRaw, err := json.Marshal(requestBodies[1])
+	if err != nil {
+		t.Fatalf("marshal second request body: %v", err)
+	}
+	if containsEncryptedContentNeedle(secondRaw) {
+		t.Fatalf("expected final gate to strip encrypted_content from second upstream body: %s", secondRaw)
+	}
+	if count := countEncryptedContentEntries(requestBodies[1]); count != 0 {
+		t.Fatalf("expected second upstream body to retain zero encrypted_content fields, got %d", count)
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderHealsPromptCacheSessions(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	var mu sync.Mutex
+	requestBodies := make([]map[string]any, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+
+		mu.Lock()
+		requestBodies = append(requestBodies, body)
+		callIndex := len(requestBodies)
+		mu.Unlock()
+
+		writer.Header().Set("Content-Type", "application/json")
+		if callIndex == 1 {
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = writer.Write([]byte(`{
+				"error": {
+					"message": "The encrypted content QVhO...FQ== could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
+					"type": "invalid_request_error",
+					"code": "invalid_encrypted_content"
+				}
+			}`))
+			return
+		}
+
+		_, _ = writer.Write([]byte(`{"id":"resp_test","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "codex-heal-provider",
+		RowKey:    "row-codex-heal",
+		Name:      "Codex Heal Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test",
+		APIFormat: "openai_chat",
+	}
+
+	firstBody := []byte(`{
+		"prompt_cache_key":"pcache-heal-123",
+		"client_metadata":{"x-codex-installation-id":"install-123"},
+		"input":[
+			{"type":"reasoning","encrypted_content":"enc-1"},
+			{"type":"reasoning","encrypted_content":"enc-2"}
+		]
+	}`)
+	firstResult := forwardOpenAIRequestViaProvider("codex", provider, "responses", firstBody, false, AdvancedProxyConfig{})
+	if firstResult.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected first call to fail with upstream invalid_encrypted_content, got %#v", firstResult)
+	}
+	if cutoff := advancedProxyEncryptedContentHealState.get("codex|pcache-heal-123"); cutoff != 2 {
+		t.Fatalf("expected prompt cache session to be recorded with cutoff 2, got %d", cutoff)
+	}
+
+	secondBody := []byte(`{
+		"prompt_cache_key":"pcache-heal-123",
+		"client_metadata":{"x-codex-installation-id":"install-123"},
+		"include":["reasoning.encrypted_content"],
+		"input":[
+			{"type":"reasoning","encrypted_content":"enc-1"},
+			{"type":"reasoning","encrypted_content":"enc-2"},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"encrypted_content should not survive"}]}
+		]
+	}`)
+	secondResult := forwardOpenAIRequestViaProvider("codex", provider, "responses", secondBody, false, AdvancedProxyConfig{})
+	if secondResult.StatusCode != http.StatusOK {
+		t.Fatalf("expected healed prompt-cache follow-up call to succeed, got %#v", secondResult)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requestBodies) != 2 {
+		t.Fatalf("expected two upstream requests, got %d", len(requestBodies))
+	}
+	secondRaw, err := json.Marshal(requestBodies[1])
+	if err != nil {
+		t.Fatalf("marshal second request body: %v", err)
+	}
+	if containsEncryptedContentNeedle(secondRaw) {
+		t.Fatalf("expected prompt-cache healed request to strip encrypted_content completely, got %s", secondRaw)
 	}
 }
 

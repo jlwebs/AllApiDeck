@@ -424,14 +424,38 @@ function buildDesktopLogFingerprint(files) {
     .join('||');
 }
 
+function isDesktopLogSummaryNoiseLine(line) {
+  const text = String(line || '').trim();
+  if (!text) return true;
+  const noisePatterns = [
+    /\[(?:[^\]]*TRY|[^\]]*OK|sidebar\.routing)\]/i,
+    /"snapshotApps"\s*:/i,
+    /"visibleRecords"\s*:/i,
+    /\btimeout=\d+s\b/i,
+  ];
+  return noisePatterns.some(pattern => pattern.test(text));
+}
+
+function isDesktopLogErrorSummaryLine(line) {
+  const text = String(line || '').trim();
+  if (!text || isDesktopLogSummaryNoiseLine(text)) return false;
+
+  const taggedSeverityPattern = /\[(?:[A-Z0-9_.-]*?(?:ERROR|FAIL|FATAL|PANIC|EXCEPTION|MISS))\]/i;
+  if (taggedSeverityPattern.test(text)) {
+    return true;
+  }
+
+  const genericSeverityPattern = /\b(error|fatal|panic|exception|traceback|failed|failure|timed out|denied|refused|invalid|abort)\b|错误|异常|失败|拒绝|崩溃|中断|致命/i;
+  return genericSeverityPattern.test(text);
+}
+
 function extractErrorSummaryLines(content) {
   const source = String(content || '');
   if (!source) return [];
   const lines = source.split(/\r?\n/);
-  const errorPattern = /\b(error|fatal|panic|exception|traceback|failed|failure|timeout|timed out|denied|refused|invalid|abort)\b|错误|异常|失败|超时|拒绝|崩溃|中断|致命/i;
   const result = [];
   lines.forEach((line, index) => {
-    if (!errorPattern.test(line)) return;
+    if (!isDesktopLogErrorSummaryLine(line)) return;
     result.push(`[L${index + 1}] ${line}`);
   });
   return result;

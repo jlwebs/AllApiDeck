@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 const advancedProxySSEScannerMaxTokenSize = 16 * 1024 * 1024
 
 var webSearchResultURLPattern = regexp.MustCompile(`https?://[^\s<>"')\]]+`)
+var encryptedContentNeedlePattern = regexp.MustCompile(`(?i)encrypted_content`)
 
 type providerAttemptResult struct {
 	Response   map[string]any
@@ -50,6 +52,14 @@ type encryptedContentHealingContext struct {
 	SessionKey           string
 	OriginalCount        int
 	AppliedHistoricalCut int
+	RemovedIncludeRefs   int
+}
+
+type encryptedContentFinalSanitizationStats struct {
+	RemovedFields      int
+	RemovedIncludeRefs int
+	ScrubbedStrings    int
+	ResidualHits       int
 }
 
 type advancedProxyEncryptedContentHealStore struct {
@@ -155,22 +165,46 @@ func extractEncryptedContentHealingSessionKey(body map[string]any, appType strin
 		return ""
 	}
 
+	sessionKeys := []string{
+		"session_id",
+		"sessionId",
+		"conversation_id",
+		"conversationId",
+		"thread_id",
+		"threadId",
+		"resume_id",
+		"resumeId",
+		"prompt_cache_key",
+		"promptCacheKey",
+		"previous_response_id",
+		"previousResponseId",
+		"response_id",
+		"responseId",
+		"x-codex-session-id",
+		"x-codex-conversation-id",
+	}
+	fingerprintKeys := []string{
+		"x-codex-installation-id",
+		"installation_id",
+		"installationId",
+	}
+
 	var search func(any) string
 	search = func(value any) string {
 		switch typed := value.(type) {
 		case map[string]any:
-			for _, key := range []string{"session_id", "sessionId", "conversation_id", "conversationId", "thread_id", "threadId", "resume_id", "resumeId"} {
+			for _, key := range sessionKeys {
 				if candidate := strings.TrimSpace(toStringValue(typed[key])); candidate != "" {
 					return candidate
 				}
 			}
-			for _, key := range []string{"metadata", "user", "context", "client"} {
+			for _, key := range []string{"metadata", "user", "context", "client", "client_metadata"} {
 				if candidate := search(typed[key]); candidate != "" {
 					return candidate
 				}
 			}
 			for _, key := range orderedJSONMapKeys(typed) {
-				if key == "metadata" || key == "user" || key == "context" || key == "client" {
+				if key == "metadata" || key == "user" || key == "context" || key == "client" || key == "client_metadata" {
 					continue
 				}
 				if candidate := search(typed[key]); candidate != "" {
@@ -193,9 +227,80 @@ func extractEncryptedContentHealingSessionKey(body map[string]any, appType strin
 
 	sessionID := search(body)
 	if sessionID == "" {
-		return ""
+		fingerprint := firstNonEmpty(
+			searchMapStringKey(body, fingerprintKeys...),
+			strings.TrimSpace(toStringValue(body["prompt_cache_key"])),
+		)
+		if fingerprint == "" {
+			return ""
+		}
+		textFingerprint := previewAdvancedProxyText(firstNonEmpty(
+			strings.TrimSpace(toStringValue(body["instructions"])),
+			extractStableEncryptedContentPromptFingerprint(body),
+			strings.TrimSpace(toStringValue(body["model"])),
+		), 200)
+		digest := sha1.Sum([]byte(strings.TrimSpace(appType) + "\n" + fingerprint + "\n" + textFingerprint))
+		sessionID = fmt.Sprintf("fallback:%x", digest[:8])
 	}
 	return strings.TrimSpace(appType) + "|" + sessionID
+}
+
+func searchMapStringKey(value any, keys ...string) string {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, key := range keys {
+			if candidate := strings.TrimSpace(toStringValue(typed[key])); candidate != "" {
+				return candidate
+			}
+		}
+		for _, item := range typed {
+			if candidate := searchMapStringKey(item, keys...); candidate != "" {
+				return candidate
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if candidate := searchMapStringKey(item, keys...); candidate != "" {
+				return candidate
+			}
+		}
+	case string:
+		if decoded := parseEmbeddedJSONObject(typed); decoded != nil {
+			return searchMapStringKey(decoded, keys...)
+		}
+	}
+	return ""
+}
+
+func extractStableEncryptedContentPromptFingerprint(body map[string]any) string {
+	if body == nil {
+		return ""
+	}
+	inputItems, _ := body["input"].([]any)
+	if len(inputItems) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, 8)
+	for _, rawItem := range inputItems {
+		itemMap, ok := rawItem.(map[string]any)
+		if !ok {
+			continue
+		}
+		role := strings.TrimSpace(toStringValue(itemMap["role"]))
+		itemType := strings.TrimSpace(toStringValue(itemMap["type"]))
+		text := previewAdvancedProxyText(firstNonEmpty(
+			openAIMessageContentToText(itemMap["content"]),
+			strings.TrimSpace(toStringValue(itemMap["text"])),
+		), 120)
+		if role == "" && itemType == "" && text == "" {
+			continue
+		}
+		parts = append(parts, role+"|"+itemType+"|"+text)
+		if len(parts) >= 6 {
+			break
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func orderedJSONMapKeys(source map[string]any) []string {
@@ -232,6 +337,28 @@ func orderedJSONMapKeys(source map[string]any) []string {
 	}
 	sort.Strings(rest)
 	return append(keys, rest...)
+}
+
+func containsEncryptedContentNeedle(rawBody []byte) bool {
+	return len(rawBody) > 0 && encryptedContentNeedlePattern.Match(rawBody)
+}
+
+func countEncryptedContentNeedle(rawBody []byte) int {
+	if len(rawBody) == 0 {
+		return 0
+	}
+	return len(encryptedContentNeedlePattern.FindAllIndex(rawBody, -1))
+}
+
+func scrubEncryptedContentString(value string) (string, int) {
+	if strings.TrimSpace(value) == "" {
+		return value, 0
+	}
+	indexes := encryptedContentNeedlePattern.FindAllStringIndex(value, -1)
+	if len(indexes) == 0 {
+		return value, 0
+	}
+	return encryptedContentNeedlePattern.ReplaceAllString(value, "stripped_content"), len(indexes)
 }
 
 func countEncryptedContentEntries(value any) int {
@@ -299,12 +426,123 @@ func stripHistoricalEncryptedContent(value any, remaining *int) int {
 	return stripped
 }
 
+func stripEncryptedContentIncludeReferences(value any) int {
+	removed := 0
+	var walk func(any)
+	walk = func(node any) {
+		switch typed := node.(type) {
+		case []any:
+			for _, item := range typed {
+				walk(item)
+			}
+		case map[string]any:
+			if includeItems, ok := typed["include"].([]any); ok && len(includeItems) > 0 {
+				filtered := make([]any, 0, len(includeItems))
+				for _, rawItem := range includeItems {
+					itemText := strings.TrimSpace(toStringValue(rawItem))
+					if itemText != "" && strings.Contains(strings.ToLower(itemText), "encrypted_content") {
+						removed += 1
+						continue
+					}
+					filtered = append(filtered, rawItem)
+				}
+				typed["include"] = filtered
+			}
+			for _, key := range orderedJSONMapKeys(typed) {
+				if key == "include" || key == "encrypted_content" {
+					continue
+				}
+				walk(typed[key])
+			}
+		}
+	}
+	walk(value)
+	return removed
+}
+
+func stripAllEncryptedContentForHealedSession(value any) encryptedContentFinalSanitizationStats {
+	stats := encryptedContentFinalSanitizationStats{}
+	var walk func(any)
+	walk = func(node any) {
+		switch typed := node.(type) {
+		case []any:
+			for index, item := range typed {
+				if text, ok := item.(string); ok {
+					scrubbed, replaced := scrubEncryptedContentString(text)
+					if replaced > 0 {
+						typed[index] = scrubbed
+						stats.ScrubbedStrings += replaced
+					}
+					continue
+				}
+				walk(item)
+			}
+		case map[string]any:
+			for key := range typed {
+				if strings.EqualFold(strings.TrimSpace(key), "encrypted_content") {
+					delete(typed, key)
+					stats.RemovedFields += 1
+				}
+			}
+			if includeItems, ok := typed["include"].([]any); ok && len(includeItems) > 0 {
+				filtered := make([]any, 0, len(includeItems))
+				for _, rawItem := range includeItems {
+					itemText := strings.TrimSpace(toStringValue(rawItem))
+					if itemText != "" && strings.Contains(strings.ToLower(itemText), "encrypted_content") {
+						stats.RemovedIncludeRefs += 1
+						continue
+					}
+					filtered = append(filtered, rawItem)
+				}
+				typed["include"] = filtered
+			}
+			for _, key := range orderedJSONMapKeys(typed) {
+				value := typed[key]
+				if text, ok := value.(string); ok {
+					scrubbed, replaced := scrubEncryptedContentString(text)
+					if replaced > 0 {
+						typed[key] = scrubbed
+						stats.ScrubbedStrings += replaced
+					}
+					continue
+				}
+				walk(value)
+			}
+		}
+	}
+	walk(value)
+	return stats
+}
+
+func finalizeOpenAIRequestForEncryptedContentHealing(rawBody []byte, sessionKey string) ([]byte, encryptedContentFinalSanitizationStats, error) {
+	stats := encryptedContentFinalSanitizationStats{}
+	if strings.TrimSpace(sessionKey) == "" || advancedProxyEncryptedContentHealState.get(sessionKey) <= 0 {
+		return rawBody, stats, nil
+	}
+	if !containsEncryptedContentNeedle(rawBody) {
+		return rawBody, stats, nil
+	}
+
+	var requestBody map[string]any
+	if err := json.Unmarshal(rawBody, &requestBody); err != nil {
+		return rawBody, stats, err
+	}
+
+	stats = stripAllEncryptedContentForHealedSession(requestBody)
+	sanitizedBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return rawBody, stats, err
+	}
+	stats.ResidualHits = countEncryptedContentNeedle(sanitizedBody)
+	return sanitizedBody, stats, nil
+}
+
 func prepareOpenAIRequestForEncryptedContentHealing(rawBody []byte, appType string) ([]byte, encryptedContentHealingContext, error) {
 	context := encryptedContentHealingContext{}
 	if len(rawBody) == 0 {
 		return rawBody, context, nil
 	}
-	if !bytes.Contains(rawBody, []byte(`"encrypted_content"`)) {
+	if !containsEncryptedContentNeedle(rawBody) {
 		return rawBody, context, nil
 	}
 
@@ -315,7 +553,7 @@ func prepareOpenAIRequestForEncryptedContentHealing(rawBody []byte, appType stri
 
 	context.SessionKey = extractEncryptedContentHealingSessionKey(requestBody, appType)
 	context.OriginalCount = countEncryptedContentEntries(requestBody)
-	if context.SessionKey == "" || context.OriginalCount == 0 {
+	if context.SessionKey == "" {
 		return rawBody, context, nil
 	}
 
@@ -326,7 +564,8 @@ func prepareOpenAIRequestForEncryptedContentHealing(rawBody []byte, appType stri
 
 	remaining := historicalCut
 	context.AppliedHistoricalCut = stripHistoricalEncryptedContent(requestBody, &remaining)
-	if context.AppliedHistoricalCut <= 0 {
+	context.RemovedIncludeRefs = stripEncryptedContentIncludeReferences(requestBody)
+	if context.AppliedHistoricalCut <= 0 && context.RemovedIncludeRefs <= 0 {
 		return rawBody, context, nil
 	}
 
@@ -2787,6 +3026,64 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 			advancedProxyEncryptedContentHealState.get(healingContext.SessionKey),
 		)
 	}
+	if healingContext.SessionKey != "" && advancedProxyEncryptedContentHealState.get(healingContext.SessionKey) > 0 && containsEncryptedContentNeedle(preparedBody) {
+		finalBody, finalStats, finalErr := finalizeOpenAIRequestForEncryptedContentHealing(preparedBody, healingContext.SessionKey)
+		if finalErr != nil {
+			message := formatAdvancedProxyFailure(appType, routeKind, provider, "", fmt.Sprintf("healed session final strip failed: %s", finalErr.Error()))
+			appendAdvancedProxyLogf(
+				"[OPENAI_PROXY_HEAL_FATAL] app=%s route=%s session=%s reason=final_strip_parse_failed hits=%d detail=%s",
+				appType,
+				routeKind,
+				previewAdvancedProxyText(healingContext.SessionKey, 80),
+				countEncryptedContentNeedle(preparedBody),
+				previewAdvancedProxyText(message, 260),
+			)
+			return rawProviderAttemptResult{
+				StatusCode: http.StatusInternalServerError,
+				Message:    message,
+				ErrorCode:  "encrypted_content_heal_failed",
+				ErrorType:  "invalid_request_error",
+				ProviderID: strings.TrimSpace(provider.ID),
+				Provider:   providerLabel,
+				TargetURL:  strings.TrimSpace(provider.BaseURL),
+				RouteKind:  routeKind,
+			}
+		}
+		preparedBody = finalBody
+		if finalStats.RemovedFields > 0 || finalStats.RemovedIncludeRefs > 0 || finalStats.ScrubbedStrings > 0 {
+			appendAdvancedProxyLogf(
+				"[OPENAI_PROXY_HEAL_FINAL] app=%s route=%s session=%s removed_fields=%d removed_include_refs=%d scrubbed_strings=%d residual_hits=%d",
+				appType,
+				routeKind,
+				previewAdvancedProxyText(healingContext.SessionKey, 80),
+				finalStats.RemovedFields,
+				finalStats.RemovedIncludeRefs,
+				finalStats.ScrubbedStrings,
+				finalStats.ResidualHits,
+			)
+		}
+		if finalStats.ResidualHits > 0 {
+			message := formatAdvancedProxyFailure(appType, routeKind, provider, "", fmt.Sprintf("healed session still contains encrypted_content after final strip (hits=%d)", finalStats.ResidualHits))
+			appendAdvancedProxyLogf(
+				"[OPENAI_PROXY_HEAL_FATAL] app=%s route=%s session=%s reason=residual_after_final_strip hits=%d detail=%s",
+				appType,
+				routeKind,
+				previewAdvancedProxyText(healingContext.SessionKey, 80),
+				finalStats.ResidualHits,
+				previewAdvancedProxyText(message, 260),
+			)
+			return rawProviderAttemptResult{
+				StatusCode: http.StatusInternalServerError,
+				Message:    message,
+				ErrorCode:  "encrypted_content_heal_failed",
+				ErrorType:  "invalid_request_error",
+				ProviderID: strings.TrimSpace(provider.ID),
+				Provider:   providerLabel,
+				TargetURL:  strings.TrimSpace(provider.BaseURL),
+				RouteKind:  routeKind,
+			}
+		}
+	}
 
 	lastStatus := http.StatusBadGateway
 	lastMessage := formatAdvancedProxyFailure(appType, routeKind, provider, "", "no compatible upstream endpoint found")
@@ -2839,6 +3136,15 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 						recordedCutoff,
 						healingContext.OriginalCount,
 						healingContext.AppliedHistoricalCut,
+					)
+				} else {
+					appendAdvancedProxyLogf(
+						"[OPENAI_PROXY_HEAL_MISS] app=%s route=%s session=%s encrypted=%d has_raw_hit=%t",
+						appType,
+						routeKind,
+						previewAdvancedProxyText(healingContext.SessionKey, 80),
+						healingContext.OriginalCount,
+						containsEncryptedContentNeedle(rawBody),
 					)
 				}
 				lastMessage = appendEncryptedContentHealingNotice(formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, healingMessage))
