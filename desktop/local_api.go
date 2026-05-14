@@ -484,6 +484,17 @@ type checkExecutionResult struct {
 	body      map[string]any
 }
 
+type checkEndpointPhase struct {
+	protocol  string
+	endpoints []string
+}
+
+type checkProtocolPreferenceState struct {
+	mu     sync.Mutex
+	loaded bool
+	values map[string]int
+}
+
 type sseCompletionParseResult struct {
 	ReturnedModel    string
 	Content          string
@@ -493,6 +504,13 @@ type sseCompletionParseResult struct {
 	TTFTMs           int64
 	HasTTFT          bool
 }
+
+const (
+	checkProtocolPreferCompletions = 0
+	checkProtocolPreferResponses   = 1
+)
+
+var localCheckProtocolPreferences checkProtocolPreferenceState
 
 var checkEndpointStripPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`/v\d+/chat/completions$`),
@@ -612,6 +630,10 @@ func isAnyrouterCheckPayload(payload normalizedCheckKeyPayload) bool {
 }
 
 func shouldTryResponsesCheck(payload normalizedCheckKeyPayload) bool {
+	hostKey := resolveCheckProtocolPreferenceHostKey(payload.URL)
+	if hostKey != "" {
+		return true
+	}
 	return isAnyrouterCheckPayload(payload)
 }
 
@@ -668,115 +690,172 @@ func buildOpenAIChatCheckEndpointCandidates(raw string) []string {
 	return candidates
 }
 
-func buildCheckEndpointCandidates(payload normalizedCheckKeyPayload) []string {
-	openAICandidates := buildOpenAIChatCheckEndpointCandidates(payload.URL)
-	candidates := append([]string{}, openAICandidates...)
-	if len(candidates) == 0 && strings.TrimSpace(payload.URL) == "" {
+func buildResponsesCheckCandidates(payload normalizedCheckKeyPayload) []string {
+	input := normalizeCheckEndpointInput(payload.URL)
+	if input == "" {
 		return nil
 	}
 
-	input := normalizeCheckEndpointInput(payload.URL)
 	bases := []string{input}
 	stripped := stripKnownCheckEndpointSuffix(input)
 	if stripped != "" && stripped != input {
 		bases = append(bases, stripped)
 	}
-	anyrouterBase := input
-	if stripped != "" {
-		anyrouterBase = stripped
-	}
 
-	if shouldTryResponsesCheck(payload) {
-		if isAnyrouterCheckPayload(payload) {
-			seen := map[string]struct{}{}
-			for _, candidate := range candidates {
-				seen[normalizeCheckEndpointInput(candidate)] = struct{}{}
-			}
-			addCheckEndpointCandidate(&candidates, seen, anyrouterBase+"/v1/responses")
-		}
-
-		seen := map[string]struct{}{}
-		for _, candidate := range candidates {
-			seen[normalizeCheckEndpointInput(candidate)] = struct{}{}
-		}
-		responsesCandidates := make([]string, 0, 2)
-		for _, base := range bases {
-			if isAnyrouterCheckPayload(payload) {
-				continue
-			}
-			for _, candidate := range buildResponsesEndpointCandidates(base) {
-				addCheckEndpointCandidate(&responsesCandidates, seen, candidate)
-			}
-		}
-		if len(responsesCandidates) > 0 {
-			candidates = append(candidates, responsesCandidates...)
+	seen := map[string]struct{}{}
+	candidates := make([]string, 0, 4)
+	for _, base := range bases {
+		for _, candidate := range buildResponsesEndpointCandidates(base) {
+			addCheckEndpointCandidate(&candidates, seen, candidate)
 		}
 	}
-
-	if shouldTryAnthropicCheck(payload) {
-		if isAnyrouterCheckPayload(payload) {
-			seen := map[string]struct{}{}
-			for _, candidate := range candidates {
-				seen[normalizeCheckEndpointInput(candidate)] = struct{}{}
-			}
-			addCheckEndpointCandidate(&candidates, seen, anyrouterBase+"/v1/messages")
-			return candidates
-		}
-
-		seen := map[string]struct{}{}
-		for _, candidate := range candidates {
-			seen[normalizeCheckEndpointInput(candidate)] = struct{}{}
-		}
-		anthropicCandidates := make([]string, 0, 2)
-		for _, base := range bases {
-			addAnthropicCheckEndpointCandidates(&anthropicCandidates, seen, base)
-		}
-		if len(anthropicCandidates) > 0 {
-			candidates = append(candidates, anthropicCandidates...)
-		}
-	}
-
 	return candidates
 }
 
-func shouldAllowCheckFallbackAfterFailure(payload normalizedCheckKeyPayload, result checkExecutionResult) bool {
+func buildAnthropicCheckCandidates(payload normalizedCheckKeyPayload) []string {
+	if !shouldTryAnthropicCheck(payload) {
+		return nil
+	}
+
+	input := normalizeCheckEndpointInput(payload.URL)
+	if input == "" {
+		return nil
+	}
+
+	bases := []string{input}
+	stripped := stripKnownCheckEndpointSuffix(input)
+	if stripped != "" && stripped != input {
+		bases = append(bases, stripped)
+	}
+
+	if isAnyrouterCheckPayload(payload) {
+		base := input
+		if stripped != "" {
+			base = stripped
+		}
+		return []string{normalizeCheckEndpointInput(base + "/v1/messages")}
+	}
+
+	seen := map[string]struct{}{}
+	candidates := make([]string, 0, 2)
+	for _, base := range bases {
+		addAnthropicCheckEndpointCandidates(&candidates, seen, base)
+	}
+	return candidates
+}
+
+func buildCheckEndpointPhases(payload normalizedCheckKeyPayload) []checkEndpointPhase {
+	openAICandidates := buildOpenAIChatCheckEndpointCandidates(payload.URL)
+	responsesCandidates := buildResponsesCheckCandidates(payload)
+	anthropicCandidates := buildAnthropicCheckCandidates(payload)
+
+	phases := make([]checkEndpointPhase, 0, 3)
+	preferResponses := getCheckProtocolPreference(payload.URL) == checkProtocolPreferResponses
+
+	addPhase := func(protocol string, endpoints []string) {
+		if len(endpoints) == 0 {
+			return
+		}
+		phases = append(phases, checkEndpointPhase{
+			protocol:  protocol,
+			endpoints: endpoints,
+		})
+	}
+
+	if preferResponses {
+		addPhase("responses", responsesCandidates)
+		addPhase("chat", openAICandidates)
+	} else {
+		addPhase("chat", openAICandidates)
+		addPhase("responses", responsesCandidates)
+	}
+	addPhase("messages", anthropicCandidates)
+
+	return phases
+}
+
+func buildCheckEndpointCandidates(payload normalizedCheckKeyPayload) []string {
+	phases := buildCheckEndpointPhases(payload)
+	candidates := make([]string, 0, 6)
+	for _, phase := range phases {
+		candidates = append(candidates, phase.endpoints...)
+	}
+	return candidates
+}
+
+func shouldContinueCheckPhaseAfterFailure(result checkExecutionResult) bool {
 	endpoint := strings.ToLower(strings.TrimSpace(result.endpoint))
 	message := strings.ToLower(strings.TrimSpace(result.message))
 
-	if shouldTryResponsesCheck(payload) {
-		switch {
-		case strings.HasSuffix(endpoint, "/chat/completions"):
-			if strings.Contains(message, "stream response did not contain valid chunks") {
-				return true
-			}
-			if result.status == http.StatusNotFound || result.status == http.StatusMethodNotAllowed {
-				return true
-			}
-		case strings.HasSuffix(endpoint, "/responses"):
-			if result.status == http.StatusNotFound || result.status == http.StatusMethodNotAllowed {
-				return true
-			}
-			if strings.Contains(message, "不支持所选模型") || strings.Contains(message, "does not support selected model") {
-				return true
-			}
-			if strings.Contains(message, "invalid json") || strings.Contains(message, "(html)") {
-				return true
-			}
-		}
-	}
-
-	if shouldTryAnthropicCheck(payload) {
-		if strings.HasSuffix(endpoint, "/messages") {
-			return false
-		}
+	switch {
+	case strings.HasSuffix(endpoint, "/chat/completions"):
 		if strings.Contains(message, "stream response did not contain valid chunks") {
 			return true
 		}
 		if result.status == http.StatusNotFound || result.status == http.StatusMethodNotAllowed {
 			return true
 		}
+	case strings.HasSuffix(endpoint, "/responses"):
+		if result.status == http.StatusNotFound || result.status == http.StatusMethodNotAllowed {
+			return true
+		}
+		if strings.Contains(message, "不支持所选模型") || strings.Contains(message, "does not support selected model") {
+			return true
+		}
+		if strings.Contains(message, "invalid json") || strings.Contains(message, "(html)") {
+			return true
+		}
 	}
 
+	if strings.HasSuffix(endpoint, "/messages") {
+		return false
+	}
+	if strings.Contains(message, "stream response did not contain valid chunks") {
+		return true
+	}
+	if result.status == http.StatusNotFound || result.status == http.StatusMethodNotAllowed {
+		return true
+	}
+
+	return false
+}
+
+func shouldAdvanceCheckPhase(payload normalizedCheckKeyPayload, currentProtocol string, lastFailure *checkExecutionResult, nextProtocol string) bool {
+	if currentProtocol == "" || nextProtocol == "" || lastFailure == nil {
+		return false
+	}
+
+	if currentProtocol == "chat" && nextProtocol == "responses" {
+		return true
+	}
+
+	if currentProtocol == "responses" && nextProtocol == "chat" {
+		return shouldContinueCheckPhaseAfterFailure(*lastFailure)
+	}
+
+	if nextProtocol != "messages" || !shouldTryAnthropicCheck(payload) {
+		return false
+	}
+
+	endpoint := strings.ToLower(strings.TrimSpace(lastFailure.endpoint))
+	message := strings.ToLower(strings.TrimSpace(lastFailure.message))
+	if strings.HasSuffix(endpoint, "/messages") {
+		return false
+	}
+	if strings.Contains(message, "stream response did not contain valid chunks") {
+		return true
+	}
+	if lastFailure.status == http.StatusNotFound || lastFailure.status == http.StatusMethodNotAllowed {
+		return true
+	}
+	if currentProtocol == "responses" {
+		if strings.Contains(message, "不支持所选模型") || strings.Contains(message, "does not support selected model") {
+			return true
+		}
+		if strings.Contains(message, "invalid json") || strings.Contains(message, "(html)") {
+			return true
+		}
+	}
 	return false
 }
 
@@ -823,6 +902,114 @@ func buildCheckDiagnostics(payload normalizedCheckKeyPayload, attempts []checkEn
 		"timeoutMs": payload.TimeoutMs,
 		"attempts":  items,
 	}
+}
+
+func resolveCheckProtocolPreferenceHostKey(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(parsed.Host))
+}
+
+func resolveCheckProtocolPreferencePath() string {
+	return filepath.Join(resolveRuntimeRootDir(), "check-protocol-preferences.json")
+}
+
+func loadCheckProtocolPreferencesLocked() {
+	if localCheckProtocolPreferences.loaded {
+		return
+	}
+	localCheckProtocolPreferences.loaded = true
+	localCheckProtocolPreferences.values = map[string]int{}
+
+	raw, err := os.ReadFile(resolveCheckProtocolPreferencePath())
+	if err != nil {
+		return
+	}
+
+	var decoded map[string]int
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] protocol-preference decode failed | %v", err))
+		return
+	}
+
+	for hostKey, value := range decoded {
+		if strings.TrimSpace(hostKey) == "" {
+			continue
+		}
+		switch value {
+		case checkProtocolPreferCompletions, checkProtocolPreferResponses:
+			localCheckProtocolPreferences.values[strings.ToLower(strings.TrimSpace(hostKey))] = value
+		}
+	}
+}
+
+func getCheckProtocolPreference(rawURL string) int {
+	hostKey := resolveCheckProtocolPreferenceHostKey(rawURL)
+	if hostKey == "" {
+		return checkProtocolPreferCompletions
+	}
+
+	localCheckProtocolPreferences.mu.Lock()
+	defer localCheckProtocolPreferences.mu.Unlock()
+	loadCheckProtocolPreferencesLocked()
+
+	if value, ok := localCheckProtocolPreferences.values[hostKey]; ok {
+		return value
+	}
+	return checkProtocolPreferCompletions
+}
+
+func setCheckProtocolPreference(rawURL string, value int) {
+	hostKey := resolveCheckProtocolPreferenceHostKey(rawURL)
+	if hostKey == "" {
+		return
+	}
+	if value != checkProtocolPreferResponses {
+		value = checkProtocolPreferCompletions
+	}
+
+	localCheckProtocolPreferences.mu.Lock()
+	loadCheckProtocolPreferencesLocked()
+	current := localCheckProtocolPreferences.values[hostKey]
+	if current == value {
+		localCheckProtocolPreferences.mu.Unlock()
+		return
+	}
+	localCheckProtocolPreferences.values[hostKey] = value
+	snapshot := make(map[string]int, len(localCheckProtocolPreferences.values))
+	for key, item := range localCheckProtocolPreferences.values {
+		snapshot[key] = item
+	}
+	localCheckProtocolPreferences.mu.Unlock()
+
+	data, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] protocol-preference encode failed | host=%s | %v", hostKey, err))
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(resolveCheckProtocolPreferencePath()), 0o755); err != nil {
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] protocol-preference mkdir failed | host=%s | %v", hostKey, err))
+		return
+	}
+	if err := os.WriteFile(resolveCheckProtocolPreferencePath(), data, 0o644); err != nil {
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] protocol-preference write failed | host=%s | %v", hostKey, err))
+		return
+	}
+
+	protocolName := "chat"
+	if value == checkProtocolPreferResponses {
+		protocolName = "responses"
+	}
+	appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] protocol-preference saved | host=%s | prefer=%s", hostKey, protocolName))
+}
+
+func resetCheckProtocolPreferencesForTests() {
+	localCheckProtocolPreferences.mu.Lock()
+	defer localCheckProtocolPreferences.mu.Unlock()
+	localCheckProtocolPreferences.loaded = false
+	localCheckProtocolPreferences.values = nil
 }
 
 func executeCheckKey(payload normalizedCheckKeyPayload) (int, map[string]any) {
@@ -1673,7 +1860,11 @@ func executeAnthropicCheckAttempt(payload normalizedCheckKeyPayload, targetURL s
 }
 
 func executeCheckKeySmart(payload normalizedCheckKeyPayload) (int, map[string]any) {
-	endpoints := buildCheckEndpointCandidates(payload)
+	phases := buildCheckEndpointPhases(payload)
+	endpoints := make([]string, 0, 6)
+	for _, phase := range phases {
+		endpoints = append(endpoints, phase.endpoints...)
+	}
 	if len(endpoints) == 0 {
 		return http.StatusBadRequest, map[string]any{
 			"error": map[string]any{
@@ -1687,32 +1878,39 @@ func executeCheckKeySmart(payload normalizedCheckKeyPayload) (int, map[string]an
 	attempts := make([]checkEndpointAttempt, 0, len(endpoints))
 	var lastFailure *checkExecutionResult
 
-	for _, endpoint := range endpoints {
-		result := executeCheckKeyAttempt(payload, endpoint)
-		if result.ok {
-			if result.body == nil {
-				result.body = map[string]any{}
+	for phaseIndex, phase := range phases {
+		var phaseLastFailure *checkExecutionResult
+		for _, endpoint := range phase.endpoints {
+			result := executeCheckKeyAttempt(payload, endpoint)
+			if result.ok {
+				if result.body == nil {
+					result.body = map[string]any{}
+				}
+				if phase.protocol == "responses" {
+					setCheckProtocolPreference(payload.URL, checkProtocolPreferResponses)
+				}
+				diagnostics := buildCheckDiagnostics(payload, attempts)
+				diagnostics["resolvedEndpoint"] = result.endpoint
+				result.body["diagnostics"] = diagnostics
+				return result.status, result.body
 			}
-			diagnostics := buildCheckDiagnostics(payload, attempts)
-			diagnostics["resolvedEndpoint"] = result.endpoint
-			result.body["diagnostics"] = diagnostics
-			return result.status, result.body
+
+			lastFailure = &result
+			phaseLastFailure = &result
+			if result.attempt != nil {
+				attempts = append(attempts, *result.attempt)
+			}
+			if shouldContinueCheckPhaseAfterFailure(result) {
+				continue
+			}
+			break
 		}
 
-		lastFailure = &result
-		if result.attempt != nil {
-			attempts = append(attempts, *result.attempt)
-		}
-		if shouldAllowCheckFallbackAfterFailure(payload, result) {
+		if phaseIndex >= len(phases)-1 {
 			continue
 		}
-		if !result.retryable {
-			return result.status, map[string]any{
-				"error": map[string]any{
-					"message":     result.message,
-					"diagnostics": buildCheckDiagnostics(payload, attempts),
-				},
-			}
+		if !shouldAdvanceCheckPhase(payload, phase.protocol, phaseLastFailure, phases[phaseIndex+1].protocol) {
+			break
 		}
 	}
 

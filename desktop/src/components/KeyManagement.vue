@@ -2876,7 +2876,7 @@ async function runQuickTest(record, options = {}) {
   record.quickTestLoading = true;
   try {
     const model = fixedModel || await resolveQuickTestModel(record);
-    const testResult = await executeQuickTest({ apiKey: record.apiKey, siteUrl: record.siteUrl, model });
+    const testResult = await executeQuickTest({ apiKey: record.apiKey, siteUrl: record.siteUrl, model, siteType: record.siteType || record.site_type || '' });
     record.quickTestStatus = testResult.status;
     record.quickTestLabel = testResult.label;
     record.quickTestModel = model;
@@ -3177,14 +3177,14 @@ async function resolveQuickTestModel(record) {
   return preferred;
 }
 
-async function executeQuickTest({ apiKey, siteUrl, model }) {
+async function executeQuickTest({ apiKey, siteUrl, model, siteType = '' }) {
   let timeoutMs = DEFAULT_TEST_TIMEOUT_MS;
   if (/^o1-|^o3-/i.test(model)) timeoutMs *= 3;
   const startedAt = Date.now();
   const response = await apiFetch('/api/check-key', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: normalizeSiteUrl(siteUrl), key: apiKey, model, messages: buildQuickTestMessages(), timeoutMs, _isFirst: false }),
+    body: JSON.stringify({ url: normalizeSiteUrl(siteUrl), key: apiKey, model, siteType, messages: buildQuickTestMessages(), timeoutMs, _isFirst: false }),
   });
   if (!response.ok) {
     const rawError = await safeReadResponsePayload(response);

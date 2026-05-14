@@ -525,6 +525,7 @@ export async function runRecordQuickTest(record, contextMap) {
       url: normalizeSiteUrl(nextRecord.siteUrl),
       key: nextRecord.apiKey,
       model,
+      siteType: String(nextRecord.siteType || nextRecord.site_type || '').trim(),
       messages: buildQuickTestMessages(),
       timeoutMs,
       _isFirst: false,
