@@ -1784,41 +1784,44 @@ function getPrimaryAdvancedProxyApp(record) {
   return getAdvancedProxyAppsForRecord(record)[0] || '';
 }
 
-function normalizeComparableSiteUrl(value) {
+function normalizeSidebarProviderSiteUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '').toLowerCase();
 }
 
-function normalizeComparableName(value) {
-  return String(value || '').trim().toLowerCase();
+function buildSidebarProviderIdentity(recordOrProvider) {
+  if (!recordOrProvider || typeof recordOrProvider !== 'object') return '';
+
+  const rowKey = String(recordOrProvider?.rowKey || '').trim();
+  if (rowKey) return rowKey;
+
+  const providerId = String(recordOrProvider?.id || recordOrProvider?.providerId || '').trim();
+  if (providerId) return providerId;
+
+  const siteUrl = normalizeSidebarProviderSiteUrl(recordOrProvider?.siteUrl || recordOrProvider?.baseUrl || recordOrProvider?.targetUrl);
+  const apiKey = String(recordOrProvider?.apiKey || '').trim();
+  const model = String(
+    recordOrProvider?.selectedModel
+    || recordOrProvider?.quickTestModel
+    || recordOrProvider?.model
+    || ''
+  ).trim().toLowerCase();
+  if (!siteUrl || !apiKey || !model) {
+    return '';
+  }
+
+  return `${siteUrl}::${apiKey}::${model}`;
+}
+
+function buildSidebarRouteStateIdentity(routeState) {
+  if (!routeState || typeof routeState !== 'object') return '';
+  return String(routeState?.providerRowKey || routeState?.providerId || '').trim();
 }
 
 function doesRouteStateMatchRecord(record, routeState) {
-  const rowKey = String(record?.rowKey || '').trim();
-  if (!rowKey || !routeState || typeof routeState !== 'object') return false;
-
-  const matchedProviderKey = String(routeState?.providerRowKey || routeState?.providerId || '').trim();
-  if (matchedProviderKey && matchedProviderKey === rowKey) {
-    return true;
-  }
-
-  const recordSiteUrl = normalizeComparableSiteUrl(record?.siteUrl);
-  const targetUrl = normalizeComparableSiteUrl(routeState?.targetUrl);
-  if (!recordSiteUrl || !targetUrl) {
-    const providerName = normalizeComparableName(routeState?.providerName);
-    const siteName = normalizeComparableName(record?.siteName);
-    return Boolean(providerName && siteName && providerName === siteName);
-  }
-  if (targetUrl === recordSiteUrl || targetUrl.startsWith(`${recordSiteUrl}/`)) {
-    return true;
-  }
-
-  const providerName = normalizeComparableName(routeState?.providerName);
-  const siteName = normalizeComparableName(record?.siteName);
-  if (providerName && siteName && providerName === siteName) {
-    return true;
-  }
-
-  return false;
+  const recordIdentity = buildSidebarProviderIdentity(record);
+  const routeIdentity = buildSidebarRouteStateIdentity(routeState);
+  if (!recordIdentity || !routeIdentity) return false;
+  return recordIdentity === routeIdentity;
 }
 
 function normalizeAdvancedProxyRouteState(record, appId) {
@@ -1866,26 +1869,7 @@ function getPrimaryAdvancedProxyVisualApp(record) {
 }
 
 function matchesAdvancedProxyProviderRoute(record, routeState) {
-  if (!record || !routeState || typeof routeState !== 'object') return false;
-  const rowKey = String(record?.rowKey || '').trim();
-  const providerRowKey = String(routeState?.providerRowKey || '').trim();
-  if (rowKey && providerRowKey && rowKey === providerRowKey) {
-    return true;
-  }
-
-  const siteName = String(record?.siteName || '').trim().toLowerCase();
-  const providerName = String(routeState?.providerName || '').trim().toLowerCase();
-  if (siteName && providerName && siteName === providerName) {
-    return true;
-  }
-
-  const siteUrl = String(record?.siteUrl || '').trim().replace(/\/+$/, '').toLowerCase();
-  const targetUrl = String(routeState?.targetUrl || '').trim().replace(/\/+$/, '').toLowerCase();
-  if (siteUrl && targetUrl && (targetUrl === siteUrl || targetUrl.startsWith(`${siteUrl}/`))) {
-    return true;
-  }
-
-  return false;
+  return doesRouteStateMatchRecord(record, routeState);
 }
 
 function normalizeAdvancedProxyProviderRouteState(record, providerKey, routeState) {
@@ -1988,19 +1972,17 @@ const advancedProxyQueueTone = computed(() => {
 
 const advancedProxyQueueItems = computed(() => {
   const panelOrderMap = panelRecordOrderByKey.value;
-  const recordRowKeyMap = new Map(
-    records.value.map(record => [String(record?.rowKey || '').trim(), record]).filter(([key]) => key)
-  );
-  const recordApiKeyMap = new Map(
-    records.value.map(record => [String(record?.apiKey || '').trim(), record]).filter(([key]) => key)
+  const recordIdentityMap = new Map(
+    records.value
+      .map(record => [buildSidebarProviderIdentity(record), record])
+      .filter(([key]) => key)
   );
 
   return advancedProxyQueueProviders.value.map((provider, index) => {
+    const providerIdentity = buildSidebarProviderIdentity(provider);
     const rowKey = String(provider?.rowKey || provider?.id || '').trim();
     const skKey = String(provider?.apiKey || '').trim();
-    const record = (rowKey && recordRowKeyMap.get(rowKey))
-      || (skKey && recordApiKeyMap.get(skKey))
-      || null;
+    const record = (providerIdentity && recordIdentityMap.get(providerIdentity)) || null;
     const appIds = record ? getAdvancedProxyAppsForRecord(record) : [];
     const routeStates = record ? getAdvancedProxyProviderRouteStatesForRecord(record) : [];
     const activeRoute = routeStates.find(item => item.isActive) || null;
@@ -2020,8 +2002,8 @@ const advancedProxyQueueItems = computed(() => {
     const queueScopeText = appIds.length > 0
       ? appIds.map(appId => ADVANCED_PROXY_APP_META[appId]?.label || appId).join(' / ')
       : '全局继承';
-    const order = panelOrderMap.get(rowKey)
-      || panelOrderMap.get(skKey)
+    const order = panelOrderMap.get(providerIdentity)
+      || panelOrderMap.get(rowKey)
       || null;
     const dispatchSource = record || {
       rowKey,
@@ -2045,7 +2027,8 @@ const advancedProxyQueueItems = computed(() => {
     ].map(text => String(text || '').trim()).filter(Boolean);
 
     return {
-      id: rowKey || `provider-${index}`,
+      id: providerIdentity || rowKey || `provider-${index}`,
+      identity: providerIdentity,
       rowKey: String(record?.rowKey || rowKey).trim(),
       order,
       shortSiteName,
@@ -2091,13 +2074,13 @@ const panelRecordOrderByKey = computed(() => {
   const orderMap = new Map();
   visibleRecords.value.forEach((record, index) => {
     const order = index + 1;
+    const identity = buildSidebarProviderIdentity(record);
     const rowKey = String(record?.rowKey || '').trim();
-    const apiKey = String(record?.apiKey || '').trim();
+    if (identity && !orderMap.has(identity)) {
+      orderMap.set(identity, order);
+    }
     if (rowKey && !orderMap.has(rowKey)) {
       orderMap.set(rowKey, order);
-    }
-    if (apiKey && !orderMap.has(apiKey)) {
-      orderMap.set(apiKey, order);
     }
   });
   return orderMap;
@@ -2110,13 +2093,13 @@ const advancedProxyQueueSelectionMetaByKey = computed(() => {
       order: index + 1,
       providerId: String(provider?.id || provider?.rowKey || '').trim(),
     };
+    const identity = buildSidebarProviderIdentity(provider);
     const rowKey = String(provider?.rowKey || provider?.id || '').trim();
-    const apiKey = String(provider?.apiKey || '').trim();
+    if (identity && !metaMap.has(identity)) {
+      metaMap.set(identity, meta);
+    }
     if (rowKey && !metaMap.has(rowKey)) {
       metaMap.set(rowKey, meta);
-    }
-    if (apiKey && !metaMap.has(apiKey)) {
-      metaMap.set(apiKey, meta);
     }
   });
   return metaMap;
@@ -2181,18 +2164,18 @@ function getQueueItemShortLabel(item) {
 }
 
 function getAdvancedProxyQueueSelectionMeta(record) {
+  const identity = buildSidebarProviderIdentity(record);
   const rowKey = String(record?.rowKey || '').trim();
-  const apiKey = String(record?.apiKey || '').trim();
-  return advancedProxyQueueSelectionMetaByKey.value.get(rowKey)
-    || advancedProxyQueueSelectionMetaByKey.value.get(apiKey)
+  return advancedProxyQueueSelectionMetaByKey.value.get(identity)
+    || advancedProxyQueueSelectionMetaByKey.value.get(rowKey)
     || null;
 }
 
 function getPanelRecordOrder(record, fallbackOrder = '') {
+  const identity = buildSidebarProviderIdentity(record);
   const rowKey = String(record?.rowKey || '').trim();
-  const apiKey = String(record?.apiKey || '').trim();
-  return panelRecordOrderByKey.value.get(rowKey)
-    ?? panelRecordOrderByKey.value.get(apiKey)
+  return panelRecordOrderByKey.value.get(identity)
+    ?? panelRecordOrderByKey.value.get(rowKey)
     ?? fallbackOrder;
 }
 

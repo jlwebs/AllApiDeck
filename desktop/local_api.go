@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -637,7 +639,14 @@ func shouldTryResponsesCheck(payload normalizedCheckKeyPayload) bool {
 	return isAnyrouterCheckPayload(payload)
 }
 
+func shouldPreferAnthropicFallback(payload normalizedCheckKeyPayload) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(payload.Model)), "claude")
+}
+
 func shouldTryAnthropicCheck(payload normalizedCheckKeyPayload) bool {
+	if shouldPreferAnthropicFallback(payload) {
+		return true
+	}
 	if isAnyrouterCheckPayload(payload) {
 		return true
 	}
@@ -750,7 +759,8 @@ func buildCheckEndpointPhases(payload normalizedCheckKeyPayload) []checkEndpoint
 	anthropicCandidates := buildAnthropicCheckCandidates(payload)
 
 	phases := make([]checkEndpointPhase, 0, 3)
-	preferResponses := getCheckProtocolPreference(payload.URL) == checkProtocolPreferResponses
+	preferResponses := getCheckProtocolPreference(payload) == checkProtocolPreferResponses
+	preferAnthropicFallback := shouldPreferAnthropicFallback(payload)
 
 	addPhase := func(protocol string, endpoints []string) {
 		if len(endpoints) == 0 {
@@ -765,11 +775,17 @@ func buildCheckEndpointPhases(payload normalizedCheckKeyPayload) []checkEndpoint
 	if preferResponses {
 		addPhase("responses", responsesCandidates)
 		addPhase("chat", openAICandidates)
+		addPhase("messages", anthropicCandidates)
 	} else {
 		addPhase("chat", openAICandidates)
-		addPhase("responses", responsesCandidates)
+		if preferAnthropicFallback {
+			addPhase("messages", anthropicCandidates)
+			addPhase("responses", responsesCandidates)
+		} else {
+			addPhase("responses", responsesCandidates)
+			addPhase("messages", anthropicCandidates)
+		}
 	}
-	addPhase("messages", anthropicCandidates)
 
 	return phases
 }
@@ -805,6 +821,10 @@ func shouldContinueCheckPhaseAfterFailure(result checkExecutionResult) bool {
 		if strings.Contains(message, "invalid json") || strings.Contains(message, "(html)") {
 			return true
 		}
+	case strings.HasSuffix(endpoint, "/messages"):
+		if result.status == http.StatusNotFound || result.status == http.StatusMethodNotAllowed {
+			return true
+		}
 	}
 
 	if strings.HasSuffix(endpoint, "/messages") {
@@ -827,6 +847,14 @@ func shouldAdvanceCheckPhase(payload normalizedCheckKeyPayload, currentProtocol 
 
 	if currentProtocol == "chat" && nextProtocol == "responses" {
 		return true
+	}
+
+	if currentProtocol == "chat" && nextProtocol == "messages" {
+		return shouldTryAnthropicCheck(payload)
+	}
+
+	if currentProtocol == "messages" && nextProtocol == "responses" {
+		return shouldTryResponsesCheck(payload)
 	}
 
 	if currentProtocol == "responses" && nextProtocol == "chat" {
@@ -912,6 +940,35 @@ func resolveCheckProtocolPreferenceHostKey(rawURL string) string {
 	return strings.ToLower(strings.TrimSpace(parsed.Host))
 }
 
+func buildCheckProtocolPreferenceKeyFingerprint(rawKey string) string {
+	key := strings.TrimSpace(rawKey)
+	if key == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])
+}
+
+func resolveCheckProtocolPreferenceScopeKey(payload normalizedCheckKeyPayload) string {
+	hostKey := resolveCheckProtocolPreferenceHostKey(payload.URL)
+	if hostKey == "" {
+		return ""
+	}
+
+	keyFingerprint := buildCheckProtocolPreferenceKeyFingerprint(payload.Key)
+	modelKey := strings.ToLower(strings.TrimSpace(payload.Model))
+	if keyFingerprint == "" || modelKey == "" {
+		return ""
+	}
+
+	return fmt.Sprintf(
+		"host=%s&key=%s&model=%s",
+		url.QueryEscape(hostKey),
+		url.QueryEscape(keyFingerprint),
+		url.QueryEscape(modelKey),
+	)
+}
+
 func resolveCheckProtocolPreferencePath() string {
 	return filepath.Join(resolveRuntimeRootDir(), "check-protocol-preferences.json")
 }
@@ -945,9 +1002,9 @@ func loadCheckProtocolPreferencesLocked() {
 	}
 }
 
-func getCheckProtocolPreference(rawURL string) int {
-	hostKey := resolveCheckProtocolPreferenceHostKey(rawURL)
-	if hostKey == "" {
+func getCheckProtocolPreference(payload normalizedCheckKeyPayload) int {
+	scopeKey := resolveCheckProtocolPreferenceScopeKey(payload)
+	if scopeKey == "" {
 		return checkProtocolPreferCompletions
 	}
 
@@ -955,15 +1012,15 @@ func getCheckProtocolPreference(rawURL string) int {
 	defer localCheckProtocolPreferences.mu.Unlock()
 	loadCheckProtocolPreferencesLocked()
 
-	if value, ok := localCheckProtocolPreferences.values[hostKey]; ok {
+	if value, ok := localCheckProtocolPreferences.values[scopeKey]; ok {
 		return value
 	}
 	return checkProtocolPreferCompletions
 }
 
-func setCheckProtocolPreference(rawURL string, value int) {
-	hostKey := resolveCheckProtocolPreferenceHostKey(rawURL)
-	if hostKey == "" {
+func setCheckProtocolPreference(payload normalizedCheckKeyPayload, value int) {
+	scopeKey := resolveCheckProtocolPreferenceScopeKey(payload)
+	if scopeKey == "" {
 		return
 	}
 	if value != checkProtocolPreferResponses {
@@ -972,12 +1029,12 @@ func setCheckProtocolPreference(rawURL string, value int) {
 
 	localCheckProtocolPreferences.mu.Lock()
 	loadCheckProtocolPreferencesLocked()
-	current := localCheckProtocolPreferences.values[hostKey]
+	current := localCheckProtocolPreferences.values[scopeKey]
 	if current == value {
 		localCheckProtocolPreferences.mu.Unlock()
 		return
 	}
-	localCheckProtocolPreferences.values[hostKey] = value
+	localCheckProtocolPreferences.values[scopeKey] = value
 	snapshot := make(map[string]int, len(localCheckProtocolPreferences.values))
 	for key, item := range localCheckProtocolPreferences.values {
 		snapshot[key] = item
@@ -986,15 +1043,15 @@ func setCheckProtocolPreference(rawURL string, value int) {
 
 	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
-		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] protocol-preference encode failed | host=%s | %v", hostKey, err))
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] protocol-preference encode failed | scope=%s | %v", scopeKey, err))
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(resolveCheckProtocolPreferencePath()), 0o755); err != nil {
-		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] protocol-preference mkdir failed | host=%s | %v", hostKey, err))
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] protocol-preference mkdir failed | scope=%s | %v", scopeKey, err))
 		return
 	}
 	if err := os.WriteFile(resolveCheckProtocolPreferencePath(), data, 0o644); err != nil {
-		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] protocol-preference write failed | host=%s | %v", hostKey, err))
+		appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] protocol-preference write failed | scope=%s | %v", scopeKey, err))
 		return
 	}
 
@@ -1002,7 +1059,7 @@ func setCheckProtocolPreference(rawURL string, value int) {
 	if value == checkProtocolPreferResponses {
 		protocolName = "responses"
 	}
-	appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] protocol-preference saved | host=%s | prefer=%s", hostKey, protocolName))
+	appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] protocol-preference saved | scope=%s | prefer=%s", scopeKey, protocolName))
 }
 
 func resetCheckProtocolPreferencesForTests() {
@@ -1887,7 +1944,7 @@ func executeCheckKeySmart(payload normalizedCheckKeyPayload) (int, map[string]an
 					result.body = map[string]any{}
 				}
 				if phase.protocol == "responses" {
-					setCheckProtocolPreference(payload.URL, checkProtocolPreferResponses)
+					setCheckProtocolPreference(payload, checkProtocolPreferResponses)
 				}
 				diagnostics := buildCheckDiagnostics(payload, attempts)
 				diagnostics["resolvedEndpoint"] = result.endpoint

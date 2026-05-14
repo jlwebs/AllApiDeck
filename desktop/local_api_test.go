@@ -42,6 +42,26 @@ func TestBuildCheckEndpointCandidatesAnyrouterOrder(t *testing.T) {
 	}
 }
 
+func TestBuildCheckEndpointPhasesClaudeFallbackOrder(t *testing.T) {
+	t.Setenv("BATCH_API_CHECK_RUNTIME_DIR", t.TempDir())
+	resetCheckProtocolPreferencesForTests()
+	if _, err := saveOutboundProxyConfig(OutboundProxyConfig{Mode: outboundProxyModeDirect}); err != nil {
+		t.Fatalf("save outbound proxy config: %v", err)
+	}
+
+	phases := buildCheckEndpointPhases(normalizedCheckKeyPayload{
+		URL:   "https://example.com",
+		Key:   "sk-test",
+		Model: "Claude-3.7-Sonnet",
+	})
+	if len(phases) != 3 {
+		t.Fatalf("expected three phases for claude fallback, got %#v", phases)
+	}
+	if phases[0].protocol != "chat" || phases[1].protocol != "messages" || phases[2].protocol != "responses" {
+		t.Fatalf("expected chat -> messages -> responses order, got %#v", phases)
+	}
+}
+
 func TestExtractResponsesOutputText(t *testing.T) {
 	payload := map[string]any{
 		"output": []any{
@@ -82,7 +102,7 @@ func TestExtractCheckErrorMessageUsesTopLevelErrorString(t *testing.T) {
 	}
 }
 
-func TestExecuteCheckKeySmartFallsBackToResponsesAndPersistsHostPreference(t *testing.T) {
+func TestExecuteCheckKeySmartFallsBackToResponsesAndPersistsScopedPreference(t *testing.T) {
 	t.Setenv("BATCH_API_CHECK_RUNTIME_DIR", t.TempDir())
 	resetCheckProtocolPreferencesForTests()
 	if _, err := saveOutboundProxyConfig(OutboundProxyConfig{Mode: outboundProxyModeDirect}); err != nil {
@@ -131,23 +151,171 @@ func TestExecuteCheckKeySmartFallsBackToResponsesAndPersistsHostPreference(t *te
 	if requests[2] != "/v1/responses" {
 		t.Fatalf("expected third attempt to be /v1/responses, got %#v", requests)
 	}
-	if got := getCheckProtocolPreference(server.URL); got != checkProtocolPreferResponses {
-		t.Fatalf("expected responses preference to persist, got %d", got)
-	}
-
-	requests = requests[:0]
-	status, body = executeCheckKeySmart(normalizedCheckKeyPayload{
+	basePayload := normalizedCheckKeyPayload{
 		URL:       server.URL,
 		Key:       "sk-test",
 		Model:     "gpt-5.5",
 		TimeoutMs: 20000,
 		Messages:  []map[string]any{{"role": "user", "content": "hi"}},
-	})
+	}
+	if got := getCheckProtocolPreference(basePayload); got != checkProtocolPreferResponses {
+		t.Fatalf("expected responses preference to persist, got %d", got)
+	}
+
+	requests = requests[:0]
+	status, body = executeCheckKeySmart(basePayload)
 	if status != http.StatusOK {
 		raw, _ := json.Marshal(body)
 		t.Fatalf("expected preferred responses path to succeed, got status=%d body=%s", status, raw)
 	}
 	if len(requests) == 0 || requests[0] != "/v1/responses" {
 		t.Fatalf("expected persisted preference to try responses first, got %#v", requests)
+	}
+
+	requests = requests[:0]
+	status, body = executeCheckKeySmart(normalizedCheckKeyPayload{
+		URL:       server.URL,
+		Key:       "sk-test",
+		Model:     "gpt-5.5-mini",
+		TimeoutMs: 20000,
+		Messages:  []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	if status != http.StatusOK {
+		raw, _ := json.Marshal(body)
+		t.Fatalf("expected different-model fallback to still succeed, got status=%d body=%s", status, raw)
+	}
+	if len(requests) == 0 || requests[0] != "/v1/chat/completions" {
+		t.Fatalf("expected different model to start from chat, got %#v", requests)
+	}
+
+	requests = requests[:0]
+	status, body = executeCheckKeySmart(normalizedCheckKeyPayload{
+		URL:       server.URL,
+		Key:       "sk-other",
+		Model:     "gpt-5.5",
+		TimeoutMs: 20000,
+		Messages:  []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	if status != http.StatusOK {
+		raw, _ := json.Marshal(body)
+		t.Fatalf("expected different-key fallback to still succeed, got status=%d body=%s", status, raw)
+	}
+	if len(requests) == 0 || requests[0] != "/v1/chat/completions" {
+		t.Fatalf("expected different key to start from chat, got %#v", requests)
+	}
+}
+
+func TestExecuteCheckKeySmartClaudeFallsBackToMessagesBeforeResponses(t *testing.T) {
+	t.Setenv("BATCH_API_CHECK_RUNTIME_DIR", t.TempDir())
+	resetCheckProtocolPreferencesForTests()
+	if _, err := saveOutboundProxyConfig(OutboundProxyConfig{Mode: outboundProxyModeDirect}); err != nil {
+		t.Fatalf("save outbound proxy config: %v", err)
+	}
+
+	requests := make([]string, 0, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests = append(requests, request.URL.Path)
+		switch request.URL.Path {
+		case "/v1/chat/completions":
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = writer.Write([]byte(`{"error":{"message":"model not found"}}`))
+		case "/chat/completions":
+			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+			writer.WriteHeader(http.StatusForbidden)
+			_, _ = writer.Write([]byte(`<html><head><title>403 Forbidden</title></head><body>forbidden</body></html>`))
+		case "/v1/messages":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{
+				"id":"msg_test",
+				"type":"message",
+				"role":"assistant",
+				"model":"claude-3-7-sonnet",
+				"content":[{"type":"text","text":"ok from messages"}],
+				"usage":{"input_tokens":3,"output_tokens":2}
+			}`))
+		case "/v1/responses":
+			t.Fatalf("responses should not be tried after messages success")
+		default:
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	status, body := executeCheckKeySmart(normalizedCheckKeyPayload{
+		URL:       server.URL,
+		Key:       "sk-test",
+		Model:     "claude-3-7-sonnet",
+		TimeoutMs: 20000,
+		Messages:  []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	if status != http.StatusOK {
+		raw, _ := json.Marshal(body)
+		t.Fatalf("expected messages fallback to succeed, got status=%d body=%s", status, raw)
+	}
+	if len(requests) != 3 {
+		t.Fatalf("expected v1 chat, chat fallback, then messages, got %#v", requests)
+	}
+	if requests[0] != "/v1/chat/completions" || requests[1] != "/chat/completions" || requests[2] != "/v1/messages" {
+		t.Fatalf("expected chat candidates before messages, got %#v", requests)
+	}
+}
+
+func TestExecuteCheckKeySmartClaudeFallsBackToResponsesAfterMessagesFailure(t *testing.T) {
+	t.Setenv("BATCH_API_CHECK_RUNTIME_DIR", t.TempDir())
+	resetCheckProtocolPreferencesForTests()
+	if _, err := saveOutboundProxyConfig(OutboundProxyConfig{Mode: outboundProxyModeDirect}); err != nil {
+		t.Fatalf("save outbound proxy config: %v", err)
+	}
+
+	requests := make([]string, 0, 5)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests = append(requests, request.URL.Path)
+		switch request.URL.Path {
+		case "/v1/chat/completions":
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = writer.Write([]byte(`{"error":{"message":"model not found"}}`))
+		case "/chat/completions":
+			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+			writer.WriteHeader(http.StatusForbidden)
+			_, _ = writer.Write([]byte(`<html><head><title>403 Forbidden</title></head><body>forbidden</body></html>`))
+		case "/v1/messages":
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = writer.Write([]byte(`{"error":{"message":"messages route not supported"}}`))
+		case "/messages":
+			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+			writer.WriteHeader(http.StatusForbidden)
+			_, _ = writer.Write([]byte(`<html><head><title>403 Forbidden</title></head><body>forbidden</body></html>`))
+		case "/v1/responses":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{
+				"model":"claude-3-7-sonnet",
+				"output":[{"type":"message","content":[{"type":"output_text","text":"ok from responses"}]}],
+				"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}
+			}`))
+		default:
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	status, body := executeCheckKeySmart(normalizedCheckKeyPayload{
+		URL:       server.URL,
+		Key:       "sk-test",
+		Model:     "claude-3-7-sonnet",
+		TimeoutMs: 20000,
+		Messages:  []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	if status != http.StatusOK {
+		raw, _ := json.Marshal(body)
+		t.Fatalf("expected responses fallback after messages failure, got status=%d body=%s", status, raw)
+	}
+	if len(requests) != 5 {
+		t.Fatalf("expected chat candidates -> messages candidates -> responses, got %#v", requests)
+	}
+	if requests[0] != "/v1/chat/completions" || requests[1] != "/chat/completions" || requests[2] != "/v1/messages" || requests[3] != "/messages" || requests[4] != "/v1/responses" {
+		t.Fatalf("unexpected request order %#v", requests)
 	}
 }
