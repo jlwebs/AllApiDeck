@@ -122,7 +122,12 @@
               <div>
                 <div class="settings-field-caption">分组</div>
                 <a-radio-group v-model:value="selectedDesktopLogGroup" size="small">
-                  <a-radio-button v-for="group in desktopLogGroups" :key="group.key" :value="group.key">
+                  <a-radio-button
+                    v-for="group in desktopLogGroups"
+                    :key="group.key"
+                    :value="group.key"
+                    :class="{ 'settings-log-group-error': group.key === ERROR_SUMMARY_GROUP_KEY }"
+                  >
                     {{ group.label }}
                   </a-radio-button>
                 </a-radio-group>
@@ -232,12 +237,17 @@ const selectedDesktopLogPath = ref('');
 const selectedDesktopLogContent = ref('');
 const themeMode = ref(getStoredThemeMode());
 const themeModeOptions = THEME_MODE_OPTIONS;
+const ERROR_SUMMARY_GROUP_KEY = '__error_summary__';
+const ERROR_SUMMARY_FILE_PATH = '__error_summary_all__';
+const ERROR_SUMMARY_GROUP_LABEL = '错误汇总';
+const desktopLogErrorSummaryCache = ref({ fingerprint: '', content: '' });
 
 const isDesktopLogAvailable = computed(() => isDesktopLogBridgeAvailable());
 
 const desktopLogGroups = computed(() => {
+  const files = Array.isArray(desktopLogFiles.value) ? desktopLogFiles.value : [];
   const groupMap = new Map();
-  (Array.isArray(desktopLogFiles.value) ? desktopLogFiles.value : []).forEach(file => {
+  files.forEach(file => {
     const key = String(file?.groupKey || 'other').trim() || 'other';
     const label = String(file?.groupLabel || '其他日志').trim() || '其他日志';
     if (!groupMap.has(key)) {
@@ -245,7 +255,21 @@ const desktopLogGroups = computed(() => {
     }
     groupMap.get(key).files.push(file);
   });
-  return Array.from(groupMap.values());
+  const groups = Array.from(groupMap.values());
+  if (files.length) {
+    groups.unshift({
+      key: ERROR_SUMMARY_GROUP_KEY,
+      label: ERROR_SUMMARY_GROUP_LABEL,
+      files: [{
+        path: ERROR_SUMMARY_FILE_PATH,
+        name: '全部错误',
+        sourceLabel: '聚合',
+        size: 0,
+        updatedAt: Date.now(),
+      }],
+    });
+  }
+  return groups;
 });
 
 const currentDesktopLogGroupFiles = computed(() => {
@@ -394,6 +418,58 @@ function formatLogSize(size) {
   return `${value} B`;
 }
 
+function buildDesktopLogFingerprint(files) {
+  return (Array.isArray(files) ? files : [])
+    .map(file => `${String(file?.path || '').trim()}|${Number(file?.updatedAt || 0)}|${Number(file?.size || 0)}`)
+    .join('||');
+}
+
+function extractErrorSummaryLines(content) {
+  const source = String(content || '');
+  if (!source) return [];
+  const lines = source.split(/\r?\n/);
+  const errorPattern = /\b(error|fatal|panic|exception|traceback|failed|failure|timeout|timed out|denied|refused|invalid|abort)\b|错误|异常|失败|超时|拒绝|崩溃|中断|致命/i;
+  const result = [];
+  lines.forEach((line, index) => {
+    if (!errorPattern.test(line)) return;
+    result.push(`[L${index + 1}] ${line}`);
+  });
+  return result;
+}
+
+async function buildDesktopLogErrorSummaryContent() {
+  const files = (Array.isArray(desktopLogFiles.value) ? desktopLogFiles.value : [])
+    .filter(file => String(file?.path || '').trim());
+  if (!files.length) {
+    return '暂无日志文件可汇总。';
+  }
+  const fingerprint = buildDesktopLogFingerprint(files);
+  if (desktopLogErrorSummaryCache.value.fingerprint === fingerprint) {
+    return desktopLogErrorSummaryCache.value.content;
+  }
+
+  const chunks = [];
+  for (const file of files) {
+    const path = String(file?.path || '').trim();
+    if (!path) continue;
+    try {
+      const result = await readDesktopLogFile(path);
+      const errors = extractErrorSummaryLines(result?.content || '');
+      if (!errors.length) continue;
+      const title = `${String(file?.name || '未知文件')} · ${String(file?.sourceLabel || '未知来源')}`;
+      chunks.push(`===== ${title} =====`);
+      chunks.push(...errors.slice(0, 500));
+      chunks.push('');
+    } catch {}
+  }
+
+  const content = chunks.length
+    ? chunks.join('\n').trim()
+    : '未检测到错误级日志（error/fatal/failed/timeout/错误/异常 等）。';
+  desktopLogErrorSummaryCache.value = { fingerprint, content };
+  return content;
+}
+
 async function loadDesktopLogContent(path) {
   const targetPath = String(path || '').trim();
   if (!targetPath || !isDesktopLogAvailable.value) {
@@ -402,8 +478,12 @@ async function loadDesktopLogContent(path) {
   }
   desktopLogContentLoading.value = true;
   try {
-    const result = await readDesktopLogFile(targetPath);
     selectedDesktopLogPath.value = targetPath;
+    if (targetPath === ERROR_SUMMARY_FILE_PATH) {
+      selectedDesktopLogContent.value = await buildDesktopLogErrorSummaryContent();
+      return;
+    }
+    const result = await readDesktopLogFile(targetPath);
     selectedDesktopLogContent.value = String(result?.content || '');
   } catch (error) {
     selectedDesktopLogContent.value = '';
@@ -425,6 +505,7 @@ async function loadDesktopLogs() {
   try {
     const snapshot = await listDesktopLogFiles();
     desktopLogFiles.value = Array.isArray(snapshot?.files) ? snapshot.files : [];
+    desktopLogErrorSummaryCache.value = { fingerprint: '', content: '' };
     selectedDesktopLogGroup.value = desktopLogGroups.value.find(group => group.key === selectedDesktopLogGroup.value)?.key
       || desktopLogGroups.value[0]?.key
       || '';
@@ -439,6 +520,7 @@ async function loadDesktopLogs() {
     }
   } catch (error) {
     desktopLogFiles.value = [];
+    desktopLogErrorSummaryCache.value = { fingerprint: '', content: '' };
     selectedDesktopLogGroup.value = '';
     selectedDesktopLogPath.value = '';
     selectedDesktopLogContent.value = '';
@@ -482,6 +564,18 @@ async function loadDesktopLogs() {
 
 .settings-log-title {
   font-weight: 600;
+}
+
+.settings-tab-content :deep(.ant-radio-button-wrapper.settings-log-group-error) {
+  color: rgba(196, 40, 40, 0.95);
+  border-color: rgba(196, 40, 40, 0.4);
+}
+
+.settings-tab-content :deep(.ant-radio-button-wrapper-checked.settings-log-group-error) {
+  color: #fff;
+  background: rgba(196, 40, 40, 0.92);
+  border-color: rgba(196, 40, 40, 0.92);
+  box-shadow: -1px 0 0 0 rgba(196, 40, 40, 0.92);
 }
 
 .settings-version-text {
