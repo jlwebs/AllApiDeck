@@ -109,6 +109,9 @@ func buildAppOptions(app *App, mode launchMode) *options.App {
 		Bind: []interface{}{
 			app,
 		},
+		Debug: options.Debug{
+			OpenInspectorOnStartup: true,
+		},
 	}
 
 	if mode == launchModeMain && runtime.GOOS == "darwin" {

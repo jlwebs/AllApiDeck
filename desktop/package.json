@@ -10,6 +10,7 @@
     "dev:web": "node scripts/run-vite.mjs",
     "build": "node scripts/run-vite.mjs build",
     "build:desktop": "node scripts/run-wails.mjs build",
+    "build:desktop-debug": "node scripts/run-wails.mjs build -debug -o all-api-deck-debug.exe",
     "build:web": "node scripts/run-vite.mjs build",
     "preview": "node scripts/run-vite.mjs preview",
     "test": "node scripts/run-node-tests.mjs",
