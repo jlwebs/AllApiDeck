@@ -93,7 +93,7 @@
               :key="item.id"
               class="panel-queue-item"
             >
-              <div class="panel-queue-item-avatar-wrap">
+              <div class="panel-queue-item-avatar-wrap" @click.stop="handleQueueProviderAvatarClick(item, $event)">
                 <a-tooltip
                   v-if="item.hasTooltip"
                   placement="top"
@@ -181,10 +181,12 @@
           v-for="(record, index) in visibleRecords"
           :key="record.rowKey"
           class="panel-record"
+          :data-row-key="String(record?.rowKey || '').trim()"
           :class="[
             `panel-record-${getQuickTestTone(record.quickTestStatus)}`,
             { 'panel-record-queue-toggleable': canToggleAdvancedProxyQueueRecord(record) },
             { 'panel-record-queue-selected': isRecordInAdvancedProxyQueue(record) },
+            { 'panel-record-queue-focus': focusedQueueRecordRowKey === String(record?.rowKey || '').trim() },
             getAdvancedProxyCardStateClass(record),
           ]"
           @click="handlePanelRecordCardClick(record, $event)"
@@ -445,6 +447,7 @@ const SUPER_MINI_QUEUE_CARD_HINT_LIMIT = 2;
 const SUPER_MINI_QUEUE_CARD_HINT_MIN_HOVER_MS = 800;
 const SUPER_MINI_QUEUE_CARD_HINT_STORAGE_KEY = 'panel.super-mini.queue-card-hint-seen-count';
 const SUPER_MINI_TRANSITION_MASK_CLASS = 'panel-super-mini-transitioning';
+const PANEL_RECORD_FOCUS_HOLD_MS = 1400;
 const DEFAULT_ADVANCED_PROXY_QUEUE_TITLE = 'Proxy Providers';
 const ADVANCED_PROXY_APP_META = {
   claude: { label: 'Claude', className: 'panel-record-avatar-app-claude' },
@@ -462,6 +465,7 @@ const advancedProxyRoutingSnapshot = ref({ apps: {}, providers: {} });
 const advancedProxyDispatchClock = ref(Date.now());
 const activePopoverRowKey = ref('');
 const activeModelDropdownRowKey = ref('');
+const focusedQueueRecordRowKey = ref('');
 const panelBodyRef = ref(null);
 const keySidePanelRef = ref(null);
 const panelQueueCardRef = ref(null);
@@ -478,6 +482,7 @@ let panelBodyResizeObserver = null;
 let panelPersistTimer = null;
 let advancedProxyRoutingTimer = null;
 let advancedProxyDispatchTimer = null;
+let focusedQueueRecordRowKeyTimer = 0;
 let lastSidebarRoutingLogAt = 0;
 let superMiniQueueScrollLeft = 0;
 let superMiniQueueCardHintHoverStartedAt = 0;
@@ -2041,6 +2046,7 @@ const advancedProxyQueueItems = computed(() => {
 
     return {
       id: rowKey || `provider-${index}`,
+      rowKey: String(record?.rowKey || rowKey).trim(),
       order,
       shortSiteName,
       siteName,
@@ -2268,6 +2274,56 @@ function handlePanelRecordCardClick(record, event) {
     return;
   }
   void toggleRecordAdvancedProxyQueue(record);
+}
+
+function clearFocusedQueueRecordRowKeyTimer() {
+  if (!focusedQueueRecordRowKeyTimer) return;
+  window.clearTimeout(focusedQueueRecordRowKeyTimer);
+  focusedQueueRecordRowKeyTimer = 0;
+}
+
+function scheduleFocusedQueueRecordRowKeyClear() {
+  clearFocusedQueueRecordRowKeyTimer();
+  focusedQueueRecordRowKeyTimer = window.setTimeout(() => {
+    focusedQueueRecordRowKeyTimer = 0;
+    focusedQueueRecordRowKey.value = '';
+  }, PANEL_RECORD_FOCUS_HOLD_MS);
+}
+
+function buildPanelRecordSelectorByRowKey(rowKey) {
+  const normalized = String(rowKey || '').trim();
+  if (!normalized) return '';
+  const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+    ? CSS.escape(normalized)
+    : normalized.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return `.panel-record[data-row-key="${escaped}"]`;
+}
+
+async function handleQueueProviderAvatarClick(item, event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+
+  const targetRowKey = String(item?.rowKey || '').trim();
+  if (!targetRowKey) return;
+
+  focusedQueueRecordRowKey.value = targetRowKey;
+  scheduleFocusedQueueRecordRowKeyClear();
+
+  await nextTick();
+  const panelBody = panelBodyRef.value;
+  if (!(panelBody instanceof HTMLElement)) return;
+
+  const selector = buildPanelRecordSelectorByRowKey(targetRowKey);
+  if (!selector) return;
+
+  const recordElement = panelBody.querySelector(selector);
+  if (!(recordElement instanceof HTMLElement)) return;
+
+  recordElement.scrollIntoView({
+    behavior: 'smooth',
+    block: 'center',
+    inline: 'nearest',
+  });
 }
 
 function isAdvancedProxyDispatching(record) {
@@ -2908,6 +2964,8 @@ onBeforeUnmount(() => {
   resetSuperMiniWindowDragState();
   resetQueueStripDragState();
   resetSuperMiniQueueTooltipHeightBoostState();
+  clearFocusedQueueRecordRowKeyTimer();
+  focusedQueueRecordRowKey.value = '';
   superMiniQueueCardHintHoverStartedAt = 0;
   flushPanelPersist();
   void setPanelInteractionLocked(false);
@@ -3845,6 +3903,11 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(255, 255, 255, 0.52);
   transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
   contain: layout paint;
+}
+
+.panel-record-queue-focus {
+  border-color: rgba(80, 162, 255, 0.55);
+  box-shadow: 0 0 0 2px rgba(80, 162, 255, 0.26), 0 10px 20px rgba(21, 22, 28, 0.1);
 }
 
 .panel-record::before {
