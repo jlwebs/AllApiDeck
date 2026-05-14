@@ -178,6 +178,30 @@ func listenBridgeServerWithFallback(host string, startPort int) (net.Listener, i
 	)
 }
 
+func buildBridgePortConflictMessage(preferredPort int, fallbackPort int) string {
+	base := fmt.Sprintf(
+		"本地代理端口 %d 已被占用，无法继续启动高级代理。\n\n请先释放该端口，或调整占用端口的进程后重试。",
+		preferredPort,
+	)
+	if fallbackPort > 0 && fallbackPort != preferredPort {
+		base += fmt.Sprintf("\n\n检测到可用备用端口：%d。为避免本地客户端仍请求旧地址导致断流，本次未自动切换端口。", fallbackPort)
+	}
+	base += "\n\n常见现象：Codex/CLI 出现 Reconnecting 或 stream disconnected。"
+	return base
+}
+
+func (a *App) notifyBridgePortConflict(preferredPort int, fallbackPort int) {
+	if a == nil || a.ctx == nil {
+		return
+	}
+	message := buildBridgePortConflictMessage(preferredPort, fallbackPort)
+	_, _ = wruntime.MessageDialog(a.ctx, wruntime.MessageDialogOptions{
+		Type:    wruntime.ErrorDialog,
+		Title:   "本地高级代理端口冲突",
+		Message: message,
+	})
+}
+
 func previewBridgeText(raw string, limit int) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -486,6 +510,24 @@ func (a *App) ensureBridgeServer() error {
 	if err != nil {
 		return err
 	}
+	if resolvedPort != preferredPort {
+		_ = listener.Close()
+		conflictMessage := buildBridgePortConflictMessage(preferredPort, resolvedPort)
+		appendBridgeImportLogf(
+			"[BRIDGE_PORT_CONFLICT] preferred=%d resolved=%d detail=%s",
+			preferredPort,
+			resolvedPort,
+			previewBridgeText(conflictMessage, 260),
+		)
+		appendAdvancedProxyLogf(
+			"[BRIDGE_PORT_CONFLICT] preferred=%d resolved=%d detail=%s",
+			preferredPort,
+			resolvedPort,
+			previewBridgeText(conflictMessage, 260),
+		)
+		a.notifyBridgePortConflict(preferredPort, resolvedPort)
+		return fmt.Errorf("bridge listen port %d is occupied", preferredPort)
+	}
 	address := fmt.Sprintf("%s:%d", bridgeServerHost, resolvedPort)
 	setCurrentBridgeServerPort(resolvedPort)
 
@@ -518,9 +560,6 @@ func (a *App) ensureBridgeServer() error {
 	a.bridgeServer = server
 
 	appendBridgeImportLogf("[BRIDGE_START] addr=%s mode=%s", address, a.mode)
-	if resolvedPort != preferredPort {
-		appendBridgeImportLogf("[BRIDGE_PORT_FALLBACK] preferred=%d resolved=%d", preferredPort, resolvedPort)
-	}
 
 	go func(server *http.Server, listener net.Listener) {
 		if serveErr := server.Serve(listener); serveErr != nil && serveErr != http.ErrServerClosed {
