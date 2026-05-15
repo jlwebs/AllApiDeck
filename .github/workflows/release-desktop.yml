@@ -39,7 +39,7 @@ jobs:
             platform: windows/amd64
             artifact_name: allapideck-windows-amd64
             release_file: allapideck-windows-amd64.exe
-            wails_output: allapideck-windows-amd64.exe
+            wails_output: allapideck.exe
             release_file_msi: allapideck-windows-amd64.msi
             upload_path: |
               desktop/release-assets/allapideck-windows-amd64.exe
@@ -146,9 +146,9 @@ jobs:
         run: |
           bun run build:desktop -- --platform ${{ matrix.platform }} -o ${{ matrix.wails_output }}
           New-Item -ItemType Directory -Path release-assets -Force | Out-Null
-          Copy-Item "build/bin/${{ matrix.release_file }}" "release-assets/${{ matrix.release_file }}"
+          Copy-Item "build/bin/${{ matrix.wails_output }}" "release-assets/${{ matrix.release_file }}"
           .\scripts\build-windows-msi.ps1 `
-            -InputExe "build/bin/${{ matrix.release_file }}" `
+            -InputExe "build/bin/${{ matrix.wails_output }}" `
             -Version "${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}" `
             -OutputFile "release-assets/${{ matrix.release_file_msi }}"
         shell: pwsh

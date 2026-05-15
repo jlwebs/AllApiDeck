@@ -81,13 +81,39 @@ $wxsContent = @"
     <MediaTemplate EmbedCab="yes" />
     <Icon Id="AppIcon.ico" SourceFile="$iconFullPathEscaped" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <UIRef Id="WixUI_InstallDir" />
+    <UIRef Id="WixUI_ErrorProgressText" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
         <Directory Id="INSTALLFOLDER" Name="$installDirNameEscaped">
           <Component Id="MainExecutableComponent" Guid="*">
-            <File Id="MainExecutableFile" Source="$inputExePathEscaped" KeyPath="yes" Checksum="yes" />
+            <File Id="MainExecutableFile" Source="$inputExePathEscaped" KeyPath="yes" Checksum="yes">
+              <Shortcut
+                Id="ApplicationStartMenuShortcut"
+                Directory="ProgramMenuDir"
+                Name="$productNameEscaped"
+                WorkingDirectory="INSTALLFOLDER"
+                Advertise="no"
+                Icon="AppIcon.ico" />
+            </File>
             <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+          </Component>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ProgramMenuDir" Name="$productNameEscaped">
+          <Component Id="ProgramMenuCleanupComponent" Guid="*">
+            <RemoveFolder Id="RemoveProgramMenuDir" On="uninstall" />
+            <RegistryValue
+              Root="HKLM"
+              Key="Software\[Manufacturer]\[ProductName]"
+              Name="Installed"
+              Type="integer"
+              Value="1"
+              KeyPath="yes" />
           </Component>
         </Directory>
       </Directory>
@@ -95,6 +121,7 @@ $wxsContent = @"
 
     <Feature Id="MainFeature" Title="$productNameEscaped" Level="1">
       <ComponentRef Id="MainExecutableComponent" />
+      <ComponentRef Id="ProgramMenuCleanupComponent" />
     </Feature>
   </Product>
 </Wix>
@@ -115,7 +142,7 @@ try {
     throw "WiX candle compilation failed."
   }
 
-  & $light.Source -nologo "-sice:ICE61" "-out" $outputFullPath "product.wixobj"
+  & $light.Source -nologo "-ext" "WixUIExtension" "-sice:ICE61" "-out" $outputFullPath "product.wixobj"
   if ($LASTEXITCODE -ne 0) {
     throw "WiX light link failed."
   }
