@@ -1,11 +1,11 @@
-﻿<div align="center">
+<div align="center">
 
 <img src="./desktop/assets/appicon.png" alt="All API Deck" width="80">
 
-**All API Deck：批量管理站点账号、模型与密钥的桌面工具**
+**All API Deck：面向桌面客户端接管、站点账号管理与协议调试的桌面工具**
 
 <p>
-支持浏览器扩展导入、批量模型发现、可用性检测，以及 Claude / Codex / OpenCode / OpenClaw 的配置切换。
+支持站点账号导入、模型发现、批量测活、密钥分组、桌面客户端一键接管，以及 Claude / Codex / OpenCode / OpenClaw 的本地高级代理。
 </p>
 
 <p align="center">
@@ -32,22 +32,27 @@
 
 </div>
 
-**这款桌面挂件工具支持以下功能：**
+## 这是什么
 
-  <center>
+All API Deck 不是单纯的“测一个接口能不能用”的小工具，而是围绕以下场景做的一套桌面工作流：
 
+- 管理大量中转站 / 账号 / API key / 模型
+- 快速判断哪个站点、哪个 key、哪个模型当前可用
+- 给 Claude / Codex / OpenCode / OpenClaw 这类桌面客户端接上本地高级代理
+- 在协议不一致时自动尝试 `messages` / `responses` / `chat/completions`
+- 把真实请求路径、回退轨迹、耗时和错误详情记录下来，方便调试
 
-- 支持从浏览器扩展或备份文件导入站点账号
-- 批量读取各站点模型列表，高效筛选强自定义，便捷地从海量站点中寻找有效自选模型
-- 批量检测模型可用性、余额、快速对话、模型性能统计（TTFT、TPS、Latency）能力
-- 中转站管理面板：随时发起可用性全面了解，优化你的琐碎时间
-- 类CCSwitch能力的本地密钥面板，支持Windows侧边栏快速查看状态切换密钥，友好且操作简单
-- 切换模型时候有清晰的改动对照、切换后可支持历史对话
-- 一键切换 Claude / Codex / OpenCode / OpenClaw 等桌面客户端配置&&预览
-- 内置高级代理，支持优先级自定义、自动切换、故障转移、多渠道队列、整流修正功能
-  </center>
+如果你经常在多个公益站、自建站、聚合站之间切换，并且还要兼顾桌面客户端配置与故障排查，这个项目就是为这类使用方式设计的。
 
+## 当前能力
 
+- 支持从浏览器扩展桥接、扩展备份文件、目录扫描等方式导入站点与账号
+- 支持批量拉取模型列表、批量快速测活、批量检测模型可用性
+- 支持按分组、状态、模型等维度筛选密钥记录
+- 支持本地侧栏 / miniBar 视图，快速查看余额、模型、调度状态与实时路由
+- 支持 Claude / Codex / OpenCode / OpenClaw 一键生成并写入本机配置
+- 内置高级代理，支持 provider 队列、故障转移、协议 fallback、错误修正、请求记录
+- 支持请求记录详情调试：对最近请求自动生成完整 `fetch(...)` 命令，便于改 header / body 直接复测
 
 ## 界面预览
 
@@ -59,56 +64,54 @@
 
 <img src="./desktop/docs/images/advanced-proxy-architecture-light.svg" alt="All API Deck 高级代理流转图" width="86%" />
 
-## 主要功能
+## 核心功能
 
-### 1. 多种导入方式支持
-- 推荐，基于拓展桥自动识别当前浏览器打开的中转站页面并自动完成导入，兼容性最佳
-- 也推荐从浏览器扩展ALL-API-HUB数据文件直接导入站点与账号信息，适合已有扩展数据直接一键到位
+### 1. 站点 / 账号导入
 
-### 2. 备份 JSON 导入
+支持多种导入方式：
 
-支持导入ALL-API-HUB插件导出的标准备份文件，例如：
+- 浏览器扩展桥接导入
+- ALL-API-HUB 备份 JSON 导入
+- 扩展目录 / 数据目录扫描导入
 
-- `accounts-backup.json`
-- `accounts-backup-2026-04-01.json`
+适合已经积累了大量站点记录、希望一键迁移到桌面端统一管理的场景。
 
-### 3. 批量模型发现
+### 2. 批量模型发现
 
-对导入的多个站点并发拉取模型列表，并支持失败诊断、状态追踪与标签分组。
+对多站点并发拉取模型列表，并保留：
 
-### 4. 批量可用性检测
+- 成功 / 失败状态
+- 失败原因
+- 发现到的模型集合
+- 后续筛选所需的结构化结果
 
-支持对选定站点与模型执行批量检测，输出：
+适合快速从大量站点里定位“哪些站点真的有目标模型”。
+
+### 3. 批量快速测活 / 可用性检测
+
+支持对目标站点和模型执行批量检测，输出：
 
 - 可用 / 异常状态
-- 错误码
-- 常见原因说明
-- 调研 trace 日志
-- fetch 复现片段
+- 状态码和错误原因
+- TTFT / TPS / Latency
+- 协议探测与 fallback 结果
+- 复现所需的请求信息
 
-### 5. 本地 Profile / CDP 双模式
+这里不是只测一个固定协议，而是会结合站点能力，自动尝试可行的 OpenAI / Anthropic 兼容入口。
 
-支持两类登录态读取模式：
+### 4. 密钥管理、分组与侧栏
 
-- `Profile 文件模式`
-- `CDP 重开模式`
+支持：
 
-设置页可切换，便于在不同站点兼容性之间取舍。
+- 给记录分组
+- 从剪贴板批量导入密钥
+- 在 miniBar / 侧栏里快速查看记录状态
+- 针对单个记录快速刷新、快速测活、切换模型
+- 查看当前 provider 队列和实时调度命中项
 
-### 6. 侧边面板
+Windows 下的侧栏体验最完整；非 Windows 环境可通过 miniBar / 独立窗体使用类似能力。
 
-支持最小化到托盘后使用侧边面板管理密钥记录，包括：
-
-- 快速刷新余额
-- 快速测试
-- 选择模型
-- 打开专属一键配置窗口
-- 监控当前设置的供应队列和实时响应的目标供应商
-- 非Win系统可通过密钥管理——miniBar按钮进入该窗体
-
-### 7. 专属一键配置
-
-支持基于当前选中的站点记录，生成桌面客户端配置变更预览，并写入本机配置文件。
+### 5. 桌面客户端一键接管
 
 当前已覆盖的典型目标应用包括：
 
@@ -117,26 +120,140 @@
 - OpenCode
 - OpenClaw
 
+支持基于当前选中的站点记录，生成配置预览并写入本机配置文件，减少手动编辑 base URL、token、模型和协议参数的重复劳动。
+
+### 6. 高级代理
+
+这是目前桌面版最核心的能力之一。
+
+支持：
+
+- provider 优先级队列
+- 自动故障转移
+- `messages` / `responses` / `chat/completions` 多协议 fallback
+- 针对不同 host / key / model 的协议偏好记忆
+- 请求整流修正
+- `invalid_encrypted_content` 自动愈合
+- 调度状态可视化
+- 请求记录与路由追踪
+
+典型例子：
+
+- 某个上游只支持 `chat/completions`，但客户端默认走 `responses`
+- 某个 Claude 兼容上游只接受 `/v1/messages`
+- 同一 host 上不同模型支持的协议不一致
+
+这些情况都可以通过高级代理统一接管后在本地做兼容层处理。
+
+### 7. 请求记录与调试
+
+请求记录面板会保存高级代理近期请求的关键信息：
+
+- 入口 / 出口
+- 实际上游 URL
+- 路由回退轨迹
+- 状态码
+- 耗时、TTFT、Latency、TPS
+- 输入 / 输出 Token
+- 错误摘要
+
+此外，最近 50 条请求还会在内存中附带完整 request body。打开详情后可以：
+
+- 查看格式化后的请求内容
+- 自动生成完整 `fetch(...)` 调试命令
+- 直接改 headers / body / URL
+- 立即在前端本地发起复测
+
+这套能力主要用于快速排查“为什么快测能过，但桌面客户端走代理失败”这类协议问题。
+
+## 适合谁
+
+这个项目更适合下面这些用户：
+
+- 有大量中转站 / key / 模型组合，需要集中管理
+- 需要给 Claude / Codex / OpenCode / OpenClaw 接入本地代理
+- 经常遇到协议不兼容、模型错配、错误复现困难
+- 希望把“发现模型、批量测试、接管客户端、排查失败”放在一个桌面工具里完成
+
+## 快速开始
+
+### 1. 下载桌面版
+
+从 Releases 下载对应平台版本：
+
+https://github.com/jlwebs/AllApiDeck/releases
+
+当前 GitHub Release 会附带这些产物：
+
+- Windows：`allapideck-windows-amd64.exe`
+- Windows：`allapideck-windows-amd64.msi`
+- macOS：`allapideck-macos-universal.dmg`
+- Linux：`allapideck-linux-amd64.tar.gz`
+- Linux：`allapideck-linux-amd64.deb`
+- Linux：`allapideck-linux-amd64.AppImage`
+
+Windows 自动更新当前优先选择并拉起 `.msi` 安装包，`.exe` 作为兼容兜底资产保留。
+
+### 2. 导入站点记录
+
+推荐优先使用：
+
+- 浏览器扩展桥接导入
+- ALL-API-HUB 备份 JSON 导入
+
+常见备份文件名例如：
+
+- `accounts-backup.json`
+- `accounts-backup-2026-04-01.json`
+
+### 3. 批量拉模型 / 快速测活
+
+导入后通常先做两件事：
+
+1. 批量拉取模型列表
+2. 对目标模型做快速测活
+
+这样你能很快知道：
+
+- 哪些站点真的有这个模型
+- 哪些 key 当前可用
+- 哪些站点需要切协议或不适合接入桌面客户端
+
+### 4. 按需开启高级代理接管
+
+如果你要让 Claude / Codex / OpenCode / OpenClaw 走本地高级代理：
+
+1. 在“高级代理功能”里配置 provider 队列
+2. 为目标应用开启接管
+3. 在配置预览里确认 base URL、token、协议类型
+4. 写入本机配置
+
 ## 项目结构
 
 ```text
 .
-├─ desktop/                 桌面端项目主目录
-│  ├─ src/                  前端页面与组件
-│  ├─ wailsjs/              Wails 绑定代码
-│  ├─ build/                桌面构建资源
-│  ├─ scripts/              开发与构建脚本
-│  ├─ main.go               Wails 入口
-│  ├─ app.go                应用生命周期与后端主逻辑
-│  └─ window_sidebar.go     托盘 / 侧边面板窗口逻辑
-└─ .github/workflows/       发布与 CI 配置
+├─ desktop/                          桌面端项目主目录
+│  ├─ src/                           Vue 前端页面与组件
+│  ├─ wailsjs/                       Wails 绑定代码
+│  ├─ scripts/                       开发、打包、安装脚本
+│  ├─ docs/                          文档与截图
+│  ├─ build/                         桌面构建输出
+│  ├─ release-assets/                CI 产物暂存目录
+│  ├─ main.go                        Wails 入口
+│  ├─ app.go                         应用生命周期与后端主逻辑
+│  ├─ advanced_proxy_*.go            高级代理相关逻辑
+│  ├─ local_api.go                   本地测活 / 协议探测逻辑
+│  └─ window_sidebar.go              托盘 / 侧边栏窗口逻辑
+└─ .github/workflows/                发布与 CI 配置
 ```
+
 ## 技术栈
 
 - 桌面壳：`Wails`
 - 前端界面：`Vue 3 + Ant Design Vue + Vite`
 - 本地后端逻辑：`Go`
-- 
+- 打包与发布：`GitHub Actions + Wails + 平台补充脚本`
+
 ## 开发环境
 
 建议环境：
@@ -147,11 +264,14 @@
 - npm 11+
 - WebView2 Runtime
 
-## 开发启动
+> 目前 Windows 是主要开发和验证环境，部分功能（尤其侧栏 / miniBar / 某些桌面客户端接管体验）在 Windows 下最完整。
+
+## 本地开发
 
 安装依赖：
 
 ```bash
+cd desktop
 npm install
 ```
 
@@ -169,16 +289,22 @@ npm run dev:web
 
 ## 构建
 
-桌面构建：
-
-```bash
-wails build
-```
-
-或：
+标准桌面构建：
 
 ```bash
 npm run build:desktop
+```
+
+调试版桌面构建：
+
+```bash
+npm run build:desktop-debug
+```
+
+仅前端构建：
+
+```bash
+npm run build:web
 ```
 
 构建产物默认位于：
@@ -187,34 +313,43 @@ npm run build:desktop
 desktop/build/bin/
 ```
 
-GitHub Release 当前会附带这些桌面端产物：
+## 日志与运行时目录
 
-- Windows：`allapideck-windows-amd64.exe`
-- macOS：`allapideck-macos-universal.dmg`
-- Linux：`allapideck-linux-amd64.tar.gz`
-- Linux AppImage：`allapideck-linux-amd64.AppImage`
-- Linux DEB：`allapideck-linux-amd64.deb`
+程序运行时目录不是固定写在仓库里，而是落到系统运行时目录中。
 
-Linux 的 `.deb` 和 `AppImage` 目前是在 CI 里基于 Wails 构建产物再额外组装出来的，因为 Wails v2 本身不会直接生成这两类发布包。
+典型位置：
 
-## 日志
+- Windows：`%LOCALAPPDATA%\\BatchApiCheck\\runtime`
+- macOS：`~/Library/Application Support/BatchApiCheck/runtime`
+- Linux：`$XDG_STATE_HOME` / `$XDG_CACHE_HOME` 下的 `batch-api-check/runtime`
 
-设置里也可获取，对应日志目录：
+日志通常位于：
 
 ```text
-logs/
+runtime/logs/
 ```
 
-其中通常会包含：
+常见日志文件包括：
 
+- `advanced-proxy.log`
 - `EXE_BACKEND_DEBUG.log`
+- `client-runtime.log`
 - `wails-dev-host.log`
 - `wails-dev-runner.log`
 - `wails-dev-vite.log`
 
-## GitHub
+## 发布方式
 
-项目主页：
+仓库使用 GitHub Actions 自动构建桌面版 release 资产。
+
+当前发布工作流会在打 tag 后自动：
+
+- 构建 Windows / macOS / Linux 产物
+- 为 Windows 额外生成 `.msi`
+- 为 Linux 额外组装 `.deb` 与 `.AppImage`
+- 上传到对应 GitHub Release
+
+## 项目主页
 
 https://github.com/jlwebs/AllApiDeck
 
