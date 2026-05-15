@@ -105,3 +105,32 @@ func TestRecordAdvancedProxyStreamObservationUsesResolvedModel(t *testing.T) {
 		t.Fatalf("expected stream record model to use resolved upstream model, got %#v", records[0])
 	}
 }
+
+func TestAdvancedProxyRequestRecordsKeepOnlyLastFiftyRequestBodies(t *testing.T) {
+	resetAdvancedProxyRequestRecordsForTest(t)
+
+	for index := 0; index < advancedProxyRequestPayloadLimit+5; index++ {
+		appendAdvancedProxyRequestRecord(AdvancedProxyRequestRecord{
+			RecordedAt:   time.Now().Format(time.RFC3339Nano),
+			AppType:      "codex",
+			ProviderID:   "provider-test",
+			ProviderName: "Provider Test",
+			RequestBody:  `{"index":` + string(rune('0'+(index%10))) + `}`,
+		})
+	}
+
+	records := advancedProxyRequestRecords.list(advancedProxyRequestRecordLimit)
+	if len(records) != advancedProxyRequestPayloadLimit+5 {
+		t.Fatalf("expected %d records, got %d", advancedProxyRequestPayloadLimit+5, len(records))
+	}
+
+	payloadCount := 0
+	for _, record := range records {
+		if record.RequestBody != "" {
+			payloadCount++
+		}
+	}
+	if payloadCount != advancedProxyRequestPayloadLimit {
+		t.Fatalf("expected only last %d request bodies to remain, got %d", advancedProxyRequestPayloadLimit, payloadCount)
+	}
+}

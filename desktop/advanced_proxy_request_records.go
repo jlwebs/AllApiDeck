@@ -12,6 +12,7 @@ import (
 )
 
 const advancedProxyRequestRecordLimit = 400
+const advancedProxyRequestPayloadLimit = 50
 
 type AdvancedProxyRequestRecord struct {
 	ID                 string                          `json:"id"`
@@ -38,6 +39,7 @@ type AdvancedProxyRequestRecord struct {
 	UpstreamEndpoint   string                          `json:"upstreamEndpoint"`
 	ErrorDetail        string                          `json:"errorDetail"`
 	Source             string                          `json:"source"`
+	RequestBody        string                          `json:"requestBody,omitempty"`
 }
 
 type AdvancedProxyRequestRouteStep struct {
@@ -75,6 +77,11 @@ func (s *advancedProxyRequestRecordStore) append(record AdvancedProxyRequestReco
 	s.records = append(s.records, record)
 	if overflow := len(s.records) - advancedProxyRequestRecordLimit; overflow > 0 {
 		s.records = append([]AdvancedProxyRequestRecord(nil), s.records[overflow:]...)
+	}
+	if payloadOverflow := len(s.records) - advancedProxyRequestPayloadLimit; payloadOverflow > 0 {
+		for index := 0; index < payloadOverflow; index++ {
+			s.records[index].RequestBody = ""
+		}
 	}
 }
 
@@ -134,6 +141,7 @@ func appendAdvancedProxyRequestRecord(record AdvancedProxyRequestRecord) {
 	record.UpstreamEndpoint = strings.TrimSpace(record.UpstreamEndpoint)
 	record.ErrorDetail = strings.TrimSpace(record.ErrorDetail)
 	record.Source = strings.TrimSpace(record.Source)
+	record.RequestBody = strings.TrimSpace(record.RequestBody)
 	advancedProxyRequestRecords.append(record)
 }
 
@@ -185,6 +193,7 @@ func appendAdvancedProxyOpenAIRecord(appType string, clientRoute string, inbound
 		UpstreamEndpoint:   extractAdvancedProxyURLPath(targetURL),
 		ErrorDetail:        strings.TrimSpace(errorDetail),
 		Source:             source,
+		RequestBody:        string(requestBody),
 	}
 	appendAdvancedProxyRequestRecord(record)
 }
@@ -237,6 +246,7 @@ func appendAdvancedProxyClaudeRecord(appType string, inboundEndpoint string, out
 		UpstreamEndpoint:   extractAdvancedProxyURLPath(targetURL),
 		ErrorDetail:        strings.TrimSpace(errorDetail),
 		Source:             "direct",
+		RequestBody:        string(requestBody),
 	}
 	appendAdvancedProxyRequestRecord(record)
 }

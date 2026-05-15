@@ -234,17 +234,16 @@
                           </template>
 
                           <template v-else-if="column.key === 'detail'">
-                            <a-tooltip :title="resolveDetailText(record)">
-                              <div class="request-records-detail-text">
-                                {{ summarizeDetail(record) }}
-                              </div>
-                            </a-tooltip>
-                          </template>
-
-                          <template v-else-if="column.key === 'actions'">
-                            <a-button type="text" size="small" class="request-records-more" @click="openRecordDetail(record)">
-                              <MoreOutlined />
-                            </a-button>
+                            <div class="request-records-detail-cell">
+                              <a-tooltip :title="resolveDetailText(record)">
+                                <div class="request-records-detail-text">
+                                  {{ summarizeDetail(record) }}
+                                </div>
+                              </a-tooltip>
+                              <a-button type="text" size="small" class="request-records-detail-button" @click="openRecordDetail(record)">
+                                详情
+                              </a-button>
+                            </div>
                           </template>
                         </td>
                       </tr>
@@ -384,6 +383,34 @@
             <pre>{{ resolveDetailText(selectedRecord) }}</pre>
           </div>
         </section>
+
+        <section class="request-record-detail-section">
+          <div class="request-record-detail-section-title request-record-detail-section-title-row">
+            <span>请求</span>
+            <div class="request-record-detail-section-actions">
+              <a-button
+                size="small"
+                class="request-record-debug-button"
+                :loading="requestDebugTesting"
+                @click="handleRequestDebugTest"
+              >
+                测试
+              </a-button>
+              <a-tooltip v-if="requestDebugState !== 'idle'" :title="requestDebugResponse || '-'">
+                <span class="request-record-debug-result" :class="`is-${requestDebugState}`">
+                  <LoadingOutlined v-if="requestDebugState === 'loading'" />
+                  <CheckCircleFilled v-else-if="requestDebugState === 'success'" />
+                  <CloseCircleFilled v-else />
+                </span>
+              </a-tooltip>
+            </div>
+          </div>
+          <a-textarea
+            v-model:value="requestDebugBody"
+            class="request-record-debug-textarea"
+            :auto-size="{ minRows: 12, maxRows: 22 }"
+          />
+        </section>
       </div>
     </a-drawer>
   </a-drawer>
@@ -392,9 +419,11 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { message, Modal } from 'ant-design-vue';
-import { DeleteOutlined, MoreOutlined, ReloadOutlined } from '@ant-design/icons-vue';
+import { CheckCircleFilled, CloseCircleFilled, DeleteOutlined, LoadingOutlined, ReloadOutlined } from '@ant-design/icons-vue';
 import {
   clearAdvancedProxyRequestRecords,
+  getAdvancedProxyConfig,
+  getAdvancedProxyEffectiveProviders,
   isAdvancedProxyRequestRecordBridgeAvailable,
   listAdvancedProxyRequestRecords,
 } from '../utils/advancedProxyBridge.js';
@@ -419,6 +448,9 @@ const hiddenAppIds = ref([]);
 const currentPage = ref(1);
 const detailOpen = ref(false);
 const selectedRecord = ref(null);
+const requestDebugBody = ref('');
+const requestDebugState = ref('idle');
+const requestDebugResponse = ref('');
 const tableScrollRef = ref(null);
 const tableElementRef = ref(null);
 const tableHorizontalScrollRef = ref(null);
@@ -450,6 +482,7 @@ const tableViewportFallbackWidth = computed(() => {
 });
 const showTableHorizontalScroll = computed(() => tableLayoutWidth.value - tableViewportWidth.value > 2);
 const tableHorizontalMaxScroll = computed(() => Math.max(0, tableContentWidth.value - tableViewportWidth.value));
+const requestDebugTesting = computed(() => requestDebugState.value === 'loading');
 
 const columns = computed(() => {
   const compact = isCompactWindow.value;
@@ -460,8 +493,7 @@ const columns = computed(() => {
     { title: '路由', dataIndex: 'routeTrace', key: 'route', width: compact ? 138 : 152 },
     { title: '性能', dataIndex: 'durationMs', key: 'metrics', width: compact ? 146 : 158 },
     { title: '状态', dataIndex: 'statusCode', key: 'status', width: compact ? 88 : 96 },
-    { title: '摘要', dataIndex: 'errorDetail', key: 'detail', width: compact ? 230 : 300, ellipsis: true },
-    { title: '', key: 'actions', width: 46, align: 'center' },
+    { title: '摘要', dataIndex: 'errorDetail', key: 'detail', width: compact ? 276 : 346, ellipsis: true },
   ];
 });
 
@@ -817,6 +849,198 @@ function resolveDetailText(record) {
   return text || '请求成功';
 }
 
+function normalizeComparableUrl(value) {
+  return String(value || '').trim().replace(/\/+$/, '').toLowerCase();
+}
+
+function formatRequestDebugResponse(value) {
+  const text = String(value || '').trim();
+  if (!text) return '(empty)';
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
+function resetRequestDebugState() {
+  requestDebugState.value = 'idle';
+  requestDebugResponse.value = '';
+}
+
+function collectRequestDebugProviders(config, appId) {
+  const candidates = [];
+  const seen = new Set();
+  const pushProvider = (provider) => {
+    const id = String(provider?.id || '').trim();
+    const rowKey = String(provider?.rowKey || '').trim();
+    const baseUrl = String(provider?.baseUrl || '').trim();
+    const dedupeKey = `${id}::${rowKey}::${baseUrl}`;
+    if (!baseUrl || seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    candidates.push(provider);
+  };
+
+  getAdvancedProxyEffectiveProviders(config, appId, { enabledOnly: false }).forEach(pushProvider);
+  Object.values(config?.queues || {}).forEach((queueSection) => {
+    (Array.isArray(queueSection?.providers) ? queueSection.providers : []).forEach(pushProvider);
+  });
+  (Array.isArray(config?.claude?.providers) ? config.claude.providers : []).forEach(pushProvider);
+
+  return candidates;
+}
+
+function resolveRequestDebugProvider(record, config) {
+  const appId = String(record?.appType || '').trim().toLowerCase() || 'claude';
+  const candidates = collectRequestDebugProviders(config, appId);
+  const providerId = String(record?.providerId || '').trim();
+  const providerRowKey = String(record?.providerRowKey || '').trim();
+  const providerName = String(record?.providerName || '').trim();
+  const providerModel = String(record?.model || '').trim().toLowerCase();
+  const normalizedTargetURL = normalizeComparableUrl(record?.upstreamUrl);
+
+  return candidates.find((provider) => {
+    if (!provider) return false;
+    if (providerId && String(provider?.id || '').trim() === providerId) return true;
+    if (providerRowKey && String(provider?.rowKey || '').trim() === providerRowKey) return true;
+
+    const normalizedBaseURL = normalizeComparableUrl(provider?.baseUrl);
+    if (normalizedBaseURL && normalizedTargetURL.startsWith(normalizedBaseURL)) {
+      if (!providerModel) return true;
+      return String(provider?.model || '').trim().toLowerCase() === providerModel;
+    }
+
+    if (providerName && String(provider?.name || '').trim() === providerName) {
+      if (!providerModel) return true;
+      return String(provider?.model || '').trim().toLowerCase() === providerModel;
+    }
+
+    return false;
+  }) || null;
+}
+
+function buildRequestDebugHeaders(record, provider, payload) {
+  const stream = payload?.stream === true;
+  const route = String(record?.outboundRoute || '').trim().toLowerCase();
+  const apiFormat = String(provider?.apiFormat || '').trim().toLowerCase();
+  const headers = {
+    'Content-Type': 'application/json',
+    'Accept': stream ? 'text/event-stream' : 'application/json',
+  };
+
+  if (String(record?.appType || '').trim().toLowerCase() === 'claude' && (route === 'messages' || apiFormat === 'anthropic')) {
+    headers['x-api-key'] = String(provider?.apiKey || '').trim();
+    headers['anthropic-version'] = '2023-06-01';
+    return headers;
+  }
+
+  headers.Authorization = `Bearer ${String(provider?.apiKey || '').trim()}`;
+  return headers;
+}
+
+function buildRequestDebugCommand(targetURL, headers, payload) {
+  const normalizedURL = String(targetURL || '').trim();
+  const normalizedHeaders = headers && typeof headers === 'object' ? headers : {};
+  const normalizedPayload = payload && typeof payload === 'object' ? payload : {};
+  const headerText = JSON.stringify(normalizedHeaders, null, 2) || '{}';
+  const payloadText = JSON.stringify(normalizedPayload, null, 2) || '{}';
+
+  return [
+    `fetch(${JSON.stringify(normalizedURL)}, {`,
+    `  method: "POST",`,
+    `  headers: ${headerText.replace(/\n/g, '\n  ')},`,
+    `  body: JSON.stringify(${payloadText.replace(/\n/g, '\n  ')})`,
+    `})`,
+  ].join('\n');
+}
+
+function parseRequestDebugPayload(record) {
+  const text = String(record?.requestBody || '').trim();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {};
+  }
+}
+
+async function syncRequestDebugEditor(record) {
+  resetRequestDebugState();
+  if (!record) {
+    requestDebugBody.value = '';
+    return;
+  }
+
+  const targetURL = String(record?.upstreamUrl || '').trim();
+  const payload = parseRequestDebugPayload(record);
+
+  try {
+    const config = await getAdvancedProxyConfig();
+    const provider = resolveRequestDebugProvider(record, config);
+    const headers = buildRequestDebugHeaders(record, provider || {}, payload);
+    requestDebugBody.value = buildRequestDebugCommand(targetURL, headers, payload);
+  } catch {
+    requestDebugBody.value = buildRequestDebugCommand(targetURL, {
+      'Content-Type': 'application/json',
+      'Accept': payload?.stream === true ? 'text/event-stream' : 'application/json',
+    }, payload);
+  }
+}
+
+async function executeRequestDebugCommand(commandText) {
+  const trimmed = String(commandText || '').trim().replace(/;+\s*$/, '');
+  if (!trimmed) {
+    throw new Error('empty fetch command');
+  }
+  const runner = new Function('fetch', `"use strict"; return (async () => { return ${trimmed}; })();`);
+  return runner(fetch);
+}
+
+function isRequestDebugResponseLike(value) {
+  return Boolean(value) && typeof value === 'object' && typeof value.text === 'function';
+}
+
+async function normalizeRequestDebugExecutionResult(result) {
+  if (isRequestDebugResponseLike(result)) {
+    return {
+      ok: typeof result.ok === 'boolean' ? result.ok : true,
+      text: await result.text(),
+    };
+  }
+  if (typeof result === 'string') {
+    return { ok: true, text: result };
+  }
+  if (result == null) {
+    return { ok: true, text: '(empty)' };
+  }
+  if (typeof result === 'object') {
+    try {
+      return { ok: true, text: JSON.stringify(result, null, 2) };
+    } catch {
+      return { ok: true, text: String(result) };
+    }
+  }
+  return { ok: true, text: String(result) };
+}
+
+async function handleRequestDebugTest() {
+  const record = selectedRecord.value;
+  if (!record) return;
+
+  requestDebugState.value = 'loading';
+  requestDebugResponse.value = '';
+
+  try {
+    const result = await executeRequestDebugCommand(requestDebugBody.value);
+    const normalizedResult = await normalizeRequestDebugExecutionResult(result);
+    requestDebugResponse.value = formatRequestDebugResponse(normalizedResult.text);
+    requestDebugState.value = normalizedResult.ok ? 'success' : 'error';
+  } catch (error) {
+    requestDebugState.value = 'error';
+    requestDebugResponse.value = error?.message || 'request failed';
+  }
+}
+
 function summarizeDetail(record) {
   const text = resolveDetailText(record);
   return text.length > 80 ? `${text.slice(0, 80)}...` : text;
@@ -977,6 +1201,7 @@ function handleClose() {
 
 function openRecordDetail(record) {
   selectedRecord.value = record || null;
+  void syncRequestDebugEditor(record);
   detailOpen.value = true;
 }
 
@@ -995,6 +1220,7 @@ function handleClear() {
         currentPage.value = 1;
         detailOpen.value = false;
         selectedRecord.value = null;
+        void syncRequestDebugEditor(null);
         message.success('请求记录已清空');
       } catch (error) {
         message.error(error?.message || '清空请求记录失败');
@@ -1017,11 +1243,16 @@ watch(
     }
     detailOpen.value = false;
     selectedRecord.value = null;
+    void syncRequestDebugEditor(null);
     detachTableResizeObserver();
     stopPolling();
   },
   { immediate: true },
 );
+
+watch(selectedRecord, (record) => {
+  void syncRequestDebugEditor(record);
+});
 
 watch(appSummaryItems, (items) => {
   const validIds = new Set(items.map(item => item.id));
@@ -1864,6 +2095,19 @@ onBeforeUnmount(() => {
   text-transform: uppercase;
 }
 
+.request-record-detail-section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.request-record-detail-section-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .request-record-detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1890,6 +2134,42 @@ onBeforeUnmount(() => {
   font: 12px/1.6 'Cascadia Code', 'Consolas', monospace;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.request-record-debug-button {
+  border-radius: 10px;
+}
+
+.request-record-debug-result {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  font-size: 14px;
+}
+
+.request-record-debug-result.is-loading {
+  color: #6f7d73;
+}
+
+.request-record-debug-result.is-success {
+  color: #2f8f59;
+}
+
+.request-record-debug-result.is-error {
+  color: #cc4b37;
+}
+
+.request-record-debug-textarea :deep(textarea) {
+  min-height: 240px;
+  border-radius: 16px;
+  padding: 12px 13px;
+  color: #4a5a50;
+  font: 12px/1.6 'Cascadia Code', 'Consolas', monospace;
+  background: rgba(248, 251, 247, 0.94);
+  border-color: rgba(107, 127, 114, 0.12);
 }
 
 .request-records-shell-dark .request-records-toolbar-pill,
@@ -2017,6 +2297,24 @@ onBeforeUnmount(() => {
   color: #b8c8be;
 }
 
+.request-records-shell-dark .request-record-debug-result.is-loading {
+  color: #b8c8be;
+}
+
+.request-records-shell-dark .request-record-debug-result.is-success {
+  color: #77d69a;
+}
+
+.request-records-shell-dark .request-record-debug-result.is-error {
+  color: #ff8d7d;
+}
+
+.request-records-shell-dark .request-record-debug-textarea :deep(textarea) {
+  color: #d3dfd6;
+  background: rgba(18, 25, 21, 0.94);
+  border-color: rgba(133, 162, 145, 0.16);
+}
+
 .request-records-shell-dark .request-records-routing-line.is-failed {
   color: #f0b8a5;
 }
@@ -2118,6 +2416,24 @@ onBeforeUnmount(() => {
 
 .request-record-detail-shell-dark .request-record-detail-item pre {
   color: #b8c8be;
+}
+
+.request-record-detail-shell-dark .request-record-debug-result.is-loading {
+  color: #b8c8be;
+}
+
+.request-record-detail-shell-dark .request-record-debug-result.is-success {
+  color: #77d69a;
+}
+
+.request-record-detail-shell-dark .request-record-debug-result.is-error {
+  color: #ff8d7d;
+}
+
+.request-record-detail-shell-dark .request-record-debug-textarea :deep(textarea) {
+  color: #d3dfd6;
+  background: rgba(18, 25, 21, 0.94);
+  border-color: rgba(133, 162, 145, 0.16);
 }
 
 @keyframes request-records-pulse {

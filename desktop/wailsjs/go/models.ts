@@ -410,6 +410,7 @@ export namespace main {
 	    upstreamEndpoint: string;
 	    errorDetail: string;
 	    source: string;
+	    requestBody?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AdvancedProxyRequestRecord(source);
@@ -441,6 +442,7 @@ export namespace main {
 	        this.upstreamEndpoint = source["upstreamEndpoint"];
 	        this.errorDetail = source["errorDetail"];
 	        this.source = source["source"];
+	        this.requestBody = source["requestBody"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
