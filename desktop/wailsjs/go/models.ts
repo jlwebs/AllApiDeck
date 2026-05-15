@@ -369,6 +369,22 @@ export namespace main {
 	}
 	
 	
+	export class AdvancedProxyRequestRouteStep {
+	    route: string;
+	    source?: string;
+	    status: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AdvancedProxyRequestRouteStep(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.route = source["route"];
+	        this.source = source["source"];
+	        this.status = source["status"];
+	    }
+	}
 	export class AdvancedProxyRequestRecord {
 	    id: string;
 	    recordedAt: string;
@@ -376,6 +392,7 @@ export namespace main {
 	    clientRoute: string;
 	    inboundEndpoint: string;
 	    outboundRoute: string;
+	    routeTrace?: AdvancedProxyRequestRouteStep[];
 	    providerId: string;
 	    providerRowKey: string;
 	    providerName: string;
@@ -406,6 +423,7 @@ export namespace main {
 	        this.clientRoute = source["clientRoute"];
 	        this.inboundEndpoint = source["inboundEndpoint"];
 	        this.outboundRoute = source["outboundRoute"];
+	        this.routeTrace = this.convertValues(source["routeTrace"], AdvancedProxyRequestRouteStep);
 	        this.providerId = source["providerId"];
 	        this.providerRowKey = source["providerRowKey"];
 	        this.providerName = source["providerName"];
@@ -424,7 +442,26 @@ export namespace main {
 	        this.errorDetail = source["errorDetail"];
 	        this.source = source["source"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
+	
 	export class AdvancedProxyRoutingState {
 	    appType: string;
 	    providerId: string;

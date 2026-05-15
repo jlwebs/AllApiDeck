@@ -536,6 +536,12 @@ func shouldFallbackResponsesToChat(statusCode int, responseBody []byte) bool {
 		return true
 	case strings.Contains(message, "not support selected model"):
 		return true
+	case strings.Contains(message, "field messages is required"):
+		return true
+	case strings.Contains(message, "messages field is required"):
+		return true
+	case strings.Contains(message, "messages is required"):
+		return true
 	case strings.Contains(message, "invalid json"):
 		return true
 	case strings.Contains(message, "(html)"):

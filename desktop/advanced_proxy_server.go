@@ -55,10 +55,12 @@ type advancedProxyStreamRequestRecordContext struct {
 	ClientRoute     string
 	InboundEndpoint string
 	OutboundRoute   string
+	RouteTrace      []AdvancedProxyRequestRouteStep
 	Source          string
 	Provider        AdvancedProxyProvider
 	TargetURL       string
 	RequestBody     []byte
+	ResolvedModel   string
 	StartedAt       time.Time
 	ObservedFormat  string
 }
@@ -653,48 +655,130 @@ func summarizeAdvancedProxyBody(raw []byte) string {
 	return previewAdvancedProxyText(normalizeAnthropicErrorMessage(raw), 220)
 }
 
-func shouldFallbackClaudeResponsesToOpenAIChat(statusCode int, message string, features claudeRequestFeatures) bool {
+func appendAdvancedProxyRouteTraceStep(trace []AdvancedProxyRequestRouteStep, route string, source string, status string) []AdvancedProxyRequestRouteStep {
+	route = strings.TrimSpace(route)
+	if route == "" {
+		return cloneAdvancedProxyRouteTrace(trace)
+	}
+	next := cloneAdvancedProxyRouteTrace(trace)
+	step := AdvancedProxyRequestRouteStep{
+		Route:  route,
+		Source: strings.TrimSpace(strings.ToLower(source)),
+		Status: strings.TrimSpace(strings.ToLower(status)),
+	}
+	if len(next) > 0 {
+		last := next[len(next)-1]
+		if last.Route == step.Route && last.Source == step.Source && last.Status == step.Status {
+			return next
+		}
+	}
+	return append(next, step)
+}
+
+func shouldFallbackClaudeResponsesToOpenAIChat(statusCode int, responseBody []byte, features claudeRequestFeatures) bool {
 	if features.HasAnthropicWebSearchTool {
 		return false
 	}
+	return shouldFallbackResponsesToChat(statusCode, responseBody)
+}
 
-	switch statusCode {
-	case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented, http.StatusUnsupportedMediaType:
-		return true
-	}
-
-	lower := strings.ToLower(strings.TrimSpace(message))
-	if lower == "" {
+func shouldFallbackClaudeOpenAIChatToResponses(statusCode int, responseBody []byte, features claudeRequestFeatures) bool {
+	if features.HasAnthropicWebSearchTool {
 		return false
 	}
+	return shouldFallbackChatPreferenceBackToResponses(statusCode, responseBody)
+}
 
-	mentionsResponses := strings.Contains(lower, "/responses") ||
-		strings.Contains(lower, "responses api") ||
-		strings.Contains(lower, "responses endpoint") ||
-		strings.Contains(lower, "openai responses") ||
-		strings.Contains(lower, " response ") ||
-		strings.HasPrefix(lower, "response ") ||
-		strings.Contains(lower, "responses")
-	if !mentionsResponses {
-		return false
-	}
-
-	switch {
-	case strings.Contains(lower, "not support"),
-		strings.Contains(lower, "unsupported"),
-		strings.Contains(lower, "not implemented"),
-		strings.Contains(lower, "not found"),
-		strings.Contains(lower, "unknown path"),
-		strings.Contains(lower, "unknown url"),
-		strings.Contains(lower, "unrecognized request url"),
-		strings.Contains(lower, "no route"),
-		strings.Contains(lower, "404 page not found"),
-		strings.Contains(lower, "only supported"),
-		strings.Contains(lower, "invalid url"):
-		return true
+func shouldAdvanceClaudeProxyPhase(current claudeProxyAttemptPhase, next claudeProxyAttemptPhase, statusCode int, responseBody []byte, features claudeRequestFeatures) bool {
+	switch current.apiFormat {
+	case "anthropic":
+		return next.apiFormat != "anthropic" && shouldFallbackClaudeMessagesToOpenAIRoute(statusCode, responseBody)
+	case "openai_responses":
+		if next.apiFormat == "anthropic" {
+			return shouldFallbackResponsesToChat(statusCode, responseBody)
+		}
+		return next.apiFormat != "openai_responses" && shouldFallbackClaudeResponsesToOpenAIChat(statusCode, responseBody, features)
+	case "openai_chat":
+		if next.apiFormat == "anthropic" {
+			return shouldFallbackChatPreferenceBackToResponses(statusCode, responseBody)
+		}
+		return next.apiFormat != "openai_chat" && shouldFallbackClaudeOpenAIChatToResponses(statusCode, responseBody, features)
 	default:
 		return false
 	}
+}
+
+type claudeProxyAttemptPhase struct {
+	apiFormat          string
+	routeKind          string
+	source             string
+	preferenceValue    int
+	preferenceScopeKey string
+}
+
+func buildClaudeProxyAttemptPhases(provider AdvancedProxyProvider, requestBody map[string]any, features claudeRequestFeatures) []claudeProxyAttemptPhase {
+	routeKindForFormat := func(apiFormat string) string {
+		switch apiFormat {
+		case "openai_chat":
+			return "chat"
+		case "openai_responses":
+			return "responses"
+		default:
+			return "messages"
+		}
+	}
+
+	appendPhase := func(phases []claudeProxyAttemptPhase, apiFormat string, source string, preferenceValue int, preferenceScopeKey string) []claudeProxyAttemptPhase {
+		apiFormat = normalizeClaudeAPIFormat(apiFormat)
+		if apiFormat == "" {
+			apiFormat = "anthropic"
+		}
+		for _, existing := range phases {
+			if existing.apiFormat == apiFormat {
+				return phases
+			}
+		}
+		return append(phases, claudeProxyAttemptPhase{
+			apiFormat:          apiFormat,
+			routeKind:          routeKindForFormat(apiFormat),
+			source:             source,
+			preferenceValue:    preferenceValue,
+			preferenceScopeKey: strings.TrimSpace(preferenceScopeKey),
+		})
+	}
+
+	model := firstNonEmpty(strings.TrimSpace(provider.Model), strings.TrimSpace(toStringValue(requestBody["model"])))
+	scopeKey := resolveAdvancedProxyClaudeProtocolPreferenceScopeKey(provider, model)
+
+	if features.HasAnthropicWebSearchTool {
+		if preferenceValue, ok := getAdvancedProxyClaudeProtocolPreference(scopeKey); ok && preferenceValue == advancedProxyClaudeProtocolPreferResponses {
+			phases := appendPhase(nil, "openai_responses", "preference", advancedProxyClaudeProtocolPreferResponses, scopeKey)
+			return appendPhase(phases, "anthropic", "fallback_restore", advancedProxyClaudeProtocolPreferAnthropic, scopeKey)
+		}
+		phases := appendPhase(nil, "anthropic", "original", advancedProxyClaudeProtocolPreferAnthropic, scopeKey)
+		return appendPhase(phases, "openai_responses", "fallback", advancedProxyClaudeProtocolPreferResponses, scopeKey)
+	}
+
+	if preferenceValue, ok := getAdvancedProxyClaudeProtocolPreference(scopeKey); ok {
+		switch preferenceValue {
+		case advancedProxyClaudeProtocolPreferResponses:
+			phases := appendPhase(nil, "openai_responses", "preference", advancedProxyClaudeProtocolPreferResponses, scopeKey)
+			phases = appendPhase(phases, "anthropic", "fallback_restore", advancedProxyClaudeProtocolPreferAnthropic, scopeKey)
+			return appendPhase(phases, "openai_chat", "fallback_restore", advancedProxyClaudeProtocolPreferChat, scopeKey)
+		case advancedProxyClaudeProtocolPreferChat:
+			phases := appendPhase(nil, "openai_chat", "preference", advancedProxyClaudeProtocolPreferChat, scopeKey)
+			phases = appendPhase(phases, "anthropic", "fallback_restore", advancedProxyClaudeProtocolPreferAnthropic, scopeKey)
+			return appendPhase(phases, "openai_responses", "fallback_restore", advancedProxyClaudeProtocolPreferResponses, scopeKey)
+		default:
+			phases := appendPhase(nil, "anthropic", "preference", advancedProxyClaudeProtocolPreferAnthropic, scopeKey)
+			phases = appendPhase(phases, "openai_responses", "fallback_restore", advancedProxyClaudeProtocolPreferResponses, scopeKey)
+			return appendPhase(phases, "openai_chat", "fallback_restore", advancedProxyClaudeProtocolPreferChat, scopeKey)
+		}
+	}
+
+	phases := appendPhase(nil, "anthropic", "original", advancedProxyClaudeProtocolPreferAnthropic, scopeKey)
+	phases = appendPhase(phases, "openai_responses", "fallback", advancedProxyClaudeProtocolPreferResponses, scopeKey)
+	return appendPhase(phases, "openai_chat", "fallback_secondary", advancedProxyClaudeProtocolPreferChat, scopeKey)
 }
 
 func describeOutboundProxyMode() string {
@@ -1537,13 +1621,14 @@ func recordAdvancedProxyStreamObservation(recordContext *advancedProxyStreamRequ
 	}
 	switch strings.ToLower(strings.TrimSpace(recordContext.AppType)) {
 	case "claude":
-		recordAdvancedProxyClaudeStreamAttempt(
+		recordAdvancedProxyClaudeStreamAttemptWithTrace(
 			recordContext.AppType,
 			recordContext.InboundEndpoint,
 			recordContext.OutboundRoute,
 			recordContext.Provider,
 			recordContext.TargetURL,
 			recordContext.RequestBody,
+			recordContext.ResolvedModel,
 			statusCode,
 			true,
 			recordContext.StartedAt,
@@ -1552,9 +1637,10 @@ func recordAdvancedProxyStreamObservation(recordContext *advancedProxyStreamRequ
 			observation.InputTokens,
 			observation.OutputTokens,
 			errorDetail,
+			recordContext.RouteTrace,
 		)
 	default:
-		recordAdvancedProxyOpenAIStreamAttempt(
+		recordAdvancedProxyOpenAIStreamAttemptWithTrace(
 			recordContext.AppType,
 			recordContext.ClientRoute,
 			recordContext.InboundEndpoint,
@@ -1563,6 +1649,7 @@ func recordAdvancedProxyStreamObservation(recordContext *advancedProxyStreamRequ
 			recordContext.Provider,
 			recordContext.TargetURL,
 			recordContext.RequestBody,
+			recordContext.ResolvedModel,
 			statusCode,
 			true,
 			recordContext.StartedAt,
@@ -1571,6 +1658,7 @@ func recordAdvancedProxyStreamObservation(recordContext *advancedProxyStreamRequ
 			observation.InputTokens,
 			observation.OutputTokens,
 			errorDetail,
+			recordContext.RouteTrace,
 		)
 	}
 }
@@ -1665,6 +1753,82 @@ func processOpenAIStreamMetricsLine(line []byte, observedFormat string, observat
 			observation.markFirstOutput(time.Now())
 		}
 	}
+}
+
+func processAnthropicStreamMetricsLine(line []byte, observation *advancedProxyStreamObservation) {
+	if observation == nil {
+		return
+	}
+	trimmed := strings.TrimSpace(string(line))
+	if trimmed == "" || !strings.HasPrefix(trimmed, "data:") {
+		return
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+	if payload == "" {
+		return
+	}
+
+	data := map[string]any{}
+	if err := json.Unmarshal([]byte(payload), &data); err != nil {
+		return
+	}
+
+	inputTokens, outputTokens := extractAdvancedProxyUsageFromMap(data)
+	observation.updateUsage(inputTokens, outputTokens)
+
+	switch strings.TrimSpace(toStringValue(data["type"])) {
+	case "message_start":
+		if messageMap, ok := data["message"].(map[string]any); ok && messageMap != nil {
+			inputTokens, outputTokens = extractAdvancedProxyUsageFromMap(messageMap)
+			observation.updateUsage(inputTokens, outputTokens)
+		}
+	case "content_block_start", "content_block_delta":
+		observation.markFirstOutput(time.Now())
+	case "message_stop":
+		observation.markCompleted(time.Now())
+	}
+}
+
+func proxyAnthropicStreamToClientWithMetrics(writer http.ResponseWriter, streamBody io.ReadCloser, recordContext *advancedProxyStreamRequestRecordContext) error {
+	defer streamBody.Close()
+
+	observation := advancedProxyStreamObservation{}
+	if recordContext != nil {
+		observation.StartedAt = recordContext.StartedAt
+	}
+	flusher, _ := writer.(http.Flusher)
+	reader := bufio.NewReader(streamBody)
+	var streamErr error
+
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			processAnthropicStreamMetricsLine(line, &observation)
+			if _, writeErr := writer.Write(line); writeErr != nil {
+				streamErr = writeErr
+				break
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if err != nil {
+			if err != io.EOF {
+				streamErr = err
+			}
+			break
+		}
+	}
+
+	if recordContext != nil {
+		observation.markCompleted(time.Now())
+		errorDetail := ""
+		if streamErr != nil {
+			errorDetail = streamErr.Error()
+		}
+		recordAdvancedProxyStreamObservation(recordContext, observation, http.StatusOK, errorDetail)
+	}
+	return streamErr
 }
 
 func proxyOpenAIStreamToClientWithMetrics(writer http.ResponseWriter, streamBody io.ReadCloser, recordContext *advancedProxyStreamRequestRecordContext) error {
@@ -3046,18 +3210,10 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 	timeoutSeconds := computeAdvancedProxyTimeoutSeconds(stream, failoverActive, config.Failover)
 	requestFeatures := classifyClaudeRequestFeatures(requestBody)
 	capabilities := resolveAdvancedProxyProviderCapabilities(provider)
-	originalAPIFormat := capabilities.APIFormat
-	apiFormat := originalAPIFormat
-	if apiFormat == "openai_chat" {
-		apiFormat = "openai_responses"
-	}
 	debugEnabled := advancedProxyDebugEnabled(config)
-	routeKind := "messages"
-	switch apiFormat {
-	case "openai_chat":
-		routeKind = "chat"
-	case "openai_responses":
-		routeKind = "responses"
+	phases := buildClaudeProxyAttemptPhases(provider, requestBody, requestFeatures)
+	if len(phases) == 0 {
+		return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "no compatible upstream endpoint found"}
 	}
 
 	basePayload := deepCopyJSONMap(requestBody)
@@ -3068,44 +3224,65 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 	if capabilities.SanitizeOrphanToolResults {
 		sanitizedCount := sanitizeOrphanToolResults(basePayload)
 		if sanitizedCount > 0 {
-			appendAdvancedProxyLogf("[CLAUDE_PROXY_SANITIZE] provider=%s route=%s sanitized_orphan_tool_results=%d", advancedProxyProviderLabel(provider), routeKind, sanitizedCount)
+			appendAdvancedProxyLogf("[CLAUDE_PROXY_SANITIZE] provider=%s sanitized_orphan_tool_results=%d", advancedProxyProviderLabel(provider), sanitizedCount)
 		}
 	}
 	if debugEnabled {
 		appendAdvancedProxyLogf(
-			"[CLAUDE_PROXY_REQUEST] provider=%s format=%s route=%s stream=%t capabilities=%s payload=%s",
+			"[CLAUDE_PROXY_REQUEST] provider=%s stream=%t capabilities=%s phases=%s payload=%s",
 			advancedProxyProviderLabel(provider),
-			apiFormat,
-			routeKind,
 			stream,
 			summarizeAdvancedProxyJSON(capabilities, 320),
+			summarizeAdvancedProxyJSON(phases, 640),
 			summarizeAdvancedProxyJSON(basePayload, 1800),
 		)
 	}
 
-	signatureRectified := false
-	budgetRectified := false
-	responsesDowngraded := false
-
-	for {
-		targets := []string{}
+	buildTargets := func(apiFormat string) []string {
 		switch apiFormat {
 		case "openai_chat":
-			targets = buildOpenAIChatCheckEndpointCandidates(provider.BaseURL)
+			return buildOpenAIChatCheckEndpointCandidates(provider.BaseURL)
 		case "openai_responses":
-			targets = buildResponsesEndpointCandidates(provider.BaseURL)
+			return buildResponsesEndpointCandidates(provider.BaseURL)
 		default:
-			targets = []string{resolveAnthropicMessagesEndpoint(provider.BaseURL)}
+			return []string{resolveAnthropicMessagesEndpoint(provider.BaseURL)}
 		}
-		if len(targets) == 0 {
-			return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "provider endpoint is empty"}
+	}
+	buildClaudeRouteTrace := func(base []AdvancedProxyRequestRouteStep, routeKind string, source string, status string) []AdvancedProxyRequestRouteStep {
+		return appendAdvancedProxyRouteTraceStep(base, routeKind, source, status)
+	}
+	buildClaudePhaseTraceBase := func(phaseIndex int) []AdvancedProxyRequestRouteStep {
+		trace := make([]AdvancedProxyRequestRouteStep, 0, phaseIndex+1)
+		for index := 0; index < phaseIndex && index < len(phases); index++ {
+			trace = appendAdvancedProxyRouteTraceStep(trace, phases[index].routeKind, phases[index].source, "failed")
 		}
-		lastStatus := http.StatusBadGateway
-		lastMessage := "no compatible upstream endpoint found"
+		return trace
+	}
 
+	fallbackModel := firstNonEmpty(strings.TrimSpace(provider.Model), strings.TrimSpace(toStringValue(basePayload["model"])))
+	lastStatus := http.StatusBadGateway
+	lastMessage := "no compatible upstream endpoint found"
+	for phaseIndex, phase := range phases {
+		var nextPhase *claudeProxyAttemptPhase
+		if phaseIndex+1 < len(phases) {
+			nextPhase = &phases[phaseIndex+1]
+		}
+		phaseTraceBase := buildClaudePhaseTraceBase(phaseIndex)
+		currentRouteSource := phase.source
 		payload := deepCopyJSONMap(basePayload)
+		signatureRectified := false
+		budgetRectified := false
+
+	retryPhase:
+		targets := buildTargets(phase.apiFormat)
+		if len(targets) == 0 {
+			lastStatus = http.StatusBadGateway
+			lastMessage = "provider endpoint is empty"
+			continue
+		}
+
 		var transformed map[string]any
-		switch apiFormat {
+		switch phase.apiFormat {
 		case "openai_chat":
 			transformed = anthropicRequestToOpenAIChat(payload, provider)
 		case "openai_responses":
@@ -3113,179 +3290,195 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 		default:
 			transformed = payload
 		}
+		resolvedPhaseModel := firstNonEmpty(strings.TrimSpace(toStringValue(transformed["model"])), fallbackModel)
 		requestSnapshot, _ := json.Marshal(transformed)
 		if debugEnabled {
 			appendAdvancedProxyLogf(
-				"[CLAUDE_PROXY_TRANSFORM] provider=%s format=%s route=%s transformed=%s",
+				"[CLAUDE_PROXY_TRANSFORM] provider=%s format=%s route=%s source=%s transformed=%s",
 				advancedProxyProviderLabel(provider),
-				apiFormat,
-				routeKind,
+				phase.apiFormat,
+				phase.routeKind,
+				currentRouteSource,
 				summarizeAdvancedProxyJSON(transformed, 2200),
 			)
 		}
 
+		advanceToNextPhase := false
 		for _, targetURL := range targets {
-			advancedProxyRuntime.MarkDispatch("claude", provider, routeKind, targetURL)
-			fallbackModel := firstNonEmpty(strings.TrimSpace(provider.Model), strings.TrimSpace(toStringValue(basePayload["model"])))
-			if stream && (apiFormat == "openai_chat" || apiFormat == "openai_responses") {
+			advancedProxyRuntime.MarkDispatch("claude", provider, phase.routeKind, targetURL)
+			if stream {
 				rawTransformed, err := json.Marshal(transformed)
 				if err != nil {
-					advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
+					advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, false)
 					observeAdvancedProxyAttempt("claude", provider, 0, 0, err)
 					return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "invalid upstream JSON request"}
 				}
 				attemptStartedAt := time.Now()
-				statusCode, responseHeaders, rawResponse, streamBody, elapsed, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, apiFormat, requestHeaders, stream), rawTransformed, timeoutSeconds, true)
+				statusCode, responseHeaders, rawResponse, streamBody, elapsed, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, phase.apiFormat, requestHeaders, stream), rawTransformed, timeoutSeconds, true)
 				if err != nil {
-					advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
+					advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, false)
 					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, err)
 					if debugEnabled {
-						appendAdvancedProxyLogf("[CLAUDE_PROXY_STREAM_ERROR] provider=%s format=%s route=%s endpoint=%s detail=%s", advancedProxyProviderLabel(provider), apiFormat, routeKind, targetURL, previewAdvancedProxyText(err.Error(), 320))
+						appendAdvancedProxyLogf("[CLAUDE_PROXY_STREAM_ERROR] provider=%s format=%s route=%s endpoint=%s detail=%s", advancedProxyProviderLabel(provider), phase.apiFormat, phase.routeKind, targetURL, previewAdvancedProxyText(err.Error(), 320))
 					}
-					recordAdvancedProxyClaudeAttempt("claude", buildAdvancedProxyClaudeInboundEndpoint(), routeKind, provider, targetURL, rawTransformed, nil, nil, stream, http.StatusBadGateway, elapsed, err.Error())
+					recordAdvancedProxyClaudeAttemptWithTrace("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, rawTransformed, resolvedPhaseModel, nil, nil, stream, http.StatusBadGateway, elapsed, err.Error(), buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"))
 					return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: err.Error()}
 				}
 				if statusCode < 200 || statusCode >= 300 {
-					advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
+					advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, false)
 					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
 					if streamBody != nil {
 						streamBody.Close()
 					}
 					errorMessage := summarizeAdvancedProxyBody(rawResponse)
+					lastStatus = statusCode
+					lastMessage = firstNonEmpty(errorMessage, fmt.Sprintf("HTTP %d", statusCode))
 					if debugEnabled {
-						appendAdvancedProxyLogf("[CLAUDE_PROXY_STREAM_REJECT] provider=%s format=%s route=%s endpoint=%s status=%d detail=%s", advancedProxyProviderLabel(provider), apiFormat, routeKind, targetURL, statusCode, errorMessage)
+						appendAdvancedProxyLogf("[CLAUDE_PROXY_STREAM_REJECT] provider=%s format=%s route=%s endpoint=%s status=%d detail=%s", advancedProxyProviderLabel(provider), phase.apiFormat, phase.routeKind, targetURL, statusCode, errorMessage)
 					}
-					recordAdvancedProxyClaudeAttempt("claude", buildAdvancedProxyClaudeInboundEndpoint(), routeKind, provider, targetURL, rawTransformed, nil, rawResponse, stream, statusCode, elapsed, errorMessage)
-					if apiFormat == "openai_responses" && !responsesDowngraded && shouldFallbackClaudeResponsesToOpenAIChat(statusCode, errorMessage, requestFeatures) {
+					recordAdvancedProxyClaudeAttemptWithTrace("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, rawTransformed, resolvedPhaseModel, nil, rawResponse, stream, statusCode, elapsed, errorMessage, buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"))
+					if nextPhase != nil && shouldAdvanceClaudeProxyPhase(phase, *nextPhase, statusCode, rawResponse, requestFeatures) {
 						if debugEnabled {
-							appendAdvancedProxyLogf("[CLAUDE_PROXY_DOWNGRADE] provider=%s from=openai_responses to=openai_chat reason=%s", advancedProxyProviderLabel(provider), previewAdvancedProxyText(errorMessage, 220))
+							appendAdvancedProxyLogf(
+								"[CLAUDE_PROXY_FALLBACK] provider=%s from=%s to=%s scope=%s reason=%s",
+								advancedProxyProviderLabel(provider),
+								phase.routeKind,
+								nextPhase.routeKind,
+								previewAdvancedProxyText(nextPhase.preferenceScopeKey, 160),
+								previewAdvancedProxyText(errorMessage, 220),
+							)
 						}
-						apiFormat = "openai_chat"
-						routeKind = "chat"
-						responsesDowngraded = true
-						goto retryProvider
+						advanceToNextPhase = true
+						break
 					}
 					return providerAttemptResult{
 						StatusCode: statusCode,
 						Message:    firstNonEmpty(errorMessage, fmt.Sprintf("HTTP %d", statusCode)),
 					}
 				}
-				advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, true)
+				advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, true)
 				observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
-				if originalAPIFormat == "openai_chat" && apiFormat == "openai_responses" {
-					changed, persistErr := persistClaudeProviderAPIFormat(provider, "openai_responses")
-					if persistErr != nil && debugEnabled {
-						appendAdvancedProxyLogf("[CLAUDE_PROXY_PERSIST_ERROR] provider=%s from=%s to=openai_responses detail=%s", advancedProxyProviderLabel(provider), originalAPIFormat, previewAdvancedProxyText(persistErr.Error(), 220))
-					}
-					if changed && debugEnabled {
-						appendAdvancedProxyLogf("[CLAUDE_PROXY_PERSIST] provider=%s from=%s to=openai_responses", advancedProxyProviderLabel(provider), originalAPIFormat)
+				if phase.preferenceScopeKey != "" {
+					setAdvancedProxyClaudeProtocolPreference(phase.preferenceScopeKey, phase.preferenceValue)
+					if debugEnabled {
+						preferName := describeAdvancedProxyClaudeProtocolPreference(phase.preferenceValue)
+						appendAdvancedProxyLogf("[CLAUDE_PROXY_PREFERENCE_SET] provider=%s scope=%s prefer=%s route=%s", advancedProxyProviderLabel(provider), previewAdvancedProxyText(phase.preferenceScopeKey, 160), preferName, phase.routeKind)
 					}
 				}
 				return providerAttemptResult{
 					StatusCode: http.StatusOK,
 					Headers:    responseHeaders,
 					StreamBody: streamBody,
-					APIFormat:  apiFormat,
+					APIFormat:  phase.apiFormat,
 					Model:      fallbackModel,
 					RecordCtx: &advancedProxyStreamRequestRecordContext{
 						AppType:         "claude",
 						ClientRoute:     "messages",
 						InboundEndpoint: buildAdvancedProxyClaudeInboundEndpoint(),
-						OutboundRoute:   routeKind,
-						Source:          "direct",
+						OutboundRoute:   phase.routeKind,
+						RouteTrace:      buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "success"),
+						Source:          currentRouteSource,
 						Provider:        provider,
 						TargetURL:       targetURL,
 						RequestBody:     rawTransformed,
+						ResolvedModel:   resolvedPhaseModel,
 						StartedAt:       attemptStartedAt,
-						ObservedFormat:  apiFormat,
+						ObservedFormat:  phase.apiFormat,
 					},
 				}
 			}
-			statusCode, responseHeaders, rawResponse, elapsed, err := performJSONUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, apiFormat, requestHeaders, stream), transformed, timeoutSeconds)
+
+			statusCode, responseHeaders, rawResponse, elapsed, err := performJSONUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, phase.apiFormat, requestHeaders, stream), transformed, timeoutSeconds)
 			if err != nil {
-				advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
+				advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, false)
 				observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, err)
 				if debugEnabled {
-					appendAdvancedProxyLogf("[CLAUDE_PROXY_ERROR] provider=%s format=%s route=%s endpoint=%s detail=%s", advancedProxyProviderLabel(provider), apiFormat, routeKind, targetURL, previewAdvancedProxyText(err.Error(), 320))
+					appendAdvancedProxyLogf("[CLAUDE_PROXY_ERROR] provider=%s format=%s route=%s endpoint=%s detail=%s", advancedProxyProviderLabel(provider), phase.apiFormat, phase.routeKind, targetURL, previewAdvancedProxyText(err.Error(), 320))
 				}
-				recordAdvancedProxyClaudeAttempt("claude", buildAdvancedProxyClaudeInboundEndpoint(), routeKind, provider, targetURL, requestSnapshot, nil, nil, stream, http.StatusBadGateway, elapsed, err.Error())
+				recordAdvancedProxyClaudeAttemptWithTrace("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, nil, stream, http.StatusBadGateway, elapsed, err.Error(), buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"))
 				return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: err.Error()}
 			}
 			if statusCode < 200 || statusCode >= 300 {
 				errorMessage := normalizeAnthropicErrorMessage(rawResponse)
-				if debugEnabled {
-					appendAdvancedProxyLogf("[CLAUDE_PROXY_REJECT] provider=%s format=%s route=%s endpoint=%s status=%d detail=%s raw=%s", advancedProxyProviderLabel(provider), apiFormat, routeKind, targetURL, statusCode, previewAdvancedProxyText(errorMessage, 320), summarizeAdvancedProxyBody(rawResponse))
-				}
-				if apiFormat == "anthropic" && !signatureRectified && shouldRectifyThinkingSignature(errorMessage, config.Rectifier) && rectifyThinkingSignature(basePayload) {
-					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
-					recordAdvancedProxyClaudeAttempt("claude", buildAdvancedProxyClaudeInboundEndpoint(), routeKind, provider, targetURL, requestSnapshot, nil, rawResponse, stream, statusCode, elapsed, errorMessage)
-					signatureRectified = true
-					goto retryProvider
-				}
-				if apiFormat == "anthropic" && !budgetRectified && shouldRectifyThinkingBudget(errorMessage, config.Rectifier) && rectifyThinkingBudget(basePayload) {
-					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
-					recordAdvancedProxyClaudeAttempt("claude", buildAdvancedProxyClaudeInboundEndpoint(), routeKind, provider, targetURL, requestSnapshot, nil, rawResponse, stream, statusCode, elapsed, errorMessage)
-					budgetRectified = true
-					goto retryProvider
-				}
-				if apiFormat == "openai_responses" && !responsesDowngraded && shouldFallbackClaudeResponsesToOpenAIChat(statusCode, errorMessage, requestFeatures) {
-					advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
-					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
-					recordAdvancedProxyClaudeAttempt("claude", buildAdvancedProxyClaudeInboundEndpoint(), routeKind, provider, targetURL, requestSnapshot, nil, rawResponse, stream, statusCode, elapsed, errorMessage)
-					if debugEnabled {
-						appendAdvancedProxyLogf("[CLAUDE_PROXY_DOWNGRADE] provider=%s from=openai_responses to=openai_chat reason=%s", advancedProxyProviderLabel(provider), previewAdvancedProxyText(errorMessage, 220))
-					}
-					apiFormat = "openai_chat"
-					routeKind = "chat"
-					responsesDowngraded = true
-					goto retryProvider
-				}
-				advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
-				observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
 				lastStatus = statusCode
 				lastMessage = firstNonEmpty(errorMessage, fmt.Sprintf("HTTP %d", statusCode))
-				recordAdvancedProxyClaudeAttempt("claude", buildAdvancedProxyClaudeInboundEndpoint(), routeKind, provider, targetURL, requestSnapshot, nil, rawResponse, stream, statusCode, elapsed, lastMessage)
-				if isRetryableCheckStatus(statusCode) && (apiFormat == "openai_chat" || apiFormat == "openai_responses") {
+				if debugEnabled {
+					appendAdvancedProxyLogf("[CLAUDE_PROXY_REJECT] provider=%s format=%s route=%s endpoint=%s status=%d detail=%s raw=%s", advancedProxyProviderLabel(provider), phase.apiFormat, phase.routeKind, targetURL, statusCode, previewAdvancedProxyText(errorMessage, 320), summarizeAdvancedProxyBody(rawResponse))
+				}
+				if phase.apiFormat == "anthropic" && !signatureRectified && shouldRectifyThinkingSignature(errorMessage, config.Rectifier) && rectifyThinkingSignature(payload) {
+					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
+					recordAdvancedProxyClaudeAttemptWithTrace("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, rawResponse, stream, statusCode, elapsed, errorMessage, buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"))
+					phaseTraceBase = buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed")
+					currentRouteSource = "rectified"
+					signatureRectified = true
+					goto retryPhase
+				}
+				if phase.apiFormat == "anthropic" && !budgetRectified && shouldRectifyThinkingBudget(errorMessage, config.Rectifier) && rectifyThinkingBudget(payload) {
+					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
+					recordAdvancedProxyClaudeAttemptWithTrace("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, rawResponse, stream, statusCode, elapsed, errorMessage, buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"))
+					phaseTraceBase = buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed")
+					currentRouteSource = "rectified"
+					budgetRectified = true
+					goto retryPhase
+				}
+				advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, false)
+				observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
+				recordAdvancedProxyClaudeAttemptWithTrace("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, rawResponse, stream, statusCode, elapsed, errorMessage, buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"))
+				if nextPhase != nil && shouldAdvanceClaudeProxyPhase(phase, *nextPhase, statusCode, rawResponse, requestFeatures) {
+					if debugEnabled {
+						appendAdvancedProxyLogf(
+							"[CLAUDE_PROXY_FALLBACK] provider=%s from=%s to=%s scope=%s reason=%s",
+							advancedProxyProviderLabel(provider),
+							phase.routeKind,
+							nextPhase.routeKind,
+							previewAdvancedProxyText(nextPhase.preferenceScopeKey, 160),
+							previewAdvancedProxyText(errorMessage, 220),
+						)
+					}
+					advanceToNextPhase = true
+					break
+				}
+				if isRetryableCheckStatus(statusCode) && (phase.apiFormat == "openai_chat" || phase.apiFormat == "openai_responses") {
 					continue
 				}
 				return providerAttemptResult{
-					StatusCode: lastStatus,
-					Message:    lastMessage,
+					StatusCode: statusCode,
+					Message:    firstNonEmpty(errorMessage, fmt.Sprintf("HTTP %d", statusCode)),
 				}
 			}
 
 			responseMap := map[string]any{}
 			if err := json.Unmarshal(rawResponse, &responseMap); err != nil {
-				advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, false)
-				recordAdvancedProxyClaudeAttempt("claude", buildAdvancedProxyClaudeInboundEndpoint(), routeKind, provider, targetURL, requestSnapshot, nil, rawResponse, stream, http.StatusBadGateway, elapsed, "invalid upstream JSON response")
+				advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, false)
+				recordAdvancedProxyClaudeAttemptWithTrace("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, rawResponse, stream, http.StatusBadGateway, elapsed, "invalid upstream JSON response", buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"))
 				return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "invalid upstream JSON response"}
 			}
-			switch apiFormat {
+			switch phase.apiFormat {
 			case "openai_chat":
 				responseMap = openAIChatToAnthropic(responseMap, fallbackModel, anthropicThinkingEnabled(requestBody))
 			case "openai_responses":
 				responseMap = openAIResponsesToAnthropic(responseMap, fallbackModel)
 			}
-			advancedProxyRuntime.MarkResult("claude", provider, routeKind, targetURL, true)
+			advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, true)
 			observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
-			if originalAPIFormat == "openai_chat" && apiFormat == "openai_responses" {
-				changed, persistErr := persistClaudeProviderAPIFormat(provider, "openai_responses")
-				if persistErr != nil && debugEnabled {
-					appendAdvancedProxyLogf("[CLAUDE_PROXY_PERSIST_ERROR] provider=%s from=%s to=openai_responses detail=%s", advancedProxyProviderLabel(provider), originalAPIFormat, previewAdvancedProxyText(persistErr.Error(), 220))
-				}
-				if changed && debugEnabled {
-					appendAdvancedProxyLogf("[CLAUDE_PROXY_PERSIST] provider=%s from=%s to=openai_responses", advancedProxyProviderLabel(provider), originalAPIFormat)
+			if phase.preferenceScopeKey != "" {
+				setAdvancedProxyClaudeProtocolPreference(phase.preferenceScopeKey, phase.preferenceValue)
+				if debugEnabled {
+					preferName := describeAdvancedProxyClaudeProtocolPreference(phase.preferenceValue)
+					appendAdvancedProxyLogf("[CLAUDE_PROXY_PREFERENCE_SET] provider=%s scope=%s prefer=%s route=%s", advancedProxyProviderLabel(provider), previewAdvancedProxyText(phase.preferenceScopeKey, 160), preferName, phase.routeKind)
 				}
 			}
-			recordAdvancedProxyClaudeAttempt("claude", buildAdvancedProxyClaudeInboundEndpoint(), routeKind, provider, targetURL, requestSnapshot, responseMap, rawResponse, stream, http.StatusOK, elapsed, "")
+			recordAdvancedProxyClaudeAttemptWithTrace("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, responseMap, rawResponse, stream, http.StatusOK, elapsed, "", buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "success"))
 			return providerAttemptResult{Response: responseMap, StatusCode: http.StatusOK, Headers: responseHeaders}
 		}
 
+		if advanceToNextPhase {
+			continue
+		}
 		return providerAttemptResult{StatusCode: lastStatus, Message: lastMessage}
-
-	retryProvider:
-		continue
 	}
+
+	return providerAttemptResult{StatusCode: lastStatus, Message: lastMessage}
 }
 
 func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvider, routeKind string, rawBody []byte, stream bool, config AdvancedProxyConfig) rawProviderAttemptResult {
@@ -3408,6 +3601,16 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 		}
 		phases = append(phases, phase)
 	}
+	buildRouteTraceSnapshot := func(currentIndex int, currentStatus string) []AdvancedProxyRequestRouteStep {
+		trace := make([]AdvancedProxyRequestRouteStep, 0, currentIndex+1)
+		for index := 0; index < currentIndex && index < len(phases); index++ {
+			trace = appendAdvancedProxyRouteTraceStep(trace, phases[index].outboundRoute, phases[index].source, "failed")
+		}
+		if currentIndex >= 0 && currentIndex < len(phases) {
+			trace = appendAdvancedProxyRouteTraceStep(trace, phases[currentIndex].outboundRoute, phases[currentIndex].source, currentStatus)
+		}
+		return trace
+	}
 
 	switch routeKind {
 	case "chat", "responses", "responses_compact":
@@ -3516,6 +3719,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 			lastErrorType = "invalid_request_error"
 			continue
 		}
+		phaseModel := resolveAdvancedProxyRecordedModel("", phase.requestBody, provider.Model)
 
 		advanceToNextPhase := false
 		for _, targetURL := range targets {
@@ -3539,7 +3743,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 				observeAdvancedProxyAttempt(appType, provider, statusCode, elapsed, err)
 				message := formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, fmt.Sprintf("upstream request failed (%s, outbound=%s)", err.Error(), describeOutboundProxyMode()))
 				appendAdvancedProxyLogf("[OPENAI_PROXY_ERROR] status=%d app=%s route=%s provider=%s endpoint=%s detail=%s", http.StatusBadGateway, appType, phase.outboundRoute, providerLabel, targetURL, previewAdvancedProxyText(message, 260))
-				recordAdvancedProxyOpenAIAttempt(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, nil, stream, http.StatusBadGateway, elapsed, message)
+				recordAdvancedProxyOpenAIAttemptWithTrace(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, phaseModel, nil, stream, http.StatusBadGateway, elapsed, message, buildRouteTraceSnapshot(phaseIndex, "failed"))
 				return rawProviderAttemptResult{
 					StatusCode: http.StatusBadGateway,
 					Message:    message,
@@ -3585,7 +3789,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 					lastErrorType = healingType
 				}
 				appendAdvancedProxyLogf("[OPENAI_PROXY_FAIL] status=%d app=%s route=%s provider=%s endpoint=%s detail=%s", statusCode, appType, phase.outboundRoute, providerLabel, targetURL, previewAdvancedProxyText(lastMessage, 260))
-				recordAdvancedProxyOpenAIAttempt(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, body, stream, statusCode, elapsed, lastMessage)
+				recordAdvancedProxyOpenAIAttemptWithTrace(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, phaseModel, body, stream, statusCode, elapsed, lastMessage, buildRouteTraceSnapshot(phaseIndex, "failed"))
 				if isRetryableCheckStatus(statusCode) {
 					continue
 				}
@@ -3655,7 +3859,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 						targetURL,
 						previewAdvancedProxyText(transformErr.Error(), 260),
 					)
-					recordAdvancedProxyOpenAIAttempt(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, nil, stream, lastStatus, elapsed, lastMessage)
+					recordAdvancedProxyOpenAIAttemptWithTrace(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, phaseModel, nil, stream, lastStatus, elapsed, lastMessage, buildRouteTraceSnapshot(phaseIndex, "failed"))
 					if phaseIndex < len(phases)-1 {
 						advanceToNextPhase = true
 						break
@@ -3697,15 +3901,17 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 					ClientRoute:     routeKind,
 					InboundEndpoint: buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind),
 					OutboundRoute:   phase.outboundRoute,
+					RouteTrace:      buildRouteTraceSnapshot(phaseIndex, "success"),
 					Source:          phase.source,
 					Provider:        provider,
 					TargetURL:       targetURL,
 					RequestBody:     phase.requestBody,
+					ResolvedModel:   phaseModel,
 					StartedAt:       attemptStartedAt,
 					ObservedFormat:  observedFormat,
 				}
 			} else {
-				recordAdvancedProxyOpenAIAttempt(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, result.Body, stream, statusCode, elapsed, "")
+				recordAdvancedProxyOpenAIAttemptWithTrace(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, phaseModel, result.Body, stream, statusCode, elapsed, "", buildRouteTraceSnapshot(phaseIndex, "success"))
 			}
 			appendAdvancedProxyLogf("[OPENAI_PROXY_OK] status=%d app=%s route=%s provider=%s endpoint=%s stream=%t", statusCode, appType, phase.outboundRoute, providerLabel, targetURL, stream)
 			return result
@@ -4052,6 +4258,20 @@ func (a *App) handleAdvancedProxyClaude(writer http.ResponseWriter, request *htt
 			}
 			copySelectedHeaders(writer.Header(), result.Headers, "Request-Id", "X-Request-Id")
 			switch result.APIFormat {
+			case "anthropic":
+				writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+				writer.Header().Set("Cache-Control", "no-cache")
+				writer.Header().Set("Connection", "keep-alive")
+				writer.WriteHeader(http.StatusOK)
+				if err := proxyAnthropicStreamToClientWithMetrics(writer, result.StreamBody, result.RecordCtx); err != nil {
+					appendAdvancedProxyLogf(
+						"[CLAUDE_PROXY_STREAM_FORWARD_FAIL] provider=%s endpoint=%s detail=%s",
+						advancedProxyProviderLabel(result.RecordCtx.Provider),
+						result.RecordCtx.TargetURL,
+						previewAdvancedProxyText(err.Error(), 260),
+					)
+				}
+				return
 			case "openai_chat":
 				writeAnthropicSSEFromOpenAIChatStreamWithRecord(writer, result.StreamBody, result.Model, anthropicThinkingEnabled(requestBody), result.RecordCtx)
 			case "openai_responses":
@@ -4096,6 +4316,20 @@ func (a *App) handleAdvancedProxyClaude(writer http.ResponseWriter, request *htt
 			advancedProxyRuntime.Record("claude", forcedProvider.ID, config.Failover, true)
 			copySelectedHeaders(writer.Header(), result.Headers, "Request-Id", "X-Request-Id")
 			switch result.APIFormat {
+			case "anthropic":
+				writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+				writer.Header().Set("Cache-Control", "no-cache")
+				writer.Header().Set("Connection", "keep-alive")
+				writer.WriteHeader(http.StatusOK)
+				if err := proxyAnthropicStreamToClientWithMetrics(writer, result.StreamBody, result.RecordCtx); err != nil {
+					appendAdvancedProxyLogf(
+						"[CLAUDE_PROXY_STREAM_FORWARD_FAIL] provider=%s endpoint=%s detail=%s",
+						advancedProxyProviderLabel(result.RecordCtx.Provider),
+						result.RecordCtx.TargetURL,
+						previewAdvancedProxyText(err.Error(), 260),
+					)
+				}
+				return
 			case "openai_chat":
 				writeAnthropicSSEFromOpenAIChatStreamWithRecord(writer, result.StreamBody, result.Model, anthropicThinkingEnabled(requestBody), result.RecordCtx)
 			case "openai_responses":

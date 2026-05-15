@@ -486,6 +486,7 @@ func resetAdvancedProxyRuntimeForTest(t *testing.T) string {
 	advancedProxyRequestRecords.clear()
 
 	resetAdvancedProxyOpenAIProtocolPreferencesForTests()
+	resetAdvancedProxyClaudeProtocolPreferencesForTests()
 
 	if _, err := saveOutboundProxyConfig(OutboundProxyConfig{Mode: outboundProxyModeDirect}); err != nil {
 		t.Fatalf("save outbound proxy config: %v", err)
@@ -547,15 +548,18 @@ func TestForwardClaudeRequestViaProviderUpdatesRoutingSnapshotForAnthropic(t *te
 	}
 }
 
-func TestForwardClaudeRequestViaProviderPersistsResponsesUpgradeAfterSuccessfulProbe(t *testing.T) {
+func TestForwardClaudeRequestViaProviderUsesMessagesFirstForOpenAIConfiguredProvider(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/v1/responses" {
+		if request.URL.Path != "/v1/messages" {
 			t.Fatalf("unexpected path: %s", request.URL.Path)
 		}
+		if request.Header.Get("x-api-key") != "sk-test" {
+			t.Fatalf("expected anthropic auth header, got %#v", request.Header)
+		}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"id":"resp_test","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`))
+		_, _ = writer.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","model":"claude-sonnet","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
 	}))
 	defer server.Close()
 
@@ -605,23 +609,25 @@ func TestForwardClaudeRequestViaProviderPersistsResponsesUpgradeAfterSuccessfulP
 	if len(saved.Queues.Global.Providers) != 1 {
 		t.Fatalf("expected one saved provider, got %#v", saved.Queues.Global.Providers)
 	}
-	if saved.Queues.Global.Providers[0].APIFormat != "openai_responses" {
-		t.Fatalf("expected provider format persisted as openai_responses, got %#v", saved.Queues.Global.Providers[0])
+	if saved.Queues.Global.Providers[0].APIFormat != "openai_chat" {
+		t.Fatalf("expected provider format to remain openai_chat, got %#v", saved.Queues.Global.Providers[0])
 	}
 }
 
-func TestForwardClaudeRequestViaProviderFallsBackToChatWithoutPersistingResponses(t *testing.T) {
+func TestForwardClaudeRequestViaProviderFallsBackFromMessagesToResponsesAndStoresPreference(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 
+	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requestCount++
 		switch request.URL.Path {
-		case "/v1/responses":
+		case "/v1/messages":
 			writer.Header().Set("Content-Type", "application/json")
 			writer.WriteHeader(http.StatusNotFound)
-			_, _ = writer.Write([]byte(`{"error":{"message":"responses endpoint not found"}}`))
-		case "/v1/chat/completions":
+			_, _ = writer.Write([]byte(`{"error":{"message":"unknown API route"}}`))
+		case "/v1/responses", "/responses":
 			writer.Header().Set("Content-Type", "application/json")
-			_, _ = writer.Write([]byte(`{"id":"chatcmpl_test","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+			_, _ = writer.Write([]byte(`{"id":"resp_test","object":"response","status":"completed","output":[{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`))
 		default:
 			t.Fatalf("unexpected path: %s", request.URL.Path)
 		}
@@ -634,7 +640,7 @@ func TestForwardClaudeRequestViaProviderFallsBackToChatWithoutPersistingResponse
 		Name:      "Claude OpenAI Provider",
 		BaseURL:   server.URL,
 		APIKey:    "sk-test",
-		APIFormat: "openai_chat",
+		APIFormat: "openai_responses",
 	}
 
 	_, err := saveAdvancedProxyConfig(AdvancedProxyConfig{
@@ -664,7 +670,10 @@ func TestForwardClaudeRequestViaProviderFallsBackToChatWithoutPersistingResponse
 	}, http.Header{}, false, AdvancedProxyConfig{})
 
 	if result.StatusCode != http.StatusOK || result.Response == nil {
-		t.Fatalf("expected fallback chat response to succeed, got %#v", result)
+		t.Fatalf("expected fallback responses response to succeed, got %#v", result)
+	}
+	if requestCount != 2 {
+		t.Fatalf("expected one messages attempt and one responses fallback, got %d", requestCount)
 	}
 
 	saved, err := loadAdvancedProxyConfig()
@@ -674,8 +683,29 @@ func TestForwardClaudeRequestViaProviderFallsBackToChatWithoutPersistingResponse
 	if len(saved.Queues.Global.Providers) != 1 {
 		t.Fatalf("expected one saved provider, got %#v", saved.Queues.Global.Providers)
 	}
-	if saved.Queues.Global.Providers[0].APIFormat != "openai_chat" {
-		t.Fatalf("expected provider format to remain openai_chat after fallback, got %#v", saved.Queues.Global.Providers[0])
+	if saved.Queues.Global.Providers[0].APIFormat != "openai_responses" {
+		t.Fatalf("expected provider format to remain unchanged after fallback, got %#v", saved.Queues.Global.Providers[0])
+	}
+
+	scopeKey := resolveAdvancedProxyClaudeProtocolPreferenceScopeKey(provider, "claude-sonnet")
+	if preference, ok := getAdvancedProxyClaudeProtocolPreference(scopeKey); !ok || preference != advancedProxyClaudeProtocolPreferResponses {
+		t.Fatalf("expected responses preference to be persisted for scope %q, got %v %t", scopeKey, preference, ok)
+	}
+
+	records := advancedProxyRequestRecords.list(10)
+	if len(records) == 0 {
+		t.Fatalf("expected fallback trace record, got %#v", records)
+	}
+	trace := records[0].RouteTrace
+	if len(trace) < 2 {
+		t.Fatalf("expected messages->responses fallback trace, got %#v", trace)
+	}
+	if trace[0].Route != "messages" || trace[0].Status != "failed" {
+		t.Fatalf("expected first trace step to capture failed messages route, got %#v", trace)
+	}
+	lastStep := trace[len(trace)-1]
+	if lastStep.Route != "responses" || lastStep.Status != "success" {
+		t.Fatalf("expected final trace step to capture successful responses fallback, got %#v", trace)
 	}
 }
 
@@ -683,19 +713,25 @@ func TestForwardClaudeRequestViaProviderUpdatesRoutingSnapshotForOpenAIChatConfi
 	resetAdvancedProxyRuntimeForTest(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/v1/responses" {
+		if request.URL.Path != "/v1/messages" {
 			t.Fatalf("unexpected path: %s", request.URL.Path)
 		}
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = writer.Write([]byte(strings.Join([]string{
-			`event: response.created`,
-			`data: {"type":"response.created","response":{"id":"resp_test","model":"gpt-5.4"}}`,
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","model":"claude-sonnet","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}`,
 			"",
-			`event: response.output_text.delta`,
-			`data: {"type":"response.output_text.delta","delta":"hi"}`,
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
 			"",
-			`event: response.completed`,
-			`data: {"type":"response.completed","response":{"id":"resp_test","model":"gpt-5.4","usage":{"input_tokens":1,"output_tokens":1}}}`,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`,
+			"",
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}`,
+			"",
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
 			"",
 		}, "\n")))
 	}))
@@ -727,10 +763,10 @@ func TestForwardClaudeRequestViaProviderUpdatesRoutingSnapshotForOpenAIChatConfi
 	if state.ProviderID != provider.ID || state.ProviderRowKey != provider.RowKey {
 		t.Fatalf("unexpected provider binding: %#v", state)
 	}
-	if state.RouteKind != "responses" || state.Status != "success" {
+	if state.RouteKind != "messages" || state.Status != "success" {
 		t.Fatalf("unexpected claude streaming route state: %#v", state)
 	}
-	if state.TargetURL != server.URL+"/v1/responses" {
+	if state.TargetURL != server.URL+"/v1/messages" {
 		t.Fatalf("unexpected target url: %#v", state)
 	}
 }
@@ -762,6 +798,8 @@ func TestForwardClaudeRequestViaProviderUpdatesRoutingSnapshotForOpenAIResponses
 		APIKey:    "sk-test",
 		APIFormat: "openai_responses",
 	}
+	scopeKey := resolveAdvancedProxyClaudeProtocolPreferenceScopeKey(provider, "gpt-5.4")
+	setAdvancedProxyClaudeProtocolPreference(scopeKey, advancedProxyClaudeProtocolPreferResponses)
 
 	result := forwardClaudeRequestViaProvider(provider, map[string]any{
 		"model":  "gpt-5.4",
@@ -788,7 +826,46 @@ func TestForwardClaudeRequestViaProviderUpdatesRoutingSnapshotForOpenAIResponses
 	}
 }
 
-func TestForwardClaudeRequestViaProviderFallsBackFromResponsesToChat(t *testing.T) {
+func TestForwardClaudeRequestViaProviderUsesStoredResponsesPreferenceForOpenAIConfiguredProvider(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	requestPaths := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requestPaths = append(requestPaths, request.URL.Path)
+		if request.URL.Path != "/v1/responses" && request.URL.Path != "/responses" {
+			t.Fatalf("expected stored preference to route directly to responses, got %s", request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"resp_test","object":"response","status":"completed","output":[{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"pref ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "claude-openai-provider",
+		RowKey:    "row-claude-openai",
+		Name:      "Claude OpenAI Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test",
+		APIFormat: "openai_chat",
+	}
+	scopeKey := resolveAdvancedProxyClaudeProtocolPreferenceScopeKey(provider, "claude-sonnet")
+	setAdvancedProxyClaudeProtocolPreference(scopeKey, advancedProxyClaudeProtocolPreferResponses)
+
+	result := forwardClaudeRequestViaProvider(provider, map[string]any{
+		"model": "claude-sonnet",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "hello"},
+		},
+	}, http.Header{}, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK || result.Response == nil {
+		t.Fatalf("expected stored-preference responses request to succeed, got %#v", result)
+	}
+	if len(requestPaths) != 1 {
+		t.Fatalf("expected one direct responses attempt after preference hit, got %#v", requestPaths)
+	}
+}
+
+func TestForwardClaudeRequestViaProviderFallsBackFromResponsesToMessages(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 
 	requestCount := 0
@@ -797,11 +874,11 @@ func TestForwardClaudeRequestViaProviderFallsBackFromResponsesToChat(t *testing.
 		switch request.URL.Path {
 		case "/v1/responses", "/responses":
 			writer.Header().Set("Content-Type", "application/json")
-			writer.WriteHeader(http.StatusNotFound)
-			_, _ = writer.Write([]byte(`{"error":{"message":"OpenAI Responses endpoint is not supported on this upstream"}}`))
-		case "/v1/chat/completions", "/chat/completions":
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = writer.Write([]byte(`{"error":{"message":"field messages is required (request id: req_test_123)"}}`))
+		case "/v1/messages":
 			writer.Header().Set("Content-Type", "application/json")
-			_, _ = writer.Write([]byte(`{"id":"chatcmpl_test","object":"chat.completion","model":"gpt-5.5","choices":[{"index":0,"message":{"role":"assistant","content":"fallback ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`))
+			_, _ = writer.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","model":"claude-haiku","content":[{"type":"text","text":"fallback ok"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":2}}`))
 		default:
 			t.Fatalf("unexpected path: %s", request.URL.Path)
 		}
@@ -816,6 +893,8 @@ func TestForwardClaudeRequestViaProviderFallsBackFromResponsesToChat(t *testing.
 		APIKey:    "sk-test",
 		APIFormat: "openai_responses",
 	}
+	scopeKey := resolveAdvancedProxyClaudeProtocolPreferenceScopeKey(provider, "gpt-5.5")
+	setAdvancedProxyClaudeProtocolPreference(scopeKey, advancedProxyClaudeProtocolPreferResponses)
 
 	result := forwardClaudeRequestViaProvider(provider, map[string]any{
 		"model": "gpt-5.5",
@@ -827,30 +906,48 @@ func TestForwardClaudeRequestViaProviderFallsBackFromResponsesToChat(t *testing.
 		t.Fatalf("expected successful chat fallback, got %#v", result)
 	}
 	if requestCount != 2 {
-		t.Fatalf("expected one responses attempt and one chat fallback, got %d", requestCount)
+		t.Fatalf("expected one responses attempt and one messages fallback, got %d", requestCount)
 	}
 
 	snapshot := advancedProxyRuntime.GetRoutingSnapshot()
 	state := snapshot.Apps["claude"]
-	if state.RouteKind != "chat" || state.Status != "success" {
-		t.Fatalf("expected chat fallback route state, got %#v", state)
+	if state.RouteKind != "messages" || state.Status != "success" {
+		t.Fatalf("expected messages fallback route state, got %#v", state)
 	}
-	if state.TargetURL != server.URL+"/v1/chat/completions" && state.TargetURL != server.URL+"/chat/completions" {
+	if state.TargetURL != server.URL+"/v1/messages" {
 		t.Fatalf("unexpected fallback target url: %#v", state)
+	}
+	records := advancedProxyRequestRecords.list(10)
+	if len(records) == 0 {
+		t.Fatalf("expected fallback trace record, got %#v", records)
+	}
+	trace := records[0].RouteTrace
+	if len(trace) < 2 {
+		t.Fatalf("expected claude fallback trace with at least 2 steps, got %#v", trace)
+	}
+	if trace[0].Route != "responses" || trace[0].Status != "failed" {
+		t.Fatalf("expected first claude trace step to be failed responses, got %#v", trace)
+	}
+	lastStep := trace[len(trace)-1]
+	if lastStep.Route != "messages" || lastStep.Status != "success" {
+		t.Fatalf("expected final claude trace step to be successful messages fallback, got %#v", trace)
+	}
+	if preference, ok := getAdvancedProxyClaudeProtocolPreference(scopeKey); !ok || preference != advancedProxyClaudeProtocolPreferAnthropic {
+		t.Fatalf("expected messages preference to be persisted for scope %q, got %v %t", scopeKey, preference, ok)
 	}
 }
 
-func TestForwardClaudeRequestViaProviderPromotesChatConfiguredWebSearchToResponses(t *testing.T) {
+func TestForwardClaudeRequestViaProviderPrefersMessagesForWebSearch(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requestCount++
-		if request.URL.Path != "/v1/responses" && request.URL.Path != "/responses" {
+		if request.URL.Path != "/v1/messages" {
 			t.Fatalf("unexpected path: %s", request.URL.Path)
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"id":"resp_test","object":"response","model":"gpt-5.5","status":"completed","output":[{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"search ok"}]}],"usage":{"input_tokens":3,"output_tokens":2}}`))
+		_, _ = writer.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","model":"claude-sonnet","content":[{"type":"text","text":"search ok"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":2}}`))
 	}))
 	defer server.Close()
 
@@ -877,25 +974,34 @@ func TestForwardClaudeRequestViaProviderPromotesChatConfiguredWebSearchToRespons
 		},
 	}, http.Header{}, false, AdvancedProxyConfig{})
 	if result.StatusCode != http.StatusOK || result.Response == nil {
-		t.Fatalf("expected promoted responses request to succeed, got %#v", result)
+		t.Fatalf("expected messages request to succeed, got %#v", result)
 	}
 	if requestCount != 1 {
-		t.Fatalf("expected single promoted responses attempt, got %d", requestCount)
+		t.Fatalf("expected single messages attempt, got %d", requestCount)
 	}
 
 	snapshot := advancedProxyRuntime.GetRoutingSnapshot()
 	state := snapshot.Apps["claude"]
-	if state.RouteKind != "responses" || state.Status != "success" {
-		t.Fatalf("expected responses route after promotion, got %#v", state)
+	if state.RouteKind != "messages" || state.Status != "success" {
+		t.Fatalf("expected messages route for web_search, got %#v", state)
 	}
 }
 
-func TestForwardClaudeRequestViaProviderDoesNotFallbackWebSearchToChat(t *testing.T) {
+func TestForwardClaudeRequestViaProviderFallsBackWebSearchFromMessagesToResponsesWithoutChat(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requestCount++
+		if request.URL.Path == "/v1/chat/completions" || request.URL.Path == "/chat/completions" {
+			t.Fatalf("web_search request should never fallback to chat: %s", request.URL.Path)
+		}
+		if request.URL.Path == "/v1/messages" {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = writer.Write([]byte(`{"error":{"message":"unknown API route"}}`))
+			return
+		}
 		if request.URL.Path != "/v1/responses" && request.URL.Path != "/responses" {
 			t.Fatalf("unexpected path: %s", request.URL.Path)
 		}
@@ -930,8 +1036,8 @@ func TestForwardClaudeRequestViaProviderDoesNotFallbackWebSearchToChat(t *testin
 	if result.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected responses failure to bubble for web_search request, got %#v", result)
 	}
-	if requestCount != 2 {
-		t.Fatalf("expected web_search request to stay on responses candidates only, got %d attempts", requestCount)
+	if requestCount != 3 {
+		t.Fatalf("expected web_search request to try messages then responses candidates only, got %d attempts", requestCount)
 	}
 
 	snapshot := advancedProxyRuntime.GetRoutingSnapshot()
@@ -2328,6 +2434,16 @@ func TestForwardOpenAIRequestViaProviderRecordsAttempts(t *testing.T) {
 	}
 	if got := records[0].ProviderKeyPreview; !strings.Contains(got, "sk-rec") {
 		t.Fatalf("expected masked key preview, got %#v", got)
+	}
+	if len(records[0].RouteTrace) < 2 {
+		t.Fatalf("expected success record to include fallback route trace, got %#v", records[0])
+	}
+	if records[0].RouteTrace[0].Route != "responses" || records[0].RouteTrace[0].Status != "failed" {
+		t.Fatalf("expected first route trace step to capture failed responses, got %#v", records[0].RouteTrace)
+	}
+	lastRouteStep := records[0].RouteTrace[len(records[0].RouteTrace)-1]
+	if lastRouteStep.Route != "chat" || lastRouteStep.Status != "success" {
+		t.Fatalf("expected final route trace step to capture successful chat fallback, got %#v", records[0].RouteTrace)
 	}
 }
 

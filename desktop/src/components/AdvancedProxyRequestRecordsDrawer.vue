@@ -52,7 +52,7 @@
           <article class="request-records-metric">
             <span class="request-records-metric-label">请求数</span>
             <strong class="request-records-metric-value">{{ summary.total }}</strong>
-            <small>最近 {{ records.length }} 条</small>
+            <small>{{ requestCountSubtext }}</small>
           </article>
 
           <article class="request-records-metric">
@@ -82,17 +82,20 @@
           <div class="request-records-board-head">
             <div class="request-records-board-title">
               <strong>请求流水</strong>
-              <span>{{ records.length }} 条</span>
+              <span>{{ filteredRecords.length }} 条</span>
             </div>
 
             <div class="request-records-board-chips">
-              <span
+              <button
                 v-for="item in appSummaryItems"
                 :key="`app-${item.id}`"
-                class="request-records-board-chip"
+                type="button"
+                class="request-records-board-chip request-records-board-chip-toggle"
+                :class="{ 'is-inactive': isAppChipHidden(item.id) }"
+                @click="toggleAppFilter(item.id)"
               >
                 {{ item.label }} {{ item.count }}
-              </span>
+              </button>
               <span
                 v-for="item in routeSummaryItems"
                 :key="`route-${item.id}`"
@@ -104,94 +107,184 @@
           </div>
 
           <div class="request-records-table-wrap">
-            <a-table
-              :data-source="records"
-              :columns="columns"
-              :loading="loading"
-              :pagination="paginationConfig"
-              :scroll="tableScrollConfig"
-              :locale="{ emptyText: '暂无请求记录' }"
-              size="small"
-              row-key="id"
-              class="request-records-table"
+            <a-spin :spinning="loading" class="request-records-table-spin">
+              <div
+                ref="tableScrollRef"
+                class="request-records-table-scroll"
+                :style="{ maxHeight: `${tableScrollY}px` }"
+              >
+                <div
+                  class="request-records-table-stage"
+                  :style="{ width: `${tableLayoutWidth}px`, transform: `translateX(-${tableScrollLeft}px)` }"
+                >
+                  <table
+                    ref="tableElementRef"
+                    class="request-records-table-native"
+                    :style="{ width: `${tableLayoutWidth}px` }"
+                  >
+                    <colgroup>
+                      <col
+                        v-for="column in columns"
+                        :key="`col-${column.key}`"
+                        :style="{ width: resolveColumnWidth(column.width) }"
+                      />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th
+                          v-for="column in columns"
+                          :key="`head-${column.key}`"
+                          class="request-records-table-head"
+                          :class="{
+                            'is-center': column.align === 'center',
+                            'is-actions': column.key === 'actions',
+                          }"
+                        >
+                          {{ column.title }}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody v-if="pagedRecords.length > 0">
+                      <tr v-for="record in pagedRecords" :key="record.id || record.recordedAt">
+                        <td
+                          v-for="column in columns"
+                          :key="`${record.id || record.recordedAt}-${column.key}`"
+                          class="request-records-table-cell"
+                          :class="{
+                            'is-center': column.align === 'center',
+                            'is-actions': column.key === 'actions',
+                          }"
+                        >
+                          <template v-if="column.key === 'time'">
+                            <div class="request-records-time">
+                              <strong>{{ formatTime(record.recordedAt) }}</strong>
+                              <small>{{ formatDate(record.recordedAt) }}</small>
+                            </div>
+                          </template>
+
+                          <template v-else-if="column.key === 'identity'">
+                            <div class="request-records-identity">
+                              <div class="request-records-identity-main">
+                                <span class="request-records-app-pill">{{ formatAppName(record.appType) }}</span>
+                                <strong>{{ record.providerName || '-' }}</strong>
+                              </div>
+                              <small class="request-records-mono">{{ record.model || '未记录模型' }}</small>
+                              <small class="request-records-mono">{{ record.providerKeyPreview || '未记录 key' }}</small>
+                            </div>
+                          </template>
+
+                          <template v-else-if="column.key === 'link'">
+                            <div class="request-records-route">
+                              <div class="request-records-route-line">
+                                <span class="request-records-route-key">入口</span>
+                                <span class="request-records-route-path">{{ summarizeInboundEndpoint(record.inboundEndpoint) }}</span>
+                              </div>
+                              <div class="request-records-route-line">
+                                <span class="request-records-route-key is-meta">协议</span>
+                                <span class="request-records-route-pill">{{ summarizeOutboundRoute(record.outboundRoute) }}</span>
+                              </div>
+                              <div class="request-records-route-line">
+                                <span class="request-records-route-key is-out">出口</span>
+                                <a-tooltip :title="record.upstreamUrl || record.upstreamEndpoint || '-'">
+                                  <span class="request-records-route-path request-records-route-path-out">
+                                    {{ summarizeUpstreamTarget(record.upstreamUrl || record.upstreamEndpoint, record.upstreamEndpoint) }}
+                                  </span>
+                                </a-tooltip>
+                              </div>
+                            </div>
+                          </template>
+
+                          <template v-else-if="column.key === 'route'">
+                            <div class="request-records-routing">
+                              <div
+                                v-for="(step, index) in resolveRouteTraceSteps(record)"
+                                :key="`${record.id || record.recordedAt || 'route'}-${index}-${step.route}-${step.status}`"
+                                class="request-records-routing-line"
+                                :class="resolveRouteTraceLineClass(record, step, index)"
+                              >
+                                <span class="request-records-routing-icon">{{ resolveRouteTraceIcon(record, step, index) }}</span>
+                                <span class="request-records-routing-label">{{ formatRouteTraceLabel(step.route) }}</span>
+                                <span v-if="resolveRouteTraceSourceLabel(step.source)" class="request-records-routing-source">
+                                  {{ resolveRouteTraceSourceLabel(step.source) }}
+                                </span>
+                              </div>
+                            </div>
+                          </template>
+
+                          <template v-else-if="column.key === 'metrics'">
+                            <div class="request-records-metrics">
+                              <strong>{{ formatDuration(record.durationMs) }}</strong>
+                              <small>TTFT {{ formatDuration(record.ttftMs) }} · Gen {{ formatDuration(record.latencyMs) }} · TPS {{ formatTps(record.tps) }}</small>
+                              <small>↑ {{ formatTokenValue(record.inputTokens) }} · ↓ {{ formatTokenValue(record.outputTokens) }}</small>
+                            </div>
+                          </template>
+
+                          <template v-else-if="column.key === 'status'">
+                            <div class="request-records-status">
+                              <a-tag :color="resolveStatusColor(record.statusCode)">
+                                {{ record.statusCode || '-' }}
+                              </a-tag>
+                              <span
+                                class="request-records-source-pill"
+                                :class="`is-${resolveSourceTone(record.source)}`"
+                              >
+                                {{ resolveSourceLabel(record.source) }}
+                              </span>
+                            </div>
+                          </template>
+
+                          <template v-else-if="column.key === 'detail'">
+                            <a-tooltip :title="resolveDetailText(record)">
+                              <div class="request-records-detail-text">
+                                {{ summarizeDetail(record) }}
+                              </div>
+                            </a-tooltip>
+                          </template>
+
+                          <template v-else-if="column.key === 'actions'">
+                            <a-button type="text" size="small" class="request-records-more" @click="openRecordDetail(record)">
+                              <MoreOutlined />
+                            </a-button>
+                          </template>
+                        </td>
+                      </tr>
+                    </tbody>
+                    <tbody v-else>
+                      <tr>
+                        <td :colspan="columns.length" class="request-records-empty-cell">
+                          暂无请求记录
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </a-spin>
+            <div
+              class="request-records-table-hscroll"
+              :class="{ 'is-active': showTableHorizontalScroll }"
             >
-              <template #bodyCell="{ column, record }">
-                <template v-if="column.key === 'time'">
-                  <div class="request-records-time">
-                    <strong>{{ formatTime(record.recordedAt) }}</strong>
-                    <small>{{ formatDate(record.recordedAt) }}</small>
-                  </div>
-                </template>
-
-                <template v-else-if="column.key === 'identity'">
-                  <div class="request-records-identity">
-                    <div class="request-records-identity-main">
-                      <span class="request-records-app-pill">{{ formatAppName(record.appType) }}</span>
-                      <strong>{{ record.providerName || '-' }}</strong>
-                    </div>
-                    <small class="request-records-mono">{{ record.model || '未记录模型' }}</small>
-                    <small class="request-records-mono">{{ record.providerKeyPreview || '未记录 key' }}</small>
-                  </div>
-                </template>
-
-                <template v-else-if="column.key === 'route'">
-                  <div class="request-records-route">
-                    <div class="request-records-route-line">
-                      <span class="request-records-route-key">入口</span>
-                      <span class="request-records-route-path">{{ summarizeInboundEndpoint(record.inboundEndpoint) }}</span>
-                    </div>
-                    <div class="request-records-route-line">
-                      <span class="request-records-route-key is-meta">协议</span>
-                      <span class="request-records-route-pill">{{ summarizeOutboundRoute(record.outboundRoute) }}</span>
-                    </div>
-                    <div class="request-records-route-line">
-                      <span class="request-records-route-key is-out">出口</span>
-                      <a-tooltip :title="record.upstreamUrl || record.upstreamEndpoint || '-'">
-                        <span class="request-records-route-path request-records-route-path-out">
-                          {{ summarizeUpstreamTarget(record.upstreamUrl || record.upstreamEndpoint, record.upstreamEndpoint) }}
-                        </span>
-                      </a-tooltip>
-                    </div>
-                  </div>
-                </template>
-
-                <template v-else-if="column.key === 'metrics'">
-                  <div class="request-records-metrics">
-                    <strong>{{ formatDuration(record.durationMs) }}</strong>
-                    <small>TTFT {{ formatDuration(record.ttftMs) }} · Gen {{ formatDuration(record.latencyMs) }} · TPS {{ formatTps(record.tps) }}</small>
-                    <small>↑ {{ formatTokenValue(record.inputTokens) }} · ↓ {{ formatTokenValue(record.outputTokens) }}</small>
-                  </div>
-                </template>
-
-                <template v-else-if="column.key === 'status'">
-                  <div class="request-records-status">
-                    <a-tag :color="resolveStatusColor(record.statusCode)">
-                      {{ record.statusCode || '-' }}
-                    </a-tag>
-                    <span
-                      class="request-records-source-pill"
-                      :class="`is-${resolveSourceTone(record.source)}`"
-                    >
-                      {{ resolveSourceLabel(record.source) }}
-                    </span>
-                  </div>
-                </template>
-
-                <template v-else-if="column.key === 'detail'">
-                  <a-tooltip :title="resolveDetailText(record)">
-                    <div class="request-records-detail-text">
-                      {{ summarizeDetail(record) }}
-                    </div>
-                  </a-tooltip>
-                </template>
-
-                <template v-else-if="column.key === 'actions'">
-                  <a-button type="text" size="small" class="request-records-more" @click="openRecordDetail(record)">
-                    <MoreOutlined />
-                  </a-button>
-                </template>
-              </template>
-            </a-table>
+              <input
+                ref="tableHorizontalScrollRef"
+                class="request-records-table-hscroll-range"
+                type="range"
+                min="0"
+                :max="Math.max(tableHorizontalMaxScroll, 1)"
+                :value="tableScrollLeft"
+                :disabled="tableHorizontalMaxScroll <= 0"
+                @input="handleTableHorizontalRangeInput"
+              />
+            </div>
+            <div v-if="filteredRecords.length > REQUEST_RECORD_PAGE_SIZE" class="request-records-pagination">
+              <a-pagination
+                size="small"
+                simple
+                :current="currentPage"
+                :page-size="REQUEST_RECORD_PAGE_SIZE"
+                :total="filteredRecords.length"
+                @change="handlePageChange"
+              />
+            </div>
           </div>
         </section>
       </div>
@@ -297,7 +390,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { message, Modal } from 'ant-design-vue';
 import { DeleteOutlined, MoreOutlined, ReloadOutlined } from '@ant-design/icons-vue';
 import {
@@ -322,11 +415,21 @@ const emit = defineEmits(['update:open']);
 const bridgeAvailable = isAdvancedProxyRequestRecordBridgeAvailable();
 const loading = ref(false);
 const records = ref([]);
+const hiddenAppIds = ref([]);
+const currentPage = ref(1);
 const detailOpen = ref(false);
 const selectedRecord = ref(null);
+const tableScrollRef = ref(null);
+const tableElementRef = ref(null);
+const tableHorizontalScrollRef = ref(null);
+const tableContentWidth = ref(0);
+const tableViewportWidth = ref(0);
+const tableScrollLeft = ref(0);
 const viewportWidth = ref(typeof window === 'undefined' ? 900 : window.innerWidth);
 const viewportHeight = ref(typeof window === 'undefined' ? 600 : window.innerHeight);
 let pollingTimer = null;
+let tableMetricsFrame = 0;
+let tableResizeObserver = null;
 const REQUEST_RECORD_PAGE_SIZE = 50;
 
 const isCompactWindow = computed(() => viewportWidth.value <= 860);
@@ -336,36 +439,55 @@ const tableScrollY = computed(() => {
   const reservedHeight = isCompactWindow.value ? 360 : 332;
   return Math.max(280, Math.min(620, viewportHeight.value - reservedHeight));
 });
-const tableScrollX = computed(() => (isCompactWindow.value ? 900 : 1020));
-const tableScrollConfig = computed(() => ({
-  x: tableScrollX.value,
-  y: tableScrollY.value,
-  scrollToFirstRowOnChange: true,
-}));
+const tableLayoutWidth = computed(() => columns.value.reduce((sum, column) => {
+  const width = Number(column?.width || 0);
+  return sum + (Number.isFinite(width) && width > 0 ? width : 0);
+}, 0));
+const tableViewportFallbackWidth = computed(() => {
+  const numeric = Number(drawerWidth.value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+  return Math.max(260, numeric - 32);
+});
+const showTableHorizontalScroll = computed(() => tableLayoutWidth.value - tableViewportWidth.value > 2);
+const tableHorizontalMaxScroll = computed(() => Math.max(0, tableContentWidth.value - tableViewportWidth.value));
 
 const columns = computed(() => {
   const compact = isCompactWindow.value;
   return [
     { title: '时间', dataIndex: 'recordedAt', key: 'time', width: compact ? 82 : 90 },
     { title: 'Provider', dataIndex: 'providerName', key: 'identity', width: compact ? 168 : 182 },
-    { title: '链路', dataIndex: 'outboundRoute', key: 'route', width: compact ? 220 : 260 },
+    { title: '链路', dataIndex: 'outboundRoute', key: 'link', width: compact ? 220 : 250 },
+    { title: '路由', dataIndex: 'routeTrace', key: 'route', width: compact ? 138 : 152 },
     { title: '性能', dataIndex: 'durationMs', key: 'metrics', width: compact ? 146 : 158 },
     { title: '状态', dataIndex: 'statusCode', key: 'status', width: compact ? 88 : 96 },
     { title: '摘要', dataIndex: 'errorDetail', key: 'detail', width: compact ? 230 : 300, ellipsis: true },
-    { title: '', key: 'actions', width: 46, align: 'center', fixed: 'right' },
+    { title: '', key: 'actions', width: 46, align: 'center' },
   ];
 });
 
-const paginationConfig = computed(() => ({
-  size: 'small',
-  pageSize: REQUEST_RECORD_PAGE_SIZE,
-  hideOnSinglePage: true,
-  showSizeChanger: false,
-  simple: true,
-}));
+const filteredRecords = computed(() => {
+  const list = Array.isArray(records.value) ? records.value : [];
+  if (hiddenAppIds.value.length === 0) {
+    return list;
+  }
+  const hiddenSet = new Set(hiddenAppIds.value);
+  return list.filter((record) => !hiddenSet.has(String(record?.appType || '').trim().toLowerCase()));
+});
+
+const pagedRecords = computed(() => {
+  const start = (currentPage.value - 1) * REQUEST_RECORD_PAGE_SIZE;
+  return filteredRecords.value.slice(start, start + REQUEST_RECORD_PAGE_SIZE);
+});
+
+const requestCountSubtext = computed(() => {
+  if (hiddenAppIds.value.length === 0) {
+    return `最近 ${records.value.length} 条`;
+  }
+  return `显示 ${filteredRecords.value.length} / ${records.value.length} 条`;
+});
 
 const summary = computed(() => {
-  const list = Array.isArray(records.value) ? records.value : [];
+  const list = filteredRecords.value;
   const total = list.length;
   const successCount = list.filter((record) => {
     const code = Number(record?.statusCode || 0);
@@ -415,7 +537,7 @@ const statusSummaryItems = computed(() => {
     {
       id: '2xx',
       label: '2xx',
-      count: records.value.filter((record) => {
+      count: filteredRecords.value.filter((record) => {
         const code = Number(record?.statusCode || 0);
         return code >= 200 && code < 300;
       }).length,
@@ -423,7 +545,7 @@ const statusSummaryItems = computed(() => {
     {
       id: '4xx',
       label: '4xx',
-      count: records.value.filter((record) => {
+      count: filteredRecords.value.filter((record) => {
         const code = Number(record?.statusCode || 0);
         return code >= 400 && code < 500;
       }).length,
@@ -431,7 +553,7 @@ const statusSummaryItems = computed(() => {
     {
       id: '5xx',
       label: '5xx',
-      count: records.value.filter((record) => {
+      count: filteredRecords.value.filter((record) => {
         const code = Number(record?.statusCode || 0);
         return code >= 500;
       }).length,
@@ -459,7 +581,7 @@ const appSummaryItems = computed(() => {
 
 const routeSummaryItems = computed(() => {
   const counts = new Map();
-  records.value.forEach((record) => {
+  filteredRecords.value.forEach((record) => {
     const route = summarizeOutboundRoute(record?.outboundRoute);
     if (!route || route === '-') return;
     counts.set(route, (counts.get(route) || 0) + 1);
@@ -477,10 +599,85 @@ const routeSummaryItems = computed(() => {
 function syncViewport() {
   viewportWidth.value = typeof window === 'undefined' ? 900 : window.innerWidth;
   viewportHeight.value = typeof window === 'undefined' ? 600 : window.innerHeight;
+  queueTableMetricsSync();
+}
+
+function detachTableResizeObserver() {
+  if (tableResizeObserver) {
+    tableResizeObserver.disconnect();
+    tableResizeObserver = null;
+  }
+}
+
+function attachTableResizeObserver() {
+  detachTableResizeObserver();
+  if (typeof ResizeObserver === 'undefined') return;
+  const scrollElement = tableScrollRef.value;
+  const tableElement = tableElementRef.value;
+  if (!scrollElement || !tableElement) return;
+  tableResizeObserver = new ResizeObserver(() => {
+    queueTableMetricsSync();
+  });
+  tableResizeObserver.observe(scrollElement);
+  tableResizeObserver.observe(tableElement);
+}
+
+function syncTableMetrics() {
+  tableMetricsFrame = 0;
+  const scrollElement = tableScrollRef.value;
+  const tableElement = tableElementRef.value;
+  if (!scrollElement || !tableElement) {
+    tableContentWidth.value = 0;
+    tableViewportWidth.value = tableViewportFallbackWidth.value;
+    tableScrollLeft.value = 0;
+    return;
+  }
+  const measuredViewportWidth = Math.max(scrollElement.clientWidth, 0);
+  const fallbackViewportWidth = tableViewportFallbackWidth.value;
+  tableContentWidth.value = Math.max(tableLayoutWidth.value, tableElement.offsetWidth, 0);
+  if (fallbackViewportWidth > 0) {
+    if (measuredViewportWidth > 0) {
+      tableViewportWidth.value = Math.min(measuredViewportWidth, fallbackViewportWidth);
+    } else {
+      tableViewportWidth.value = fallbackViewportWidth;
+    }
+  } else {
+    tableViewportWidth.value = measuredViewportWidth;
+  }
+  const maxScrollLeft = Math.max(0, tableContentWidth.value - tableViewportWidth.value);
+  if (tableScrollLeft.value > maxScrollLeft) {
+    tableScrollLeft.value = maxScrollLeft;
+  }
+}
+
+function queueTableMetricsSync() {
+  if (tableMetricsFrame) {
+    window.cancelAnimationFrame(tableMetricsFrame);
+  }
+  tableMetricsFrame = window.requestAnimationFrame(() => {
+    syncTableMetrics();
+  });
+}
+
+function setTableScrollLeft(nextScrollLeft) {
+  const maxScrollLeft = Math.max(0, tableContentWidth.value - tableViewportWidth.value);
+  const clamped = Math.max(0, Math.min(maxScrollLeft, Number(nextScrollLeft) || 0));
+  tableScrollLeft.value = clamped;
+}
+
+function handleTableHorizontalRangeInput(event) {
+  const nextValue = Number(event?.target?.value || 0);
+  setTableScrollLeft(nextValue);
 }
 
 function normalizeText(value) {
   return String(value || '').trim();
+}
+
+function resolveColumnWidth(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 'auto';
+  return `${numeric}px`;
 }
 
 function formatDateTime(value) {
@@ -522,9 +719,11 @@ function formatDuration(value) {
 function formatCompactNumber(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) return '0';
-  if (numeric >= 100000) return `${Math.round(numeric / 1000)}k`;
-  if (numeric >= 10000) return `${(numeric / 1000).toFixed(1)}k`;
-  if (numeric >= 1000) return `${Math.round(numeric / 100) / 10}k`;
+  if (numeric >= 1000000000) return `${(numeric / 1000000000).toFixed(2)}B`;
+  if (numeric >= 1000000) return `${(numeric / 1000000).toFixed(2)}M`;
+  if (numeric >= 100000) return `${Math.round(numeric / 1000)}K`;
+  if (numeric >= 10000) return `${(numeric / 1000).toFixed(1)}K`;
+  if (numeric >= 1000) return `${Math.round(numeric / 100) / 10}K`;
   return String(Math.round(numeric));
 }
 
@@ -594,6 +793,25 @@ function resolveStatusColor(statusCode) {
   return 'red';
 }
 
+function handlePageChange(page) {
+  const numeric = Number(page || 1);
+  currentPage.value = Number.isFinite(numeric) && numeric > 0 ? numeric : 1;
+}
+
+function isAppChipHidden(appId) {
+  return hiddenAppIds.value.includes(String(appId || '').trim().toLowerCase());
+}
+
+function toggleAppFilter(appId) {
+  const normalized = String(appId || '').trim().toLowerCase();
+  if (!normalized) return;
+  if (isAppChipHidden(normalized)) {
+    hiddenAppIds.value = hiddenAppIds.value.filter(id => id !== normalized);
+    return;
+  }
+  hiddenAppIds.value = [...hiddenAppIds.value, normalized];
+}
+
 function resolveDetailText(record) {
   const text = normalizeText(record?.errorDetail);
   return text || '请求成功';
@@ -617,6 +835,93 @@ function summarizeOutboundRoute(value) {
   const text = normalizeText(value);
   if (!text) return '-';
   return text.replace(/^\/+/, '');
+}
+
+function resolveRouteTraceSteps(record) {
+  const rawSteps = Array.isArray(record?.routeTrace) ? record.routeTrace : [];
+  const normalized = rawSteps
+    .map((step) => ({
+      route: normalizeText(step?.route),
+      source: normalizeText(step?.source).toLowerCase(),
+      status: normalizeText(step?.status).toLowerCase(),
+    }))
+    .filter(step => step.route);
+  if (normalized.length > 0) {
+    return normalized.slice(-3);
+  }
+  const fallbackRoute = summarizeOutboundRoute(record?.outboundRoute);
+  if (!fallbackRoute || fallbackRoute === '-') {
+    return [];
+  }
+  return [{
+    route: fallbackRoute,
+    source: normalizeText(record?.source).toLowerCase(),
+    status: Number(record?.statusCode || 0) >= 200 && Number(record?.statusCode || 0) < 300 ? 'success' : 'failed',
+  }];
+}
+
+function formatRouteTraceLabel(value) {
+  switch (String(value || '').trim().toLowerCase()) {
+    case 'responses':
+      return 'responses';
+    case 'responses_compact':
+      return 'resp/compact';
+    case 'chat':
+      return 'chat';
+    case 'messages':
+      return 'messages';
+    default:
+      return summarizeOutboundRoute(value) || '-';
+  }
+}
+
+function resolveRouteTraceSourceLabel(value) {
+  switch (String(value || '').trim().toLowerCase()) {
+    case 'fallback':
+      return '回退';
+    case 'fallback_restore':
+      return '恢复';
+    case 'preference':
+      return '偏好';
+    case 'upgrade':
+      return '升级';
+    case 'rectified':
+      return '修正';
+    default:
+      return '';
+  }
+}
+
+function isFinalFallbackRouteStep(record, step, index) {
+  const steps = resolveRouteTraceSteps(record);
+  if (index !== steps.length - 1 || step?.status !== 'success' || steps.length < 2) {
+    return false;
+  }
+  const previousRoutes = steps.slice(0, -1).map(item => item.route);
+  if (previousRoutes.some(route => route !== step.route)) {
+    return true;
+  }
+  return ['fallback', 'fallback_restore', 'preference'].includes(String(step?.source || '').trim().toLowerCase());
+}
+
+function resolveRouteTraceLineClass(record, step, index) {
+  if (isFinalFallbackRouteStep(record, step, index)) {
+    return 'is-fallback-final';
+  }
+  if (step?.status === 'failed') {
+    return 'is-failed';
+  }
+  return 'is-direct';
+}
+
+function resolveRouteTraceIcon(record, step, index) {
+  if (isFinalFallbackRouteStep(record, step, index)) {
+    return '●';
+  }
+  if (step?.status === 'failed') {
+    return '×';
+  }
+  return '○';
 }
 
 function summarizeUpstreamTarget(rawUrl, rawPath) {
@@ -643,6 +948,8 @@ async function refreshRecords() {
   loading.value = true;
   try {
     records.value = await listAdvancedProxyRequestRecords(400);
+    await nextTick();
+    queueTableMetricsSync();
   } catch (error) {
     message.error(error?.message || '读取高级代理请求记录失败');
   } finally {
@@ -684,6 +991,8 @@ function handleClear() {
       try {
         await clearAdvancedProxyRequestRecords();
         records.value = [];
+        hiddenAppIds.value = [];
+        currentPage.value = 1;
         detailOpen.value = false;
         selectedRecord.value = null;
         message.success('请求记录已清空');
@@ -700,23 +1009,68 @@ watch(
     if (nextOpen) {
       syncViewport();
       await refreshRecords();
+      await nextTick();
+      attachTableResizeObserver();
+      queueTableMetricsSync();
       startPolling();
       return;
     }
     detailOpen.value = false;
     selectedRecord.value = null;
+    detachTableResizeObserver();
     stopPolling();
   },
   { immediate: true },
 );
 
+watch(appSummaryItems, (items) => {
+  const validIds = new Set(items.map(item => item.id));
+  hiddenAppIds.value = hiddenAppIds.value.filter(id => validIds.has(id));
+}, { immediate: true });
+
+watch(filteredRecords, (list) => {
+  const totalPages = Math.max(1, Math.ceil(list.length / REQUEST_RECORD_PAGE_SIZE));
+  if (currentPage.value > totalPages) {
+    currentPage.value = totalPages;
+  }
+  if (currentPage.value < 1) {
+    currentPage.value = 1;
+  }
+}, { immediate: true });
+
+watch(
+  () => [
+    props.open,
+    currentPage.value,
+    filteredRecords.value.length,
+    columns.value.map(column => `${column.key}:${column.width}`).join('|'),
+    tableScrollY.value,
+  ],
+  async ([nextOpen]) => {
+    if (!nextOpen) return;
+    await nextTick();
+    attachTableResizeObserver();
+    queueTableMetricsSync();
+  },
+  { flush: 'post' },
+);
+
 onMounted(() => {
   syncViewport();
+  nextTick(() => {
+    attachTableResizeObserver();
+    queueTableMetricsSync();
+  });
   window.addEventListener('resize', syncViewport);
 });
 
 onBeforeUnmount(() => {
   stopPolling();
+  detachTableResizeObserver();
+  if (tableMetricsFrame) {
+    window.cancelAnimationFrame(tableMetricsFrame);
+    tableMetricsFrame = 0;
+  }
   window.removeEventListener('resize', syncViewport);
 });
 </script>
@@ -798,6 +1152,8 @@ onBeforeUnmount(() => {
 .request-records-scroll-shell {
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
   overflow-x: hidden;
   overflow-y: auto;
   -ms-overflow-style: none;
@@ -815,6 +1171,8 @@ onBeforeUnmount(() => {
   align-content: start;
   gap: 10px;
   min-height: max-content;
+  min-width: 0;
+  width: 100%;
   padding-bottom: 6px;
 }
 
@@ -856,6 +1214,25 @@ onBeforeUnmount(() => {
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
+}
+
+.request-records-board-chip-toggle {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease,
+    opacity 0.18s ease;
+}
+
+.request-records-board-chip-toggle.is-inactive {
+  background: rgba(246, 248, 244, 0.92);
+  border-color: rgba(110, 133, 118, 0.08);
+  color: #8a988d;
+  opacity: 0.72;
 }
 
 .request-records-toolbar-pill-muted,
@@ -943,10 +1320,12 @@ onBeforeUnmount(() => {
 }
 
 .request-records-board {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   flex: none;
   min-height: clamp(420px, 58vh, 680px);
+  min-width: 0;
+  width: 100%;
   border-radius: 20px;
   border: 1px solid rgba(103, 126, 111, 0.12);
   background:
@@ -995,82 +1374,202 @@ onBeforeUnmount(() => {
 }
 
 .request-records-table-wrap {
-  display: flex;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
   flex: 1 1 auto;
-  min-height: 360px;
+  min-height: 0;
+  height: 100%;
+  min-width: 0;
+  width: 100%;
   overflow: hidden;
 }
 
-.request-records-table {
+.request-records-table-spin {
   display: flex;
   flex: 1 1 auto;
-  height: 100%;
   min-height: 0;
+  min-width: 0;
   width: 100%;
+  overflow: hidden;
 }
 
-.request-records-table :deep(.ant-table) {
-  table-layout: fixed;
-}
-
-.request-records-table :deep(.ant-spin-nested-loading),
-.request-records-table :deep(.ant-spin-container),
-.request-records-table :deep(.ant-table-wrapper),
-.request-records-table :deep(.ant-table),
-.request-records-table :deep(.ant-table-container) {
+.request-records-table-spin :deep(.ant-spin-nested-loading) {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
 }
 
-.request-records-table :deep(.ant-table-container) {
-  border-top: 0;
+.request-records-table-spin :deep(.ant-spin-container) {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
 }
 
-.request-records-table :deep(.ant-table-content) {
-  overflow-x: auto !important;
-}
-
-.request-records-table :deep(.ant-table-body) {
+.request-records-table-scroll {
   flex: 1 1 auto;
   min-height: 240px;
-  overflow-x: auto !important;
-  overflow-y: auto !important;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
-.request-records-table :deep(.ant-table-header) {
-  overflow-x: hidden !important;
+.request-records-table-stage {
+  will-change: transform;
 }
 
-.request-records-table :deep(.ant-table-cell-fix-right) {
-  background: inherit;
+.request-records-table-hscroll {
+  position: relative;
+  z-index: 3;
+  min-width: 0;
+  width: 60%;
+  height: 20px;
+  margin: 4px 0 0 12px;
+  display: flex;
+  align-items: center;
+  pointer-events: auto;
 }
 
-.request-records-table :deep(.ant-table-thead > tr > th) {
+.request-records-table-hscroll-range {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 20px;
+  margin: 0;
+  background: transparent;
+  pointer-events: auto;
+}
+
+.request-records-table-hscroll-range::-webkit-slider-runnable-track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(228, 235, 230, 0.9);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.request-records-table-hscroll-range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 32px;
+  height: 12px;
+  margin-top: -2px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(120, 138, 126, 0.38);
+  transition: background-color 0.18s ease, opacity 0.18s ease;
+}
+
+.request-records-table-hscroll.is-active .request-records-table-hscroll-range::-webkit-slider-thumb {
+  background: rgba(96, 120, 104, 0.82);
+}
+
+.request-records-table-hscroll-range::-moz-range-track {
+  height: 8px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(228, 235, 230, 0.9);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.request-records-table-hscroll-range::-moz-range-thumb {
+  width: 32px;
+  height: 12px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(120, 138, 126, 0.38);
+  transition: background-color 0.18s ease, opacity 0.18s ease;
+}
+
+.request-records-table-hscroll.is-active .request-records-table-hscroll-range::-moz-range-thumb {
+  background: rgba(96, 120, 104, 0.82);
+}
+
+.request-records-table-hscroll-range:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.request-records-table-native {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+.request-records-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   padding: 8px 10px;
   border-bottom: 1px solid rgba(110, 132, 118, 0.1);
-  background: rgba(248, 250, 247, 0.72);
+  background: rgba(248, 250, 247, 0.94);
   color: #718176;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  text-align: left;
+  white-space: nowrap;
 }
 
-.request-records-table :deep(.ant-table-tbody > tr > td) {
+.request-records-table-head.is-center,
+.request-records-table-cell.is-center {
+  text-align: center;
+}
+
+.request-records-table-cell {
   padding: 9px 10px;
   border-bottom: 1px solid rgba(109, 128, 115, 0.08);
   background: transparent;
   vertical-align: top;
 }
 
-.request-records-table :deep(.ant-table-tbody > tr:hover > td) {
+.request-records-table-native tbody tr:hover > .request-records-table-cell {
   background: rgba(241, 246, 239, 0.76);
 }
 
-.request-records-table :deep(.ant-pagination) {
-  margin: 8px 12px 12px;
+.request-records-table-cell.is-actions,
+.request-records-table-head.is-actions {
+  width: 46px;
+}
+
+.request-records-empty-cell {
+  padding: 56px 20px;
+  color: #b6b9b7;
+  font-size: 18px;
+  text-align: center;
+}
+
+.request-records-pagination {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 12px 12px;
+}
+
+.request-records-table-scroll::-webkit-scrollbar:vertical {
+  width: 10px;
+}
+
+.request-records-table-scroll::-webkit-scrollbar:horizontal {
+  height: 0;
+}
+
+.request-records-table-scroll::-webkit-scrollbar-thumb:vertical {
+  border-radius: 999px;
+  background: rgba(120, 138, 126, 0.62);
+}
+
+.request-records-table-scroll::-webkit-scrollbar-track:vertical {
+  background: rgba(228, 235, 230, 0.72);
 }
 
 .request-records-time,
@@ -1212,6 +1711,54 @@ onBeforeUnmount(() => {
 .request-records-route-path-out {
   color: #78867b;
   font-weight: 500;
+}
+
+.request-records-routing {
+  display: grid;
+  gap: 5px;
+}
+
+.request-records-routing-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #55655a;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.request-records-routing-line.is-direct {
+  color: #58695f;
+}
+
+.request-records-routing-line.is-failed {
+  color: #9b6b5a;
+}
+
+.request-records-routing-line.is-fallback-final {
+  color: #2f7a45;
+  font-weight: 700;
+}
+
+.request-records-routing-icon {
+  width: 12px;
+  text-align: center;
+  font-size: 10px;
+  flex: 0 0 auto;
+}
+
+.request-records-routing-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.request-records-routing-source {
+  color: #8b998f;
+  font-size: 10px;
+  flex: 0 0 auto;
 }
 
 .request-records-status {
@@ -1362,6 +1909,13 @@ onBeforeUnmount(() => {
   color: #a9b9af;
 }
 
+.request-records-shell-dark .request-records-board-chip-toggle.is-inactive {
+  background: rgba(25, 33, 29, 0.94);
+  border-color: rgba(133, 162, 145, 0.08);
+  color: #8a9990;
+  opacity: 0.72;
+}
+
 .request-records-shell-dark .request-records-toolbar-dot {
   background: #7fb486;
   box-shadow: 0 0 0 4px rgba(127, 180, 134, 0.12);
@@ -1375,6 +1929,58 @@ onBeforeUnmount(() => {
     linear-gradient(180deg, rgba(24, 33, 28, 0.96), rgba(18, 25, 21, 0.94)),
     rgba(17, 24, 20, 0.92);
   box-shadow: 0 18px 34px rgba(0, 0, 0, 0.22);
+}
+
+.request-records-shell-dark .request-records-table-head {
+  border-bottom-color: rgba(129, 155, 140, 0.14);
+  background: rgba(24, 33, 28, 0.96);
+  color: #aebfb4;
+}
+
+.request-records-shell-dark .request-records-table-cell {
+  border-bottom-color: rgba(129, 155, 140, 0.1);
+}
+
+.request-records-shell-dark .request-records-table-native tbody tr:hover > .request-records-table-cell {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.request-records-shell-dark .request-records-empty-cell {
+  color: #8ea196;
+}
+
+.request-records-shell-dark .request-records-table-scroll::-webkit-scrollbar-thumb:vertical {
+  background: rgba(129, 155, 140, 0.52);
+}
+
+.request-records-shell-dark .request-records-table-scroll::-webkit-scrollbar-track:vertical {
+  background: rgba(23, 31, 27, 0.82);
+}
+
+.request-records-shell-dark .request-records-table-hscroll-range::-webkit-slider-runnable-track {
+  background: rgba(23, 31, 27, 0.86);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.request-records-shell-dark .request-records-table-hscroll-range::-webkit-slider-thumb {
+  background: rgba(129, 155, 140, 0.4);
+}
+
+.request-records-shell-dark .request-records-table-hscroll.is-active .request-records-table-hscroll-range::-webkit-slider-thumb {
+  background: rgba(129, 155, 140, 0.82);
+}
+
+.request-records-shell-dark .request-records-table-hscroll-range::-moz-range-track {
+  background: rgba(23, 31, 27, 0.86);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.request-records-shell-dark .request-records-table-hscroll-range::-moz-range-thumb {
+  background: rgba(129, 155, 140, 0.4);
+}
+
+.request-records-shell-dark .request-records-table-hscroll.is-active .request-records-table-hscroll-range::-moz-range-thumb {
+  background: rgba(129, 155, 140, 0.82);
 }
 
 .request-records-shell-dark .request-records-metric-label,
@@ -1405,8 +2011,18 @@ onBeforeUnmount(() => {
 .request-records-shell-dark .request-records-route-host,
 .request-records-shell-dark .request-records-route-path,
 .request-records-shell-dark .request-records-route-path-out,
+.request-records-shell-dark .request-records-routing-line.is-direct,
+.request-records-shell-dark .request-records-routing-source,
 .request-records-shell-dark .request-record-detail-item pre {
   color: #b8c8be;
+}
+
+.request-records-shell-dark .request-records-routing-line.is-failed {
+  color: #f0b8a5;
+}
+
+.request-records-shell-dark .request-records-routing-line.is-fallback-final {
+  color: #87d39c;
 }
 
 .request-records-shell-dark .request-records-route-key {
@@ -1457,20 +2073,6 @@ onBeforeUnmount(() => {
 .request-records-shell-dark .request-records-board-title span {
   background: rgba(56, 74, 65, 0.92);
   color: #d8e8dc;
-}
-
-.request-records-shell-dark .request-records-table :deep(.ant-table-thead > tr > th) {
-  border-bottom-color: rgba(129, 155, 140, 0.14);
-  background: rgba(255, 255, 255, 0.03);
-  color: #aebfb4;
-}
-
-.request-records-shell-dark .request-records-table :deep(.ant-table-tbody > tr > td) {
-  border-bottom-color: rgba(129, 155, 140, 0.1);
-}
-
-.request-records-shell-dark .request-records-table :deep(.ant-table-tbody > tr:hover > td) {
-  background: rgba(255, 255, 255, 0.04);
 }
 
 .request-records-shell-dark .request-records-action-button-refresh {

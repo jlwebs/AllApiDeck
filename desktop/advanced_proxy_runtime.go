@@ -1283,16 +1283,7 @@ func claudeProviderCompatibilityRank(provider AdvancedProxyProvider, features cl
 	if !features.requiresResponsesOrAnthropicProvider() {
 		return 0
 	}
-	switch normalizeClaudeAPIFormat(provider.APIFormat) {
-	case "openai_responses":
-		return 0
-	case "anthropic":
-		return 1
-	case "openai_chat":
-		return 2
-	default:
-		return 3
-	}
+	return 0
 }
 
 func filterCompatibleClaudeProviders(providers []AdvancedProxyProvider, features claudeRequestFeatures) []AdvancedProxyProvider {

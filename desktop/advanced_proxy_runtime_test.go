@@ -214,7 +214,7 @@ func TestClassifyClaudeRequestFeaturesDetectsAnthropicWebSearchTool(t *testing.T
 	}
 }
 
-func TestFilterCompatibleClaudeProvidersPrioritizesResponsesForWebSearch(t *testing.T) {
+func TestFilterCompatibleClaudeProvidersPreservesQueueOrderForWebSearch(t *testing.T) {
 	providers := []AdvancedProxyProvider{
 		{ID: "openai-chat", APIFormat: "openai_chat"},
 		{ID: "anthropic", APIFormat: "anthropic"},
@@ -228,8 +228,8 @@ func TestFilterCompatibleClaudeProvidersPrioritizesResponsesForWebSearch(t *test
 	if len(filtered) != 3 {
 		t.Fatalf("expected three compatible providers, got %#v", filtered)
 	}
-	if filtered[0].ID != "openai-responses" || filtered[1].ID != "anthropic" || filtered[2].ID != "openai-chat" {
-		t.Fatalf("expected responses first, anthropic second, chat-configured providers last, got %#v", filtered)
+	if filtered[0].ID != "openai-chat" || filtered[1].ID != "anthropic" || filtered[2].ID != "openai-responses" {
+		t.Fatalf("expected original queue order to be preserved, got %#v", filtered)
 	}
 }
 

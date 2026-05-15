@@ -14,29 +14,36 @@ import (
 const advancedProxyRequestRecordLimit = 400
 
 type AdvancedProxyRequestRecord struct {
-	ID                 string   `json:"id"`
-	RecordedAt         string   `json:"recordedAt"`
-	AppType            string   `json:"appType"`
-	ClientRoute        string   `json:"clientRoute"`
-	InboundEndpoint    string   `json:"inboundEndpoint"`
-	OutboundRoute      string   `json:"outboundRoute"`
-	ProviderID         string   `json:"providerId"`
-	ProviderRowKey     string   `json:"providerRowKey"`
-	ProviderName       string   `json:"providerName"`
-	ProviderKeyPreview string   `json:"providerKeyPreview"`
-	Model              string   `json:"model"`
-	Stream             bool     `json:"stream"`
-	StatusCode         int      `json:"statusCode"`
-	DurationMs         int64    `json:"durationMs"`
-	TTFTMs             *int64   `json:"ttftMs,omitempty"`
-	LatencyMs          *int64   `json:"latencyMs,omitempty"`
-	InputTokens        *int     `json:"inputTokens,omitempty"`
-	OutputTokens       *int     `json:"outputTokens,omitempty"`
-	TPS                *float64 `json:"tps,omitempty"`
-	UpstreamURL        string   `json:"upstreamUrl"`
-	UpstreamEndpoint   string   `json:"upstreamEndpoint"`
-	ErrorDetail        string   `json:"errorDetail"`
-	Source             string   `json:"source"`
+	ID                 string                          `json:"id"`
+	RecordedAt         string                          `json:"recordedAt"`
+	AppType            string                          `json:"appType"`
+	ClientRoute        string                          `json:"clientRoute"`
+	InboundEndpoint    string                          `json:"inboundEndpoint"`
+	OutboundRoute      string                          `json:"outboundRoute"`
+	RouteTrace         []AdvancedProxyRequestRouteStep `json:"routeTrace,omitempty"`
+	ProviderID         string                          `json:"providerId"`
+	ProviderRowKey     string                          `json:"providerRowKey"`
+	ProviderName       string                          `json:"providerName"`
+	ProviderKeyPreview string                          `json:"providerKeyPreview"`
+	Model              string                          `json:"model"`
+	Stream             bool                            `json:"stream"`
+	StatusCode         int                             `json:"statusCode"`
+	DurationMs         int64                           `json:"durationMs"`
+	TTFTMs             *int64                          `json:"ttftMs,omitempty"`
+	LatencyMs          *int64                          `json:"latencyMs,omitempty"`
+	InputTokens        *int                            `json:"inputTokens,omitempty"`
+	OutputTokens       *int                            `json:"outputTokens,omitempty"`
+	TPS                *float64                        `json:"tps,omitempty"`
+	UpstreamURL        string                          `json:"upstreamUrl"`
+	UpstreamEndpoint   string                          `json:"upstreamEndpoint"`
+	ErrorDetail        string                          `json:"errorDetail"`
+	Source             string                          `json:"source"`
+}
+
+type AdvancedProxyRequestRouteStep struct {
+	Route  string `json:"route"`
+	Source string `json:"source,omitempty"`
+	Status string `json:"status"`
 }
 
 type advancedProxyRecordedMetrics struct {
@@ -117,6 +124,7 @@ func appendAdvancedProxyRequestRecord(record AdvancedProxyRequestRecord) {
 	record.ClientRoute = strings.TrimSpace(record.ClientRoute)
 	record.InboundEndpoint = strings.TrimSpace(record.InboundEndpoint)
 	record.OutboundRoute = strings.TrimSpace(record.OutboundRoute)
+	record.RouteTrace = normalizeAdvancedProxyRouteTrace(record.RouteTrace)
 	record.ProviderID = strings.TrimSpace(record.ProviderID)
 	record.ProviderRowKey = strings.TrimSpace(record.ProviderRowKey)
 	record.ProviderName = strings.TrimSpace(record.ProviderName)
@@ -129,33 +137,42 @@ func appendAdvancedProxyRequestRecord(record AdvancedProxyRequestRecord) {
 	advancedProxyRequestRecords.append(record)
 }
 
-func recordAdvancedProxyOpenAIAttempt(appType string, clientRoute string, inboundEndpoint string, outboundRoute string, source string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, responseBody []byte, stream bool, statusCode int, elapsed time.Duration, errorDetail string) {
+func recordAdvancedProxyOpenAIAttempt(appType string, clientRoute string, inboundEndpoint string, outboundRoute string, source string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, resolvedModel string, responseBody []byte, stream bool, statusCode int, elapsed time.Duration, errorDetail string) {
+	recordAdvancedProxyOpenAIAttemptWithTrace(appType, clientRoute, inboundEndpoint, outboundRoute, source, provider, targetURL, requestBody, resolvedModel, responseBody, stream, statusCode, elapsed, errorDetail, nil)
+}
+
+func recordAdvancedProxyOpenAIAttemptWithTrace(appType string, clientRoute string, inboundEndpoint string, outboundRoute string, source string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, resolvedModel string, responseBody []byte, stream bool, statusCode int, elapsed time.Duration, errorDetail string, routeTrace []AdvancedProxyRequestRouteStep) {
 	usageInput, usageOutput := extractAdvancedProxyUsageFromBody(responseBody)
 	metrics := buildAdvancedProxyRecordedMetrics(elapsed, usageInput, usageOutput)
 	resolvedDetail := strings.TrimSpace(errorDetail)
 	if resolvedDetail == "" && (statusCode < 200 || statusCode >= 300) {
 		resolvedDetail = summarizeAdvancedProxyBody(responseBody)
 	}
-	appendAdvancedProxyOpenAIRecord(appType, clientRoute, inboundEndpoint, outboundRoute, source, provider, targetURL, requestBody, stream, statusCode, metrics, resolvedDetail)
+	appendAdvancedProxyOpenAIRecord(appType, clientRoute, inboundEndpoint, outboundRoute, source, provider, targetURL, requestBody, resolvedModel, stream, statusCode, metrics, resolvedDetail, routeTrace)
 }
 
-func recordAdvancedProxyOpenAIStreamAttempt(appType string, clientRoute string, inboundEndpoint string, outboundRoute string, source string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, statusCode int, stream bool, startedAt time.Time, firstOutputAt *time.Time, completedAt time.Time, inputTokens *int, outputTokens *int, errorDetail string) {
+func recordAdvancedProxyOpenAIStreamAttempt(appType string, clientRoute string, inboundEndpoint string, outboundRoute string, source string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, resolvedModel string, statusCode int, stream bool, startedAt time.Time, firstOutputAt *time.Time, completedAt time.Time, inputTokens *int, outputTokens *int, errorDetail string) {
+	recordAdvancedProxyOpenAIStreamAttemptWithTrace(appType, clientRoute, inboundEndpoint, outboundRoute, source, provider, targetURL, requestBody, resolvedModel, statusCode, stream, startedAt, firstOutputAt, completedAt, inputTokens, outputTokens, errorDetail, nil)
+}
+
+func recordAdvancedProxyOpenAIStreamAttemptWithTrace(appType string, clientRoute string, inboundEndpoint string, outboundRoute string, source string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, resolvedModel string, statusCode int, stream bool, startedAt time.Time, firstOutputAt *time.Time, completedAt time.Time, inputTokens *int, outputTokens *int, errorDetail string, routeTrace []AdvancedProxyRequestRouteStep) {
 	metrics := buildAdvancedProxyStreamRecordedMetrics(startedAt, firstOutputAt, completedAt, inputTokens, outputTokens)
-	appendAdvancedProxyOpenAIRecord(appType, clientRoute, inboundEndpoint, outboundRoute, source, provider, targetURL, requestBody, stream, statusCode, metrics, errorDetail)
+	appendAdvancedProxyOpenAIRecord(appType, clientRoute, inboundEndpoint, outboundRoute, source, provider, targetURL, requestBody, resolvedModel, stream, statusCode, metrics, errorDetail, routeTrace)
 }
 
-func appendAdvancedProxyOpenAIRecord(appType string, clientRoute string, inboundEndpoint string, outboundRoute string, source string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, stream bool, statusCode int, metrics advancedProxyRecordedMetrics, errorDetail string) {
+func appendAdvancedProxyOpenAIRecord(appType string, clientRoute string, inboundEndpoint string, outboundRoute string, source string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, resolvedModel string, stream bool, statusCode int, metrics advancedProxyRecordedMetrics, errorDetail string, routeTrace []AdvancedProxyRequestRouteStep) {
 	record := AdvancedProxyRequestRecord{
 		RecordedAt:         time.Now().Format(time.RFC3339Nano),
 		AppType:            appType,
 		ClientRoute:        clientRoute,
 		InboundEndpoint:    inboundEndpoint,
 		OutboundRoute:      outboundRoute,
+		RouteTrace:         cloneAdvancedProxyRouteTrace(routeTrace),
 		ProviderID:         strings.TrimSpace(provider.ID),
 		ProviderRowKey:     strings.TrimSpace(provider.RowKey),
 		ProviderName:       advancedProxyProviderLabel(provider),
 		ProviderKeyPreview: maskAdvancedProxyAPIKey(provider.APIKey),
-		Model:              extractAdvancedProxyModelFromBody(requestBody, provider.Model),
+		Model:              resolveAdvancedProxyRecordedModel(resolvedModel, requestBody, provider.Model),
 		Stream:             stream,
 		StatusCode:         statusCode,
 		DurationMs:         metrics.DurationMs,
@@ -172,33 +189,42 @@ func appendAdvancedProxyOpenAIRecord(appType string, clientRoute string, inbound
 	appendAdvancedProxyRequestRecord(record)
 }
 
-func recordAdvancedProxyClaudeAttempt(appType string, inboundEndpoint string, outboundRoute string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, response map[string]any, rawResponse []byte, stream bool, statusCode int, elapsed time.Duration, errorDetail string) {
+func recordAdvancedProxyClaudeAttempt(appType string, inboundEndpoint string, outboundRoute string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, resolvedModel string, response map[string]any, rawResponse []byte, stream bool, statusCode int, elapsed time.Duration, errorDetail string) {
+	recordAdvancedProxyClaudeAttemptWithTrace(appType, inboundEndpoint, outboundRoute, provider, targetURL, requestBody, resolvedModel, response, rawResponse, stream, statusCode, elapsed, errorDetail, nil)
+}
+
+func recordAdvancedProxyClaudeAttemptWithTrace(appType string, inboundEndpoint string, outboundRoute string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, resolvedModel string, response map[string]any, rawResponse []byte, stream bool, statusCode int, elapsed time.Duration, errorDetail string, routeTrace []AdvancedProxyRequestRouteStep) {
 	usageInput, usageOutput := extractAdvancedProxyUsageFromMap(response)
 	metrics := buildAdvancedProxyRecordedMetrics(elapsed, usageInput, usageOutput)
 	resolvedDetail := strings.TrimSpace(errorDetail)
 	if resolvedDetail == "" && (statusCode < 200 || statusCode >= 300) {
 		resolvedDetail = summarizeAdvancedProxyBody(rawResponse)
 	}
-	appendAdvancedProxyClaudeRecord(appType, inboundEndpoint, outboundRoute, provider, targetURL, requestBody, stream, statusCode, metrics, resolvedDetail)
+	appendAdvancedProxyClaudeRecord(appType, inboundEndpoint, outboundRoute, provider, targetURL, requestBody, resolvedModel, stream, statusCode, metrics, resolvedDetail, routeTrace)
 }
 
-func recordAdvancedProxyClaudeStreamAttempt(appType string, inboundEndpoint string, outboundRoute string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, statusCode int, stream bool, startedAt time.Time, firstOutputAt *time.Time, completedAt time.Time, inputTokens *int, outputTokens *int, errorDetail string) {
+func recordAdvancedProxyClaudeStreamAttempt(appType string, inboundEndpoint string, outboundRoute string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, resolvedModel string, statusCode int, stream bool, startedAt time.Time, firstOutputAt *time.Time, completedAt time.Time, inputTokens *int, outputTokens *int, errorDetail string) {
+	recordAdvancedProxyClaudeStreamAttemptWithTrace(appType, inboundEndpoint, outboundRoute, provider, targetURL, requestBody, resolvedModel, statusCode, stream, startedAt, firstOutputAt, completedAt, inputTokens, outputTokens, errorDetail, nil)
+}
+
+func recordAdvancedProxyClaudeStreamAttemptWithTrace(appType string, inboundEndpoint string, outboundRoute string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, resolvedModel string, statusCode int, stream bool, startedAt time.Time, firstOutputAt *time.Time, completedAt time.Time, inputTokens *int, outputTokens *int, errorDetail string, routeTrace []AdvancedProxyRequestRouteStep) {
 	metrics := buildAdvancedProxyStreamRecordedMetrics(startedAt, firstOutputAt, completedAt, inputTokens, outputTokens)
-	appendAdvancedProxyClaudeRecord(appType, inboundEndpoint, outboundRoute, provider, targetURL, requestBody, stream, statusCode, metrics, errorDetail)
+	appendAdvancedProxyClaudeRecord(appType, inboundEndpoint, outboundRoute, provider, targetURL, requestBody, resolvedModel, stream, statusCode, metrics, errorDetail, routeTrace)
 }
 
-func appendAdvancedProxyClaudeRecord(appType string, inboundEndpoint string, outboundRoute string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, stream bool, statusCode int, metrics advancedProxyRecordedMetrics, errorDetail string) {
+func appendAdvancedProxyClaudeRecord(appType string, inboundEndpoint string, outboundRoute string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, resolvedModel string, stream bool, statusCode int, metrics advancedProxyRecordedMetrics, errorDetail string, routeTrace []AdvancedProxyRequestRouteStep) {
 	record := AdvancedProxyRequestRecord{
 		RecordedAt:         time.Now().Format(time.RFC3339Nano),
 		AppType:            appType,
 		ClientRoute:        "messages",
 		InboundEndpoint:    inboundEndpoint,
 		OutboundRoute:      outboundRoute,
+		RouteTrace:         cloneAdvancedProxyRouteTrace(routeTrace),
 		ProviderID:         strings.TrimSpace(provider.ID),
 		ProviderRowKey:     strings.TrimSpace(provider.RowKey),
 		ProviderName:       advancedProxyProviderLabel(provider),
 		ProviderKeyPreview: maskAdvancedProxyAPIKey(provider.APIKey),
-		Model:              extractAdvancedProxyModelFromBody(requestBody, provider.Model),
+		Model:              resolveAdvancedProxyRecordedModel(resolvedModel, requestBody, provider.Model),
 		Stream:             stream,
 		StatusCode:         statusCode,
 		DurationMs:         metrics.DurationMs,
@@ -213,6 +239,50 @@ func appendAdvancedProxyClaudeRecord(appType string, inboundEndpoint string, out
 		Source:             "direct",
 	}
 	appendAdvancedProxyRequestRecord(record)
+}
+
+func cloneAdvancedProxyRouteTrace(source []AdvancedProxyRequestRouteStep) []AdvancedProxyRequestRouteStep {
+	if len(source) == 0 {
+		return nil
+	}
+	result := make([]AdvancedProxyRequestRouteStep, 0, len(source))
+	for _, step := range source {
+		route := strings.TrimSpace(step.Route)
+		if route == "" {
+			continue
+		}
+		result = append(result, AdvancedProxyRequestRouteStep{
+			Route:  route,
+			Source: strings.TrimSpace(step.Source),
+			Status: strings.TrimSpace(step.Status),
+		})
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func normalizeAdvancedProxyRouteTrace(source []AdvancedProxyRequestRouteStep) []AdvancedProxyRequestRouteStep {
+	cloned := cloneAdvancedProxyRouteTrace(source)
+	if len(cloned) == 0 {
+		return nil
+	}
+	result := make([]AdvancedProxyRequestRouteStep, 0, len(cloned))
+	for _, step := range cloned {
+		status := strings.ToLower(strings.TrimSpace(step.Status))
+		switch status {
+		case "success", "failed":
+		default:
+			status = "success"
+		}
+		result = append(result, AdvancedProxyRequestRouteStep{
+			Route:  strings.TrimSpace(step.Route),
+			Source: strings.TrimSpace(strings.ToLower(step.Source)),
+			Status: status,
+		})
+	}
+	return result
 }
 
 func buildAdvancedProxyRecordedMetrics(elapsed time.Duration, inputTokens *int, outputTokens *int) advancedProxyRecordedMetrics {
@@ -378,6 +448,13 @@ func extractAdvancedProxyModelFromBody(requestBody []byte, fallback string) stri
 		}
 	}
 	return strings.TrimSpace(fallback)
+}
+
+func resolveAdvancedProxyRecordedModel(resolvedModel string, requestBody []byte, fallback string) string {
+	if model := strings.TrimSpace(resolvedModel); model != "" {
+		return model
+	}
+	return extractAdvancedProxyModelFromBody(requestBody, fallback)
 }
 
 func extractAdvancedProxyURLPath(raw string) string {
