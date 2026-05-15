@@ -1,11 +1,11 @@
-﻿<div align="center">
+<div align="center">
 
 <img src="../../assets/appicon.png" alt="All API Deck" width="80">
 
-**Desktop app for batch API checks, key handling, and client switching**
+**Desktop app for importing, scanning, testing, managing, and routing large batches of relay sites and API keys**
 
 <p>
-Supports browser-extension import, model discovery, availability checks, and config switching for Claude, Codex, OpenCode, and OpenClaw.
+Supports portable account import, batch model discovery, quick checks, key grouping, one-click client takeover, and local advanced proxying for Claude, Codex, OpenCode, and OpenClaw.
 </p>
 
 <p align="center">
@@ -31,95 +31,193 @@ Supports browser-extension import, model discovery, availability checks, and con
 </p>
 
 </div>
-## Preview
 
-<img src="../images/repo-preview/allapideck.webp" alt="All API Dock Home" width="50%" />
-<img src="../images/repo-preview/PixPin_2026-04-12_04-03-39.png" alt="Side Panel" width="20%" />
+## What This Is
 
-## Positioning
+All API Deck is a desktop workflow for people handling large numbers of relay sites, API keys, and model combinations.
 
-This is not just a web page utility. It is a local desktop workflow app.
+- Import existing site and key data from extensions, backups, and local directories
+- Discover models and run quick checks across many sites
+- Group, filter, and manage large key inventories in one place
+- Hand selected records over to Claude, Codex, OpenCode, or OpenClaw
+- Use a local advanced proxy when protocol compatibility needs a last-mile fix
 
-The project currently has three main layers:
+## Current Capabilities
 
-- Desktop shell: `Wails`
-- Frontend UI: `Vue 3 + Ant Design Vue + Vite`
-- Local backend logic: `Go`
+- Portable import from browser-extension bridge data, extension backups, and scanned directories
+- Batch model discovery
+- Batch availability checks with TTFT, TPS, latency, and protocol probing
+- Key grouping, filtering, and side panel / floating window management
+- One-click config generation and local writeback for Claude, Codex, OpenCode, and OpenClaw
+- Advanced proxy with provider queues, failover, protocol fallback, request healing, and request records
+- Editable `fetch(...)` replay for recent requests
 
-## Main Features
+## UI Preview
 
-### 1. Extension-first import
+<img src="../images/all-api-deck-home.png" alt="All API Deck Home" width="72%" />
+<img src="../images/all-api-deck-site-management.png" alt="All API Deck Site Management" width="72%" />
+<img src="../images/all-api-deck-sidebar.png" alt="All API Deck Sidebar" width="24%" />
 
-Supports direct import from ALL-API-HUB browser extension data, which is recommended when extension data is already available.
+## Advanced Proxy Flow
 
-### 2. Backup JSON import
+<img src="../images/advanced-proxy-architecture-light.svg" alt="All API Deck Advanced Proxy Flow" width="86%" />
 
-Supports importing standard backup files exported by the ALL-API-HUB extension, for example:
+## Core Features
 
-- `accounts-backup.json`
-- `accounts-backup-2026-04-01.json`
+### 1. Site / account import
 
-### 3. Batch model discovery
+Supported import paths:
 
-Fetches model lists concurrently from imported sites, with failure diagnostics, status tracking, and tag grouping.
+- browser-extension bridge import
+- ALL-API-HUB backup JSON import
+- extension directory / local data directory scanning
 
-### 4. Batch availability checks
+### 2. Batch model discovery
 
-Supports batch testing on selected sites and models, including:
+Fetches model lists concurrently and keeps:
 
-- Available / failed status
-- Error codes
-- Common reason hints
-- Trace logs for investigation
-- Fetch snippets for reproduction
+- success / failure state
+- failure reason
+- discovered model sets
+- structured results for later filtering
 
-### 5. Local Profile / CDP dual mode
+### 3. Batch quick checks
 
-Supports two login-state reading modes:
+Checks selected sites and models with:
 
-- `Profile file mode`
-- `CDP reopen mode`
+- available / failed status
+- status code and error reason
+- TTFT / TPS / Latency
+- protocol probing and fallback result
+- request details for reproduction
 
-These can be switched in settings depending on compatibility needs across different sites.
+### 4. Key management, side panel, and floating window
 
-### 6. Side panel
+Supports:
 
-After minimizing to tray, the side panel can be used to manage key records with:
+- record grouping
+- batch clipboard key import
+- quick refresh and quick test
+- model switching per record
+- provider queue and live dispatch visibility
+- dispatch observation and call-cluster organization
 
-- Quick balance refresh
-- Quick testing
-- Model selection
-- One-click open for the dedicated config window
+### 5. One-click desktop client takeover
 
-### 7. Dedicated one-click config
-
-Based on the currently selected site record, the app can generate a config diff preview and write the result into local desktop client config files.
-
-Supported target apps currently include:
+Supported client targets:
 
 - Claude
 - Codex
 - OpenCode
 - OpenClaw
 
+The app can generate a config preview from the selected record and write local client config files directly.
+
+### 6. Advanced proxy
+
+Supports:
+
+- provider priority queues
+- automatic failover
+- `messages` / `responses` / `chat/completions` fallback
+- protocol preference memory for host / key / model combinations
+- request normalization and healing
+- `invalid_encrypted_content` auto-healing
+- request records and route tracing
+
+### 7. Request records and debugging
+
+The request records panel keeps:
+
+- entry / exit route
+- upstream URL
+- fallback path
+- status code
+- timing metrics
+- input / output token counts
+- error summary
+
+The latest 50 requests also keep full request bodies in memory and can be replayed through an editable `fetch(...)` command.
+
+## Who This Is For
+
+- users managing many relay sites, keys, and model combinations
+- users migrating existing extension or backup data into a desktop workspace
+- users doing repeated discovery, testing, filtering, and grouping
+- users connecting Claude, Codex, OpenCode, or OpenClaw through a local compatibility layer
+
+## Quick Start
+
+### 1. Download the desktop build
+
+Releases:
+
+https://github.com/jlwebs/AllApiDeck/releases
+
+Current release assets include:
+
+- Windows: `allapideck-windows-amd64.exe`
+- Windows: `allapideck-windows-amd64.msi`
+- macOS: `allapideck-macos-universal.dmg`
+- Linux: `allapideck-linux-amd64.tar.gz`
+- Linux: `allapideck-linux-amd64.deb`
+- Linux: `allapideck-linux-amd64.AppImage`
+
+On Windows, auto-update prefers the `.msi` installer.
+
+### 2. Import site records
+
+Recommended first:
+
+- browser-extension bridge import
+- ALL-API-HUB backup JSON import
+
+Common backup filenames:
+
+- `accounts-backup.json`
+- `accounts-backup-2026-04-01.json`
+
+### 3. Discover models and run quick checks
+
+Typical first steps:
+
+1. fetch model lists in batch
+2. run quick checks against target models
+
+### 4. Enable advanced proxy takeover when needed
+
+1. configure the provider queue
+2. enable takeover for the target app
+3. verify base URL, token, model, and protocol
+4. write the local config
+
 ## Project Structure
 
 ```text
 .
-├─ src/                     Frontend pages and components
-├─ wailsjs/                 Wails binding code
-├─ build/                   Build output
-├─ logs/                    Runtime logs
-├─ scripts/                 Dev and build scripts
-├─ main.go                  Wails entry
-├─ app.go                   App lifecycle and backend core logic
-├─ window_sidebar.go        Tray / side panel window logic
-└─ local_api.go             Local API and request handling
+├─ desktop/                          Main desktop app directory
+│  ├─ src/                           Vue frontend pages and components
+│  ├─ wailsjs/                       Wails binding code
+│  ├─ scripts/                       Dev, build, and packaging scripts
+│  ├─ docs/                          Docs and screenshots
+│  ├─ build/                         Desktop build output
+│  ├─ release-assets/                CI artifact staging
+│  ├─ main.go                        Wails entry
+│  ├─ app.go                         App lifecycle and backend core logic
+│  ├─ advanced_proxy_*.go            Advanced proxy logic
+│  ├─ local_api.go                   Local checks and protocol probing
+│  └─ window_sidebar.go              Tray / sidebar window logic
+└─ .github/workflows/                Release and CI workflows
 ```
 
-## Development Environment
+## Tech Stack
 
-Recommended environment:
+- Desktop shell: `Wails`
+- Frontend UI: `Vue 3 + Ant Design Vue + Vite`
+- Local backend logic: `Go`
+- Packaging and release: `GitHub Actions + Wails + platform scripts`
+
+## Development Environment
 
 - Windows 10/11
 - Go 1.24+
@@ -132,6 +230,7 @@ Recommended environment:
 Install dependencies:
 
 ```bash
+cd desktop
 npm install
 ```
 
@@ -152,42 +251,30 @@ npm run dev:web
 Desktop build:
 
 ```bash
-wails build
-```
-
-Or:
-
-```bash
 npm run build:desktop
 ```
 
-Build output is generated by default in:
+Desktop debug build:
 
-```text
-build/bin/
+```bash
+npm run build:desktop-debug
 ```
 
-GitHub Release desktop assets currently include:
+Build output:
 
-- Windows: `allapideck-windows-amd64.exe`
-- macOS: `allapideck-macos-universal.dmg`
-- Linux: `allapideck-linux-amd64.tar.gz`
-- Linux AppImage: `allapideck-linux-amd64.AppImage`
-- Linux DEB: `allapideck-linux-amd64.deb`
-
-The Linux packages are assembled manually in CI on top of the Wails build output because Wails v2 does not generate `.deb` or `AppImage` release artifacts by itself.
+```text
+desktop/build/bin/
+```
 
 ## Logs
 
-Logs are also available from the settings page. The main log directory is:
-
-```text
-logs/
-```
+Logs are available from the settings page and runtime log directory.
 
 Typical files include:
 
 - `EXE_BACKEND_DEBUG.log`
+- `advanced-proxy.log`
+- `client-runtime.log`
 - `wails-dev-host.log`
 - `wails-dev-runner.log`
 - `wails-dev-vite.log`
