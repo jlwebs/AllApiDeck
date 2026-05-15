@@ -36,6 +36,28 @@ func (f *failingReadCloser) Close() error {
 	return nil
 }
 
+type delayedReadCloser struct {
+	chunks [][]byte
+	delay  time.Duration
+	index  int
+}
+
+func (d *delayedReadCloser) Read(p []byte) (int, error) {
+	if d.index >= len(d.chunks) {
+		return 0, io.EOF
+	}
+	if d.index > 0 && d.delay > 0 {
+		time.Sleep(d.delay)
+	}
+	chunk := d.chunks[d.index]
+	d.index++
+	return copy(p, chunk), nil
+}
+
+func (d *delayedReadCloser) Close() error {
+	return nil
+}
+
 func contentBlocksOf(t *testing.T, raw any) []map[string]any {
 	t.Helper()
 	switch typed := raw.(type) {
@@ -460,6 +482,10 @@ func resetAdvancedProxyRuntimeForTest(t *testing.T) string {
 	advancedProxyEncryptedContentHealState.mu.Lock()
 	advancedProxyEncryptedContentHealState.sessions = map[string]int{}
 	advancedProxyEncryptedContentHealState.mu.Unlock()
+
+	advancedProxyRequestRecords.clear()
+
+	resetAdvancedProxyOpenAIProtocolPreferencesForTests()
 
 	if _, err := saveOutboundProxyConfig(OutboundProxyConfig{Mode: outboundProxyModeDirect}); err != nil {
 		t.Fatalf("save outbound proxy config: %v", err)
@@ -2025,6 +2051,478 @@ func TestForwardOpenAIRequestViaProviderHealsPromptCacheSessions(t *testing.T) {
 	}
 	if containsEncryptedContentNeedle(secondRaw) {
 		t.Fatalf("expected prompt-cache healed request to strip encrypted_content completely, got %s", secondRaw)
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderFallbacksResponsesToChat(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	type capturedRequest struct {
+		Path string
+		Body map[string]any
+	}
+
+	var mu sync.Mutex
+	requests := make([]capturedRequest, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+
+		mu.Lock()
+		requests = append(requests, capturedRequest{Path: request.URL.Path, Body: body})
+		mu.Unlock()
+
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/responses", "/responses":
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = writer.Write([]byte(`{"error":{"message":"unknown API route"}}`))
+		case "/v1/chat/completions", "/chat/completions":
+			_, _ = writer.Write([]byte(`{
+				"id":"chatcmpl_fallback_123",
+				"object":"chat.completion",
+				"created":1710000000,
+				"model":"gpt-5.5",
+				"choices":[
+					{"index":0,"message":{"role":"assistant","content":"fallback ok"},"finish_reason":"stop"}
+				],
+				"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14}
+			}`))
+		default:
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "fallback-provider",
+		RowKey:    "row-fallback",
+		Name:      "Fallback Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test-fallback",
+		APIFormat: "openai_chat",
+	}
+
+	rawBody := []byte(`{
+		"model":"gpt-5.5",
+		"instructions":"system fallback",
+		"stream":false,
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}
+		],
+		"reasoning":{"effort":"medium"}
+	}`)
+
+	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("expected fallback request to succeed, got %#v", result)
+	}
+
+	var responseBody map[string]any
+	if err := json.Unmarshal(result.Body, &responseBody); err != nil {
+		t.Fatalf("decode transformed response: %v", err)
+	}
+	if got := strings.TrimSpace(toStringValue(responseBody["object"])); got != "response" {
+		t.Fatalf("expected responses payload object, got %#v", responseBody)
+	}
+	output, ok := responseBody["output"].([]any)
+	if !ok || len(output) == 0 {
+		t.Fatalf("expected responses output items, got %#v", responseBody["output"])
+	}
+	firstItem, _ := output[0].(map[string]any)
+	content, _ := firstItem["content"].([]any)
+	firstContent, _ := content[0].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(firstContent["text"])); got != "fallback ok" {
+		t.Fatalf("expected transformed output text, got %#v", firstContent)
+	}
+
+	scopeKey := resolveAdvancedProxyOpenAIProtocolPreferenceScopeKey(provider, "gpt-5.5")
+	if preference, ok := getAdvancedProxyOpenAIProtocolPreference(scopeKey); !ok || preference != advancedProxyOpenAIProtocolPreferChat {
+		t.Fatalf("expected chat preference to be persisted for scope %q, got %v %t", scopeKey, preference, ok)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) < 2 {
+		t.Fatalf("expected fallback flow to reach chat after at least one responses attempt, got %d requests", len(requests))
+	}
+	for index := 0; index < len(requests)-1; index++ {
+		if requests[index].Path != "/v1/responses" && requests[index].Path != "/responses" {
+			t.Fatalf("unexpected pre-fallback request path: %#v", requests)
+		}
+	}
+	lastRequest := requests[len(requests)-1]
+	if lastRequest.Path != "/v1/chat/completions" && lastRequest.Path != "/chat/completions" {
+		t.Fatalf("unexpected request order: %#v", requests)
+	}
+	if _, exists := lastRequest.Body["input"]; exists {
+		t.Fatalf("expected fallback chat request body to remove responses input field: %#v", lastRequest.Body)
+	}
+	messages, ok := lastRequest.Body["messages"].([]any)
+	if !ok || len(messages) < 2 {
+		t.Fatalf("expected fallback chat request to contain system + user messages, got %#v", lastRequest.Body["messages"])
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderUsesChatPreferenceForResponsesStream(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	provider := AdvancedProxyProvider{
+		ID:        "pref-provider",
+		RowKey:    "row-pref",
+		Name:      "Preference Provider",
+		APIKey:    "sk-pref",
+		APIFormat: "openai_chat",
+	}
+
+	var mu sync.Mutex
+	requestPaths := make([]string, 0, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mu.Lock()
+		requestPaths = append(requestPaths, request.URL.Path)
+		mu.Unlock()
+
+		if request.URL.Path != "/v1/chat/completions" && request.URL.Path != "/chat/completions" {
+			t.Fatalf("expected direct chat preference hit, got path %s", request.URL.Path)
+		}
+
+		writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = writer.Write([]byte("data: {\"id\":\"chatcmpl_pref_123\",\"object\":\"chat.completion.chunk\",\"created\":1710000001,\"model\":\"gpt-5.5\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello\"}}]}\n\n"))
+		_, _ = writer.Write([]byte("data: {\"id\":\"chatcmpl_pref_123\",\"object\":\"chat.completion.chunk\",\"created\":1710000001,\"model\":\"gpt-5.5\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":2,\"total_tokens\":9}}\n\n"))
+		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	provider.BaseURL = server.URL
+	scopeKey := resolveAdvancedProxyOpenAIProtocolPreferenceScopeKey(provider, "gpt-5.5")
+	setAdvancedProxyOpenAIProtocolPreference(scopeKey, advancedProxyOpenAIProtocolPreferChat)
+
+	rawBody := []byte(`{
+		"model":"gpt-5.5",
+		"stream":true,
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}
+		]
+	}`)
+
+	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, true, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK || result.StreamBody == nil {
+		t.Fatalf("expected preferred chat stream to succeed, got %#v", result)
+	}
+
+	streamPayload, err := io.ReadAll(result.StreamBody)
+	if err != nil {
+		t.Fatalf("read transformed stream: %v", err)
+	}
+	streamText := string(streamPayload)
+	for _, needle := range []string{"event: response.created", "event: response.output_text.delta", "event: response.completed", "data: [DONE]"} {
+		if !strings.Contains(streamText, needle) {
+			t.Fatalf("expected transformed responses stream to contain %q, got %s", needle, streamText)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requestPaths) != 1 {
+		t.Fatalf("expected one preferred chat request, got %#v", requestPaths)
+	}
+	if requestPaths[0] != "/v1/chat/completions" && requestPaths[0] != "/chat/completions" {
+		t.Fatalf("expected one preferred chat request, got %#v", requestPaths)
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderBlocksFallbackForPreviousResponseID(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requestCount++
+		if request.URL.Path != "/v1/responses" && request.URL.Path != "/responses" {
+			t.Fatalf("expected fallback to stay blocked on responses route, got %s", request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusNotFound)
+		_, _ = writer.Write([]byte(`{"error":{"message":"unknown API route"}}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "blocked-provider",
+		RowKey:    "row-blocked",
+		Name:      "Blocked Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-blocked",
+		APIFormat: "openai_chat",
+	}
+
+	rawBody := []byte(`{
+		"model":"gpt-5.5",
+		"previous_response_id":"resp_prev_123",
+		"stream":false,
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}
+		]
+	}`)
+
+	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected blocked fallback to preserve responses failure, got %#v", result)
+	}
+	if requestCount < 1 {
+		t.Fatalf("expected blocked fallback to keep at least one responses attempt, got %d", requestCount)
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderRecordsAttempts(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/responses", "/responses":
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = writer.Write([]byte(`{"error":{"message":"unknown API route"}}`))
+		case "/v1/chat/completions", "/chat/completions":
+			_, _ = writer.Write([]byte(`{"id":"chatcmpl_test","object":"chat.completion","model":"gpt-5.5","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}}`))
+		default:
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "record-provider",
+		RowKey:    "row-record",
+		Name:      "Record Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-record-provider",
+		APIFormat: "openai_chat",
+	}
+
+	rawBody := []byte(`{"model":"gpt-5.5","stream":false,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]}`)
+	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("expected fallback request to succeed, got %#v", result)
+	}
+
+	records := advancedProxyRequestRecords.list(10)
+	if len(records) < 2 {
+		t.Fatalf("expected at least two request records, got %#v", records)
+	}
+	if records[0].StatusCode != http.StatusOK || records[0].OutboundRoute != "chat" {
+		t.Fatalf("expected newest record to capture successful chat fallback, got %#v", records[0])
+	}
+	if records[0].InputTokens == nil || *records[0].InputTokens != 7 || records[0].OutputTokens == nil || *records[0].OutputTokens != 2 {
+		t.Fatalf("expected usage tokens on success record, got %#v", records[0])
+	}
+	failedResponsesAttempts := 0
+	for _, record := range records[1:] {
+		if record.StatusCode == http.StatusNotFound && record.OutboundRoute == "responses" {
+			failedResponsesAttempts++
+		}
+	}
+	if failedResponsesAttempts < 1 {
+		t.Fatalf("expected at least one failed responses attempt in records, got %#v", records)
+	}
+	if got := records[0].ProviderKeyPreview; !strings.Contains(got, "sk-rec") {
+		t.Fatalf("expected masked key preview, got %#v", got)
+	}
+}
+
+func TestWriteOpenAIProxySuccessRecordsResponsesStreamMetrics(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	provider := AdvancedProxyProvider{
+		ID:      "stream-record-provider",
+		RowKey:  "row-stream-record",
+		Name:    "Stream Record Provider",
+		BaseURL: "https://example.com/v1",
+		APIKey:  "sk-stream-record-provider",
+		Model:   "gpt-5.5",
+	}
+	streamBody := &delayedReadCloser{
+		delay: 12 * time.Millisecond,
+		chunks: [][]byte{
+			[]byte("event: response.created\n"),
+			[]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stream\",\"model\":\"gpt-5.5\"}}\n\n"),
+			[]byte("event: response.output_text.delta\n"),
+			[]byte("data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello\"}\n\n"),
+			[]byte("event: response.completed\n"),
+			[]byte("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":4},\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}]}}\n\n"),
+		},
+	}
+	result := rawProviderAttemptResult{
+		StatusCode: http.StatusOK,
+		Headers:    http.Header{"Content-Type": []string{"text/event-stream; charset=utf-8"}},
+		StreamBody: streamBody,
+		RecordCtx: &advancedProxyStreamRequestRecordContext{
+			AppType:         "codex",
+			ClientRoute:     "responses",
+			InboundEndpoint: buildAdvancedProxyOpenAIInboundEndpoint("codex", "responses"),
+			OutboundRoute:   "responses",
+			Source:          "original",
+			Provider:        provider,
+			TargetURL:       "https://example.com/v1/responses",
+			RequestBody:     []byte(`{"model":"gpt-5.5","stream":true}`),
+			StartedAt:       time.Now().Add(-18 * time.Millisecond),
+			ObservedFormat:  "responses",
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	writeOpenAIProxySuccess(recorder, result, "text/event-stream; charset=utf-8")
+
+	if !strings.Contains(recorder.Body.String(), `"type":"response.completed"`) {
+		t.Fatalf("expected passthrough stream body, got %q", recorder.Body.String())
+	}
+	records := advancedProxyRequestRecords.list(10)
+	if len(records) != 1 {
+		t.Fatalf("expected one recorded stream request, got %#v", records)
+	}
+	record := records[0]
+	if record.StatusCode != http.StatusOK || record.OutboundRoute != "responses" {
+		t.Fatalf("unexpected stream record identity: %#v", record)
+	}
+	if record.InputTokens == nil || *record.InputTokens != 12 || record.OutputTokens == nil || *record.OutputTokens != 4 {
+		t.Fatalf("expected stream usage metrics, got %#v", record)
+	}
+	if record.TTFTMs == nil || *record.TTFTMs <= 0 {
+		t.Fatalf("expected ttft on stream record, got %#v", record)
+	}
+	if record.LatencyMs == nil || *record.LatencyMs <= 0 {
+		t.Fatalf("expected generation latency on stream record, got %#v", record)
+	}
+	if record.TPS == nil || *record.TPS <= 0 {
+		t.Fatalf("expected tps on stream record, got %#v", record)
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIChatStreamWithRecordCapturesMetrics(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	provider := AdvancedProxyProvider{
+		ID:      "claude-stream-provider",
+		RowKey:  "row-claude-stream",
+		Name:    "Claude Stream Provider",
+		BaseURL: "https://example.com/v1",
+		APIKey:  "sk-claude-stream-provider",
+		Model:   "claude-sonnet",
+	}
+	streamBody := &delayedReadCloser{
+		delay: 12 * time.Millisecond,
+		chunks: [][]byte{
+			[]byte("data: {\"id\":\"chatcmpl-stream\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"),
+			[]byte("data: {\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{}}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":3,\"total_tokens\":12}}\n\n"),
+			[]byte("data: [DONE]\n\n"),
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIChatStreamWithRecord(
+		recorder,
+		streamBody,
+		"gpt-5.5",
+		false,
+		&advancedProxyStreamRequestRecordContext{
+			AppType:         "claude",
+			ClientRoute:     "messages",
+			InboundEndpoint: buildAdvancedProxyClaudeInboundEndpoint(),
+			OutboundRoute:   "chat",
+			Source:          "direct",
+			Provider:        provider,
+			TargetURL:       "https://example.com/v1/chat/completions",
+			RequestBody:     []byte(`{"model":"claude-sonnet","stream":true}`),
+			StartedAt:       time.Now().Add(-16 * time.Millisecond),
+			ObservedFormat:  "openai_chat",
+		},
+	)
+
+	if !strings.Contains(recorder.Body.String(), `"type":"message_stop"`) {
+		t.Fatalf("expected anthropic SSE payload, got %q", recorder.Body.String())
+	}
+	records := advancedProxyRequestRecords.list(10)
+	if len(records) != 1 {
+		t.Fatalf("expected one claude stream record, got %#v", records)
+	}
+	record := records[0]
+	if record.AppType != "claude" || record.OutboundRoute != "chat" {
+		t.Fatalf("unexpected claude stream record identity: %#v", record)
+	}
+	if record.InputTokens == nil || *record.InputTokens != 9 || record.OutputTokens == nil || *record.OutputTokens != 3 {
+		t.Fatalf("expected claude stream usage metrics, got %#v", record)
+	}
+	if record.TTFTMs == nil || *record.TTFTMs <= 0 {
+		t.Fatalf("expected claude stream ttft, got %#v", record)
+	}
+	if record.LatencyMs == nil || *record.LatencyMs <= 0 {
+		t.Fatalf("expected claude stream generation latency, got %#v", record)
+	}
+	if record.TPS == nil || *record.TPS <= 0 {
+		t.Fatalf("expected claude stream tps, got %#v", record)
+	}
+}
+
+func TestHandleAdvancedProxyCodexForcesProbeWhenSingleProviderCircuitIsOpen(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requestCount++
+		if request.URL.Path != "/v1/chat/completions" && request.URL.Path != "/chat/completions" {
+			t.Fatalf("unexpected upstream path: %s", request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"chatcmpl_force","object":"chat.completion","model":"gpt-5.5","choices":[{"index":0,"message":{"role":"assistant","content":"forced"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`))
+	}))
+	defer server.Close()
+
+	config := defaultAdvancedProxyConfig()
+	config.Codex.Enabled = true
+	config.Queues.Global.Providers = []AdvancedProxyProvider{
+		{
+			ID:        "force-provider",
+			RowKey:    "row-force",
+			Name:      "Force Provider",
+			BaseURL:   server.URL,
+			APIKey:    "sk-force-provider",
+			APIFormat: "openai_chat",
+			Enabled:   true,
+		},
+	}
+	config.Failover.Enabled = true
+	config.Failover.AutoFailoverEnabled = true
+	if _, err := saveAdvancedProxyConfig(config); err != nil {
+		t.Fatalf("save advanced proxy config: %v", err)
+	}
+
+	for index := 0; index < config.Failover.CircuitFailureThreshold; index++ {
+		advancedProxyRuntime.Record("codex", "force-provider", config.Failover, false)
+	}
+	stats := advancedProxyRuntime.GetStats("codex", "force-provider")
+	if stats.State != circuitStateOpen {
+		t.Fatalf("expected circuit breaker to open before forced probe, got %#v", stats)
+	}
+
+	app := &App{}
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1"+advancedProxyCodexBasePath+"/chat/completions", strings.NewReader(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hello"}],"stream":false}`))
+	request.RemoteAddr = "127.0.0.1:43210"
+	recorder := httptest.NewRecorder()
+
+	app.handleAdvancedProxyCodex(recorder, request)
+
+	response := recorder.Result()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("expected forced probe to recover single-provider request, status=%d body=%s", response.StatusCode, string(body))
+	}
+	if requestCount != 1 {
+		t.Fatalf("expected forced probe to hit upstream once, got %d", requestCount)
+	}
+	stats = advancedProxyRuntime.GetStats("codex", "force-provider")
+	if stats.State != circuitStateClosed {
+		t.Fatalf("expected successful forced probe to close breaker, got %#v", stats)
 	}
 }
 

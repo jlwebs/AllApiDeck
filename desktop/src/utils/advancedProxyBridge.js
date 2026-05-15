@@ -480,6 +480,23 @@ export async function resetCircuitBreaker(appType, providerId) {
   return app.ResetCircuitBreaker(String(appType || 'claude'), String(providerId || '').trim());
 }
 
+export function isAdvancedProxyRequestRecordBridgeAvailable() {
+  const app = getAppBridge();
+  return typeof app?.GetAdvancedProxyRequestRecords === 'function';
+}
+
+export async function listAdvancedProxyRequestRecords(limit = 120) {
+  const app = getAppBridge();
+  if (!app?.GetAdvancedProxyRequestRecords) return [];
+  return app.GetAdvancedProxyRequestRecords(Math.max(1, Number(limit || 120)));
+}
+
+export async function clearAdvancedProxyRequestRecords() {
+  const app = getAppBridge();
+  if (!app?.ClearAdvancedProxyRequestRecords) return true;
+  return app.ClearAdvancedProxyRequestRecords();
+}
+
 export function getAdvancedProxyQueueProviders(config = null, scope = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, options = {}) {
   const snapshot = normalizeAdvancedProxyConfig(config || getAdvancedProxyLocalSnapshot());
   const normalizedScope = normalizeQueueScope(scope);

@@ -15,7 +15,14 @@
         <div class="page-content batch-page-content key-management-page-content">
           <div class="container batch-page-container key-management-page-container">
             <div class="key-management" :class="{ 'key-management-compact': isCompactMode, 'key-management-gaia': isDarkMode }">
-              <AppHeader v-if="!isCompactMode" current-page="keys" :is-dark-mode="isDarkMode" @experimental="showExperimentalFeatures = true" @settings="openSettingsModal" />
+              <AppHeader
+                v-if="!isCompactMode"
+                current-page="keys"
+                :is-dark-mode="isDarkMode"
+                @experimental="showExperimentalFeatures = true"
+                @request-records="showRequestRecordsDrawer = true"
+                @settings="openSettingsModal"
+              />
 
       <template v-if="!isCompactMode">
 
@@ -899,6 +906,10 @@
                 v-model:desktop-token-source-mode="desktopTokenSourceMode"
                 :app-name="'All API Deck'"
               />
+              <AdvancedProxyRequestRecordsDrawer
+                v-model:open="showRequestRecordsDrawer"
+                :is-dark-mode="isDarkMode"
+              />
               <AdvancedProxyModal
                 v-model:open="showExperimentalFeatures"
                 :initial-queue-scope="advancedProxyFocusQueueScope"
@@ -920,6 +931,7 @@ import { useRoute } from 'vue-router';
 import AppHeader from './AppHeader.vue';
 import QueueOrbitIcon from './icons/QueueOrbitIcon.vue';
 import AdvancedProxyModal from './AdvancedProxyModal.vue';
+import AdvancedProxyRequestRecordsDrawer from './AdvancedProxyRequestRecordsDrawer.vue';
 import DesktopConfigDiffModal from './DesktopConfigDiffModal.vue';
 import SystemSettingsModal from './SystemSettingsModal.vue';
 import { fetchModelList } from '../utils/api.js';
@@ -1035,6 +1047,7 @@ const batchQuickTestProgress = reactive({
 const currentTablePage = ref(1);
 const currentTablePageSize = ref(20);
 const showAppSettingsModal = ref(false);
+const showRequestRecordsDrawer = ref(false);
 const globalTreeExpanded = ref(loadTreeExpandedSetting(true));
 const desktopTokenSourceMode = ref(loadDesktopTokenSourceMode());
 const settingsApiUrl = ref('');

@@ -20,6 +20,7 @@
               current-page="sites"
               :is-dark-mode="isDarkMode"
               @experimental="handleExperimental"
+              @request-records="showRequestRecordsDrawer = true"
               @settings="handleSettings"
             />
 
@@ -339,6 +340,10 @@
       v-model:desktop-token-source-mode="desktopTokenSourceMode"
       :app-name="'All API Deck'"
     />
+    <AdvancedProxyRequestRecordsDrawer
+      v-model:open="showRequestRecordsDrawer"
+      :is-dark-mode="isDarkMode"
+    />
     <AdvancedProxyModal v-model:open="showExperimentalFeatures" />
   </ConfigProvider>
 </template>
@@ -358,6 +363,7 @@ import {
 } from '@ant-design/icons-vue';
 import AppHeader from './AppHeader.vue';
 import AdvancedProxyModal from './AdvancedProxyModal.vue';
+import AdvancedProxyRequestRecordsDrawer from './AdvancedProxyRequestRecordsDrawer.vue';
 import TextPromptModal from './TextPromptModal.vue';
 import SystemSettingsModal from './SystemSettingsModal.vue';
 import { fetchModelList } from '../utils/api.js';
@@ -403,6 +409,7 @@ const textPromptMode = ref('sk');
 const textPromptValue = ref('');
 const textPromptSiteCacheKey = ref('');
 const showAppSettingsModal = ref(false);
+const showRequestRecordsDrawer = ref(false);
 const globalTreeExpanded = ref(loadTreeExpandedSetting(true));
 const desktopTokenSourceMode = ref(loadDesktopTokenSourceMode());
 const isDarkMode = ref(false);

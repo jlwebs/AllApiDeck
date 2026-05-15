@@ -10,6 +10,10 @@ export function ApplyManagedAppConfigFiles(arg1) {
   return window['go']['main']['App']['ApplyManagedAppConfigFiles'](arg1);
 }
 
+export function ClearAdvancedProxyRequestRecords() {
+  return window['go']['main']['App']['ClearAdvancedProxyRequestRecords']();
+}
+
 export function CloseBridgeImportSession() {
   return window['go']['main']['App']['CloseBridgeImportSession']();
 }
@@ -48,6 +52,10 @@ export function GetAdvancedProxyConfig() {
 
 export function GetAdvancedProxyConfigFilePath() {
   return window['go']['main']['App']['GetAdvancedProxyConfigFilePath']();
+}
+
+export function GetAdvancedProxyRequestRecords(arg1) {
+  return window['go']['main']['App']['GetAdvancedProxyRequestRecords'](arg1);
 }
 
 export function GetAdvancedProxyRoutingSnapshot() {

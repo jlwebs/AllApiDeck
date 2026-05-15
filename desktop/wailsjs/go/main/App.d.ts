@@ -6,6 +6,8 @@ export function AppendClientLog(arg1:string,arg2:string):Promise<void>;
 
 export function ApplyManagedAppConfigFiles(arg1:main.ManagedAppConfigApplyRequest):Promise<main.ManagedAppConfigApplyResult>;
 
+export function ClearAdvancedProxyRequestRecords():Promise<boolean>;
+
 export function CloseBridgeImportSession():Promise<main.BridgeImportSnapshot>;
 
 export function CloseDesktopProfileAssist(arg1:Array<string>):Promise<Record<string, any>>;
@@ -25,6 +27,8 @@ export function ExtractChromeProfileTokens(arg1:main.ChromeProfileTokenRequest):
 export function GetAdvancedProxyConfig():Promise<main.AdvancedProxyConfig>;
 
 export function GetAdvancedProxyConfigFilePath():Promise<string>;
+
+export function GetAdvancedProxyRequestRecords(arg1:number):Promise<Array<main.AdvancedProxyRequestRecord>>;
 
 export function GetAdvancedProxyRoutingSnapshot():Promise<main.AdvancedProxyRoutingSnapshot>;
 

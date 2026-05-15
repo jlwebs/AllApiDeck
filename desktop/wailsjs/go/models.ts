@@ -369,6 +369,62 @@ export namespace main {
 	}
 	
 	
+	export class AdvancedProxyRequestRecord {
+	    id: string;
+	    recordedAt: string;
+	    appType: string;
+	    clientRoute: string;
+	    inboundEndpoint: string;
+	    outboundRoute: string;
+	    providerId: string;
+	    providerRowKey: string;
+	    providerName: string;
+	    providerKeyPreview: string;
+	    model: string;
+	    stream: boolean;
+	    statusCode: number;
+	    durationMs: number;
+	    ttftMs?: number;
+	    latencyMs?: number;
+	    inputTokens?: number;
+	    outputTokens?: number;
+	    tps?: number;
+	    upstreamUrl: string;
+	    upstreamEndpoint: string;
+	    errorDetail: string;
+	    source: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AdvancedProxyRequestRecord(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.recordedAt = source["recordedAt"];
+	        this.appType = source["appType"];
+	        this.clientRoute = source["clientRoute"];
+	        this.inboundEndpoint = source["inboundEndpoint"];
+	        this.outboundRoute = source["outboundRoute"];
+	        this.providerId = source["providerId"];
+	        this.providerRowKey = source["providerRowKey"];
+	        this.providerName = source["providerName"];
+	        this.providerKeyPreview = source["providerKeyPreview"];
+	        this.model = source["model"];
+	        this.stream = source["stream"];
+	        this.statusCode = source["statusCode"];
+	        this.durationMs = source["durationMs"];
+	        this.ttftMs = source["ttftMs"];
+	        this.latencyMs = source["latencyMs"];
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	        this.tps = source["tps"];
+	        this.upstreamUrl = source["upstreamUrl"];
+	        this.upstreamEndpoint = source["upstreamEndpoint"];
+	        this.errorDetail = source["errorDetail"];
+	        this.source = source["source"];
+	    }
+	}
 	export class AdvancedProxyRoutingState {
 	    appType: string;
 	    providerId: string;

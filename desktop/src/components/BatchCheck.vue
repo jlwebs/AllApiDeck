@@ -19,6 +19,7 @@
               v-if="!isModelProbeWindow"
               current-page="batch":is-dark-mode="isDarkMode"
               @experimental="showExperimentalFeatures = true"
+              @request-records="showRequestRecordsDrawer = true"
               @settings="openSettingsModal"
             />
 
@@ -676,6 +677,10 @@
               v-model:tree-expanded="isTreeExpanded"
               v-model:desktop-token-source-mode="desktopTokenSourceMode":is-chrome-profile-auth-available="isChromeProfileAuthAvailable":app-name="appInfo.name":app-version="appInfo.version"
             />
+            <AdvancedProxyRequestRecordsDrawer
+              v-model:open="showRequestRecordsDrawer"
+              :is-dark-mode="isDarkMode"
+            />
           </div>
         </div>
       </div>
@@ -696,6 +701,7 @@ import { HomeOutlined, ReloadOutlined, MenuUnfoldOutlined, MenuFoldOutlined, Inb
 } from '@ant-design/icons-vue';
 import AppHeader from './AppHeader.vue';
 import AdvancedProxyModal from './AdvancedProxyModal.vue';
+import AdvancedProxyRequestRecordsDrawer from './AdvancedProxyRequestRecordsDrawer.vue';
 import BridgeImportWizardModal from './BridgeImportWizardModal.vue';
 import SystemSettingsModal from './SystemSettingsModal.vue';
 import { fetchModelList
@@ -796,6 +802,7 @@ const bridgeImportClientReady = ref(false);
 const bridgeImportLastClientPing = ref('');
 let bridgeImportPollTimer = null;
 const showAppSettingsModal = ref(false);
+const showRequestRecordsDrawer = ref(false);
 const settingsApiUrl = ref('');
 const settingsApiKey = ref('');
 const localCacheList = ref([]);

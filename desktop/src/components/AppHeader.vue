@@ -58,6 +58,17 @@
       </button>
 
       <button
+        type="button"
+        class="spring-pill"
+        title="请求记录"
+        aria-label="请求记录"
+        @click="$emit('request-records')"
+      >
+        <BarChartOutlined />
+        <span>统计</span>
+      </button>
+
+      <button
         v-if="showSettings"
         type="button"
         class="spring-pill spring-pill-icon-only"
@@ -181,6 +192,7 @@ import { message } from 'ant-design-vue';
 import appLogo from '../assets/logo.png';
 import {
   ApiOutlined,
+  BarChartOutlined,
   DatabaseOutlined,
   GithubOutlined,
   KeyOutlined,
@@ -198,7 +210,7 @@ import {
 } from '../utils/appUpdateState.js';
 import { openUrlInSystemBrowser } from '../utils/runtimeApi.js';
 
-defineEmits(['experimental', 'settings']);
+defineEmits(['experimental', 'request-records', 'settings']);
 
 defineProps({
   currentPage: {
