@@ -2160,6 +2160,140 @@ func TestForwardOpenAIRequestViaProviderHealsPromptCacheSessions(t *testing.T) {
 	}
 }
 
+func TestForwardOpenAIRequestViaProviderUsesProviderModelForResponsesRoute(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	var capturedPath string
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		capturedPath = request.URL.Path
+		if err := json.NewDecoder(request.Body).Decode(&capturedBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"resp_model_override","object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "model-override-provider",
+		RowKey:    "row-model-override",
+		Name:      "Model Override Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-model-override",
+		Model:     "gemini-3-flash-previewcloud",
+		APIFormat: "openai_responses",
+	}
+
+	rawBody := []byte(`{
+		"model":"gpt-5.5",
+		"stream":false,
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}
+		]
+	}`)
+
+	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("expected provider-model responses request to succeed, got %#v", result)
+	}
+	if capturedPath != "/v1/responses" && capturedPath != "/responses" {
+		t.Fatalf("expected normalized request to stay on responses route, got %s", capturedPath)
+	}
+	if got := strings.TrimSpace(toStringValue(capturedBody["model"])); got != provider.Model {
+		t.Fatalf("expected upstream request model %q, got %#v", provider.Model, capturedBody)
+	}
+
+	records := advancedProxyRequestRecords.list(10)
+	if len(records) != 1 {
+		t.Fatalf("expected one request record, got %#v", records)
+	}
+	if records[0].Model != provider.Model {
+		t.Fatalf("expected request record model %q, got %#v", provider.Model, records[0])
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderPrefersProviderChatAPIForResponsesRoute(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	type capturedRequest struct {
+		Path string
+		Body map[string]any
+	}
+
+	requests := make([]capturedRequest, 0, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		requests = append(requests, capturedRequest{Path: request.URL.Path, Body: body})
+		if request.URL.Path != "/v1/chat/completions" && request.URL.Path != "/chat/completions" {
+			t.Fatalf("expected provider-configured chat route, got %s", request.URL.Path)
+		}
+
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{
+			"id":"chatcmpl_provider_route",
+			"object":"chat.completion",
+			"created":1710000000,
+			"model":"gemini-3-flash-previewcloud",
+			"choices":[
+				{"index":0,"message":{"role":"assistant","content":"provider route ok"},"finish_reason":"stop"}
+			],
+			"usage":{"prompt_tokens":13,"completion_tokens":4,"total_tokens":17}
+		}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "provider-route-chat",
+		RowKey:    "row-provider-route-chat",
+		Name:      "Provider Route Chat",
+		BaseURL:   server.URL,
+		APIKey:    "sk-provider-route-chat",
+		Model:     "gemini-3-flash-previewcloud",
+		APIFormat: "openai_chat",
+	}
+
+	rawBody := []byte(`{
+		"model":"gpt-5.5",
+		"instructions":"system fallback",
+		"stream":false,
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}
+		]
+	}`)
+
+	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("expected provider chat route to succeed, got %#v", result)
+	}
+
+	if len(requests) != 1 {
+		t.Fatalf("expected one upstream request, got %#v", requests)
+	}
+	if got := strings.TrimSpace(toStringValue(requests[0].Body["model"])); got != provider.Model {
+		t.Fatalf("expected provider-configured model %q, got %#v", provider.Model, requests[0].Body)
+	}
+	if _, exists := requests[0].Body["messages"]; !exists {
+		t.Fatalf("expected provider-configured chat request body, got %#v", requests[0].Body)
+	}
+
+	var responseBody map[string]any
+	if err := json.Unmarshal(result.Body, &responseBody); err != nil {
+		t.Fatalf("decode transformed response: %v", err)
+	}
+	if got := strings.TrimSpace(toStringValue(responseBody["object"])); got != "response" {
+		t.Fatalf("expected transformed responses payload object, got %#v", responseBody)
+	}
+
+	scopeKey := resolveAdvancedProxyOpenAIProtocolPreferenceScopeKey(provider, provider.Model)
+	if preference, ok := getAdvancedProxyOpenAIProtocolPreference(scopeKey); !ok || preference != advancedProxyOpenAIProtocolPreferChat {
+		t.Fatalf("expected provider chat preference to be persisted for scope %q, got %v %t", scopeKey, preference, ok)
+	}
+}
+
 func TestForwardOpenAIRequestViaProviderFallbacksResponsesToChat(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 
@@ -2208,7 +2342,7 @@ func TestForwardOpenAIRequestViaProviderFallbacksResponsesToChat(t *testing.T) {
 		Name:      "Fallback Provider",
 		BaseURL:   server.URL,
 		APIKey:    "sk-test-fallback",
-		APIFormat: "openai_chat",
+		APIFormat: "openai_responses",
 	}
 
 	rawBody := []byte(`{
@@ -2404,7 +2538,7 @@ func TestForwardOpenAIRequestViaProviderRecordsAttempts(t *testing.T) {
 		Name:      "Record Provider",
 		BaseURL:   server.URL,
 		APIKey:    "sk-record-provider",
-		APIFormat: "openai_chat",
+		APIFormat: "openai_responses",
 	}
 
 	rawBody := []byte(`{"model":"gpt-5.5","stream":false,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]}`)

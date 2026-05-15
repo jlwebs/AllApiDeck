@@ -3481,6 +3481,39 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 	return providerAttemptResult{StatusCode: lastStatus, Message: lastMessage}
 }
 
+func normalizeOpenAIProviderDispatchRoute(apiFormat string) string {
+	switch strings.ToLower(strings.TrimSpace(apiFormat)) {
+	case "openai_chat":
+		return "chat"
+	case "openai_responses":
+		return "responses"
+	default:
+		return ""
+	}
+}
+
+func normalizeOpenAIProxyRequestForProvider(rawBody []byte, provider AdvancedProxyProvider) ([]byte, string, error) {
+	requestBody := map[string]any{}
+	if err := json.Unmarshal(rawBody, &requestBody); err != nil {
+		return nil, "", err
+	}
+
+	resolvedModel := firstNonEmpty(strings.TrimSpace(provider.Model), strings.TrimSpace(toStringValue(requestBody["model"])))
+	if resolvedModel == "" {
+		return rawBody, "", nil
+	}
+	if strings.TrimSpace(toStringValue(requestBody["model"])) == resolvedModel {
+		return rawBody, resolvedModel, nil
+	}
+
+	requestBody["model"] = resolvedModel
+	normalizedBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, "", err
+	}
+	return normalizedBody, resolvedModel, nil
+}
+
 func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvider, routeKind string, rawBody []byte, stream bool, config AdvancedProxyConfig) rawProviderAttemptResult {
 	providerLabel := advancedProxyProviderLabel(provider)
 	if normalizeClaudeAPIFormat(provider.APIFormat) == "anthropic" {
@@ -3572,9 +3605,35 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 		}
 	}
 
+	normalizedBody, resolvedModel, normalizeErr := normalizeOpenAIProxyRequestForProvider(preparedBody, provider)
+	if normalizeErr != nil {
+		message := formatAdvancedProxyFailure(appType, routeKind, provider, "", fmt.Sprintf("invalid upstream JSON request after normalization (%s)", normalizeErr.Error()))
+		appendAdvancedProxyLogf(
+			"[OPENAI_PROXY_NORMALIZE_FAIL] app=%s route=%s provider=%s detail=%s",
+			appType,
+			routeKind,
+			providerLabel,
+			previewAdvancedProxyText(normalizeErr.Error(), 260),
+		)
+		return rawProviderAttemptResult{
+			StatusCode: http.StatusInternalServerError,
+			Message:    message,
+			ErrorCode:  "advanced_proxy_error",
+			ErrorType:  "invalid_request_error",
+			ProviderID: strings.TrimSpace(provider.ID),
+			Provider:   providerLabel,
+			TargetURL:  strings.TrimSpace(provider.BaseURL),
+			RouteKind:  routeKind,
+		}
+	}
+	if resolvedModel == "" {
+		resolvedModel = strings.TrimSpace(provider.Model)
+	}
+
 	type openAIProxyAttemptPhase struct {
 		outboundRoute      string
 		requestBody        []byte
+		resolvedModel      string
 		responseTransform  string
 		preferenceValue    int
 		preferenceScopeKey string
@@ -3626,7 +3685,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 	}
 
 	if routeKind == "responses" {
-		fallbackPlan, fallbackErr := buildOpenAIChatFallbackPlanFromResponses(preparedBody, provider)
+		fallbackPlan, fallbackErr := buildOpenAIChatFallbackPlanFromResponses(normalizedBody, provider)
 		if fallbackErr != nil {
 			appendAdvancedProxyLogf(
 				"[OPENAI_PROXY_FALLBACK_PREPARE_FAIL] app=%s provider=%s route=%s detail=%s",
@@ -3636,30 +3695,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 				previewAdvancedProxyText(fallbackErr.Error(), 260),
 			)
 		}
-		if fallbackPlan.SupportsChat {
-			if preferenceValue, ok := getAdvancedProxyOpenAIProtocolPreference(fallbackPlan.ScopeKey); ok && preferenceValue == advancedProxyOpenAIProtocolPreferChat {
-				appendAdvancedProxyLogf(
-					"[OPENAI_PROXY_PREFERENCE_HIT] app=%s provider=%s scope=%s prefer=chat original_route=%s",
-					appType,
-					providerLabel,
-					previewAdvancedProxyText(fallbackPlan.ScopeKey, 160),
-					routeKind,
-				)
-				appendPhase(openAIProxyAttemptPhase{
-					outboundRoute:      "chat",
-					requestBody:        fallbackPlan.ChatBody,
-					responseTransform:  "chat_to_responses",
-					preferenceValue:    advancedProxyOpenAIProtocolPreferChat,
-					preferenceScopeKey: fallbackPlan.ScopeKey,
-					source:             "preference",
-				})
-				appendPhase(openAIProxyAttemptPhase{
-					outboundRoute: "responses",
-					requestBody:   preparedBody,
-					source:        "fallback_restore",
-				})
-			}
-		} else if len(fallbackPlan.Blockers) > 0 {
+		if !fallbackPlan.SupportsChat && len(fallbackPlan.Blockers) > 0 {
 			appendAdvancedProxyLogf(
 				"[OPENAI_PROXY_FALLBACK_BLOCKED] app=%s provider=%s route=%s blockers=%s",
 				appType,
@@ -3668,28 +3704,86 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 				previewAdvancedProxyText(strings.Join(fallbackPlan.Blockers, ","), 260),
 			)
 		}
-		if len(phases) == 0 {
+
+		appendResponsesPhase := func(source string, preferenceValue int, preferenceScopeKey string) {
 			appendPhase(openAIProxyAttemptPhase{
-				outboundRoute: "responses",
-				requestBody:   preparedBody,
-				source:        "original",
+				outboundRoute:      "responses",
+				requestBody:        normalizedBody,
+				resolvedModel:      firstNonEmpty(resolvedModel, fallbackPlan.Model),
+				preferenceValue:    preferenceValue,
+				preferenceScopeKey: strings.TrimSpace(preferenceScopeKey),
+				source:             source,
 			})
+		}
+		appendChatPhase := func(source string, preferenceValue int, preferenceScopeKey string) {
 			if fallbackPlan.SupportsChat {
 				appendPhase(openAIProxyAttemptPhase{
 					outboundRoute:      "chat",
 					requestBody:        fallbackPlan.ChatBody,
+					resolvedModel:      firstNonEmpty(fallbackPlan.Model, resolvedModel),
 					responseTransform:  "chat_to_responses",
-					preferenceValue:    advancedProxyOpenAIProtocolPreferChat,
-					preferenceScopeKey: fallbackPlan.ScopeKey,
-					source:             "fallback",
+					preferenceValue:    preferenceValue,
+					preferenceScopeKey: strings.TrimSpace(preferenceScopeKey),
+					source:             source,
 				})
 			}
 		}
+
+		providerPreferredRoute := normalizeOpenAIProviderDispatchRoute(provider.APIFormat)
+		if preferenceValue, ok := getAdvancedProxyOpenAIProtocolPreference(fallbackPlan.ScopeKey); ok {
+			switch preferenceValue {
+			case advancedProxyOpenAIProtocolPreferChat:
+				appendAdvancedProxyLogf(
+					"[OPENAI_PROXY_PREFERENCE_HIT] app=%s provider=%s scope=%s prefer=chat original_route=%s",
+					appType,
+					providerLabel,
+					previewAdvancedProxyText(fallbackPlan.ScopeKey, 160),
+					routeKind,
+				)
+				appendChatPhase("preference", advancedProxyOpenAIProtocolPreferChat, fallbackPlan.ScopeKey)
+				appendResponsesPhase("fallback_restore", advancedProxyOpenAIProtocolPreferResponses, fallbackPlan.ScopeKey)
+			case advancedProxyOpenAIProtocolPreferResponses:
+				appendAdvancedProxyLogf(
+					"[OPENAI_PROXY_PREFERENCE_HIT] app=%s provider=%s scope=%s prefer=responses original_route=%s",
+					appType,
+					providerLabel,
+					previewAdvancedProxyText(fallbackPlan.ScopeKey, 160),
+					routeKind,
+				)
+				appendResponsesPhase("preference", advancedProxyOpenAIProtocolPreferResponses, fallbackPlan.ScopeKey)
+				appendChatPhase("fallback_restore", advancedProxyOpenAIProtocolPreferChat, fallbackPlan.ScopeKey)
+			}
+		}
+		if len(phases) == 0 {
+			switch providerPreferredRoute {
+			case "chat":
+				if fallbackPlan.SupportsChat {
+					appendChatPhase("provider_config", advancedProxyOpenAIProtocolPreferChat, fallbackPlan.ScopeKey)
+					appendResponsesPhase("fallback_restore", advancedProxyOpenAIProtocolPreferResponses, fallbackPlan.ScopeKey)
+				} else {
+					appendResponsesPhase("original", 0, "")
+				}
+			case "responses":
+				appendResponsesPhase("provider_config", advancedProxyOpenAIProtocolPreferResponses, fallbackPlan.ScopeKey)
+				appendChatPhase("fallback", advancedProxyOpenAIProtocolPreferChat, fallbackPlan.ScopeKey)
+			default:
+				appendResponsesPhase("original", 0, "")
+				appendChatPhase("fallback", advancedProxyOpenAIProtocolPreferChat, fallbackPlan.ScopeKey)
+			}
+		}
+		if len(phases) == 0 {
+			appendResponsesPhase("original", 0, "")
+		}
 	} else {
+		phaseSource := "original"
+		if routeKind == "chat" && normalizeOpenAIProviderDispatchRoute(provider.APIFormat) == "chat" {
+			phaseSource = "provider_config"
+		}
 		appendPhase(openAIProxyAttemptPhase{
 			outboundRoute: routeKind,
-			requestBody:   preparedBody,
-			source:        "original",
+			requestBody:   normalizedBody,
+			resolvedModel: resolvedModel,
+			source:        phaseSource,
 		})
 	}
 
@@ -3719,7 +3813,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 			lastErrorType = "invalid_request_error"
 			continue
 		}
-		phaseModel := resolveAdvancedProxyRecordedModel("", phase.requestBody, provider.Model)
+		phaseModel := resolveAdvancedProxyRecordedModel(phase.resolvedModel, phase.requestBody, provider.Model)
 
 		advanceToNextPhase := false
 		for _, targetURL := range targets {
@@ -3804,12 +3898,13 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 						advanceToNextPhase = true
 						break
 					}
-					if phase.source == "preference" && phase.outboundRoute == "chat" && phases[phaseIndex+1].outboundRoute == "responses" && shouldFallbackChatPreferenceBackToResponses(statusCode, body) {
+					if phase.outboundRoute == "chat" && phases[phaseIndex+1].outboundRoute == "responses" && shouldFallbackChatPreferenceBackToResponses(statusCode, body) {
 						appendAdvancedProxyLogf(
-							"[OPENAI_PROXY_PREFERENCE_STALE] app=%s provider=%s scope=%s prefer=chat reason=%s",
+							"[OPENAI_PROXY_CHAT_RESTORE] app=%s provider=%s scope=%s source=%s reason=%s",
 							appType,
 							providerLabel,
 							previewAdvancedProxyText(phase.preferenceScopeKey, 160),
+							phase.source,
 							previewAdvancedProxyText(summarizeAdvancedProxyBody(body), 220),
 						)
 						advanceToNextPhase = true
@@ -3843,7 +3938,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 				RouteKind:  routeKind,
 			}
 			if phase.responseTransform == "chat_to_responses" {
-				transformedResult, transformErr := transformOpenAIChatResultToResponses(result, firstNonEmpty(strings.TrimSpace(provider.Model), ""))
+				transformedResult, transformErr := transformOpenAIChatResultToResponses(result, firstNonEmpty(phaseModel, strings.TrimSpace(provider.Model), ""))
 				if transformErr != nil {
 					if streamBody != nil {
 						_ = streamBody.Close()
