@@ -459,7 +459,6 @@ const tableViewportWidth = ref(0);
 const tableScrollLeft = ref(0);
 const viewportWidth = ref(typeof window === 'undefined' ? 900 : window.innerWidth);
 const viewportHeight = ref(typeof window === 'undefined' ? 600 : window.innerHeight);
-let pollingTimer = null;
 let tableMetricsFrame = 0;
 let tableResizeObserver = null;
 const REQUEST_RECORD_PAGE_SIZE = 50;
@@ -1181,20 +1180,6 @@ async function refreshRecords() {
   }
 }
 
-function startPolling() {
-  stopPolling();
-  pollingTimer = window.setInterval(() => {
-    void refreshRecords();
-  }, 5000);
-}
-
-function stopPolling() {
-  if (pollingTimer) {
-    window.clearInterval(pollingTimer);
-    pollingTimer = null;
-  }
-}
-
 function handleClose() {
   emit('update:open', false);
 }
@@ -1238,14 +1223,12 @@ watch(
       await nextTick();
       attachTableResizeObserver();
       queueTableMetricsSync();
-      startPolling();
       return;
     }
     detailOpen.value = false;
     selectedRecord.value = null;
     void syncRequestDebugEditor(null);
     detachTableResizeObserver();
-    stopPolling();
   },
   { immediate: true },
 );
@@ -1296,7 +1279,6 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  stopPolling();
   detachTableResizeObserver();
   if (tableMetricsFrame) {
     window.cancelAnimationFrame(tableMetricsFrame);
