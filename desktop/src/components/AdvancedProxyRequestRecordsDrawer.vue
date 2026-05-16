@@ -111,7 +111,13 @@
               <div
                 ref="tableScrollRef"
                 class="request-records-table-scroll"
+                :class="{
+                  'is-draggable': tableDragEnabled,
+                  'is-dragging': tableDragging,
+                }"
                 :style="{ maxHeight: `${tableScrollY}px` }"
+                @pointerdown="handleTablePointerDown"
+                @click.capture="handleTableClickCapture"
               >
                 <div
                   class="request-records-table-stage"
@@ -457,10 +463,14 @@ const tableHorizontalScrollRef = ref(null);
 const tableContentWidth = ref(0);
 const tableViewportWidth = ref(0);
 const tableScrollLeft = ref(0);
+const tableVerticalMaxScroll = ref(0);
+const tableDragging = ref(false);
 const viewportWidth = ref(typeof window === 'undefined' ? 900 : window.innerWidth);
 const viewportHeight = ref(typeof window === 'undefined' ? 600 : window.innerHeight);
 let tableMetricsFrame = 0;
 let tableResizeObserver = null;
+let tableDragSession = null;
+let tableSuppressClickUntil = 0;
 const REQUEST_RECORD_PAGE_SIZE = 50;
 
 const isCompactWindow = computed(() => viewportWidth.value <= 860);
@@ -481,6 +491,7 @@ const tableViewportFallbackWidth = computed(() => {
 });
 const showTableHorizontalScroll = computed(() => tableLayoutWidth.value - tableViewportWidth.value > 2);
 const tableHorizontalMaxScroll = computed(() => Math.max(0, tableContentWidth.value - tableViewportWidth.value));
+const tableDragEnabled = computed(() => tableHorizontalMaxScroll.value > 0 || tableVerticalMaxScroll.value > 0);
 const requestDebugTesting = computed(() => requestDebugState.value === 'loading');
 
 const columns = computed(() => {
@@ -660,12 +671,14 @@ function syncTableMetrics() {
   if (!scrollElement || !tableElement) {
     tableContentWidth.value = 0;
     tableViewportWidth.value = tableViewportFallbackWidth.value;
+    tableVerticalMaxScroll.value = 0;
     tableScrollLeft.value = 0;
     return;
   }
   const measuredViewportWidth = Math.max(scrollElement.clientWidth, 0);
   const fallbackViewportWidth = tableViewportFallbackWidth.value;
   tableContentWidth.value = Math.max(tableLayoutWidth.value, tableElement.offsetWidth, 0);
+  tableVerticalMaxScroll.value = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
   if (fallbackViewportWidth > 0) {
     if (measuredViewportWidth > 0) {
       tableViewportWidth.value = Math.min(measuredViewportWidth, fallbackViewportWidth);
@@ -699,6 +712,109 @@ function setTableScrollLeft(nextScrollLeft) {
 function handleTableHorizontalRangeInput(event) {
   const nextValue = Number(event?.target?.value || 0);
   setTableScrollLeft(nextValue);
+}
+
+function isTableInteractiveTarget(target) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(target.closest([
+    'button',
+    'a',
+    'input',
+    'textarea',
+    'select',
+    'label',
+    '[role="button"]',
+    '.ant-btn',
+    '.ant-pagination',
+    '.request-records-detail-button',
+  ].join(',')));
+}
+
+function detachTableDragListeners() {
+  window.removeEventListener('pointermove', handleTablePointerMove);
+  window.removeEventListener('pointerup', handleTablePointerEnd);
+  window.removeEventListener('pointercancel', handleTablePointerEnd);
+}
+
+function clearTableDragSession() {
+  const session = tableDragSession;
+  if (session?.scrollElement?.releasePointerCapture && session.pointerId != null) {
+    try {
+      session.scrollElement.releasePointerCapture(session.pointerId);
+    } catch {}
+  }
+  detachTableDragListeners();
+  tableDragging.value = false;
+  tableDragSession = null;
+  if (typeof document !== 'undefined') {
+    document.body.style.removeProperty('user-select');
+  }
+}
+
+function handleTablePointerDown(event) {
+  const scrollElement = tableScrollRef.value;
+  if (!scrollElement || !tableDragEnabled.value) return;
+  if (event.pointerType === 'mouse' && event.button !== 0) return;
+  if (event.isPrimary === false) return;
+  if (isTableInteractiveTarget(event.target)) return;
+
+  clearTableDragSession();
+  tableDragSession = {
+    pointerId: event.pointerId,
+    startClientX: Number(event.clientX || 0),
+    startClientY: Number(event.clientY || 0),
+    startScrollLeft: tableScrollLeft.value,
+    startScrollTop: scrollElement.scrollTop,
+    scrollElement,
+    dragging: false,
+  };
+
+  if (scrollElement.setPointerCapture) {
+    try {
+      scrollElement.setPointerCapture(event.pointerId);
+    } catch {}
+  }
+
+  window.addEventListener('pointermove', handleTablePointerMove, { passive: false });
+  window.addEventListener('pointerup', handleTablePointerEnd, { passive: false });
+  window.addEventListener('pointercancel', handleTablePointerEnd, { passive: false });
+}
+
+function handleTablePointerMove(event) {
+  const session = tableDragSession;
+  if (!session || session.pointerId !== event.pointerId) return;
+  const deltaX = Number(event.clientX || 0) - session.startClientX;
+  const deltaY = Number(event.clientY || 0) - session.startClientY;
+  if (!session.dragging && Math.abs(deltaX) < 3 && Math.abs(deltaY) < 3) {
+    return;
+  }
+
+  if (!session.dragging) {
+    session.dragging = true;
+    tableDragging.value = true;
+    tableSuppressClickUntil = Date.now() + 250;
+    if (typeof document !== 'undefined') {
+      document.body.style.userSelect = 'none';
+    }
+  }
+
+  event.preventDefault();
+  setTableScrollLeft(session.startScrollLeft - deltaX);
+  const maxScrollTop = Math.max(0, session.scrollElement.scrollHeight - session.scrollElement.clientHeight);
+  session.scrollElement.scrollTop = Math.max(0, Math.min(maxScrollTop, session.startScrollTop - deltaY));
+}
+
+function handleTablePointerEnd(event) {
+  const session = tableDragSession;
+  if (!session || session.pointerId !== event.pointerId) return;
+  clearTableDragSession();
+}
+
+function handleTableClickCapture(event) {
+  if (Date.now() > tableSuppressClickUntil) return;
+  tableSuppressClickUntil = 0;
+  event.preventDefault();
+  event.stopPropagation();
 }
 
 function normalizeText(value) {
@@ -1228,6 +1344,7 @@ watch(
     detailOpen.value = false;
     selectedRecord.value = null;
     void syncRequestDebugEditor(null);
+    clearTableDragSession();
     detachTableResizeObserver();
   },
   { immediate: true },
@@ -1279,6 +1396,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  clearTableDragSession();
   detachTableResizeObserver();
   if (tableMetricsFrame) {
     window.cancelAnimationFrame(tableMetricsFrame);
@@ -1633,6 +1751,19 @@ onBeforeUnmount(() => {
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-gutter: stable;
+}
+
+.request-records-table-scroll.is-draggable {
+  cursor: grab;
+}
+
+.request-records-table-scroll.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.request-records-table-scroll.is-dragging * {
+  user-select: none;
 }
 
 .request-records-table-stage {
