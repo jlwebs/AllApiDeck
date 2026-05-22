@@ -69,3 +69,4 @@ all-api-hub/
 cc-switch/
 batch-api-check.exe
 link-crypto.local.html
+*.pyc
