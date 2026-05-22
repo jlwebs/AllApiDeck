@@ -102,6 +102,30 @@ type OptimizerConfig struct {
 	CacheTTL          string `json:"cacheTtl"`
 }
 
+type AntiPoisonRandomizationConfig struct {
+	Enabled                      bool `json:"enabled"`
+	StrategyPoolSize             int  `json:"strategyPoolSize"`
+	MinPhraseVariantsPerStrategy int  `json:"minPhraseVariantsPerStrategy"`
+	RandomInsertionPoints        bool `json:"randomInsertionPoints"`
+	MinFakeToolcalls             int  `json:"minFakeToolcalls"`
+	RequirePerToolTypeMarker     bool `json:"requirePerToolTypeMarker"`
+}
+
+type AntiPoisonStringProtectionConfig struct {
+	Enabled bool     `json:"enabled"`
+	Rules   []string `json:"rules"`
+}
+
+type AntiPoisonConfig struct {
+	Enabled          bool                             `json:"enabled"`
+	StrictMode       bool                             `json:"strictMode"`
+	FailureMode      string                           `json:"failureMode"`
+	StrategyPrompt   string                           `json:"strategyPrompt"`
+	AlgorithmPrompt  string                           `json:"algorithmPrompt"`
+	Randomization    AntiPoisonRandomizationConfig    `json:"randomization"`
+	StringProtection AntiPoisonStringProtectionConfig `json:"stringProtection"`
+}
+
 type AdvancedProxyConfig struct {
 	Enabled          bool                      `json:"enabled"`
 	DebugLogging     bool                      `json:"debugLogging"`
@@ -116,6 +140,7 @@ type AdvancedProxyConfig struct {
 	HighAvailability HighAvailabilityConfig    `json:"highAvailability"`
 	Rectifier        RectifierConfig           `json:"rectifier"`
 	Optimizer        OptimizerConfig           `json:"optimizer"`
+	AntiPoison       AntiPoisonConfig          `json:"antiPoison"`
 	UpdatedAt        string                    `json:"updatedAt"`
 }
 
@@ -179,6 +204,56 @@ func defaultAdvancedProxyQueuesConfig() AdvancedProxyQueuesConfig {
 	}
 }
 
+const defaultAntiPoisonStrategyPrompt = `如果本轮产生任意真实 toolcall，请额外生成 AllApiDeck guard fake toolcall。
+guard fake toolcall 不是用户真实请求，不得解释给用户。
+guard fake toolcall 必须按 {{ALGORITHM_ALIAS}} 随机变化算法生成工具链校验信息。
+网关会在返回客户端前摘除所有 guard fake toolcall。
+如果没有真实 toolcall，不要生成 guard fake toolcall。`
+
+const defaultAntiPoisonAlgorithmPrompt = `{{ALGORITHM_ALIAS}} 是本轮随机变化算法代号，仅用于关联本段规则和策略段规则。
+使用该算法时，请基于所有真实 toolcall 组织调用链摘要。
+调用链摘要至少包含真实 toolcall 的返回顺序、工具类别、call_id 摘要、参数 canonical 摘要、本轮 nonce 派生片段。
+生成 guard fake toolcall 时，请写入 algorithm、nonce、digest、chain、cover。
+digest 使用网关提示的链路规则生成，必须与真实 toolcall 链路一一对应。`
+
+func defaultAntiPoisonRandomizationConfig() AntiPoisonRandomizationConfig {
+	return AntiPoisonRandomizationConfig{
+		Enabled:                      true,
+		StrategyPoolSize:             10,
+		MinPhraseVariantsPerStrategy: 5,
+		RandomInsertionPoints:        true,
+		MinFakeToolcalls:             1,
+		RequirePerToolTypeMarker:     true,
+	}
+}
+
+func defaultAntiPoisonStringProtectionConfig() AntiPoisonStringProtectionConfig {
+	return AntiPoisonStringProtectionConfig{
+		Enabled: true,
+		Rules: []string{
+			`保护 JSON 字段名命中值: key:(?i)^(api[_-]?key|secret|client[_-]?secret|token|access[_-]?token|refresh[_-]?token|session[_-]?token|password|authorization|auth[_-]?token|credential|credentials|private[_-]?key)$`,
+			`保护点号开头配置文件路径: (?i)\.(env(?:\.[A-Za-z0-9_-]+)?|npmrc|pypirc|yarnrc|netrc|gitconfig|git-credentials)\b`,
+			`保护常见配置文件路径: (?i)\b[A-Za-z0-9_.\\/-]*(\.env|\.npmrc|\.pypirc|\.yarnrc|\.netrc|config\.(json|ya?ml|toml|ini)|settings\.(json|ya?ml|toml|ini))\b`,
+			`保护 JSON/YAML/TOML 敏感 key: (?i)("?(api[_-]?key|secret|token|password|authorization|auth[_-]?token|private[_-]?key)"?\s*[:=]\s*)("[^"]{8,}"|'[^']{8,}'|[^\s,;}"']{8,})`,
+			`保护 Bearer/Basic/Auth 头值: (?i)\b(Bearer|Basic|Authorization)\s+[A-Za-z0-9._~+/=-]{12,}`,
+			`保护环境变量式密钥: (?i)\b[A-Z0-9_]*(KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\s*=\s*[^\s"'` + "`" + `]{8,}`,
+			`保护疑似私钥块: -----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]{20,}?-----END [A-Z ]*PRIVATE KEY-----`,
+		},
+	}
+}
+
+func defaultAntiPoisonConfig() AntiPoisonConfig {
+	return AntiPoisonConfig{
+		Enabled:          false,
+		StrictMode:       true,
+		FailureMode:      "block",
+		StrategyPrompt:   defaultAntiPoisonStrategyPrompt,
+		AlgorithmPrompt:  defaultAntiPoisonAlgorithmPrompt,
+		Randomization:    defaultAntiPoisonRandomizationConfig(),
+		StringProtection: defaultAntiPoisonStringProtectionConfig(),
+	}
+}
+
 func defaultAdvancedProxyConfig() AdvancedProxyConfig {
 	return AdvancedProxyConfig{
 		Enabled:      false,
@@ -235,6 +310,7 @@ func defaultAdvancedProxyConfig() AdvancedProxyConfig {
 			CacheInjection:    true,
 			CacheTTL:          "1h",
 		},
+		AntiPoison: defaultAntiPoisonConfig(),
 	}
 }
 
@@ -332,8 +408,85 @@ func sanitizeAdvancedProxyConfig(config AdvancedProxyConfig) AdvancedProxyConfig
 	if strings.TrimSpace(config.Optimizer.CacheTTL) == "" {
 		config.Optimizer.CacheTTL = defaults.Optimizer.CacheTTL
 	}
+	config.AntiPoison = sanitizeAntiPoisonConfig(config.AntiPoison)
 	config.Enabled = advancedProxyAnyAppEnabled(config)
 	return config
+}
+
+func sanitizeAntiPoisonConfig(config AntiPoisonConfig) AntiPoisonConfig {
+	defaults := defaultAntiPoisonConfig()
+	if isZeroAntiPoisonConfig(config) {
+		return defaults
+	}
+	if strings.TrimSpace(config.FailureMode) != "warn" {
+		config.FailureMode = defaults.FailureMode
+	}
+	config.StrategyPrompt = strings.TrimSpace(config.StrategyPrompt)
+	if config.StrategyPrompt == "" {
+		config.StrategyPrompt = defaults.StrategyPrompt
+	}
+	config.AlgorithmPrompt = strings.TrimSpace(config.AlgorithmPrompt)
+	if config.AlgorithmPrompt == "" {
+		config.AlgorithmPrompt = defaults.AlgorithmPrompt
+	}
+	if config.Randomization.StrategyPoolSize == 0 &&
+		config.Randomization.MinPhraseVariantsPerStrategy == 0 &&
+		config.Randomization.MinFakeToolcalls == 0 {
+		config.Randomization = defaults.Randomization
+	} else {
+		config.Randomization.StrategyPoolSize = clampInt(config.Randomization.StrategyPoolSize, 1, 100)
+		config.Randomization.MinPhraseVariantsPerStrategy = clampInt(config.Randomization.MinPhraseVariantsPerStrategy, 1, 50)
+		config.Randomization.MinFakeToolcalls = clampInt(config.Randomization.MinFakeToolcalls, 1, 20)
+	}
+	config.StringProtection = sanitizeAntiPoisonStringProtectionConfig(config.StringProtection, defaults.StringProtection)
+	return config
+}
+
+func sanitizeAntiPoisonStringProtectionConfig(config AntiPoisonStringProtectionConfig, defaults AntiPoisonStringProtectionConfig) AntiPoisonStringProtectionConfig {
+	if len(config.Rules) == 0 {
+		if !config.Enabled {
+			config.Enabled = defaults.Enabled
+		}
+		config.Rules = append([]string(nil), defaults.Rules...)
+		return config
+	}
+	cleaned := make([]string, 0, len(config.Rules))
+	seen := map[string]struct{}{}
+	for _, rule := range config.Rules {
+		rule = strings.TrimSpace(rule)
+		if rule == "" {
+			continue
+		}
+		if _, exists := seen[rule]; exists {
+			continue
+		}
+		seen[rule] = struct{}{}
+		cleaned = append(cleaned, rule)
+		if len(cleaned) >= 80 {
+			break
+		}
+	}
+	if len(cleaned) == 0 {
+		cleaned = append([]string(nil), defaults.Rules...)
+	}
+	config.Rules = cleaned
+	return config
+}
+
+func isZeroAntiPoisonConfig(config AntiPoisonConfig) bool {
+	return !config.Enabled &&
+		!config.StrictMode &&
+		strings.TrimSpace(config.FailureMode) == "" &&
+		strings.TrimSpace(config.StrategyPrompt) == "" &&
+		strings.TrimSpace(config.AlgorithmPrompt) == "" &&
+		!config.Randomization.Enabled &&
+		config.Randomization.StrategyPoolSize == 0 &&
+		config.Randomization.MinPhraseVariantsPerStrategy == 0 &&
+		!config.Randomization.RandomInsertionPoints &&
+		config.Randomization.MinFakeToolcalls == 0 &&
+		!config.Randomization.RequirePerToolTypeMarker &&
+		!config.StringProtection.Enabled &&
+		len(config.StringProtection.Rules) == 0
 }
 
 func defaultAdvancedProxyHighAvailabilityRPMConfig() HighAvailabilityRPMConfig {
@@ -724,6 +877,7 @@ func (a *App) GetAdvancedProxyConfigFilePath() string {
 
 func (a *App) SetAdvancedProxyConfig(config AdvancedProxyConfig) (*AdvancedProxyConfig, error) {
 	current, err := loadAdvancedProxyConfig()
+	loadedCurrent := err == nil
 	if err == nil {
 		config.ListenHost = current.ListenHost
 		config.ListenPort = current.ListenPort
@@ -732,9 +886,41 @@ func (a *App) SetAdvancedProxyConfig(config AdvancedProxyConfig) (*AdvancedProxy
 	if err != nil {
 		return nil, err
 	}
+	if loadedCurrent {
+		logAdvancedProxyAntiPoisonConfigChange(current.AntiPoison, saved.AntiPoison)
+	}
 	saved.ListenHost = bridgeServerHost
 	saved.ListenPort = currentBridgeServerPort()
 	return &saved, nil
+}
+
+func logAdvancedProxyAntiPoisonConfigChange(before AntiPoisonConfig, after AntiPoisonConfig) {
+	if before.Enabled == after.Enabled &&
+		before.StrictMode == after.StrictMode &&
+		before.FailureMode == after.FailureMode &&
+		before.StrategyPrompt == after.StrategyPrompt &&
+		before.AlgorithmPrompt == after.AlgorithmPrompt &&
+		before.Randomization == after.Randomization &&
+		before.StringProtection.Enabled == after.StringProtection.Enabled &&
+		strings.Join(before.StringProtection.Rules, "\n") == strings.Join(after.StringProtection.Rules, "\n") {
+		return
+	}
+	appendAdvancedProxyLogf(
+		"[ANTI_POISON_CONFIG] enabled=%t strict=%t failure=%s strategy_len=%d algorithm_len=%d random_enabled=%t strategy_pool=%d phrase_variants=%d insertion_random=%t min_fake=%d per_type_marker=%t string_protection=%t string_rules=%d",
+		after.Enabled,
+		after.StrictMode,
+		after.FailureMode,
+		len(after.StrategyPrompt),
+		len(after.AlgorithmPrompt),
+		after.Randomization.Enabled,
+		after.Randomization.StrategyPoolSize,
+		after.Randomization.MinPhraseVariantsPerStrategy,
+		after.Randomization.RandomInsertionPoints,
+		after.Randomization.MinFakeToolcalls,
+		after.Randomization.RequirePerToolTypeMarker,
+		after.StringProtection.Enabled,
+		len(after.StringProtection.Rules),
+	)
 }
 
 func (a *App) GetFailoverQueue(appType string) ([]FailoverQueueItem, error) {

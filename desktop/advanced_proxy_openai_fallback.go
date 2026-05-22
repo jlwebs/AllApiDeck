@@ -548,6 +548,8 @@ func shouldFallbackResponsesToChat(statusCode int, responseBody []byte) bool {
 		return true
 	case strings.Contains(message, "unsupported") && strings.Contains(message, "route"):
 		return true
+	case strings.Contains(message, "not implemented"):
+		return true
 	default:
 		return false
 	}
@@ -558,7 +560,7 @@ func shouldFallbackChatPreferenceBackToResponses(statusCode int, responseBody []
 		return true
 	}
 	message := strings.ToLower(strings.TrimSpace(firstNonEmpty(summarizeAdvancedProxyBody(responseBody), fmt.Sprintf("http %d", statusCode))))
-	return strings.Contains(message, "unknown api route") || strings.Contains(message, "unsupported")
+	return strings.Contains(message, "unknown api route") || strings.Contains(message, "unsupported") || strings.Contains(message, "not implemented")
 }
 
 func convertOpenAIChatResponseBodyToResponses(rawBody []byte, fallbackModel string) ([]byte, error) {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +30,11 @@ func resolveAdvancedProxyClaudeProtocolPreferencePath() string {
 }
 
 func resolveAdvancedProxyClaudeProtocolPreferenceScopeKey(provider AdvancedProxyProvider, model string) string {
-	return resolveAdvancedProxyOpenAIProtocolPreferenceScopeKey(provider, model)
+	baseScope := resolveAdvancedProxyOpenAIProtocolPreferenceScopeKey(provider, model)
+	if strings.TrimSpace(baseScope) == "" {
+		return ""
+	}
+	return baseScope + "&claude_api_format=" + url.QueryEscape(normalizeClaudeAPIFormat(provider.APIFormat))
 }
 
 func loadAdvancedProxyClaudeProtocolPreferencesLocked() {
@@ -166,6 +171,8 @@ func shouldFallbackClaudeMessagesToOpenAIRoute(statusCode int, responseBody []by
 	case strings.Contains(message, "unknown api route"):
 		return true
 	case strings.Contains(message, "unsupported") && strings.Contains(message, "route"):
+		return true
+	case strings.Contains(message, "not implemented"):
 		return true
 	case strings.Contains(message, "not found"):
 		return true

@@ -201,7 +201,11 @@ jobs:
             echo "prerelease=${{ inputs.prerelease }}" >> "$GITHUB_OUTPUT"
           else
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            if echo "${GITHUB_REF_NAME}" | grep -Eiq '(-|\.)(alpha|beta|rc)(\.|-|$)'; then
+              echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            fi
           fi
         shell: bash
 

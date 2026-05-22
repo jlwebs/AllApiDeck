@@ -1956,6 +1956,115 @@ func anthropicRequestToOpenAIChat(body map[string]any, provider AdvancedProxyPro
 	return request
 }
 
+func shouldRectifyOpenAIChatSystemPrompt(errorMessage string) bool {
+	message := strings.ToLower(strings.TrimSpace(errorMessage))
+	if message == "" {
+		return false
+	}
+	if strings.Contains(message, "system prompt") && (strings.Contains(message, "not allowed") || strings.Contains(message, "unsupported") || strings.Contains(message, "not supported")) {
+		return true
+	}
+	if strings.Contains(message, "system role") && (strings.Contains(message, "not allowed") || strings.Contains(message, "unsupported") || strings.Contains(message, "not supported")) {
+		return true
+	}
+	return strings.Contains(message, "system messages") && (strings.Contains(message, "not allowed") || strings.Contains(message, "unsupported") || strings.Contains(message, "not supported"))
+}
+
+func inlineOpenAIChatSystemPrompt(request map[string]any) bool {
+	messages, ok := normalizeOpenAIChatMessageList(request["messages"])
+	if !ok || len(messages) == 0 {
+		return false
+	}
+
+	systemParts := make([]string, 0, 2)
+	nextMessages := make([]map[string]any, 0, len(messages))
+	for _, message := range messages {
+		role := strings.ToLower(strings.TrimSpace(toStringValue(message["role"])))
+		if role == "system" {
+			if text := strings.TrimSpace(openAIMessageContentToText(message["content"])); text != "" {
+				systemParts = append(systemParts, text)
+			}
+			continue
+		}
+		nextMessages = append(nextMessages, message)
+	}
+	if len(systemParts) == 0 {
+		return false
+	}
+
+	systemText := "Context instructions:\n" + strings.Join(systemParts, "\n\n")
+	for index, message := range nextMessages {
+		if strings.EqualFold(strings.TrimSpace(toStringValue(message["role"])), "user") {
+			nextMessages[index]["content"] = prependOpenAIChatTextContent(systemText, message["content"])
+			request["messages"] = nextMessages
+			return true
+		}
+	}
+
+	request["messages"] = append([]map[string]any{
+		{
+			"role":    "user",
+			"content": systemText,
+		},
+	}, nextMessages...)
+	return true
+}
+
+func normalizeOpenAIChatMessageList(raw any) ([]map[string]any, bool) {
+	switch typed := raw.(type) {
+	case []map[string]any:
+		messages := make([]map[string]any, 0, len(typed))
+		for _, message := range typed {
+			messages = append(messages, deepCopyJSONMap(message))
+		}
+		return messages, true
+	case []any:
+		messages := make([]map[string]any, 0, len(typed))
+		for _, rawMessage := range typed {
+			message, ok := rawMessage.(map[string]any)
+			if !ok {
+				continue
+			}
+			messages = append(messages, deepCopyJSONMap(message))
+		}
+		return messages, len(messages) > 0
+	default:
+		return nil, false
+	}
+}
+
+func prependOpenAIChatTextContent(prefix string, content any) any {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return content
+	}
+	switch typed := content.(type) {
+	case string:
+		text := strings.TrimSpace(typed)
+		if text == "" {
+			return prefix
+		}
+		return prefix + "\n\n" + text
+	case []map[string]any:
+		next := make([]map[string]any, 0, len(typed)+1)
+		next = append(next, map[string]any{"type": "text", "text": prefix})
+		for _, item := range typed {
+			next = append(next, deepCopyJSONMap(item))
+		}
+		return next
+	case []any:
+		next := make([]any, 0, len(typed)+1)
+		next = append(next, map[string]any{"type": "text", "text": prefix})
+		next = append(next, typed...)
+		return next
+	default:
+		if serialized := stringifyJSON(content); serialized != "" {
+			return prefix + "\n\n" + serialized
+		}
+		return prefix
+	}
+}
+
 func anthropicRequestToOpenAIResponses(body map[string]any, provider AdvancedProxyProvider) map[string]any {
 	model := strings.TrimSpace(provider.Model)
 	if model == "" {

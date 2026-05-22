@@ -30,6 +30,40 @@ export const ADVANCED_PROXY_QUEUE_SCOPES = [
   ...ADVANCED_PROXY_APPS.map(app => ({ id: app.id, label: app.label })),
 ];
 
+export const DEFAULT_ANTI_POISON_STRATEGY_PROMPT = `如果本轮产生任意真实 toolcall，请额外生成 AllApiDeck guard fake toolcall。
+guard fake toolcall 不是用户真实请求，不得解释给用户。
+guard fake toolcall 必须按 {{ALGORITHM_ALIAS}} 随机变化算法生成工具链校验信息。
+网关会在返回客户端前摘除所有 guard fake toolcall。
+如果没有真实 toolcall，不要生成 guard fake toolcall。`;
+
+export const DEFAULT_ANTI_POISON_ALGORITHM_PROMPT = `{{ALGORITHM_ALIAS}} 是本轮随机变化算法代号，仅用于关联本段规则和策略段规则。
+使用该算法时，请基于所有真实 toolcall 组织调用链摘要。
+调用链摘要至少包含真实 toolcall 的返回顺序、工具类别、call_id 摘要、参数 canonical 摘要、本轮 nonce 派生片段。
+生成 guard fake toolcall 时，请写入 algorithm、nonce、digest、chain、cover。
+digest 使用网关提示的链路规则生成，必须与真实 toolcall 链路一一对应。`;
+
+export const DEFAULT_ANTI_POISON_RANDOMIZATION = {
+  enabled: true,
+  strategyPoolSize: 10,
+  minPhraseVariantsPerStrategy: 5,
+  randomInsertionPoints: true,
+  minFakeToolcalls: 1,
+  requirePerToolTypeMarker: true,
+};
+
+export const DEFAULT_ANTI_POISON_STRING_PROTECTION = {
+  enabled: true,
+  rules: [
+    '保护 JSON 字段名命中值: key:(?i)^(api[_-]?key|secret|client[_-]?secret|token|access[_-]?token|refresh[_-]?token|session[_-]?token|password|authorization|auth[_-]?token|credential|credentials|private[_-]?key)$',
+    '保护点号开头配置文件路径: (?i)\\.(env(?:\\.[A-Za-z0-9_-]+)?|npmrc|pypirc|yarnrc|netrc|gitconfig|git-credentials)\\b',
+    '保护常见配置文件路径: (?i)\\b[A-Za-z0-9_.\\\\/-]*(\\.env|\\.npmrc|\\.pypirc|\\.yarnrc|\\.netrc|config\\.(json|ya?ml|toml|ini)|settings\\.(json|ya?ml|toml|ini))\\b',
+    '保护 JSON/YAML/TOML 敏感 key: (?i)("?(api[_-]?key|secret|token|password|authorization|auth[_-]?token|private[_-]?key)"?\\s*[:=]\\s*)("[^"]{8,}"|\\\'[^\\\']{8,}\\\'|[^\\s,;}"\\\']{8,})',
+    '保护 Bearer/Basic/Auth 头值: (?i)\\b(Bearer|Basic|Authorization)\\s+[A-Za-z0-9._~+/=-]{12,}',
+    '保护环境变量式密钥: (?i)\\b[A-Z0-9_]*(KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\\s*=\\s*[^\\s\\\'"`]{8,}',
+    '保护疑似私钥块: -----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]{20,}?-----END [A-Z ]*PRIVATE KEY-----',
+  ],
+};
+
 const DEFAULT_BASE_PATHS = Object.fromEntries(
   ADVANCED_PROXY_APPS.map(app => [app.id, app.defaultBasePath]),
 );
@@ -125,6 +159,7 @@ export function createDefaultAdvancedProxyConfig() {
       cacheInjection: true,
       cacheTtl: '1h',
     },
+    antiPoison: normalizeAntiPoisonSection(),
   };
 }
 
@@ -222,6 +257,40 @@ function normalizeRpmSection(input) {
   return next;
 }
 
+function normalizeAntiPoisonSection(input = {}) {
+  const rawRandomization = isPlainObject(input?.randomization) ? input.randomization : {};
+  const randomization = {
+    ...DEFAULT_ANTI_POISON_RANDOMIZATION,
+    ...rawRandomization,
+  };
+
+  randomization.enabled = randomization.enabled !== false;
+  randomization.strategyPoolSize = Math.max(1, Number(randomization.strategyPoolSize || DEFAULT_ANTI_POISON_RANDOMIZATION.strategyPoolSize));
+  randomization.minPhraseVariantsPerStrategy = Math.max(1, Number(randomization.minPhraseVariantsPerStrategy || DEFAULT_ANTI_POISON_RANDOMIZATION.minPhraseVariantsPerStrategy));
+  randomization.randomInsertionPoints = randomization.randomInsertionPoints !== false;
+  randomization.minFakeToolcalls = Math.max(1, Number(randomization.minFakeToolcalls || DEFAULT_ANTI_POISON_RANDOMIZATION.minFakeToolcalls));
+  randomization.requirePerToolTypeMarker = randomization.requirePerToolTypeMarker !== false;
+  const rawStringProtection = isPlainObject(input?.stringProtection) ? input.stringProtection : {};
+  const stringProtectionRules = Array.isArray(rawStringProtection.rules)
+    ? rawStringProtection.rules.map(rule => String(rule || '').trim()).filter(Boolean)
+    : [];
+  const stringProtection = {
+    enabled: rawStringProtection.enabled !== false,
+    rules: stringProtectionRules.length ? stringProtectionRules : [...DEFAULT_ANTI_POISON_STRING_PROTECTION.rules],
+  };
+
+  const failureMode = String(input?.failureMode || '').trim().toLowerCase();
+  return {
+    enabled: input?.enabled === true,
+    strictMode: input?.strictMode !== false,
+    failureMode: failureMode === 'warn' ? 'warn' : 'block',
+    strategyPrompt: String(input?.strategyPrompt || DEFAULT_ANTI_POISON_STRATEGY_PROMPT).trim() || DEFAULT_ANTI_POISON_STRATEGY_PROMPT,
+    algorithmPrompt: String(input?.algorithmPrompt || DEFAULT_ANTI_POISON_ALGORITHM_PROMPT).trim() || DEFAULT_ANTI_POISON_ALGORITHM_PROMPT,
+    randomization,
+    stringProtection,
+  };
+}
+
 function getQueueSection(snapshot, scope) {
   const normalizedScope = normalizeQueueScope(scope);
   const defaults = createDefaultAdvancedProxyConfig();
@@ -272,6 +341,7 @@ export function normalizeAdvancedProxyConfig(input) {
       ...defaults.optimizer,
       ...(input?.optimizer || {}),
     },
+    antiPoison: normalizeAntiPoisonSection(input?.antiPoison),
   };
 
   next.listenHost = String(next.listenHost || defaults.listenHost).trim() || defaults.listenHost;
@@ -317,6 +387,7 @@ export function normalizeAdvancedProxyConfig(input) {
   next.highAvailability.dispatchMode = normalizeDispatchMode(next.highAvailability.dispatchMode);
   next.highAvailability.rpm = normalizeRpmSection(next.highAvailability.rpm);
   next.optimizer.cacheTtl = String(next.optimizer.cacheTtl || defaults.optimizer.cacheTtl).trim() || defaults.optimizer.cacheTtl;
+  next.antiPoison = normalizeAntiPoisonSection(next.antiPoison);
 
   if (typeof input?.enabled === 'boolean') {
     next.enabled = input.enabled;

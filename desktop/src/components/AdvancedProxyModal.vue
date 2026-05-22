@@ -51,22 +51,54 @@
                   </template>
                   <button
                     type="button"
-                    class="advanced-proxy-master-debug-button advanced-proxy-master-help-button"
+                    class="advanced-proxy-master-debug-button advanced-proxy-master-help-button advanced-proxy-master-side-icon-button"
                     :class="{ 'advanced-proxy-master-debug-button-active': masterHelpTooltipOpen }"
                     aria-label="查看使用说明"
                   >
-                    <QuestionCircleOutlined />
+                    <QuestionCircleOutlined class="advanced-proxy-master-side-icon" />
                   </button>
                 </a-tooltip>
+                <a-popover
+                  placement="top"
+                  overlayClassName="advanced-proxy-anti-poison-tooltip"
+                  :open="antiPoisonTooltipOpen"
+                  @openChange="handleAntiPoisonTooltipOpenChange"
+                >
+                  <template #content>
+                    <div v-if="antiPoisonEnabled" class="advanced-proxy-anti-poison-tooltip-content">
+                      <span>防投毒开启</span>
+                      <button type="button" class="advanced-proxy-anti-poison-detail-link" @click.stop="openAntiPoisonPanel">
+                        详情
+                      </button>
+                    </div>
+                    <span v-else>防投毒关闭</span>
+                  </template>
+                  <button
+                    type="button"
+                    class="advanced-proxy-master-debug-button advanced-proxy-anti-poison-button"
+                    :class="{ 'advanced-proxy-master-debug-button-active': antiPoisonEnabled }"
+                    :aria-label="antiPoisonEnabled ? '关闭防投毒' : '开启防投毒'"
+                    @click="handleAntiPoisonToggle"
+                  >
+                    <svg class="advanced-proxy-anti-poison-icon" viewBox="0 0 28 28" aria-hidden="true">
+                      <path class="advanced-proxy-anti-poison-bottle" d="M10.8 4.8h6.4v4.3c2.5 1.1 4.2 3.6 4.2 6.5v5.7c0 1.1-.9 2-2 2H8.6c-1.1 0-2-.9-2-2v-5.7c0-2.9 1.7-5.4 4.2-6.5V4.8Z" />
+                      <path class="advanced-proxy-anti-poison-neck" d="M10 4h8" />
+                      <path class="advanced-proxy-anti-poison-skull" d="M10.5 15.3c0-2 1.5-3.4 3.5-3.4s3.5 1.4 3.5 3.4c0 1.2-.6 2.3-1.6 2.8v1.4h-3.8v-1.4c-1-.5-1.6-1.6-1.6-2.8Z" />
+                      <circle class="advanced-proxy-anti-poison-eye" cx="12.7" cy="15.4" r=".7" />
+                      <circle class="advanced-proxy-anti-poison-eye" cx="15.3" cy="15.4" r=".7" />
+                      <path v-if="antiPoisonEnabled" class="advanced-proxy-anti-poison-cross" d="M6.4 6.4 21.6 21.6M21.6 6.4 6.4 21.6" />
+                    </svg>
+                  </button>
+                </a-popover>
                 <a-tooltip :title="draft.debugLogging ? '调试日志已开启，写入 advanced-proxy.log' : '开启调试日志，写入 advanced-proxy.log'">
                   <button
                     type="button"
-                    class="advanced-proxy-master-debug-button"
+                    class="advanced-proxy-master-debug-button advanced-proxy-master-side-icon-button"
                     :class="{ 'advanced-proxy-master-debug-button-active': draft.debugLogging }"
                     aria-label="切换调试日志"
                     @click="handleConfigMutation(next => { next.debugLogging = !next.debugLogging; }, draft.debugLogging ? '高级代理调试日志已关闭' : '高级代理调试日志已开启')"
                   >
-                    <BugOutlined />
+                    <BugOutlined class="advanced-proxy-master-side-icon" />
                   </button>
                 </a-tooltip>
               </div>
@@ -395,6 +427,208 @@
   </a-modal>
 
   <DesktopConfigDiffModal :open="previewOpen" :preview="configPreview" @cancel="cancelPreview" @confirm="applyPreview" />
+
+  <a-drawer
+    :open="antiPoisonPanelOpen"
+    title="防投毒详情"
+    placement="right"
+    :width="antiPoisonDrawerWidth"
+    :zIndex="1200"
+    class="advanced-proxy-anti-poison-drawer"
+    @close="antiPoisonPanelOpen = false"
+  >
+    <div class="advanced-proxy-anti-poison-panel">
+      <section class="advanced-proxy-anti-poison-hero-card">
+        <div>
+          <span class="advanced-proxy-anti-poison-kicker">Prompt Injection Guard</span>
+          <h3>防投毒守卫</h3>
+          <p>用于配置动态工具链水印策略、随机变化算法 Prompt 和回流校验统计。非流式代理会执行网关校验；流式请求暂只写绕过日志。</p>
+        </div>
+        <div class="advanced-proxy-anti-poison-state" :class="{ 'is-active': antiPoisonEnabled }">
+          {{ antiPoisonEnabled ? '已开启' : '未开启' }}
+        </div>
+      </section>
+
+      <section class="advanced-proxy-anti-poison-card">
+        <div class="advanced-proxy-anti-poison-card-head">
+          <div>
+            <h4>设置</h4>
+            <p>控制防投毒检查强度和命中后的处理方式。</p>
+          </div>
+        </div>
+        <div class="advanced-proxy-anti-poison-settings">
+          <div class="advanced-proxy-anti-poison-setting-row">
+            <div>
+              <strong>防投毒开关</strong>
+              <span>关闭后不显示红叉，也不启用相关策略。</span>
+            </div>
+            <a-switch :checked="antiPoisonEnabled" @change="handleAntiPoisonEnabledChange" />
+          </div>
+          <div class="advanced-proxy-anti-poison-setting-row">
+            <div>
+              <strong>严格模式</strong>
+              <span>有真实 toolcall 但缺少合法 guard fake toolcall 时直接拒绝。</span>
+            </div>
+            <a-switch :checked="antiPoisonConfig.strictMode" :disabled="!antiPoisonEnabled" @change="value => handleAntiPoisonFieldChange('strictMode', value)" />
+          </div>
+          <div class="advanced-proxy-anti-poison-setting-row">
+            <div>
+              <strong>失败处理方式</strong>
+              <span>校验失败后阻断回流，或只写日志告警。</span>
+            </div>
+            <a-segmented
+              :value="antiPoisonConfig.failureMode"
+              :disabled="!antiPoisonEnabled"
+              :options="[
+                { label: '阻断', value: 'block' },
+                { label: '告警', value: 'warn' },
+              ]"
+              @change="value => handleAntiPoisonFieldChange('failureMode', value)"
+            />
+          </div>
+          <div class="advanced-proxy-anti-poison-setting-row">
+            <div>
+              <strong>字符串保护</strong>
+              <span>转发给上游前把配置/密钥样式字符串替换为占位符，回客户端前再还原。</span>
+            </div>
+            <a-switch
+              :checked="antiPoisonStringProtectionEnabled"
+              :disabled="!antiPoisonEnabled"
+              @change="handleAntiPoisonStringProtectionEnabledChange"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section class="advanced-proxy-anti-poison-card">
+        <div class="advanced-proxy-anti-poison-card-head advanced-proxy-anti-poison-card-head-actions">
+          <div>
+            <h4>字符串保护规则</h4>
+            <p>一行一个规则描述，冒号后为正则；主要拦截读取配置文件、点号文件、JSON key 和密钥字符串后的注入文本。</p>
+          </div>
+          <div class="advanced-proxy-anti-poison-actions">
+            <button type="button" class="advanced-proxy-anti-poison-soft-button" @click="antiPoisonRulesOpen = !antiPoisonRulesOpen">
+              {{ antiPoisonRulesOpen ? '收起规则' : '展开规则' }}
+            </button>
+            <button type="button" class="advanced-proxy-anti-poison-soft-button" @click="resetAntiPoisonStringProtectionRules">
+              重置规则
+            </button>
+          </div>
+        </div>
+        <div class="advanced-proxy-anti-poison-rule-summary">
+          <span v-for="item in antiPoisonStringProtectionRuleSummary" :key="item.label">
+            <strong>{{ item.value }}</strong>
+            {{ item.label }}
+          </span>
+        </div>
+        <a-textarea
+          v-if="antiPoisonRulesOpen"
+          class="advanced-proxy-anti-poison-textarea advanced-proxy-anti-poison-rules-textarea"
+          :value="antiPoisonStringProtectionRulesText"
+          :disabled="!antiPoisonEnabled || !antiPoisonStringProtectionEnabled"
+          :auto-size="{ minRows: 7, maxRows: 12 }"
+          @change="event => handleAntiPoisonStringProtectionRulesChange(event?.target?.value)"
+        />
+      </section>
+
+      <section class="advanced-proxy-anti-poison-card">
+        <div class="advanced-proxy-anti-poison-card-head advanced-proxy-anti-poison-card-head-actions">
+          <div>
+            <h4>策略 Prompt</h4>
+            <p>描述何时生成 guard fake toolcall，以及这些 fake toolcall 如何被网关摘除。</p>
+          </div>
+          <div class="advanced-proxy-anti-poison-actions">
+            <a-button size="small" @click="resetAntiPoisonPromptsToDefault">恢复默认策略</a-button>
+            <a-button size="small" type="primary" @click="antiPoisonPreviewOpen = !antiPoisonPreviewOpen">预览随机展开</a-button>
+          </div>
+        </div>
+        <a-textarea
+          class="advanced-proxy-anti-poison-textarea"
+          :value="antiPoisonConfig.strategyPrompt"
+          :auto-size="{ minRows: 5, maxRows: 9 }"
+          @change="event => handleAntiPoisonFieldChange('strategyPrompt', event?.target?.value)"
+        />
+      </section>
+
+      <section class="advanced-proxy-anti-poison-card">
+        <div class="advanced-proxy-anti-poison-card-head">
+          <div>
+            <h4>随机变化算法 Prompt</h4>
+            <p><code>{{ antiPoisonAliasPlaceholder }}</code> 只是上下文关联代号，用来把策略段和算法段绑定起来。</p>
+          </div>
+        </div>
+        <a-textarea
+          class="advanced-proxy-anti-poison-textarea"
+          :value="antiPoisonConfig.algorithmPrompt"
+          :auto-size="{ minRows: 5, maxRows: 9 }"
+          @change="event => handleAntiPoisonFieldChange('algorithmPrompt', event?.target?.value)"
+        />
+      </section>
+
+      <section class="advanced-proxy-anti-poison-card">
+        <div class="advanced-proxy-anti-poison-card-head">
+          <div>
+            <h4>随机化可视</h4>
+            <p>二级随机策略由内置策略池控制，仅展示，不开放细调，避免破坏默认防护结构。</p>
+          </div>
+        </div>
+        <div class="advanced-proxy-anti-poison-random-grid">
+          <article v-for="item in antiPoisonRandomizationCards" :key="item.label" class="advanced-proxy-anti-poison-random-card">
+            <span>{{ item.label }}</span>
+            <strong>{{ item.value }}</strong>
+          </article>
+        </div>
+        <pre v-if="antiPoisonPreviewOpen" class="advanced-proxy-anti-poison-preview">{{ antiPoisonPreviewText }}</pre>
+      </section>
+
+      <section class="advanced-proxy-anti-poison-card">
+        <div class="advanced-proxy-anti-poison-card-head">
+          <div>
+            <h4>流水统计</h4>
+            <p>按 request out / respond in 记录本轮网关逻辑操作；完整校验明细写入 advanced-proxy.log。</p>
+          </div>
+          <div class="advanced-proxy-anti-poison-actions">
+            <button type="button" class="advanced-proxy-anti-poison-soft-button" @click="reloadAntiPoisonRecords">
+              刷新流水
+            </button>
+          </div>
+        </div>
+        <div class="advanced-proxy-anti-poison-flow-table">
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>阶段</th>
+                <th>通路</th>
+                <th>规则/逻辑</th>
+                <th>路径</th>
+                <th>before</th>
+                <th>after</th>
+                <th>数量</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in antiPoisonOperationRows" :key="row.id" :class="{ 'advanced-proxy-anti-poison-blocked-row': row.blocked }">
+                <td class="advanced-proxy-anti-poison-time-cell">{{ row.time }}</td>
+                <td><span class="advanced-proxy-anti-poison-stage-pill" :class="{ 'is-blocked': row.blocked }">{{ row.stage }}</span></td>
+                <td>{{ row.channel }}</td>
+                <td>{{ row.rule }}</td>
+                <td>{{ row.path }}</td>
+                <td><code>{{ row.before }}</code></td>
+                <td><code>{{ row.after }}</code></td>
+                <td>{{ row.count }}</td>
+              </tr>
+              <tr v-if="!antiPoisonOperationRows.length">
+                <td colspan="8" class="advanced-proxy-anti-poison-empty-row">
+                  暂无流水；开启防投毒并产生代理请求后显示。
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </a-drawer>
 </template>
 
 <script setup>
@@ -415,15 +649,21 @@ import {
   ADVANCED_PROXY_APPS,
   ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
   ADVANCED_PROXY_QUEUE_SCOPES,
+  DEFAULT_ANTI_POISON_ALGORITHM_PROMPT,
+  DEFAULT_ANTI_POISON_RANDOMIZATION,
+  DEFAULT_ANTI_POISON_STRING_PROTECTION,
+  DEFAULT_ANTI_POISON_STRATEGY_PROMPT,
   getAdvancedProxyAppBaseUrl,
   getAdvancedProxyConfig,
   getAdvancedProxyEffectiveProviders,
   getAdvancedProxyQueueProviders,
   getCircuitBreakerStats,
+  listAdvancedProxyRequestRecords,
   normalizeAdvancedProxyConfig,
   resetCircuitBreaker,
   setAdvancedProxyConfig,
 } from '../utils/advancedProxyBridge.js';
+import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
 
 const EMPTY_PREVIEW = { appGroups: [], writes: [], errors: [] };
 const modalWidth = 'min(1180px, calc(100vw - 24px))';
@@ -462,6 +702,11 @@ const loading = ref(false);
 const saving = ref(false);
 const previewOpen = ref(false);
 const masterHelpTooltipOpen = ref(false);
+const antiPoisonTooltipOpen = ref(false);
+const antiPoisonPanelOpen = ref(false);
+const antiPoisonPreviewOpen = ref(false);
+const antiPoisonRulesOpen = ref(false);
+const antiPoisonRequestRecords = ref([]);
 const shellScrollRef = ref(null);
 const queuePanelRef = ref(null);
 const selectedQueueScope = ref(ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
@@ -493,6 +738,35 @@ const highAvailabilityEnabled = computed(() => draft?.highAvailability?.enabled 
 const unifiedFailoverEnabled = computed(() =>
   draft?.failover?.enabled === true && draft?.failover?.autoFailoverEnabled === true
 );
+const antiPoisonConfig = computed(() => draft?.antiPoison || normalizeAdvancedProxyConfig({}).antiPoison);
+const antiPoisonEnabled = computed(() => antiPoisonConfig.value?.enabled === true);
+const antiPoisonStringProtectionEnabled = computed(() => antiPoisonConfig.value?.stringProtection?.enabled !== false);
+const antiPoisonStringProtectionRulesText = computed(() => {
+  const rules = Array.isArray(antiPoisonConfig.value?.stringProtection?.rules)
+    ? antiPoisonConfig.value.stringProtection.rules
+    : DEFAULT_ANTI_POISON_STRING_PROTECTION.rules;
+  return rules.join('\n');
+});
+const antiPoisonStringProtectionRuleSummary = computed(() => {
+  const rules = Array.isArray(antiPoisonConfig.value?.stringProtection?.rules)
+    ? antiPoisonConfig.value.stringProtection.rules
+    : DEFAULT_ANTI_POISON_STRING_PROTECTION.rules;
+  return [
+    {
+      label: '条规则',
+      value: rules.length,
+    },
+    {
+      label: '字段名命中',
+      value: rules.filter(rule => String(rule || '').toLowerCase().includes('key:')).length,
+    },
+    {
+      label: '文本正则',
+      value: rules.filter(rule => !String(rule || '').toLowerCase().includes('key:')).length,
+    },
+  ];
+});
+const antiPoisonAliasPlaceholder = '{{ALGORITHM_ALIAS}}';
 const dispatchModeOptions = DISPATCH_MODE_OPTIONS;
 const selectedDispatchModeDescription = computed(() =>
   DISPATCH_MODE_OPTIONS.find(option => option.value === draft?.highAvailability?.dispatchMode)?.description
@@ -511,6 +785,75 @@ const selectedHighAvailabilityRpmValue = computed(() => {
   return Number.isFinite(Number(providerValue)) ? Number(providerValue) : 0;
 });
 const proxyMasterEnabled = computed(() => enabledAppIds.value.length > 0);
+const antiPoisonDrawerWidth = computed(() => {
+  const viewportWidth = typeof window === 'undefined' ? 1040 : Number(window.innerWidth || 1040);
+  return Math.min(Math.max(viewportWidth - 24, 320), 1040);
+});
+const antiPoisonOperationRows = computed(() => {
+  const rows = [];
+  const records = Array.isArray(antiPoisonRequestRecords.value) ? antiPoisonRequestRecords.value : [];
+  records.forEach(record => {
+    const ops = Array.isArray(record?.antiPoisonOps) ? record.antiPoisonOps : [];
+    ops.forEach((op, index) => {
+      rows.push({
+        id: String(op?.id || `${record?.id || 'record'}-${index}`),
+        time: formatAntiPoisonOperationTime(op?.time || record?.recordedAt),
+        stage: String(op?.stage || '-'),
+        channel: String(op?.channel || record?.appType || '-'),
+        rule: String(op?.rule || op?.reason || 'gateway'),
+        path: String(op?.path || op?.route || record?.outboundRoute || '-'),
+        before: String(op?.before || '-'),
+        after: String(op?.after || '-'),
+        count: Number(op?.count || 0),
+        blocked: op?.blocked === true || String(op?.reason || '').includes('anti_poison'),
+      });
+    });
+  });
+  return rows.slice(0, 40);
+});
+const antiPoisonRandomizationCards = computed(() => {
+  const randomization = antiPoisonConfig.value?.randomization || DEFAULT_ANTI_POISON_RANDOMIZATION;
+  return [
+    { label: '策略池', value: `${randomization.strategyPoolSize || DEFAULT_ANTI_POISON_RANDOMIZATION.strategyPoolSize} 个策略` },
+    { label: '句式变体', value: `每策略 ${randomization.minPhraseVariantsPerStrategy || DEFAULT_ANTI_POISON_RANDOMIZATION.minPhraseVariantsPerStrategy}+ 种` },
+    { label: '插入点位', value: randomization.randomInsertionPoints ? '多点随机' : '固定' },
+    { label: 'fake toolcall', value: `至少 ${randomization.minFakeToolcalls || DEFAULT_ANTI_POISON_RANDOMIZATION.minFakeToolcalls} 个` },
+    { label: '工具类别 marker', value: randomization.requirePerToolTypeMarker ? '每类覆盖' : '不强制' },
+    { label: '算法代号', value: '每轮随机生成' },
+  ];
+});
+const antiPoisonPreviewText = computed(() => {
+  const alias = 'APTX_7F3A91C2';
+  const prefix = 'aad_guard_51e2b7a903';
+  const guardToolName = `${prefix}_trace`;
+  const nonce = 'c4f17a92e5b8d631';
+  const strategyPrompt = String(antiPoisonConfig.value?.strategyPrompt || DEFAULT_ANTI_POISON_STRATEGY_PROMPT)
+    .replaceAll('{{ALGORITHM_ALIAS}}', alias);
+  const algorithmPrompt = String(antiPoisonConfig.value?.algorithmPrompt || DEFAULT_ANTI_POISON_ALGORITHM_PROMPT)
+    .replaceAll('{{ALGORITHM_ALIAS}}', alias);
+  return [
+    '[AllApiDeck 防投毒随机策略]',
+    `[随机变化算法代号] ${alias}`,
+    `[fake toolcall prefix] ${prefix}`,
+    `[guard tool name] ${guardToolName}`,
+    `[nonce] ${nonce}`,
+    '[策略槽] 07',
+    '[句式变体] 03',
+    '[插入点位提示] tool_schema_tail',
+    '',
+    '[策略 Prompt]',
+    strategyPrompt,
+    '',
+    '[随机变化算法 Prompt]',
+    algorithmPrompt,
+    '',
+    '[网关校验约定]',
+    `如果本轮产生任何真实 toolcall，必须额外调用 \`${guardToolName}\`。`,
+    `guard fake toolcall 参数必须包含 algorithm="${alias}"、nonce="${nonce}"、digest、chain、cover。`,
+    'digest 规则: 按真实 toolcall 返回顺序组织链路，每项为 index|tool_type|tool_name|call_id尾8位|sha256(canonical_arguments)，前面加 alias 与 nonce 行，整体 sha256 后取前 16 位小写 hex。',
+    '网关校验通过后会摘除 guard fake toolcall，再返回给客户端。',
+  ].join('\n');
+});
 const selectedQueueLabel = computed(() =>
   ADVANCED_PROXY_QUEUE_SCOPES.find(item => item.id === selectedQueueScope.value)?.label || '全局'
 );
@@ -1475,6 +1818,29 @@ function handleFollowGlobalQueue() {
 async function reloadContext() {
   const { records } = loadPanelRecords();
   availableRecords.value = records;
+  try {
+    antiPoisonRequestRecords.value = await listAdvancedProxyRequestRecords(80);
+  } catch {
+    antiPoisonRequestRecords.value = [];
+  }
+}
+
+async function reloadAntiPoisonRecords() {
+  await reloadAntiPoisonRecordsInternal(true);
+}
+
+async function reloadAntiPoisonRecordsInternal(showToast = true) {
+  try {
+    antiPoisonRequestRecords.value = await listAdvancedProxyRequestRecords(80);
+    if (showToast) {
+      message.success('防投毒流水已刷新');
+    }
+  } catch (error) {
+    antiPoisonRequestRecords.value = [];
+    if (showToast) {
+      message.error(`刷新防投毒流水失败：${error?.message || error}`);
+    }
+  }
 }
 
 function pruneOrphanedQueueProviders(config, records) {
@@ -1522,6 +1888,8 @@ watch(
   async value => {
     if (!value) {
       masterHelpTooltipOpen.value = false;
+      antiPoisonTooltipOpen.value = false;
+      antiPoisonPanelOpen.value = false;
       return;
     }
     if (value) {
@@ -1712,12 +2080,122 @@ function cancelPreview() {
 
 function handleCancel() {
   masterHelpTooltipOpen.value = false;
+  antiPoisonTooltipOpen.value = false;
+  antiPoisonPanelOpen.value = false;
   cancelPreview();
   emit('update:open', false);
 }
 
 function handleMasterHelpTooltipOpenChange(open) {
   masterHelpTooltipOpen.value = open;
+}
+
+function handleAntiPoisonToggle() {
+  handleAntiPoisonEnabledChange(!antiPoisonEnabled.value);
+  antiPoisonTooltipOpen.value = true;
+}
+
+function handleAntiPoisonTooltipOpenChange(open) {
+  antiPoisonTooltipOpen.value = open;
+}
+
+function openAntiPoisonPanel() {
+  if (!antiPoisonEnabled.value) return;
+  antiPoisonTooltipOpen.value = false;
+  antiPoisonPanelOpen.value = true;
+  void reloadAntiPoisonRecordsInternal(false);
+}
+
+function formatAntiPoisonOperationTime(value) {
+  const parsed = new Date(String(value || ''));
+  if (Number.isNaN(parsed.getTime())) return '-';
+  return parsed.toLocaleTimeString('zh-CN', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function logAntiPoisonConfigEvent(action, detail = '') {
+  logClientDiagnostic('advanced-proxy.anti-poison', [
+    `action=${action}`,
+    `enabled=${String(antiPoisonEnabled.value)}`,
+    `strict=${String(antiPoisonConfig.value?.strictMode === true)}`,
+    `failureMode=${String(antiPoisonConfig.value?.failureMode || 'block')}`,
+    detail,
+  ].filter(Boolean).join(' '));
+}
+
+async function updateAntiPoisonConfig(mutator, successMessage = '防投毒配置已更新', logAction = 'update') {
+  await handleConfigMutation(next => {
+    if (!next.antiPoison || typeof next.antiPoison !== 'object') {
+      next.antiPoison = normalizeAdvancedProxyConfig({}).antiPoison;
+    }
+    mutator(next.antiPoison);
+  }, successMessage);
+  logAntiPoisonConfigEvent(logAction);
+}
+
+function handleAntiPoisonEnabledChange(value) {
+  void updateAntiPoisonConfig(
+    next => { next.enabled = value === true; },
+    value ? '防投毒已开启' : '防投毒已关闭',
+    value ? 'enabled' : 'disabled',
+  );
+}
+
+function handleAntiPoisonFieldChange(field, value) {
+  void updateAntiPoisonConfig(next => {
+    next[field] = value;
+  }, '防投毒配置已更新', `field.${field}`);
+}
+
+function handleAntiPoisonStringProtectionEnabledChange(value) {
+  void updateAntiPoisonConfig(next => {
+    next.stringProtection = {
+      ...(next.stringProtection || {}),
+      enabled: value === true,
+      rules: Array.isArray(next.stringProtection?.rules) && next.stringProtection.rules.length
+        ? [...next.stringProtection.rules]
+        : [...DEFAULT_ANTI_POISON_STRING_PROTECTION.rules],
+    };
+  }, value ? '字符串保护已开启' : '字符串保护已关闭', value ? 'string-protection.enabled' : 'string-protection.disabled');
+}
+
+function handleAntiPoisonStringProtectionRulesChange(value) {
+  const rules = String(value || '')
+    .split(/\r?\n/)
+    .map(rule => rule.trim())
+    .filter(Boolean);
+  void updateAntiPoisonConfig(next => {
+    next.stringProtection = {
+      ...(next.stringProtection || {}),
+      enabled: next.stringProtection?.enabled !== false,
+      rules: rules.length ? rules : [...DEFAULT_ANTI_POISON_STRING_PROTECTION.rules],
+    };
+  }, '字符串保护规则已更新', 'string-protection.rules');
+}
+
+function resetAntiPoisonStringProtectionRules() {
+  void updateAntiPoisonConfig(next => {
+    next.stringProtection = {
+      enabled: true,
+      rules: [...DEFAULT_ANTI_POISON_STRING_PROTECTION.rules],
+    };
+  }, '字符串保护规则已恢复默认', 'string-protection.reset');
+}
+
+function resetAntiPoisonPromptsToDefault() {
+  void updateAntiPoisonConfig(next => {
+    next.strategyPrompt = DEFAULT_ANTI_POISON_STRATEGY_PROMPT;
+    next.algorithmPrompt = DEFAULT_ANTI_POISON_ALGORITHM_PROMPT;
+    next.randomization = { ...DEFAULT_ANTI_POISON_RANDOMIZATION };
+    next.stringProtection = {
+      enabled: true,
+      rules: [...DEFAULT_ANTI_POISON_STRING_PROTECTION.rules],
+    };
+  }, '防投毒策略已恢复默认', 'reset-default');
 }
 </script>
 
@@ -1870,7 +2348,7 @@ function handleMasterHelpTooltipOpenChange(open) {
   width: 100%;
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: stretch;
   gap: 4px;
   padding: 6px;
@@ -1894,13 +2372,528 @@ function handleMasterHelpTooltipOpenChange(open) {
   padding: 0;
 }
 
+.advanced-proxy-master-side-icon-button :deep(.anticon),
+.advanced-proxy-master-side-icon-button :deep(svg) {
+  width: 16px !important;
+  height: 16px !important;
+  font-size: 16px !important;
+  line-height: 1;
+}
+
+.advanced-proxy-master-side-icon {
+  width: 16px !important;
+  height: 16px !important;
+  font-size: 16px !important;
+  line-height: 1 !important;
+}
+
+.advanced-proxy-master-side-icon :deep(svg) {
+  width: 16px !important;
+  height: 16px !important;
+}
+
 .advanced-proxy-master-debug-button:hover {
   background: rgba(90, 117, 79, 0.06);
   color: #22311c;
 }
 
+.advanced-proxy-master-debug-button:focus-visible {
+  outline: 2px solid rgba(90, 117, 79, 0.38);
+  outline-offset: 2px;
+}
+
 .advanced-proxy-master-help-button {
   background: transparent;
+}
+
+.advanced-proxy-anti-poison-button {
+  color: #5d8060;
+}
+
+.advanced-proxy-anti-poison-icon {
+  width: 38px !important;
+  height: 38px !important;
+  display: block;
+}
+
+.advanced-proxy-anti-poison-bottle {
+  fill: rgba(230, 245, 226, 0.9);
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linejoin: round;
+}
+
+.advanced-proxy-anti-poison-neck,
+.advanced-proxy-anti-poison-cross {
+  fill: none;
+  stroke-linecap: round;
+}
+
+.advanced-proxy-anti-poison-neck {
+  stroke: currentColor;
+  stroke-width: 1.7;
+}
+
+.advanced-proxy-anti-poison-skull {
+  fill: #5d8060;
+}
+
+.advanced-proxy-anti-poison-eye {
+  fill: #f8fff3;
+}
+
+.advanced-proxy-anti-poison-cross {
+  stroke: #d9563d;
+  stroke-width: 2.35;
+}
+
+:deep(.advanced-proxy-anti-poison-tooltip .ant-popover-inner) {
+  min-width: 128px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(33, 45, 29, 0.94);
+}
+
+:deep(.advanced-proxy-anti-poison-tooltip .ant-popover-inner-content) {
+  color: rgba(255, 255, 255, 0.92);
+  padding: 0;
+}
+
+.advanced-proxy-anti-poison-tooltip-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.advanced-proxy-anti-poison-detail-link {
+  border: 1px solid rgba(215, 236, 204, 0.34);
+  border-radius: 999px;
+  background: rgba(215, 236, 204, 0.14);
+  color: #111827;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 5px 9px;
+  cursor: pointer;
+  transition: background-color .18s ease, border-color .18s ease, transform .18s ease;
+}
+
+.advanced-proxy-anti-poison-detail-link:hover {
+  background: rgba(215, 236, 204, 0.24);
+  border-color: rgba(215, 236, 204, 0.56);
+  transform: translateY(-1px);
+}
+
+.advanced-proxy-anti-poison-panel {
+  display: grid;
+  gap: 14px;
+  width: 100%;
+  min-width: 0;
+}
+
+:global(.advanced-proxy-anti-poison-drawer .ant-drawer-content-wrapper) {
+  max-width: calc(100vw - 12px);
+}
+
+:global(.advanced-proxy-anti-poison-drawer .ant-drawer-header) {
+  border-bottom: 1px solid rgba(90, 117, 79, 0.12);
+  background: rgba(249, 253, 244, 0.94);
+}
+
+:global(.advanced-proxy-anti-poison-drawer .ant-drawer-title) {
+  color: #22311c;
+  font-weight: 900;
+}
+
+:global(.advanced-proxy-anti-poison-drawer .ant-drawer-body) {
+  background:
+    radial-gradient(circle at 78% 4%, rgba(210, 237, 180, 0.34), transparent 32%),
+    linear-gradient(180deg, rgba(249, 253, 244, 0.96), rgba(241, 248, 236, 0.92));
+  padding: 16px;
+  overflow-x: hidden;
+}
+
+.advanced-proxy-anti-poison-hero-card,
+.advanced-proxy-anti-poison-card {
+  min-width: 0;
+  border: 1px solid rgba(90, 117, 79, 0.14);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 90% 0%, rgba(210, 237, 180, 0.38), transparent 36%),
+    rgba(255, 255, 255, 0.78);
+  box-shadow: 0 16px 36px rgba(61, 87, 48, 0.1);
+}
+
+.advanced-proxy-anti-poison-hero-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px;
+}
+
+.advanced-proxy-anti-poison-kicker {
+  display: block;
+  margin-bottom: 6px;
+  color: rgba(77, 97, 66, 0.62);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.advanced-proxy-anti-poison-hero-card h3,
+.advanced-proxy-anti-poison-card h4 {
+  margin: 0;
+  color: #22311c;
+  font-weight: 900;
+}
+
+.advanced-proxy-anti-poison-hero-card h3 {
+  font-size: 20px;
+}
+
+.advanced-proxy-anti-poison-hero-card p,
+.advanced-proxy-anti-poison-card-head p {
+  margin: 6px 0 0;
+  color: rgba(55, 72, 47, 0.68);
+  line-height: 1.5;
+}
+
+.advanced-proxy-anti-poison-state {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1px solid rgba(90, 117, 79, 0.18);
+  background: rgba(255, 255, 255, 0.62);
+  color: rgba(77, 97, 66, 0.68);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 10px;
+}
+
+.advanced-proxy-anti-poison-state.is-active {
+  border-color: rgba(217, 86, 61, 0.24);
+  background: rgba(255, 232, 226, 0.78);
+  color: #b63c29;
+}
+
+.advanced-proxy-anti-poison-card {
+  padding: 16px;
+}
+
+.advanced-proxy-anti-poison-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.advanced-proxy-anti-poison-card-head-actions {
+  align-items: flex-start;
+}
+
+.advanced-proxy-anti-poison-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.advanced-proxy-anti-poison-actions :deep(.ant-btn),
+.advanced-proxy-anti-poison-soft-button {
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid rgba(90, 117, 79, 0.18);
+  box-shadow: 0 8px 18px rgba(54, 73, 45, 0.08);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.advanced-proxy-anti-poison-actions :deep(.ant-btn-primary) {
+  border-color: rgba(44, 79, 41, 0.52);
+  background: linear-gradient(135deg, #284321, #5d7b48);
+}
+
+.advanced-proxy-anti-poison-soft-button {
+  padding: 0 12px;
+  background: rgba(255, 255, 255, 0.76);
+  color: #24391f;
+  cursor: pointer;
+  transition: transform .16s ease, background-color .16s ease, border-color .16s ease;
+}
+
+.advanced-proxy-anti-poison-soft-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(90, 117, 79, 0.34);
+  background: rgba(246, 251, 241, 0.96);
+}
+
+.advanced-proxy-anti-poison-card h4 {
+  font-size: 15px;
+}
+
+.advanced-proxy-anti-poison-card-head p {
+  font-size: 12px;
+}
+
+.advanced-proxy-anti-poison-settings {
+  display: grid;
+  gap: 10px;
+}
+
+.advanced-proxy-anti-poison-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(90, 117, 79, 0.1);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.advanced-proxy-anti-poison-setting-row strong,
+.advanced-proxy-anti-poison-setting-row span {
+  display: block;
+}
+
+.advanced-proxy-anti-poison-setting-row strong {
+  color: #26381f;
+  font-size: 13px;
+}
+
+.advanced-proxy-anti-poison-setting-row span {
+  margin-top: 3px;
+  color: rgba(55, 72, 47, 0.62);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.advanced-proxy-anti-poison-textarea :deep(textarea) {
+  border-radius: 14px;
+  border-color: rgba(90, 117, 79, 0.16);
+  background: rgba(255, 255, 255, 0.66);
+  color: #26381f;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.advanced-proxy-anti-poison-rule-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.advanced-proxy-anti-poison-rule-summary span {
+  min-width: 0;
+  border: 1px solid rgba(90, 117, 79, 0.11);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.64);
+  color: rgba(55, 72, 47, 0.62);
+  font-size: 11px;
+  padding: 9px 10px;
+}
+
+.advanced-proxy-anti-poison-rule-summary strong {
+  margin-right: 5px;
+  color: #22311c;
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.advanced-proxy-anti-poison-rules-textarea :deep(textarea) {
+  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+}
+
+.advanced-proxy-anti-poison-random-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.advanced-proxy-anti-poison-random-card {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(90, 117, 79, 0.1);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.advanced-proxy-anti-poison-random-card span,
+.advanced-proxy-anti-poison-random-card strong {
+  display: block;
+}
+
+.advanced-proxy-anti-poison-random-card span {
+  color: rgba(55, 72, 47, 0.58);
+  font-size: 11px;
+}
+
+.advanced-proxy-anti-poison-random-card strong {
+  margin-top: 4px;
+  color: #22311c;
+  font-size: 13px;
+}
+
+.advanced-proxy-anti-poison-preview {
+  margin: 12px 0 0;
+  padding: 12px;
+  max-height: 320px;
+  overflow: auto;
+  border-radius: 14px;
+  border: 1px solid rgba(90, 117, 79, 0.12);
+  background: rgba(28, 37, 24, 0.92);
+  color: #eff8e9;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.advanced-proxy-anti-poison-flow-table {
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: 340px;
+  border: 1px solid rgba(90, 117, 79, 0.12);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(247, 251, 242, 0.78)),
+    radial-gradient(circle at 10% 10%, rgba(178, 211, 135, 0.16), transparent 36%);
+}
+
+.advanced-proxy-anti-poison-flow-table table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.advanced-proxy-anti-poison-flow-table th:nth-child(1),
+.advanced-proxy-anti-poison-flow-table td:nth-child(1) {
+  width: 112px;
+}
+
+.advanced-proxy-anti-poison-flow-table th:nth-child(2),
+.advanced-proxy-anti-poison-flow-table td:nth-child(2) {
+  width: 92px;
+}
+
+.advanced-proxy-anti-poison-flow-table th:nth-child(3),
+.advanced-proxy-anti-poison-flow-table td:nth-child(3) {
+  width: 78px;
+}
+
+.advanced-proxy-anti-poison-flow-table th:nth-child(8),
+.advanced-proxy-anti-poison-flow-table td:nth-child(8) {
+  width: 52px;
+}
+
+.advanced-proxy-anti-poison-flow-table th,
+.advanced-proxy-anti-poison-flow-table td {
+  padding: 10px 11px;
+  border-bottom: 1px solid rgba(90, 117, 79, 0.1);
+  text-align: left;
+  vertical-align: top;
+  color: rgba(38, 56, 31, 0.78);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.advanced-proxy-anti-poison-flow-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(242, 249, 235, 0.96);
+  color: #25391e;
+  font-weight: 800;
+}
+
+.advanced-proxy-anti-poison-flow-table td code {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  border-radius: 8px;
+  padding: 2px 6px;
+  background: rgba(33, 48, 28, 0.08);
+  color: #25391e;
+  white-space: normal;
+}
+
+.advanced-proxy-anti-poison-blocked-row td {
+  background: rgba(255, 235, 230, 0.78);
+  color: #7c2418 !important;
+}
+
+.advanced-proxy-anti-poison-blocked-row td code {
+  background: rgba(190, 53, 34, 0.12);
+  color: #7c2418;
+}
+
+.advanced-proxy-anti-poison-time-cell {
+  color: rgba(55, 72, 47, 0.5) !important;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.advanced-proxy-anti-poison-stage-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(78, 111, 61, 0.12);
+  color: #29431f;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.advanced-proxy-anti-poison-stage-pill.is-blocked {
+  background: rgba(217, 86, 61, 0.18);
+  color: #9e2f20;
+}
+
+.advanced-proxy-anti-poison-empty-row {
+  height: 68px;
+  text-align: center !important;
+  color: rgba(55, 72, 47, 0.55) !important;
+}
+
+@media (max-width: 760px) {
+  :global(.advanced-proxy-anti-poison-drawer .ant-drawer-body) {
+    padding: 10px;
+  }
+
+  .advanced-proxy-anti-poison-hero-card {
+    flex-direction: column;
+    padding: 14px;
+  }
+
+  .advanced-proxy-anti-poison-flow-table th,
+  .advanced-proxy-anti-poison-flow-table td {
+    padding: 8px 7px;
+    font-size: 11px;
+  }
+
+  .advanced-proxy-anti-poison-flow-table th:nth-child(1),
+  .advanced-proxy-anti-poison-flow-table td:nth-child(1) {
+    width: 82px;
+  }
+
+  .advanced-proxy-anti-poison-flow-table th:nth-child(2),
+  .advanced-proxy-anti-poison-flow-table td:nth-child(2) {
+    width: 72px;
+  }
+
+  .advanced-proxy-anti-poison-flow-table th:nth-child(3),
+  .advanced-proxy-anti-poison-flow-table td:nth-child(3) {
+    width: 58px;
+  }
+
+  .advanced-proxy-anti-poison-flow-table th:nth-child(8),
+  .advanced-proxy-anti-poison-flow-table td:nth-child(8) {
+    width: 38px;
+  }
 }
 
 .advanced-proxy-master-help-tooltip-copy {
@@ -1955,9 +2948,9 @@ function handleMasterHelpTooltipOpenChange(open) {
 }
 
 
-.advanced-proxy-master-debug-button :deep(svg) {
-  width: 22px;
-  height: 22px;
+.advanced-proxy-master-side-icon-button :deep(svg) {
+  width: 16px !important;
+  height: 16px !important;
 }
 
 .advanced-proxy-master-debug-button-active {

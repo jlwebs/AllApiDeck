@@ -25,29 +25,31 @@ var webSearchResultURLPattern = regexp.MustCompile(`https?://[^\s<>"')\]]+`)
 var encryptedContentNeedlePattern = regexp.MustCompile(`(?i)encrypted_content`)
 
 type providerAttemptResult struct {
-	Response   map[string]any
-	StatusCode int
-	Message    string
-	Headers    http.Header
-	StreamBody io.ReadCloser
-	APIFormat  string
-	Model      string
-	RecordCtx  *advancedProxyStreamRequestRecordContext
+	Response          map[string]any
+	StatusCode        int
+	Message           string
+	Headers           http.Header
+	StreamBody        io.ReadCloser
+	APIFormat         string
+	Model             string
+	RecordCtx         *advancedProxyStreamRequestRecordContext
+	AntiPoisonBlocked bool
 }
 
 type rawProviderAttemptResult struct {
-	StatusCode int
-	Message    string
-	ErrorCode  string
-	ErrorType  string
-	Body       []byte
-	Headers    http.Header
-	StreamBody io.ReadCloser
-	ProviderID string
-	Provider   string
-	TargetURL  string
-	RouteKind  string
-	RecordCtx  *advancedProxyStreamRequestRecordContext
+	StatusCode        int
+	Message           string
+	ErrorCode         string
+	ErrorType         string
+	Body              []byte
+	Headers           http.Header
+	StreamBody        io.ReadCloser
+	ProviderID        string
+	Provider          string
+	TargetURL         string
+	RouteKind         string
+	RecordCtx         *advancedProxyStreamRequestRecordContext
+	AntiPoisonBlocked bool
 }
 
 type advancedProxyStreamRequestRecordContext struct {
@@ -63,6 +65,9 @@ type advancedProxyStreamRequestRecordContext struct {
 	ResolvedModel   string
 	StartedAt       time.Time
 	ObservedFormat  string
+	AntiPoisonCtx   antiPoisonRequestContext
+	StringProtect   antiPoisonStringProtectionContext
+	AntiPoisonOps   []antiPoisonOperationRecord
 }
 
 type advancedProxyStreamObservation struct {
@@ -774,6 +779,17 @@ func buildClaudeProxyAttemptPhases(provider AdvancedProxyProvider, requestBody m
 			phases = appendPhase(phases, "openai_responses", "fallback_restore", advancedProxyClaudeProtocolPreferResponses, scopeKey)
 			return appendPhase(phases, "openai_chat", "fallback_restore", advancedProxyClaudeProtocolPreferChat, scopeKey)
 		}
+	}
+
+	switch normalizeClaudeAPIFormat(provider.APIFormat) {
+	case "openai_responses":
+		phases := appendPhase(nil, "openai_responses", "provider_config", advancedProxyClaudeProtocolPreferResponses, scopeKey)
+		phases = appendPhase(phases, "anthropic", "fallback", advancedProxyClaudeProtocolPreferAnthropic, scopeKey)
+		return appendPhase(phases, "openai_chat", "fallback_secondary", advancedProxyClaudeProtocolPreferChat, scopeKey)
+	case "openai_chat":
+		phases := appendPhase(nil, "openai_chat", "provider_config", advancedProxyClaudeProtocolPreferChat, scopeKey)
+		phases = appendPhase(phases, "anthropic", "fallback", advancedProxyClaudeProtocolPreferAnthropic, scopeKey)
+		return appendPhase(phases, "openai_responses", "fallback_secondary", advancedProxyClaudeProtocolPreferResponses, scopeKey)
 	}
 
 	phases := appendPhase(nil, "anthropic", "original", advancedProxyClaudeProtocolPreferAnthropic, scopeKey)
@@ -1621,7 +1637,7 @@ func recordAdvancedProxyStreamObservation(recordContext *advancedProxyStreamRequ
 	}
 	switch strings.ToLower(strings.TrimSpace(recordContext.AppType)) {
 	case "claude":
-		recordAdvancedProxyClaudeStreamAttemptWithTrace(
+		recordAdvancedProxyClaudeStreamAttemptWithTraceAndOps(
 			recordContext.AppType,
 			recordContext.InboundEndpoint,
 			recordContext.OutboundRoute,
@@ -1638,9 +1654,10 @@ func recordAdvancedProxyStreamObservation(recordContext *advancedProxyStreamRequ
 			observation.OutputTokens,
 			errorDetail,
 			recordContext.RouteTrace,
+			recordContext.AntiPoisonOps,
 		)
 	default:
-		recordAdvancedProxyOpenAIStreamAttemptWithTrace(
+		recordAdvancedProxyOpenAIStreamAttemptWithTraceAndOps(
 			recordContext.AppType,
 			recordContext.ClientRoute,
 			recordContext.InboundEndpoint,
@@ -1659,6 +1676,7 @@ func recordAdvancedProxyStreamObservation(recordContext *advancedProxyStreamRequ
 			observation.OutputTokens,
 			errorDetail,
 			recordContext.RouteTrace,
+			recordContext.AntiPoisonOps,
 		)
 	}
 }
@@ -1796,10 +1814,26 @@ func proxyAnthropicStreamToClientWithMetrics(writer http.ResponseWriter, streamB
 	if recordContext != nil {
 		observation.StartedAt = recordContext.StartedAt
 	}
+	streamRaw, guardResult, readErr := readAndPrepareAntiPoisonAnthropicStream(streamBody, recordContext)
+	if readErr != nil {
+		observation.markCompleted(time.Now())
+		if recordContext != nil {
+			recordAdvancedProxyStreamObservation(recordContext, observation, http.StatusBadGateway, readErr.Error())
+		}
+		return readErr
+	}
+	if guardResult.Blocked {
+		observation.markFirstOutput(time.Now())
+		observation.markCompleted(time.Now())
+		writeAnthropicStreamAntiPoisonError(writer, "AllApiDeck anti-poison validation failed: "+guardResult.Reason)
+		if recordContext != nil {
+			recordAdvancedProxyStreamObservation(recordContext, observation, http.StatusBadGateway, guardResult.Reason)
+		}
+		return nil
+	}
+	reader := bufio.NewReader(bytes.NewReader(streamRaw))
 	flusher, _ := writer.(http.Flusher)
-	reader := bufio.NewReader(streamBody)
 	var streamErr error
-
 	for {
 		line, err := reader.ReadBytes('\n')
 		if len(line) > 0 {
@@ -1838,8 +1872,26 @@ func proxyOpenAIStreamToClientWithMetrics(writer http.ResponseWriter, streamBody
 	if recordContext != nil {
 		observation.StartedAt = recordContext.StartedAt
 	}
+	streamRaw, guardResult, readErr := readAndPrepareAntiPoisonOpenAIStream(streamBody, recordContext)
+	if readErr != nil {
+		observation.markCompleted(time.Now())
+		if recordContext != nil {
+			recordAdvancedProxyStreamObservation(recordContext, observation, http.StatusBadGateway, readErr.Error())
+		}
+		return readErr
+	}
+	if guardResult.Blocked {
+		observation.markFirstOutput(time.Now())
+		observation.markCompleted(time.Now())
+		writeOpenAIStreamAntiPoisonError(writer, "AllApiDeck anti-poison validation failed: "+guardResult.Reason)
+		if recordContext != nil {
+			recordAdvancedProxyStreamObservation(recordContext, observation, http.StatusBadGateway, guardResult.Reason)
+		}
+		return nil
+	}
+
 	flusher, _ := writer.(http.Flusher)
-	reader := bufio.NewReader(streamBody)
+	reader := bufio.NewReader(bytes.NewReader(streamRaw))
 	var streamErr error
 
 	for {
@@ -1909,6 +1961,23 @@ func writeAnthropicSSEFromOpenAIResponsesStreamWithRecord(writer http.ResponseWr
 		if flusher != nil {
 			flusher.Flush()
 		}
+	}
+
+	streamReader := io.Reader(streamBody)
+	if recordContext != nil {
+		sanitizedRaw, guardResult, readErr := readAndPrepareAntiPoisonOpenAIStream(streamBody, recordContext)
+		if readErr != nil {
+			streamRecordDetail = fmt.Sprintf("responses stream read failed: %s", readErr.Error())
+			writeAnthropicStreamAntiPoisonError(writer, "Advanced proxy stream read failed")
+			return
+		}
+		if guardResult.Blocked {
+			observation.markFirstOutput(time.Now())
+			streamRecordDetail = "AllApiDeck anti-poison validation failed: " + guardResult.Reason
+			writeAnthropicStreamAntiPoisonError(writer, streamRecordDetail)
+			return
+		}
+		streamReader = bytes.NewReader(sanitizedRaw)
 	}
 
 	type responsesToolStreamState struct {
@@ -2434,7 +2503,7 @@ func writeAnthropicSSEFromOpenAIResponsesStreamWithRecord(writer http.ResponseWr
 		return ""
 	}
 
-	scanner := bufio.NewScanner(streamBody)
+	scanner := bufio.NewScanner(streamReader)
 	scanner.Buffer(make([]byte, 0, 64*1024), advancedProxySSEScannerMaxTokenSize)
 	eventName := ""
 	dataParts := make([]string, 0, 4)
@@ -2882,6 +2951,23 @@ func writeAnthropicSSEFromOpenAIChatStreamWithRecord(writer http.ResponseWriter,
 		}
 	}
 
+	streamReader := io.Reader(streamBody)
+	if recordContext != nil {
+		sanitizedRaw, guardResult, readErr := readAndPrepareAntiPoisonOpenAIStream(streamBody, recordContext)
+		if readErr != nil {
+			streamRecordDetail = fmt.Sprintf("chat stream read failed: %s", readErr.Error())
+			writeAnthropicStreamAntiPoisonError(writer, "Advanced proxy stream read failed")
+			return
+		}
+		if guardResult.Blocked {
+			observation.markFirstOutput(time.Now())
+			streamRecordDetail = "AllApiDeck anti-poison validation failed: " + guardResult.Reason
+			writeAnthropicStreamAntiPoisonError(writer, streamRecordDetail)
+			return
+		}
+		streamReader = bytes.NewReader(sanitizedRaw)
+	}
+
 	messageID := ""
 	model := strings.TrimSpace(fallbackModel)
 	if model == "" {
@@ -3050,7 +3136,7 @@ func writeAnthropicSSEFromOpenAIChatStreamWithRecord(writer http.ResponseWriter,
 		})
 	}
 
-	scanner := bufio.NewScanner(streamBody)
+	scanner := bufio.NewScanner(streamReader)
 	scanner.Buffer(make([]byte, 0, 64*1024), advancedProxySSEScannerMaxTokenSize)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -3227,6 +3313,29 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 			appendAdvancedProxyLogf("[CLAUDE_PROXY_SANITIZE] provider=%s sanitized_orphan_tool_results=%d", advancedProxyProviderLabel(provider), sanitizedCount)
 		}
 	}
+	antiPoisonCtx := antiPoisonRequestContext{Config: sanitizeAntiPoisonConfig(config.AntiPoison), RouteKind: "claude_messages"}
+	if config.AntiPoison.Enabled {
+		guardedPayload, guardCtx, guardErr := applyAntiPoisonPromptToAnthropicRequest(basePayload, config.AntiPoison)
+		if guardErr != nil {
+			appendAdvancedProxyLogf(
+				"[ANTI_POISON_PROMPT_FAIL] app=claude route=messages provider=%s detail=%s",
+				advancedProxyProviderLabel(provider),
+				previewAdvancedProxyText(guardErr.Error(), 220),
+			)
+		} else if guardCtx.Enabled {
+			basePayload = guardedPayload
+			antiPoisonCtx = guardCtx
+			appendAdvancedProxyLogf(
+				"[ANTI_POISON_PROMPT_APPLY] app=claude route=messages provider=%s alias=%s guard=%s strategy=%d phrase=%d insertion=%s",
+				advancedProxyProviderLabel(provider),
+				previewAdvancedProxyText(guardCtx.Alias, 40),
+				previewAdvancedProxyText(guardCtx.GuardToolName, 80),
+				guardCtx.StrategySlot,
+				guardCtx.PhraseVariant,
+				previewAdvancedProxyText(guardCtx.InsertionPoint, 60),
+			)
+		}
+	}
 	if debugEnabled {
 		appendAdvancedProxyLogf(
 			"[CLAUDE_PROXY_REQUEST] provider=%s stream=%t capabilities=%s phases=%s payload=%s",
@@ -3272,6 +3381,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 		payload := deepCopyJSONMap(basePayload)
 		signatureRectified := false
 		budgetRectified := false
+		chatSystemRectified := false
 
 	retryPhase:
 		targets := buildTargets(phase.apiFormat)
@@ -3289,6 +3399,34 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 			transformed = anthropicRequestToOpenAIResponses(payload, provider)
 		default:
 			transformed = payload
+		}
+		stringProtectionCtx := antiPoisonStringProtectionContext{}
+		if config.AntiPoison.Enabled && config.AntiPoison.StringProtection.Enabled {
+			rawTransformedForProtection, marshalErr := json.Marshal(transformed)
+			if marshalErr == nil {
+				protectedRaw, protectionCtx, protectionErr := applyAntiPoisonStringProtectionToJSONBody(rawTransformedForProtection, config.AntiPoison, phase.routeKind, advancedProxyProviderLabel(provider), "claude")
+				stringProtectionCtx = protectionCtx
+				if protectionErr != nil {
+					appendAdvancedProxyLogf(
+						"[ANTI_POISON_STRING_PROTECT_FAIL] app=claude route=%s provider=%s detail=%s",
+						phase.routeKind,
+						advancedProxyProviderLabel(provider),
+						previewAdvancedProxyText(protectionErr.Error(), 220),
+					)
+				} else if protectionCtx.Enabled {
+					protectedMap := map[string]any{}
+					if err := json.Unmarshal(protectedRaw, &protectedMap); err == nil {
+						transformed = protectedMap
+						appendAdvancedProxyLogf(
+							"[ANTI_POISON_STRING_PROTECT] app=claude route=%s provider=%s ops=%d placeholders=%d",
+							phase.routeKind,
+							advancedProxyProviderLabel(provider),
+							len(protectionCtx.Records),
+							len(protectionCtx.mapping),
+						)
+					}
+				}
+			}
 		}
 		resolvedPhaseModel := firstNonEmpty(strings.TrimSpace(toStringValue(transformed["model"])), fallbackModel)
 		requestSnapshot, _ := json.Marshal(transformed)
@@ -3384,10 +3522,13 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 						ResolvedModel:   resolvedPhaseModel,
 						StartedAt:       attemptStartedAt,
 						ObservedFormat:  phase.apiFormat,
+						AntiPoisonCtx:   antiPoisonCtx,
+						StringProtect:   stringProtectionCtx,
 					},
 				}
 			}
 
+		retryCurrentTarget:
 			statusCode, responseHeaders, rawResponse, elapsed, err := performJSONUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, phase.apiFormat, requestHeaders, stream), transformed, timeoutSeconds)
 			if err != nil {
 				advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, false)
@@ -3395,7 +3536,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 				if debugEnabled {
 					appendAdvancedProxyLogf("[CLAUDE_PROXY_ERROR] provider=%s format=%s route=%s endpoint=%s detail=%s", advancedProxyProviderLabel(provider), phase.apiFormat, phase.routeKind, targetURL, previewAdvancedProxyText(err.Error(), 320))
 				}
-				recordAdvancedProxyClaudeAttemptWithTrace("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, nil, stream, http.StatusBadGateway, elapsed, err.Error(), buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"))
+				recordAdvancedProxyClaudeAttemptWithTraceAndOps("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, nil, stream, http.StatusBadGateway, elapsed, err.Error(), buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"), annotateAntiPoisonStringProtectionRecords(stringProtectionCtx.Records, phase.routeKind, advancedProxyProviderLabel(provider)))
 				return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: err.Error()}
 			}
 			if statusCode < 200 || statusCode >= 300 {
@@ -3407,7 +3548,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 				}
 				if phase.apiFormat == "anthropic" && !signatureRectified && shouldRectifyThinkingSignature(errorMessage, config.Rectifier) && rectifyThinkingSignature(payload) {
 					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
-					recordAdvancedProxyClaudeAttemptWithTrace("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, rawResponse, stream, statusCode, elapsed, errorMessage, buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"))
+					recordAdvancedProxyClaudeAttemptWithTraceAndOps("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, rawResponse, stream, statusCode, elapsed, errorMessage, buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"), annotateAntiPoisonStringProtectionRecords(stringProtectionCtx.Records, phase.routeKind, advancedProxyProviderLabel(provider)))
 					phaseTraceBase = buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed")
 					currentRouteSource = "rectified"
 					signatureRectified = true
@@ -3415,15 +3556,32 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 				}
 				if phase.apiFormat == "anthropic" && !budgetRectified && shouldRectifyThinkingBudget(errorMessage, config.Rectifier) && rectifyThinkingBudget(payload) {
 					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
-					recordAdvancedProxyClaudeAttemptWithTrace("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, rawResponse, stream, statusCode, elapsed, errorMessage, buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"))
+					recordAdvancedProxyClaudeAttemptWithTraceAndOps("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, rawResponse, stream, statusCode, elapsed, errorMessage, buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"), annotateAntiPoisonStringProtectionRecords(stringProtectionCtx.Records, phase.routeKind, advancedProxyProviderLabel(provider)))
 					phaseTraceBase = buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed")
 					currentRouteSource = "rectified"
 					budgetRectified = true
 					goto retryPhase
 				}
+				if phase.apiFormat == "openai_chat" && !chatSystemRectified && shouldRectifyOpenAIChatSystemPrompt(errorMessage) && inlineOpenAIChatSystemPrompt(transformed) {
+					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
+					recordAdvancedProxyClaudeAttemptWithTraceAndOps("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, rawResponse, stream, statusCode, elapsed, errorMessage, buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"), annotateAntiPoisonStringProtectionRecords(stringProtectionCtx.Records, phase.routeKind, advancedProxyProviderLabel(provider)))
+					phaseTraceBase = buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed")
+					currentRouteSource = "rectified"
+					chatSystemRectified = true
+					resolvedPhaseModel = firstNonEmpty(strings.TrimSpace(toStringValue(transformed["model"])), fallbackModel)
+					requestSnapshot, _ = json.Marshal(transformed)
+					appendAdvancedProxyLogf(
+						"[CLAUDE_PROXY_CHAT_SYSTEM_RECTIFY] provider=%s route=%s endpoint=%s reason=%s",
+						advancedProxyProviderLabel(provider),
+						phase.routeKind,
+						targetURL,
+						previewAdvancedProxyText(errorMessage, 160),
+					)
+					goto retryCurrentTarget
+				}
 				advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, false)
 				observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, nil)
-				recordAdvancedProxyClaudeAttemptWithTrace("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, rawResponse, stream, statusCode, elapsed, errorMessage, buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"))
+				recordAdvancedProxyClaudeAttemptWithTraceAndOps("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, rawResponse, stream, statusCode, elapsed, errorMessage, buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"), annotateAntiPoisonStringProtectionRecords(stringProtectionCtx.Records, phase.routeKind, advancedProxyProviderLabel(provider)))
 				if nextPhase != nil && shouldAdvanceClaudeProxyPhase(phase, *nextPhase, statusCode, rawResponse, requestFeatures) {
 					if debugEnabled {
 						appendAdvancedProxyLogf(
@@ -3450,8 +3608,63 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 			responseMap := map[string]any{}
 			if err := json.Unmarshal(rawResponse, &responseMap); err != nil {
 				advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, false)
-				recordAdvancedProxyClaudeAttemptWithTrace("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, rawResponse, stream, http.StatusBadGateway, elapsed, "invalid upstream JSON response", buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"))
+				recordAdvancedProxyClaudeAttemptWithTraceAndOps("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, rawResponse, stream, http.StatusBadGateway, elapsed, "invalid upstream JSON response", buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"), annotateAntiPoisonStringProtectionRecords(stringProtectionCtx.Records, phase.routeKind, advancedProxyProviderLabel(provider)))
 				return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "invalid upstream JSON response"}
+			}
+			if antiPoisonCtx.Enabled {
+				validationBody := rawResponse
+				validationRoute := ""
+				switch phase.apiFormat {
+				case "openai_chat":
+					validationRoute = "chat"
+				case "openai_responses":
+					validationRoute = "responses"
+				default:
+					validationRoute = "anthropic"
+				}
+				var guardResult antiPoisonValidationResult
+				if validationRoute == "anthropic" {
+					guardResult = validateAndStripAntiPoisonAnthropicResponse(validationBody, antiPoisonCtx)
+				} else {
+					guardResult = validateAndStripAntiPoisonOpenAIResponse(validationBody, validationRoute, antiPoisonCtx)
+				}
+				appendAdvancedProxyLogf(
+					"[ANTI_POISON_VALIDATE] app=claude route=messages provider=%s format=%s alias=%s valid=%t blocked=%t reason=%s real=%d guard=%d stripped=%d",
+					advancedProxyProviderLabel(provider),
+					phase.apiFormat,
+					previewAdvancedProxyText(antiPoisonCtx.Alias, 40),
+					guardResult.Valid,
+					guardResult.Blocked,
+					previewAdvancedProxyText(guardResult.Reason, 120),
+					guardResult.RealCount,
+					guardResult.GuardCount,
+					guardResult.RemovedGuards,
+				)
+				if guardResult.Blocked {
+					advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, false)
+					observeAdvancedProxyAttempt("claude", provider, http.StatusBadGateway, elapsed, nil)
+					ops := appendAntiPoisonBlockedOperation(stringProtectionCtx.Records, phase.routeKind, advancedProxyProviderLabel(provider), "claude", guardResult.Reason)
+					recordAdvancedProxyClaudeAttemptWithTraceAndOps("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, guardResult.Body, stream, http.StatusBadGateway, elapsed, guardResult.Reason, buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"), annotateAntiPoisonStringProtectionRecords(ops, phase.routeKind, advancedProxyProviderLabel(provider)))
+					return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "AllApiDeck anti-poison validation failed: " + guardResult.Reason, AntiPoisonBlocked: true}
+				}
+				if guardResult.Applied {
+					rawResponse = guardResult.Body
+					responseMap = map[string]any{}
+					if err := json.Unmarshal(rawResponse, &responseMap); err != nil {
+						advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, false)
+						recordAdvancedProxyClaudeAttemptWithTraceAndOps("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, rawResponse, stream, http.StatusBadGateway, elapsed, "invalid stripped anti-poison response", buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"), annotateAntiPoisonStringProtectionRecords(stringProtectionCtx.Records, phase.routeKind, advancedProxyProviderLabel(provider)))
+						return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "invalid stripped anti-poison response"}
+					}
+				}
+			}
+			if !stream && stringProtectionCtx.Enabled {
+				rawResponse = restoreAntiPoisonStringProtectionInJSONBody(rawResponse, &stringProtectionCtx, phase.routeKind, advancedProxyProviderLabel(provider), "claude")
+				responseMap = map[string]any{}
+				if err := json.Unmarshal(rawResponse, &responseMap); err != nil {
+					advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, false)
+					recordAdvancedProxyClaudeAttemptWithTraceAndOps("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, nil, rawResponse, stream, http.StatusBadGateway, elapsed, "invalid restored anti-poison response", buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "failed"), annotateAntiPoisonStringProtectionRecords(stringProtectionCtx.Records, phase.routeKind, advancedProxyProviderLabel(provider)))
+					return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "invalid restored anti-poison response"}
+				}
 			}
 			switch phase.apiFormat {
 			case "openai_chat":
@@ -3468,7 +3681,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 					appendAdvancedProxyLogf("[CLAUDE_PROXY_PREFERENCE_SET] provider=%s scope=%s prefer=%s route=%s", advancedProxyProviderLabel(provider), previewAdvancedProxyText(phase.preferenceScopeKey, 160), preferName, phase.routeKind)
 				}
 			}
-			recordAdvancedProxyClaudeAttemptWithTrace("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, responseMap, rawResponse, stream, http.StatusOK, elapsed, "", buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "success"))
+			recordAdvancedProxyClaudeAttemptWithTraceAndOps("claude", buildAdvancedProxyClaudeInboundEndpoint(), phase.routeKind, provider, targetURL, requestSnapshot, resolvedPhaseModel, responseMap, rawResponse, stream, http.StatusOK, elapsed, "", buildClaudeRouteTrace(phaseTraceBase, phase.routeKind, currentRouteSource, "success"), annotateAntiPoisonStringProtectionRecords(stringProtectionCtx.Records, phase.routeKind, advancedProxyProviderLabel(provider)))
 			return providerAttemptResult{Response: responseMap, StatusCode: http.StatusOK, Headers: responseHeaders}
 		}
 
@@ -3628,6 +3841,57 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 	}
 	if resolvedModel == "" {
 		resolvedModel = strings.TrimSpace(provider.Model)
+	}
+	antiPoisonCtx := antiPoisonRequestContext{Config: sanitizeAntiPoisonConfig(config.AntiPoison), RouteKind: routeKind}
+	stringProtectionCtx := antiPoisonStringProtectionContext{}
+	if config.AntiPoison.Enabled {
+		guardedBody, guardCtx, guardErr := applyAntiPoisonPromptToOpenAIRequest(normalizedBody, routeKind, config.AntiPoison)
+		if guardErr != nil {
+			appendAdvancedProxyLogf(
+				"[ANTI_POISON_PROMPT_FAIL] app=%s route=%s provider=%s detail=%s",
+				appType,
+				routeKind,
+				providerLabel,
+				previewAdvancedProxyText(guardErr.Error(), 220),
+			)
+		} else if guardCtx.Enabled {
+			normalizedBody = guardedBody
+			antiPoisonCtx = guardCtx
+			appendAdvancedProxyLogf(
+				"[ANTI_POISON_PROMPT_APPLY] app=%s route=%s provider=%s alias=%s guard=%s strategy=%d phrase=%d insertion=%s",
+				appType,
+				routeKind,
+				providerLabel,
+				previewAdvancedProxyText(guardCtx.Alias, 40),
+				previewAdvancedProxyText(guardCtx.GuardToolName, 80),
+				guardCtx.StrategySlot,
+				guardCtx.PhraseVariant,
+				previewAdvancedProxyText(guardCtx.InsertionPoint, 60),
+			)
+		}
+	}
+	if config.AntiPoison.Enabled && config.AntiPoison.StringProtection.Enabled {
+		protectedBody, protectionCtx, protectionErr := applyAntiPoisonStringProtectionToJSONBody(normalizedBody, config.AntiPoison, routeKind, providerLabel, "openai")
+		stringProtectionCtx = protectionCtx
+		if protectionErr != nil {
+			appendAdvancedProxyLogf(
+				"[ANTI_POISON_STRING_PROTECT_FAIL] app=%s route=%s provider=%s detail=%s",
+				appType,
+				routeKind,
+				providerLabel,
+				previewAdvancedProxyText(protectionErr.Error(), 220),
+			)
+		} else if protectionCtx.Enabled {
+			normalizedBody = protectedBody
+			appendAdvancedProxyLogf(
+				"[ANTI_POISON_STRING_PROTECT] app=%s route=%s provider=%s ops=%d placeholders=%d",
+				appType,
+				routeKind,
+				providerLabel,
+				len(protectionCtx.Records),
+				len(protectionCtx.mapping),
+			)
+		}
 	}
 
 	type openAIProxyAttemptPhase struct {
@@ -3837,7 +4101,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 				observeAdvancedProxyAttempt(appType, provider, statusCode, elapsed, err)
 				message := formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, fmt.Sprintf("upstream request failed (%s, outbound=%s)", err.Error(), describeOutboundProxyMode()))
 				appendAdvancedProxyLogf("[OPENAI_PROXY_ERROR] status=%d app=%s route=%s provider=%s endpoint=%s detail=%s", http.StatusBadGateway, appType, phase.outboundRoute, providerLabel, targetURL, previewAdvancedProxyText(message, 260))
-				recordAdvancedProxyOpenAIAttemptWithTrace(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, phaseModel, nil, stream, http.StatusBadGateway, elapsed, message, buildRouteTraceSnapshot(phaseIndex, "failed"))
+				recordAdvancedProxyOpenAIAttemptWithTraceAndOps(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, phaseModel, nil, stream, http.StatusBadGateway, elapsed, message, buildRouteTraceSnapshot(phaseIndex, "failed"), annotateAntiPoisonStringProtectionRecords(stringProtectionCtx.Records, routeKind, providerLabel))
 				return rawProviderAttemptResult{
 					StatusCode: http.StatusBadGateway,
 					Message:    message,
@@ -3882,8 +4146,11 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 					lastErrorCode = healingCode
 					lastErrorType = healingType
 				}
+				if !stream && stringProtectionCtx.Enabled {
+					body = restoreAntiPoisonStringProtectionInJSONBody(body, &stringProtectionCtx, routeKind, providerLabel, "openai")
+				}
 				appendAdvancedProxyLogf("[OPENAI_PROXY_FAIL] status=%d app=%s route=%s provider=%s endpoint=%s detail=%s", statusCode, appType, phase.outboundRoute, providerLabel, targetURL, previewAdvancedProxyText(lastMessage, 260))
-				recordAdvancedProxyOpenAIAttemptWithTrace(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, phaseModel, body, stream, statusCode, elapsed, lastMessage, buildRouteTraceSnapshot(phaseIndex, "failed"))
+				recordAdvancedProxyOpenAIAttemptWithTraceAndOps(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, phaseModel, body, stream, statusCode, elapsed, lastMessage, buildRouteTraceSnapshot(phaseIndex, "failed"), annotateAntiPoisonStringProtectionRecords(stringProtectionCtx.Records, routeKind, providerLabel))
 				if isRetryableCheckStatus(statusCode) {
 					continue
 				}
@@ -3954,7 +4221,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 						targetURL,
 						previewAdvancedProxyText(transformErr.Error(), 260),
 					)
-					recordAdvancedProxyOpenAIAttemptWithTrace(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, phaseModel, nil, stream, lastStatus, elapsed, lastMessage, buildRouteTraceSnapshot(phaseIndex, "failed"))
+					recordAdvancedProxyOpenAIAttemptWithTraceAndOps(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, phaseModel, nil, stream, lastStatus, elapsed, lastMessage, buildRouteTraceSnapshot(phaseIndex, "failed"), annotateAntiPoisonStringProtectionRecords(stringProtectionCtx.Records, routeKind, providerLabel))
 					if phaseIndex < len(phases)-1 {
 						advanceToNextPhase = true
 						break
@@ -3971,6 +4238,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 					}
 				}
 				result = transformedResult
+				result.RecordCtx = nil
 			}
 			if phase.preferenceScopeKey != "" {
 				setAdvancedProxyOpenAIProtocolPreference(phase.preferenceScopeKey, phase.preferenceValue)
@@ -3986,10 +4254,49 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 					preferName,
 				)
 			}
+			if !stream && antiPoisonCtx.Enabled {
+				guardResult := validateAndStripAntiPoisonOpenAIResponse(result.Body, routeKind, antiPoisonCtx)
+				appendAdvancedProxyLogf(
+					"[ANTI_POISON_VALIDATE] app=%s route=%s provider=%s alias=%s valid=%t blocked=%t reason=%s real=%d guard=%d stripped=%d",
+					appType,
+					routeKind,
+					providerLabel,
+					previewAdvancedProxyText(antiPoisonCtx.Alias, 40),
+					guardResult.Valid,
+					guardResult.Blocked,
+					previewAdvancedProxyText(guardResult.Reason, 120),
+					guardResult.RealCount,
+					guardResult.GuardCount,
+					guardResult.RemovedGuards,
+				)
+				if guardResult.Blocked {
+					result.StatusCode = http.StatusBadGateway
+					result.Body = []byte(fmt.Sprintf(`{"error":{"message":"AllApiDeck anti-poison validation failed: %s","type":"invalid_request_error","code":"anti_poison_validation_failed"}}`, previewAdvancedProxyText(guardResult.Reason, 160)))
+					result.StreamBody = nil
+					result.Headers = result.Headers.Clone()
+					result.Headers.Set("Content-Type", "application/json")
+					result.Message = "AllApiDeck anti-poison validation failed: " + guardResult.Reason
+					result.ErrorCode = "anti_poison_validation_failed"
+					result.ErrorType = "invalid_request_error"
+					result.AntiPoisonBlocked = true
+					ops := appendAntiPoisonBlockedOperation(stringProtectionCtx.Records, routeKind, providerLabel, "openai", guardResult.Reason)
+					recordAdvancedProxyOpenAIAttemptWithTraceAndOps(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, phaseModel, result.Body, false, result.StatusCode, elapsed, guardResult.Reason, buildRouteTraceSnapshot(phaseIndex, "failed"), annotateAntiPoisonStringProtectionRecords(ops, routeKind, providerLabel))
+					return result
+				} else if guardResult.Applied {
+					result.Body = guardResult.Body
+				}
+			}
+			if !stream && stringProtectionCtx.Enabled {
+				result.Body = restoreAntiPoisonStringProtectionInJSONBody(result.Body, &stringProtectionCtx, routeKind, providerLabel, "openai")
+			}
 			if stream && result.StreamBody != nil {
 				observedFormat := "chat"
 				if phase.responseTransform == "chat_to_responses" || routeKind == "responses" || routeKind == "responses_compact" {
 					observedFormat = "responses"
+				}
+				recordCtxObservedFormat := observedFormat
+				if phase.responseTransform == "chat_to_responses" {
+					recordCtxObservedFormat = "chat"
 				}
 				result.RecordCtx = &advancedProxyStreamRequestRecordContext{
 					AppType:         appType,
@@ -4003,10 +4310,12 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 					RequestBody:     phase.requestBody,
 					ResolvedModel:   phaseModel,
 					StartedAt:       attemptStartedAt,
-					ObservedFormat:  observedFormat,
+					ObservedFormat:  recordCtxObservedFormat,
+					AntiPoisonCtx:   antiPoisonCtx,
+					StringProtect:   stringProtectionCtx,
 				}
 			} else {
-				recordAdvancedProxyOpenAIAttemptWithTrace(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, phaseModel, result.Body, stream, statusCode, elapsed, "", buildRouteTraceSnapshot(phaseIndex, "success"))
+				recordAdvancedProxyOpenAIAttemptWithTraceAndOps(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, phaseModel, result.Body, stream, statusCode, elapsed, "", buildRouteTraceSnapshot(phaseIndex, "success"), annotateAntiPoisonStringProtectionRecords(stringProtectionCtx.Records, routeKind, providerLabel))
 			}
 			appendAdvancedProxyLogf("[OPENAI_PROXY_OK] status=%d app=%s route=%s provider=%s endpoint=%s stream=%t", statusCode, appType, phase.outboundRoute, providerLabel, targetURL, stream)
 			return result
@@ -4380,6 +4689,10 @@ func (a *App) handleAdvancedProxyClaude(writer http.ResponseWriter, request *htt
 		if failoverActive {
 			advancedProxyRuntime.Record("claude", provider.ID, config.Failover, false)
 		}
+		if result.AntiPoisonBlocked {
+			writeAnthropicProxyError(writer, http.StatusBadGateway, firstNonEmpty(result.Message, "AllApiDeck anti-poison validation failed"))
+			return
+		}
 		if result.StatusCode > 0 {
 			lastStatus = result.StatusCode
 		}
@@ -4547,6 +4860,10 @@ func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWrit
 		}
 		if failoverActive {
 			advancedProxyRuntime.Record(appType, provider.ID, config.Failover, false)
+		}
+		if result.AntiPoisonBlocked {
+			writeOpenAIProxyError(writer, http.StatusBadGateway, firstNonEmpty(result.Message, "AllApiDeck anti-poison validation failed"), firstNonEmpty(result.ErrorCode, "anti_poison_validation_failed"), firstNonEmpty(result.ErrorType, "invalid_request_error"))
+			return
 		}
 		if result.StatusCode > 0 {
 			lastStatus = result.StatusCode

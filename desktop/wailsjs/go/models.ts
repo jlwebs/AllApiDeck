@@ -14,6 +14,84 @@ export namespace main {
 	        this.basePath = source["basePath"];
 	    }
 	}
+	export class AntiPoisonStringProtectionConfig {
+	    enabled: boolean;
+	    rules: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AntiPoisonStringProtectionConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.rules = source["rules"];
+	    }
+	}
+	export class AntiPoisonRandomizationConfig {
+	    enabled: boolean;
+	    strategyPoolSize: number;
+	    minPhraseVariantsPerStrategy: number;
+	    randomInsertionPoints: boolean;
+	    minFakeToolcalls: number;
+	    requirePerToolTypeMarker: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AntiPoisonRandomizationConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.strategyPoolSize = source["strategyPoolSize"];
+	        this.minPhraseVariantsPerStrategy = source["minPhraseVariantsPerStrategy"];
+	        this.randomInsertionPoints = source["randomInsertionPoints"];
+	        this.minFakeToolcalls = source["minFakeToolcalls"];
+	        this.requirePerToolTypeMarker = source["requirePerToolTypeMarker"];
+	    }
+	}
+	export class AntiPoisonConfig {
+	    enabled: boolean;
+	    strictMode: boolean;
+	    failureMode: string;
+	    strategyPrompt: string;
+	    algorithmPrompt: string;
+	    randomization: AntiPoisonRandomizationConfig;
+	    stringProtection: AntiPoisonStringProtectionConfig;
+	
+	    static createFrom(source: any = {}) {
+	        return new AntiPoisonConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.strictMode = source["strictMode"];
+	        this.failureMode = source["failureMode"];
+	        this.strategyPrompt = source["strategyPrompt"];
+	        this.algorithmPrompt = source["algorithmPrompt"];
+	        this.randomization = this.convertValues(source["randomization"], AntiPoisonRandomizationConfig);
+	        this.stringProtection = this.convertValues(source["stringProtection"], AntiPoisonStringProtectionConfig);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class OptimizerConfig {
 	    enabled: boolean;
 	    thinkingOptimizer: boolean;
@@ -296,6 +374,7 @@ export namespace main {
 	    highAvailability: HighAvailabilityConfig;
 	    rectifier: RectifierConfig;
 	    optimizer: OptimizerConfig;
+	    antiPoison: AntiPoisonConfig;
 	    updatedAt: string;
 	
 	    static createFrom(source: any = {}) {
@@ -317,6 +396,7 @@ export namespace main {
 	        this.highAvailability = this.convertValues(source["highAvailability"], HighAvailabilityConfig);
 	        this.rectifier = this.convertValues(source["rectifier"], RectifierConfig);
 	        this.optimizer = this.convertValues(source["optimizer"], OptimizerConfig);
+	        this.antiPoison = this.convertValues(source["antiPoison"], AntiPoisonConfig);
 	        this.updatedAt = source["updatedAt"];
 	    }
 	
@@ -369,6 +449,42 @@ export namespace main {
 	}
 	
 	
+	export class antiPoisonOperationRecord {
+	    id: string;
+	    time: string;
+	    stage: string;
+	    channel: string;
+	    rule: string;
+	    path: string;
+	    before: string;
+	    after: string;
+	    count: number;
+	    route: string;
+	    provider: string;
+	    blocked: boolean;
+	    reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new antiPoisonOperationRecord(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.time = source["time"];
+	        this.stage = source["stage"];
+	        this.channel = source["channel"];
+	        this.rule = source["rule"];
+	        this.path = source["path"];
+	        this.before = source["before"];
+	        this.after = source["after"];
+	        this.count = source["count"];
+	        this.route = source["route"];
+	        this.provider = source["provider"];
+	        this.blocked = source["blocked"];
+	        this.reason = source["reason"];
+	    }
+	}
 	export class AdvancedProxyRequestRouteStep {
 	    route: string;
 	    source?: string;
@@ -411,6 +527,7 @@ export namespace main {
 	    errorDetail: string;
 	    source: string;
 	    requestBody?: string;
+	    antiPoisonOps?: antiPoisonOperationRecord[];
 	
 	    static createFrom(source: any = {}) {
 	        return new AdvancedProxyRequestRecord(source);
@@ -443,6 +560,7 @@ export namespace main {
 	        this.errorDetail = source["errorDetail"];
 	        this.source = source["source"];
 	        this.requestBody = source["requestBody"];
+	        this.antiPoisonOps = this.convertValues(source["antiPoisonOps"], antiPoisonOperationRecord);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -522,6 +640,9 @@ export namespace main {
 		    return a;
 		}
 	}
+	
+	
+	
 	
 	
 	export class AppUpdateAsset {
@@ -1199,6 +1320,7 @@ export namespace main {
 	        this.localStorageKeyCount = source["localStorageKeyCount"];
 	    }
 	}
+	
 	
 	export class desktopProfileAssistOpenRequest {
 	    siteName: string;
