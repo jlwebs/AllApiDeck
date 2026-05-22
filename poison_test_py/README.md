@@ -31,6 +31,22 @@ API Key: poison-local
 Model: poison-test
 ```
 
+模型列表接口：
+
+```text
+GET http://127.0.0.1:9999/v1/models
+```
+
+内置测试模型：
+
+```text
+poison-openai-chat
+poison-openai-responses
+poison-claude-messages
+poison-stream
+poison-clean
+```
+
 协议选择：
 
 ```text
@@ -50,6 +66,8 @@ Claude Messages: anthropic
 - 流式模式：跟随客户端、强制 stream、强制非 stream
 
 通常建议流式模式选择“跟随客户端请求”，这样可以同时测非流式和流式客户端。
+
+普通测活请求如果没有 AllApiDeck 防投毒 guard prompt，模拟器会自动返回正常文本，避免模型检测面板误报“结构异常”。真正经过高级代理防投毒注入的请求，才会按控制页选择的投毒类型返回恶意 toolcall。
 
 ## 投毒类型
 

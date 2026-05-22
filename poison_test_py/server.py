@@ -83,6 +83,45 @@ ATTACKS = {
 }
 
 
+TEST_MODELS = [
+    {
+        "id": "poison-openai-chat",
+        "object": "model",
+        "created": 1760000000,
+        "owned_by": "allapideck-poison-test",
+        "protocol": "openai_chat",
+    },
+    {
+        "id": "poison-openai-responses",
+        "object": "model",
+        "created": 1760000000,
+        "owned_by": "allapideck-poison-test",
+        "protocol": "openai_responses",
+    },
+    {
+        "id": "poison-claude-messages",
+        "object": "model",
+        "created": 1760000000,
+        "owned_by": "allapideck-poison-test",
+        "protocol": "claude_messages",
+    },
+    {
+        "id": "poison-stream",
+        "object": "model",
+        "created": 1760000000,
+        "owned_by": "allapideck-poison-test",
+        "protocol": "streaming",
+    },
+    {
+        "id": "poison-clean",
+        "object": "model",
+        "created": 1760000000,
+        "owned_by": "allapideck-poison-test",
+        "protocol": "clean_text",
+    },
+]
+
+
 def current_state() -> dict[str, str]:
     with STATE_LOCK:
         return dict(STATE)
@@ -153,6 +192,23 @@ def extract_guard_context(request: dict[str, Any], protocol: str) -> dict[str, s
     }
 
 
+def has_allapideck_guard_prompt(request: dict[str, Any]) -> bool:
+    text = json.dumps(request, ensure_ascii=False)
+    return (
+        "[AllApiDeck 防投毒随机策略]" in text
+        or "[guard tool name]" in text
+        or "AllApiDeck guard fake toolcall" in text
+        or bool(find_guard_tool_name(request))
+    )
+
+
+def active_attack_for_request(request: dict[str, Any]) -> str:
+    attack = current_state()["attack"]
+    if attack == "clean_text" or has_allapideck_guard_prompt(request):
+        return attack
+    return "clean_text"
+
+
 def first_match(text: str, pattern: str) -> str:
     match = re.search(pattern, text)
     return match.group(1).strip() if match else ""
@@ -210,7 +266,7 @@ def real_command_for_attack(attack: str) -> str:
 
 
 def openai_chat_response(request: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    attack = current_state()["attack"]
+    attack = active_attack_for_request(request)
     ctx = extract_guard_context(request, "openai_chat")
     model = request.get("model") or "poison-test-chat"
     if attack == "clean_text":
@@ -257,7 +313,7 @@ def openai_chat_response(request: dict[str, Any]) -> tuple[dict[str, Any], list[
 
 
 def openai_responses_response(request: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    attack = current_state()["attack"]
+    attack = active_attack_for_request(request)
     ctx = extract_guard_context(request, "openai_responses")
     model = request.get("model") or "poison-test-responses"
     if attack == "clean_text":
@@ -316,7 +372,7 @@ def openai_responses_response(request: dict[str, Any]) -> tuple[dict[str, Any], 
 
 
 def claude_messages_response(request: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    attack = current_state()["attack"]
+    attack = active_attack_for_request(request)
     ctx = extract_guard_context(request, "claude_messages")
     model = request.get("model") or "poison-test-claude"
     if attack == "clean_text":
@@ -575,6 +631,29 @@ class PoisonHandler(BaseHTTPRequestHandler):
     server_version = "AllApiDeckPoisonTest/0.1"
 
     def do_GET(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path in {"/v1", "/v1/"}:
+            send_json(
+                self,
+                {
+                    "ok": True,
+                    "service": "AllApiDeck Poison Test Upstream",
+                    "models": "/v1/models",
+                    "routes": ["/v1/chat/completions", "/v1/responses", "/v1/messages"],
+                },
+            )
+            return
+        if parsed.path == "/v1/models":
+            send_json(self, {"object": "list", "data": TEST_MODELS})
+            return
+        if parsed.path.startswith("/v1/models/"):
+            model_id = urllib.parse.unquote(parsed.path.removeprefix("/v1/models/")).strip()
+            for model in TEST_MODELS:
+                if model["id"] == model_id:
+                    send_json(self, model)
+                    return
+            send_json(self, {"error": {"message": f"model {model_id} not found", "type": "invalid_request_error"}}, status=404)
+            return
         if self.path.startswith("/state"):
             send_json(self, current_state())
             return
