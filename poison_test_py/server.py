@@ -435,7 +435,7 @@ def send_sse(handler: BaseHTTPRequestHandler, events: list[tuple[str, dict[str, 
     handler.send_response(200)
     handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
     handler.send_header("Cache-Control", "no-cache")
-    handler.send_header("Connection", "keep-alive")
+    handler.send_header("Connection", "close")
     handler.end_headers()
     for event_name, payload in events:
         if event_name:
@@ -447,6 +447,7 @@ def send_sse(handler: BaseHTTPRequestHandler, events: list[tuple[str, dict[str, 
         handler.wfile.write(f"data: {data}\n\n".encode("utf-8"))
         handler.wfile.flush()
         time.sleep(0.04)
+    handler.close_connection = True
 
 
 def send_json(handler: BaseHTTPRequestHandler, body: dict[str, Any], status: int = 200) -> None:

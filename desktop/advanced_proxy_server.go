@@ -1580,6 +1580,14 @@ func performRawUpstreamRequest(method string, targetURL string, headers map[stri
 		return 0, nil, nil, nil, time.Since(startedAt), err
 	}
 	if keepStream && response.StatusCode >= 200 && response.StatusCode < 300 {
+		if shouldBufferSuccessfulStreamingUpstreamResponse(response.Header) {
+			defer response.Body.Close()
+			body, err := io.ReadAll(io.LimitReader(response.Body, 8*1024*1024))
+			if err != nil {
+				return response.StatusCode, response.Header.Clone(), nil, nil, time.Since(startedAt), err
+			}
+			return response.StatusCode, response.Header.Clone(), body, nil, time.Since(startedAt), nil
+		}
 		return response.StatusCode, response.Header.Clone(), nil, response.Body, time.Since(startedAt), nil
 	}
 	defer response.Body.Close()
@@ -1588,6 +1596,17 @@ func performRawUpstreamRequest(method string, targetURL string, headers map[stri
 		return response.StatusCode, response.Header.Clone(), nil, nil, time.Since(startedAt), err
 	}
 	return response.StatusCode, response.Header.Clone(), body, nil, time.Since(startedAt), nil
+}
+
+func shouldBufferSuccessfulStreamingUpstreamResponse(headers http.Header) bool {
+	contentType := strings.ToLower(strings.TrimSpace(headers.Get("Content-Type")))
+	if contentType == "" || strings.Contains(contentType, "text/event-stream") {
+		return false
+	}
+	return strings.Contains(contentType, "application/json") ||
+		strings.Contains(contentType, "application/problem+json") ||
+		strings.Contains(contentType, "text/plain") ||
+		strings.Contains(contentType, "text/html")
 }
 
 func normalizeAdvancedProxyObservedFormat(value string) string {
@@ -4190,6 +4209,36 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 					TargetURL:  targetURL,
 					RouteKind:  routeKind,
 				}
+			}
+
+			if phaseIndex < len(phases)-1 && phase.outboundRoute == "responses" && phases[phaseIndex+1].outboundRoute == "chat" && shouldFallbackSuccessfulResponsesToChat(statusCode, body) {
+				advancedProxyRuntime.MarkResult(appType, provider, phase.outboundRoute, targetURL, false)
+				observeAdvancedProxyAttempt(appType, provider, http.StatusBadGateway, elapsed, nil)
+				if !stream && stringProtectionCtx.Enabled {
+					body = restoreAntiPoisonStringProtectionInJSONBody(body, &stringProtectionCtx, routeKind, providerLabel, "openai")
+				}
+				lastStatus = http.StatusBadGateway
+				lastMessage = formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, firstNonEmpty(summarizeAdvancedProxyBody(body), fmt.Sprintf("HTTP %d semantic error", statusCode)))
+				lastErrorCode = "advanced_proxy_error"
+				lastErrorType = "invalid_request_error"
+				appendAdvancedProxyLogf(
+					"[OPENAI_PROXY_SEMANTIC_FAIL] status=%d app=%s route=%s provider=%s endpoint=%s detail=%s",
+					statusCode,
+					appType,
+					phase.outboundRoute,
+					providerLabel,
+					targetURL,
+					previewAdvancedProxyText(lastMessage, 260),
+				)
+				recordAdvancedProxyOpenAIAttemptWithTraceAndOps(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, phaseModel, body, stream, lastStatus, elapsed, lastMessage, buildRouteTraceSnapshot(phaseIndex, "failed"), annotateAntiPoisonStringProtectionRecords(stringProtectionCtx.Records, routeKind, providerLabel))
+				appendAdvancedProxyLogf(
+					"[OPENAI_PROXY_FALLBACK] app=%s provider=%s from=responses to=chat reason=%s",
+					appType,
+					providerLabel,
+					previewAdvancedProxyText(summarizeAdvancedProxyBody(body), 220),
+				)
+				advanceToNextPhase = true
+				break
 			}
 
 			advancedProxyRuntime.MarkResult(appType, provider, phase.outboundRoute, targetURL, true)

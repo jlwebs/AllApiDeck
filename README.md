@@ -223,6 +223,14 @@ Windows 自动更新当前优先选择并拉起 `.msi` 安装包，`.exe` 作为
 3. 在配置预览里确认 base URL、token、协议类型
 4. 写入本机配置
 
+## 防投毒测试报告
+
+本仓库保留了高级代理防投毒能力的设计说明、测试结论和本地投毒演练报告：
+
+- [防投毒设计 Wiki](anti-poison-wiki.md)：说明 guard 注入、随机变化算法、链路摘要、流式增量校验、字符串保护和面板统计的整体设计。
+- [防投毒测试结果](anti-poison-result.md)：记录单测、E2E 投毒矩阵、live soak 和 stream drill 的覆盖范围与验证结果。
+- [本地投毒 Demo 半小时评估报告](anti-poison-demo-eval-report.md)：记录 `127.0.0.1:9999` 本地投毒 demo 的 30 分钟多协议、流式、多轮、防泄漏评估历史摘要。
+
 ## 项目结构
 
 ```text

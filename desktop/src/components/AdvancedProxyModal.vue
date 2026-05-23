@@ -662,6 +662,7 @@ import {
   normalizeAdvancedProxyConfig,
   resetCircuitBreaker,
   setAdvancedProxyConfig,
+  syncAdvancedProxyProvidersFromRecords,
 } from '../utils/advancedProxyBridge.js';
 import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
 
@@ -1337,7 +1338,7 @@ async function reconcileLocalAppTakeoverState(config) {
     nextConfig[app.id].enabled = false;
   });
 
-  const savedConfig = await setAdvancedProxyConfig(createPendingConfig(nextConfig));
+  const savedConfig = await setAdvancedProxyConfig(createSyncedPendingConfig(nextConfig));
   loadedConfigSnapshot.value = normalizeAdvancedProxyConfig(savedConfig);
   overwriteDraft(loadedConfigSnapshot.value);
   await reloadBreakerStatsForScope(selectedQueueScope.value, loadedConfigSnapshot.value);
@@ -1404,6 +1405,11 @@ function createPendingConfig(source = draft) {
   });
   plainDraft.claude.providers = [...(plainDraft.queues?.global?.providers || [])];
   return normalizeAdvancedProxyConfig(plainDraft);
+}
+
+function createSyncedPendingConfig(source = draft, records = availableRecords.value) {
+  const pending = createPendingConfig(source);
+  return syncAdvancedProxyProvidersFromRecords(pending, records).config;
 }
 
 function buildProviderDuplicateMeta(records) {
@@ -1533,7 +1539,7 @@ async function saveConfigImmediately(nextConfig, successMessage = '高级代理�
 
   saving.value = true;
   try {
-    const saved = await setAdvancedProxyConfig(createPendingConfig(nextConfig));
+    const saved = await setAdvancedProxyConfig(createSyncedPendingConfig(nextConfig));
     await syncSavedConfig(saved);
     message.success(successMessage);
     return true;
@@ -1557,7 +1563,7 @@ function openPreviewForManagedWrites(nextConfig, desktopPreview, successMessage 
     return;
   }
 
-  pendingSaveConfig.value = createPendingConfig(nextConfig);
+  pendingSaveConfig.value = createSyncedPendingConfig(nextConfig);
   pendingManagedWrites.value = managedWrites;
   pendingWriteOrder.value = options.writeOrder === 'managed-first' ? 'managed-first' : 'config-first';
   pendingSuccessMessage.value = successMessage;
@@ -1567,7 +1573,7 @@ function openPreviewForManagedWrites(nextConfig, desktopPreview, successMessage 
 
 async function handleConfigMutation(mutator, successMessage) {
   if (saving.value) return;
-  const nextConfig = createPendingConfig();
+  const nextConfig = createSyncedPendingConfig();
   mutator(nextConfig);
   await saveConfigImmediately(nextConfig, successMessage);
 }
@@ -1653,7 +1659,7 @@ async function handleAppTakeoverToggle(appId, value) {
   }
 
   const app = ADVANCED_PROXY_APPS.find(item => item.id === appId);
-  const nextConfig = createPendingConfig();
+  const nextConfig = createSyncedPendingConfig();
   if (!nextConfig[appId]) {
     nextConfig[appId] = {};
   }
@@ -1845,7 +1851,7 @@ async function reloadAntiPoisonRecordsInternal(showToast = true) {
 
 function pruneOrphanedQueueProviders(config, records) {
   const matcher = createManagedProviderMatcher(records);
-  const nextConfig = createPendingConfig(config);
+  const nextConfig = createSyncedPendingConfig(config, records);
   let removedCount = 0;
 
   ADVANCED_PROXY_QUEUE_SCOPES.forEach(item => {
@@ -1874,8 +1880,10 @@ async function loadData() {
   try {
     await reloadContext();
     const config = await getAdvancedProxyConfig();
-    await syncSavedConfig(config);
-    await reconcileLocalAppTakeoverState(config);
+    const { config: syncedConfig, changed } = syncAdvancedProxyProvidersFromRecords(config, availableRecords.value);
+    const activeConfig = changed ? await setAdvancedProxyConfig(syncedConfig) : syncedConfig;
+    await syncSavedConfig(activeConfig);
+    await reconcileLocalAppTakeoverState(activeConfig);
   } catch (error) {
     message.error(error?.message || '加载高级代理配置失败');
   } finally {

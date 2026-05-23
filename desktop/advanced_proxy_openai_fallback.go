@@ -555,6 +555,36 @@ func shouldFallbackResponsesToChat(statusCode int, responseBody []byte) bool {
 	}
 }
 
+func shouldFallbackSuccessfulResponsesToChat(statusCode int, responseBody []byte) bool {
+	if statusCode < 200 || statusCode >= 300 || !hasOpenAIErrorEnvelope(responseBody) {
+		return false
+	}
+	return shouldFallbackResponsesToChat(statusCode, responseBody)
+}
+
+func hasOpenAIErrorEnvelope(responseBody []byte) bool {
+	if len(responseBody) == 0 {
+		return false
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(responseBody, &decoded); err != nil {
+		return false
+	}
+	if errorValue, exists := decoded["error"]; exists {
+		switch typed := errorValue.(type) {
+		case map[string]any:
+			return strings.TrimSpace(toStringValue(typed["message"])) != "" ||
+				strings.TrimSpace(toStringValue(typed["code"])) != "" ||
+				strings.TrimSpace(toStringValue(typed["type"])) != ""
+		case string:
+			return strings.TrimSpace(typed) != ""
+		}
+	}
+	return strings.TrimSpace(toStringValue(decoded["message"])) != "" &&
+		(strings.TrimSpace(toStringValue(decoded["code"])) != "" ||
+			strings.Contains(strings.ToLower(strings.TrimSpace(toStringValue(decoded["type"]))), "error"))
+}
+
 func shouldFallbackChatPreferenceBackToResponses(statusCode int, responseBody []byte) bool {
 	if statusCode == http.StatusNotFound || statusCode == http.StatusMethodNotAllowed {
 		return true

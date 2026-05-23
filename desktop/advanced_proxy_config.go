@@ -236,6 +236,7 @@ func defaultAntiPoisonStringProtectionConfig() AntiPoisonStringProtectionConfig 
 			`保护常见配置文件路径: (?i)\b[A-Za-z0-9_.\\/-]*(\.env|\.npmrc|\.pypirc|\.yarnrc|\.netrc|config\.(json|ya?ml|toml|ini)|settings\.(json|ya?ml|toml|ini))\b`,
 			`保护 JSON/YAML/TOML 敏感 key: (?i)("?(api[_-]?key|secret|token|password|authorization|auth[_-]?token|private[_-]?key)"?\s*[:=]\s*)("[^"]{8,}"|'[^']{8,}'|[^\s,;}"']{8,})`,
 			`保护 Bearer/Basic/Auth 头值: (?i)\b(Bearer|Basic|Authorization)\s+[A-Za-z0-9._~+/=-]{12,}`,
+			`保护常见 LLM/API key 形态: (?i)\b(?:sk|sk-ant|sk-proj|sk-live|sk-test|xox[baprs]|gh[pousr]|AIza)[A-Za-z0-9._=-]{12,}\b`,
 			`保护环境变量式密钥: (?i)\b[A-Z0-9_]*(KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\s*=\s*[^\s"'` + "`" + `]{8,}`,
 			`保护疑似私钥块: -----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]{20,}?-----END [A-Z ]*PRIVATE KEY-----`,
 		},

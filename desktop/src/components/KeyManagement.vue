@@ -943,6 +943,7 @@ import {
   getAdvancedProxyConfig,
   normalizeAdvancedProxyConfig,
   setAdvancedProxyConfig,
+  syncAdvancedProxyProvidersFromRecords,
 } from '../utils/advancedProxyBridge.js';
 import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS, inferProviderKeyFromSnapshot } from '../utils/desktopConfigTransform.js';
 import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils/balance.js';
@@ -2548,6 +2549,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   flushPersistRecords();
+  void syncAdvancedProxyProviderSnapshotsFromKeys();
   if (typeof window !== 'undefined') {
     window.removeEventListener('pointerdown', handleGlobalRowContextMenuDismiss, true);
     window.removeEventListener('resize', closeAllContextMenus);
@@ -3641,6 +3643,12 @@ function confirmDeleteAbnormalRecords() {
   });
 }
 
+function syncAdvancedProxyConfigSnapshotFromCurrentRecords(config) {
+  return syncAdvancedProxyProvidersFromRecords(config, tableData.value, {
+    modelResolver: record => getRecordSelectedModelValue(record),
+  }).config;
+}
+
 async function syncCurrentGroupToAdvancedProxyQueue() {
   const validRecords = currentGroupValidProviderQueueRecords.value;
   if (!validRecords.length) {
@@ -3654,7 +3662,7 @@ async function syncCurrentGroupToAdvancedProxyQueue() {
     const providers = validRecords.map((record, index) => buildProviderFromManagedRecord(record, index + 1));
     replaceAdvancedProxyQueueProviders(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, providers);
     nextConfig.claude.providers = [...(nextConfig.queues?.[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE]?.providers || [])];
-    await setAdvancedProxyConfig(nextConfig);
+    await setAdvancedProxyConfig(syncAdvancedProxyConfigSnapshotFromCurrentRecords(nextConfig));
     advancedProxyFocusQueueScope.value = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
     advancedProxyFocusQueueToken.value = Date.now();
     showExperimentalFeatures.value = true;
@@ -3677,7 +3685,7 @@ async function appendCurrentGroupToAdvancedProxyQueue() {
     const providers = validRecords.map((record, index) => buildProviderFromManagedRecord(record, index + 1));
     appendAdvancedProxyQueueProviders(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, providers);
     nextConfig.claude.providers = [...(nextConfig.queues?.[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE]?.providers || [])];
-    await setAdvancedProxyConfig(nextConfig);
+    await setAdvancedProxyConfig(syncAdvancedProxyConfigSnapshotFromCurrentRecords(nextConfig));
     advancedProxyFocusQueueScope.value = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
     advancedProxyFocusQueueToken.value = Date.now();
     showExperimentalFeatures.value = true;
@@ -3693,7 +3701,7 @@ async function clearAdvancedProxyQueue() {
     const nextConfig = normalizeAdvancedProxyConfig(savedConfig || {});
     clearAdvancedProxyQueueProviders(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
     nextConfig.claude.providers = [...(nextConfig.queues?.[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE]?.providers || [])];
-    await setAdvancedProxyConfig(nextConfig);
+    await setAdvancedProxyConfig(syncAdvancedProxyConfigSnapshotFromCurrentRecords(nextConfig));
     advancedProxyFocusQueueScope.value = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
     advancedProxyFocusQueueToken.value = Date.now();
     showExperimentalFeatures.value = true;
@@ -4856,6 +4864,7 @@ function flushPersistRecords() {
   localStorage.setItem(STORAGE_KEY, snapshot.autoJson);
   localStorage.setItem(MANUAL_STORAGE_KEY, snapshot.manualJson);
   lastPersistedRecordsSnapshot = signature;
+  void syncAdvancedProxyProviderSnapshotsFromKeys();
 }
 
 function schedulePersistRecords() {
@@ -4866,6 +4875,19 @@ function schedulePersistRecords() {
     persistRecordsTimer = null;
     flushPersistRecords();
   }, PERSIST_DEBOUNCE_MS);
+}
+
+async function syncAdvancedProxyProviderSnapshotsFromKeys() {
+  try {
+    const config = await getAdvancedProxyConfig();
+    const { config: nextConfig, changed } = syncAdvancedProxyProvidersFromRecords(config, tableData.value, {
+      modelResolver: record => getRecordSelectedModelValue(record),
+    });
+    if (!changed) return;
+    await setAdvancedProxyConfig(nextConfig);
+  } catch (error) {
+    console.warn('[AdvancedProxy] sync provider snapshots from key records failed:', error);
+  }
 }
 
 function persistMeta() {

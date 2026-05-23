@@ -233,6 +233,84 @@ function normalizeQueueSection(input, defaults, fallbackProviders = null) {
   return next;
 }
 
+function buildManagedRecordIdentityKey(baseUrl, apiKey) {
+  const normalizedBaseUrl = String(baseUrl || '').trim().replace(/\/+$/, '').toLowerCase();
+  const normalizedApiKey = String(apiKey || '').trim();
+  return normalizedBaseUrl && normalizedApiKey ? `${normalizedBaseUrl}|${normalizedApiKey}` : '';
+}
+
+function buildManagedRecordProviderMap(records) {
+  const byRowKey = new Map();
+  const byIdentity = new Map();
+  (Array.isArray(records) ? records : []).forEach(record => {
+    const rowKey = String(record?.rowKey || '').trim();
+    const identity = buildManagedRecordIdentityKey(record?.siteUrl, record?.apiKey);
+    if (rowKey) {
+      byRowKey.set(rowKey, record);
+    }
+    if (identity) {
+      byIdentity.set(identity, record);
+    }
+  });
+  return { byRowKey, byIdentity };
+}
+
+function getRecordModelForProvider(record, provider, modelResolver = null) {
+  const resolvedModel = typeof modelResolver === 'function' ? modelResolver(record, provider) : '';
+  return String(
+    resolvedModel ||
+      record?.selectedModel ||
+      record?.quickTestModel ||
+      provider?.model ||
+      ''
+  ).trim();
+}
+
+function refreshProviderFromManagedRecord(provider, record, modelResolver = null) {
+  if (!record) return provider;
+  const rowKey = String(record?.rowKey || provider?.rowKey || provider?.id || '').trim();
+  return {
+    ...provider,
+    id: rowKey || String(provider?.id || '').trim(),
+    rowKey,
+    name: String(record?.siteName || provider?.name || record?.siteUrl || provider?.baseUrl || 'Provider').trim(),
+    baseUrl: String(record?.siteUrl || provider?.baseUrl || '').trim().replace(/\/+$/, ''),
+    apiKey: String(record?.apiKey || provider?.apiKey || '').trim(),
+    model: getRecordModelForProvider(record, provider, modelResolver),
+    sourceType: String(record?.sourceType || provider?.sourceType || 'auto').trim(),
+  };
+}
+
+export function syncAdvancedProxyProvidersFromRecords(config, records, options = {}) {
+  const snapshot = normalizeAdvancedProxyConfig(config || {});
+  const providerMap = buildManagedRecordProviderMap(records);
+  const modelResolver = typeof options?.modelResolver === 'function' ? options.modelResolver : null;
+  let changed = false;
+
+  ADVANCED_PROXY_QUEUE_SCOPES.forEach(scope => {
+    const queue = snapshot?.queues?.[scope.id];
+    if (!queue || !Array.isArray(queue.providers)) return;
+    queue.providers = queue.providers.map(provider => {
+      const rowKey = String(provider?.rowKey || provider?.id || '').trim();
+      const identity = buildManagedRecordIdentityKey(provider?.baseUrl, provider?.apiKey);
+      const record = providerMap.byRowKey.get(rowKey) || providerMap.byIdentity.get(identity) || null;
+      if (!record) return provider;
+
+      const refreshed = refreshProviderFromManagedRecord(provider, record, modelResolver);
+      if (JSON.stringify(refreshed) !== JSON.stringify(provider)) {
+        changed = true;
+      }
+      return refreshed;
+    });
+  });
+
+  snapshot.claude.providers = [...(snapshot.queues?.global?.providers || [])];
+  return {
+    config: normalizeAdvancedProxyConfig(snapshot),
+    changed,
+  };
+}
+
 function normalizeRpmSection(input) {
   const defaults = getDefaultRpmSection();
   const next = {

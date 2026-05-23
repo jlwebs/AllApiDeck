@@ -2518,6 +2518,189 @@ func TestForwardOpenAIRequestViaProviderFallbacksResponsesToChat(t *testing.T) {
 	}
 }
 
+func TestForwardOpenAIRequestViaProviderFallbacksResponsesToChatOnSuccessfulErrorBody(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	type capturedRequest struct {
+		Path string
+		Body map[string]any
+	}
+
+	var mu sync.Mutex
+	requests := make([]capturedRequest, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+
+		mu.Lock()
+		requests = append(requests, capturedRequest{Path: request.URL.Path, Body: body})
+		mu.Unlock()
+
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/responses", "/responses":
+			_, _ = writer.Write([]byte(`{"error":{"code":"convert_request_failed","message":"not implemented (request id: semantic-test)","type":"new_api_error"}}`))
+		case "/v1/chat/completions", "/chat/completions":
+			_, _ = writer.Write([]byte(`{
+				"id":"chatcmpl_semantic_fallback_123",
+				"object":"chat.completion",
+				"created":1710000000,
+				"model":"gpt-5.5",
+				"choices":[
+					{"index":0,"message":{"role":"assistant","content":"semantic fallback ok"},"finish_reason":"stop"}
+				],
+				"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14}
+			}`))
+		default:
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "semantic-fallback-provider",
+		RowKey:    "row-semantic-fallback",
+		Name:      "Semantic Fallback Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test-semantic-fallback",
+		APIFormat: "openai_responses",
+	}
+
+	rawBody := []byte(`{
+		"model":"gpt-5.5",
+		"instructions":"system fallback",
+		"stream":false,
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}
+		]
+	}`)
+
+	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("expected semantic fallback request to succeed, got %#v", result)
+	}
+
+	var responseBody map[string]any
+	if err := json.Unmarshal(result.Body, &responseBody); err != nil {
+		t.Fatalf("decode transformed response: %v", err)
+	}
+	if got := strings.TrimSpace(toStringValue(responseBody["object"])); got != "response" {
+		t.Fatalf("expected responses payload object, got %#v", responseBody)
+	}
+	output, ok := responseBody["output"].([]any)
+	if !ok || len(output) == 0 {
+		t.Fatalf("expected responses output items, got %#v", responseBody["output"])
+	}
+	firstItem, _ := output[0].(map[string]any)
+	content, _ := firstItem["content"].([]any)
+	firstContent, _ := content[0].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(firstContent["text"])); got != "semantic fallback ok" {
+		t.Fatalf("expected transformed output text, got %#v", firstContent)
+	}
+
+	scopeKey := resolveAdvancedProxyOpenAIProtocolPreferenceScopeKey(provider, "gpt-5.5")
+	if preference, ok := getAdvancedProxyOpenAIProtocolPreference(scopeKey); !ok || preference != advancedProxyOpenAIProtocolPreferChat {
+		t.Fatalf("expected chat preference to be persisted for scope %q, got %v %t", scopeKey, preference, ok)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) < 2 {
+		t.Fatalf("expected fallback flow to reach chat after responses semantic error, got %d requests", len(requests))
+	}
+	for index := 0; index < len(requests)-1; index++ {
+		if requests[index].Path != "/v1/responses" && requests[index].Path != "/responses" {
+			t.Fatalf("unexpected pre-fallback request path: %#v", requests)
+		}
+	}
+	lastRequest := requests[len(requests)-1]
+	if lastRequest.Path != "/v1/chat/completions" && lastRequest.Path != "/chat/completions" {
+		t.Fatalf("unexpected request order: %#v", requests)
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderFallbacksResponsesStreamToChatOnSuccessfulErrorBody(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	var mu sync.Mutex
+	requestPaths := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mu.Lock()
+		requestPaths = append(requestPaths, request.URL.Path)
+		mu.Unlock()
+
+		switch request.URL.Path {
+		case "/v1/responses", "/responses":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"error":{"code":"convert_request_failed","message":"not implemented (request id: stream-semantic-test)","type":"new_api_error"}}`))
+		case "/v1/chat/completions", "/chat/completions":
+			writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+			_, _ = writer.Write([]byte("data: {\"id\":\"chatcmpl_stream_semantic_fallback_123\",\"object\":\"chat.completion.chunk\",\"created\":1710000001,\"model\":\"gpt-5.5\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"stream\"}}]}\n\n"))
+			_, _ = writer.Write([]byte("data: {\"id\":\"chatcmpl_stream_semantic_fallback_123\",\"object\":\"chat.completion.chunk\",\"created\":1710000001,\"model\":\"gpt-5.5\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" fallback ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}\n\n"))
+			_, _ = writer.Write([]byte("data: [DONE]\n\n"))
+		default:
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "stream-semantic-fallback-provider",
+		RowKey:    "row-stream-semantic-fallback",
+		Name:      "Stream Semantic Fallback Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test-stream-semantic-fallback",
+		APIFormat: "openai_responses",
+	}
+
+	rawBody := []byte(`{
+		"model":"gpt-5.5",
+		"stream":true,
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}
+		]
+	}`)
+
+	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, true, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK || result.StreamBody == nil {
+		t.Fatalf("expected stream semantic fallback request to succeed, got %#v", result)
+	}
+	defer result.StreamBody.Close()
+
+	streamPayload, err := io.ReadAll(result.StreamBody)
+	if err != nil {
+		t.Fatalf("read transformed stream: %v", err)
+	}
+	streamText := string(streamPayload)
+	for _, needle := range []string{"event: response.created", "event: response.output_text.delta", "stream fallback ok", "event: response.completed", "data: [DONE]"} {
+		if !strings.Contains(streamText, needle) {
+			t.Fatalf("expected transformed responses stream to contain %q, got %s", needle, streamText)
+		}
+	}
+
+	scopeKey := resolveAdvancedProxyOpenAIProtocolPreferenceScopeKey(provider, "gpt-5.5")
+	if preference, ok := getAdvancedProxyOpenAIProtocolPreference(scopeKey); !ok || preference != advancedProxyOpenAIProtocolPreferChat {
+		t.Fatalf("expected chat preference to be persisted for scope %q, got %v %t", scopeKey, preference, ok)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requestPaths) < 2 {
+		t.Fatalf("expected stream fallback flow to reach chat after responses semantic error, got %#v", requestPaths)
+	}
+	for index := 0; index < len(requestPaths)-1; index++ {
+		if requestPaths[index] != "/v1/responses" && requestPaths[index] != "/responses" {
+			t.Fatalf("unexpected pre-fallback request path: %#v", requestPaths)
+		}
+	}
+	lastPath := requestPaths[len(requestPaths)-1]
+	if lastPath != "/v1/chat/completions" && lastPath != "/chat/completions" {
+		t.Fatalf("unexpected request order: %#v", requestPaths)
+	}
+}
+
 func TestForwardOpenAIRequestViaProviderUsesChatPreferenceForResponsesStream(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 
