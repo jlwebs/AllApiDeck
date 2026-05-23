@@ -215,29 +215,25 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Create or update release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
-          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+      - name: Ensure release assets exist
         run: |
           shopt -s nullglob
           files=(release-assets/*)
-
           if [ ${#files[@]} -eq 0 ]; then
             echo "No release assets were downloaded." >&2
             exit 1
           fi
-
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
-            exit 0
-          fi
-
-          args=(gh release create "$RELEASE_TAG" "${files[@]}" --title "$RELEASE_TAG" --generate-notes --target "$GITHUB_SHA")
-          if [ "$PRERELEASE" = "true" ]; then
-            args+=(--prerelease)
-          fi
-          "${args[@]}"
         shell: bash
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          generate_release_notes: true
+          files: release-assets/*
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          token: ${{ secrets.GITHUB_TOKEN }}
