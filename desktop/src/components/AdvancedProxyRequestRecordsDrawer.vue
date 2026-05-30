@@ -385,8 +385,16 @@
         <section class="request-record-detail-section">
           <div class="request-record-detail-section-title">返回</div>
           <div class="request-record-detail-item request-record-detail-item-full">
-            <span>详情</span>
-            <pre>{{ resolveDetailText(selectedRecord) }}</pre>
+            <span>上游原始响应预览</span>
+            <pre>{{ selectedRecord.upstreamResponsePreview || '-' }}</pre>
+          </div>
+          <div class="request-record-detail-item request-record-detail-item-full">
+            <span>客户端响应预览</span>
+            <pre>{{ selectedRecord.responsePreview || '-' }}</pre>
+          </div>
+          <div class="request-record-detail-item request-record-detail-item-full">
+            <span>错误详情</span>
+            <pre>{{ selectedRecord.errorDetail || '-' }}</pre>
           </div>
         </section>
 
@@ -503,7 +511,7 @@ const columns = computed(() => {
     { title: '路由', dataIndex: 'routeTrace', key: 'route', width: compact ? 138 : 152 },
     { title: '性能', dataIndex: 'durationMs', key: 'metrics', width: compact ? 146 : 158 },
     { title: '状态', dataIndex: 'statusCode', key: 'status', width: compact ? 88 : 96 },
-    { title: '摘要', dataIndex: 'errorDetail', key: 'detail', width: compact ? 276 : 346, ellipsis: true },
+    { title: '摘要', dataIndex: 'responsePreview', key: 'detail', width: compact ? 276 : 346, ellipsis: true },
   ];
 });
 
@@ -960,8 +968,10 @@ function toggleAppFilter(appId) {
 }
 
 function resolveDetailText(record) {
-  const text = normalizeText(record?.errorDetail);
-  return text || '请求成功';
+  const delivered = normalizeText(record?.responsePreview);
+  const upstream = normalizeText(record?.upstreamResponsePreview);
+  const error = normalizeText(record?.errorDetail);
+  return delivered || upstream || error || '请求成功';
 }
 
 function normalizeComparableUrl(value) {

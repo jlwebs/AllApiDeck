@@ -467,7 +467,7 @@
           <div class="advanced-proxy-anti-poison-setting-row">
             <div>
               <strong>严格模式</strong>
-              <span>有真实 toolcall 但缺少合法 guard fake toolcall 时直接拒绝。</span>
+              <span>有真实 toolcall 但缺少合法 guard JSON 时直接拒绝。</span>
             </div>
             <a-switch :checked="antiPoisonConfig.strictMode" :disabled="!antiPoisonEnabled" @change="value => handleAntiPoisonFieldChange('strictMode', value)" />
           </div>
@@ -535,7 +535,7 @@
         <div class="advanced-proxy-anti-poison-card-head advanced-proxy-anti-poison-card-head-actions">
           <div>
             <h4>策略 Prompt</h4>
-            <p>描述何时生成 guard fake toolcall，以及这些 fake toolcall 如何被网关摘除。</p>
+            <p>描述何时生成 guard JSON，以及这些 guard JSON 如何被网关摘除。</p>
           </div>
           <div class="advanced-proxy-anti-poison-actions">
             <a-button size="small" @click="resetAntiPoisonPromptsToDefault">恢复默认策略</a-button>
@@ -612,7 +612,14 @@
                 <td class="advanced-proxy-anti-poison-time-cell">{{ row.time }}</td>
                 <td><span class="advanced-proxy-anti-poison-stage-pill" :class="{ 'is-blocked': row.blocked }">{{ row.stage }}</span></td>
                 <td>{{ row.channel }}</td>
-                <td>{{ row.rule }}</td>
+                <td>
+                  <div class="advanced-proxy-anti-poison-rule-cell">
+                    <span>{{ row.rule }}</span>
+                    <button type="button" class="advanced-proxy-anti-poison-row-detail-button" @click.stop="showAntiPoisonOperationDetail(row)">
+                      详情
+                    </button>
+                  </div>
+                </td>
                 <td>{{ row.path }}</td>
                 <td><code>{{ row.before }}</code></td>
                 <td><code>{{ row.after }}</code></td>
@@ -632,9 +639,9 @@
 </template>
 
 <script setup>
-import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { computed, h, nextTick, reactive, ref, watch } from 'vue';
 import { BugOutlined, CloudSyncOutlined, QuestionCircleOutlined, ReloadOutlined } from '@ant-design/icons-vue';
-import { message } from 'ant-design-vue';
+import { message, Modal } from 'ant-design-vue';
 import advancedProxyArchitectureLightSvg from '../../docs/images/advanced-proxy-architecture-light.svg';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
@@ -796,7 +803,7 @@ const antiPoisonOperationRows = computed(() => {
   records.forEach(record => {
     const ops = Array.isArray(record?.antiPoisonOps) ? record.antiPoisonOps : [];
     ops.forEach((op, index) => {
-      rows.push({
+      const row = {
         id: String(op?.id || `${record?.id || 'record'}-${index}`),
         time: formatAntiPoisonOperationTime(op?.time || record?.recordedAt),
         stage: String(op?.stage || '-'),
@@ -807,7 +814,9 @@ const antiPoisonOperationRows = computed(() => {
         after: String(op?.after || '-'),
         count: Number(op?.count || 0),
         blocked: op?.blocked === true || String(op?.reason || '').includes('anti_poison'),
-      });
+      };
+      row.detailText = buildAntiPoisonOperationDetailText(row, record, op, index);
+      rows.push(row);
     });
   });
   return rows.slice(0, 40);
@@ -817,17 +826,18 @@ const antiPoisonRandomizationCards = computed(() => {
   return [
     { label: '策略池', value: `${randomization.strategyPoolSize || DEFAULT_ANTI_POISON_RANDOMIZATION.strategyPoolSize} 个策略` },
     { label: '句式变体', value: `每策略 ${randomization.minPhraseVariantsPerStrategy || DEFAULT_ANTI_POISON_RANDOMIZATION.minPhraseVariantsPerStrategy}+ 种` },
-    { label: '插入点位', value: randomization.randomInsertionPoints ? '多点随机' : '固定' },
-    { label: 'fake toolcall', value: `至少 ${randomization.minFakeToolcalls || DEFAULT_ANTI_POISON_RANDOMIZATION.minFakeToolcalls} 个` },
-    { label: '工具类别 marker', value: randomization.requirePerToolTypeMarker ? '每类覆盖' : '不强制' },
-    { label: '算法代号', value: '每轮随机生成' },
+    { label: '前置约束', value: '替换工具前说明' },
+    { label: 'guard 结构', value: '仅 name/tool_name' },
+    { label: '工具覆盖', value: '每次 toolcall 一个' },
+    { label: '命名前缀', value: '每轮随机生成' },
   ];
 });
 const antiPoisonPreviewText = computed(() => {
   const alias = 'APTX_7F3A91C2';
   const prefix = 'aad_guard_51e2b7a903';
-  const guardToolName = `${prefix}_trace`;
-  const nonce = 'c4f17a92e5b8d631';
+  const guardToolName = `${prefix}_<original_tool_name>`;
+  const guardToolExample = `${prefix}_WebSearch`;
+  const guardJsonTag = 'aad_guard_json';
   const strategyPrompt = String(antiPoisonConfig.value?.strategyPrompt || DEFAULT_ANTI_POISON_STRATEGY_PROMPT)
     .replaceAll('{{ALGORITHM_ALIAS}}', alias);
   const algorithmPrompt = String(antiPoisonConfig.value?.algorithmPrompt || DEFAULT_ANTI_POISON_ALGORITHM_PROMPT)
@@ -835,12 +845,11 @@ const antiPoisonPreviewText = computed(() => {
   return [
     '[AllApiDeck 防投毒随机策略]',
     `[随机变化算法代号] ${alias}`,
-    `[fake toolcall prefix] ${prefix}`,
+    `[guard name prefix] ${prefix}`,
     `[guard tool name] ${guardToolName}`,
-    `[nonce] ${nonce}`,
     '[策略槽] 07',
     '[句式变体] 03',
-    '[插入点位提示] tool_schema_tail',
+    '[插入点位提示] fixed_prepend',
     '',
     '[策略 Prompt]',
     strategyPrompt,
@@ -848,11 +857,15 @@ const antiPoisonPreviewText = computed(() => {
     '[随机变化算法 Prompt]',
     algorithmPrompt,
     '',
-    '[网关校验约定]',
-    `如果本轮产生任何真实 toolcall，必须额外调用 \`${guardToolName}\`。`,
-    `guard fake toolcall 参数必须包含 algorithm="${alias}"、nonce="${nonce}"、digest、chain、cover。`,
-    'digest 规则: 按真实 toolcall 返回顺序组织链路，每项为 index|tool_type|tool_name|call_id尾8位|sha256(canonical_arguments)，前面加 alias 与 nonce 行，整体 sha256 后取前 16 位小写 hex。',
-    '网关校验通过后会摘除 guard fake toolcall，再返回给客户端。',
+    '[Gateway validation contract]',
+    'If this turn emits any real toolcall, the model must first emit one guard JSON text block, then emit the corresponding real toolcall.',
+    'Do not emit ordinary pre-tool explanations or progress narration such as I will search; replace that pre-tool sentence with guard JSON.',
+    `guard JSON text blocks must be wrapped as <${guardJsonTag}>...</${guardJsonTag}>.`,
+    `guard JSON name must follow ${guardToolName}; for WebSearch it is ${guardToolExample}.`,
+    'guard JSON only requires the minimal binding fields: name and tool_name.',
+    'tool_name must equal the immediately following real tool name.',
+    'Do not include digest, chain, cover, nonce, algorithm, or tool_type.',
+    'After validation, the gateway strips guard JSON before returning to the client.',
   ].join('\n');
 });
 const selectedQueueLabel = computed(() =>
@@ -2125,6 +2138,127 @@ function formatAntiPoisonOperationTime(value) {
   });
 }
 
+function buildAntiPoisonOperationDetailText(row, record, op, index) {
+  const reason = op?.reason || record?.errorDetail || '';
+  const toolCalls = Array.isArray(record?.upstreamToolCalls) ? record.upstreamToolCalls : [];
+  const toolArgs = Array.isArray(record?.upstreamToolArgsPreview) ? record.upstreamToolArgsPreview : [];
+  const routeTrace = Array.isArray(record?.routeTrace) ? record.routeTrace : [];
+  const hostedToolCalls = toolCalls.filter(name => isAntiPoisonHostedToolCallName(name));
+  const functionToolCalls = toolCalls.filter(name => !isAntiPoisonHostedToolCallName(name));
+  const sections = [
+    ['摘要', {
+      operationIndex: index,
+      recordId: record?.id || '',
+      time: op?.time || record?.recordedAt || '',
+      appType: record?.appType || '',
+      channel: row.channel,
+      stage: row.stage,
+      route: record?.outboundRoute || record?.clientRoute || row.path,
+      providerName: record?.providerName || op?.provider || '',
+      model: record?.model || '',
+      statusCode: record?.statusCode,
+      source: record?.source,
+      stream: record?.stream,
+      blocked: row.blocked,
+    }],
+    ['失败原因', {
+      rule: row.rule,
+      reason,
+      errorDetail: record?.errorDetail || '',
+      before: row.before,
+      after: row.after,
+      count: row.count,
+    }],
+    ['工具调用归类', {
+      totalObserved: toolCalls.length,
+      hostedToolCalls,
+      functionToolCalls,
+      note: hostedToolCalls.length
+        ? 'web_search_call 属于 OpenAI Responses hosted web search 输出项，不等同于普通 function_call。'
+        : '',
+      upstreamToolCalls: toolCalls,
+      upstreamToolArgsPreview: toolArgs,
+    }],
+    ['链路', {
+      inboundEndpoint: record?.inboundEndpoint || '',
+      outboundRoute: record?.outboundRoute || '',
+      upstreamEndpoint: record?.upstreamEndpoint || '',
+      upstreamUrl: record?.upstreamUrl || '',
+      routeTrace,
+    }],
+    ['网关 Prompt', {
+      antiPoisonPromptPreview: record?.antiPoisonPromptPreview || '',
+    }],
+    ['上游观察', {
+      upstreamLatestObserved: record?.upstreamLatestObserved || null,
+      upstreamAssistantPreview: record?.upstreamAssistantPreview || '',
+    }],
+    ['响应预览', {
+      upstreamResponsePreview: record?.upstreamResponsePreview || '',
+      responsePreview: record?.responsePreview || '',
+    }],
+    ['原始对象', {
+      operation: op || null,
+      recordSummary: {
+        id: record?.id || '',
+        appType: record?.appType || '',
+        providerName: record?.providerName || '',
+        model: record?.model || '',
+        statusCode: record?.statusCode,
+        source: record?.source,
+        stream: record?.stream,
+        antiPoisonOps: record?.antiPoisonOps || [],
+      },
+    }],
+  ];
+  return sections
+    .map(([title, payload]) => `## ${title}\n${JSON.stringify(payload, null, 2)}`)
+    .join('\n\n');
+}
+
+function isAntiPoisonHostedToolCallName(name) {
+  return String(name || '').trim() === 'web_search_call';
+}
+
+async function copyAntiPoisonOperationDetail(text) {
+  const content = String(text || '');
+  if (!content) return;
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(content);
+      message.success('详情已复制');
+      return;
+    }
+  } catch (error) {
+    // Fall through to legacy copy.
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = content;
+  textarea.setAttribute('readonly', 'readonly');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
+  message.success('详情已复制');
+}
+
+function showAntiPoisonOperationDetail(row) {
+  const detailText = String(row?.detailText || '');
+  Modal.confirm({
+    title: row?.blocked ? '防投毒拦截详情' : '防投毒流水详情',
+    width: 820,
+    okText: '复制详情',
+    cancelText: '关闭',
+    content: h('pre', { class: 'advanced-proxy-anti-poison-operation-detail' }, detailText || '-'),
+    async onOk() {
+      await copyAntiPoisonOperationDetail(detailText);
+      return false;
+    },
+  });
+}
+
 function logAntiPoisonConfigEvent(action, detail = '') {
   logClientDiagnostic('advanced-proxy.anti-poison', [
     `action=${action}`,
@@ -2828,6 +2962,30 @@ function resetAntiPoisonPromptsToDefault() {
   white-space: normal;
 }
 
+.advanced-proxy-anti-poison-rule-cell {
+  display: grid;
+  gap: 8px;
+  align-items: start;
+}
+
+.advanced-proxy-anti-poison-row-detail-button {
+  width: fit-content;
+  min-width: 58px;
+  border: 1px solid rgba(190, 53, 34, 0.78);
+  border-radius: 0;
+  padding: 3px 12px;
+  background: rgba(255, 255, 255, 0.52);
+  color: #9e2f20;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.advanced-proxy-anti-poison-row-detail-button:hover {
+  background: rgba(255, 235, 230, 0.92);
+}
+
 .advanced-proxy-anti-poison-blocked-row td {
   background: rgba(255, 235, 230, 0.78);
   color: #7c2418 !important;
@@ -2859,6 +3017,19 @@ function resetAntiPoisonPromptsToDefault() {
 .advanced-proxy-anti-poison-stage-pill.is-blocked {
   background: rgba(217, 86, 61, 0.18);
   color: #9e2f20;
+}
+
+:global(.advanced-proxy-anti-poison-operation-detail) {
+  max-height: min(62vh, 620px);
+  overflow: auto;
+  margin: 0;
+  padding: 14px;
+  border-radius: 12px;
+  background: #13200f;
+  color: #eef8e9;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
 }
 
 .advanced-proxy-anti-poison-empty-row {
@@ -2902,6 +3073,7 @@ function resetAntiPoisonPromptsToDefault() {
   .advanced-proxy-anti-poison-flow-table td:nth-child(8) {
     width: 38px;
   }
+
 }
 
 .advanced-proxy-master-help-tooltip-copy {

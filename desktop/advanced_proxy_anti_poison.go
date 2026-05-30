@@ -16,8 +16,16 @@ const (
 	antiPoisonAlgorithmPlaceholder = "{{ALGORITHM_ALIAS}}"
 	antiPoisonDefaultAlias         = "APTX9997"
 	antiPoisonDefaultPrefix        = "aad_guard"
-	antiPoisonGuardToolSuffix      = "_trace"
 	antiPoisonDigestLength         = 16
+	antiPoisonInjectionModeFixed   = "fixed_prepend"
+	antiPoisonGuardJSONTagName     = "aad_guard_json"
+	antiPoisonGuardJSONOpenTag     = "<aad_guard_json>"
+	antiPoisonGuardJSONCloseTag    = "</aad_guard_json>"
+)
+
+var (
+	antiPoisonGuardJSONPattern = regexp.MustCompile(`(?is)<\s*aad_guard_json\s*>\s*(\{.*?\})\s*<\s*/\s*aad_guard_json\s*>`)
+	antiPoisonGuardLikePattern = regexp.MustCompile(`(?is)<\s*a\s*a\s*d\s*_?\s*g\s*u\s*a\s*r\s*d\s*_?\s*j\s*s\s*o\s*n\s*>\s*\{.*?\}\s*<\s*/\s*a\s*a\s*d\s*_?\s*g\s*u\s*a\s*r\s*d\s*_?\s*j\s*s\s*o\s*n\s*>`)
 )
 
 type antiPoisonRequestContext struct {
@@ -43,12 +51,36 @@ type antiPoisonToolCall struct {
 	IsGuard       bool
 }
 
+type antiPoisonGuardPayload struct {
+	Name      string
+	ToolName  string
+	ToolType  string
+	Algorithm string
+	Nonce     string
+	Digest    string
+	Chain     string
+	Cover     string
+	RawJSON   string
+}
+
+type antiPoisonGuardValidation struct {
+	ValidGuardCount int
+	DigestMismatch  bool
+}
+
+type antiPoisonTextGuardExtraction struct {
+	Text        string
+	GuardCount  int
+	GuardBlocks []antiPoisonGuardPayload
+}
+
 type antiPoisonValidationResult struct {
 	Applied       bool
 	Valid         bool
 	Blocked       bool
 	Reason        string
 	RealCount     int
+	RealCalls     []antiPoisonToolCall
 	GuardCount    int
 	RemovedGuards int
 	Body          []byte
@@ -83,6 +115,8 @@ type antiPoisonStringProtectionRule struct {
 	Pattern     string
 	Regexp      *regexp.Regexp
 }
+
+var antiPoisonSensitiveToolFilePattern = regexp.MustCompile(`(?i)(^|[\\/])\.(env(?:\.[A-Za-z0-9_-]+)?|npmrc|pypirc|yarnrc|netrc|gitconfig|git-credentials)$`)
 
 func newAntiPoisonRequestContext(routeKind string, config AntiPoisonConfig) antiPoisonRequestContext {
 	config = sanitizeAntiPoisonConfig(config)
@@ -161,7 +195,7 @@ func restoreAntiPoisonStringProtectionInJSONBody(rawBody []byte, ctx *antiPoison
 					Channel:  channel,
 					Route:    route,
 					Provider: provider,
-					Rule:     "字符串保护还原",
+					Rule:     "string protection restore",
 					Before:   fmt.Sprintf("%d placeholder(s)", count),
 					After:    "restored for client",
 					Count:    count,
@@ -196,7 +230,7 @@ func restoreAntiPoisonStringProtectionInJSONBody(rawBody []byte, ctx *antiPoison
 			Channel:  channel,
 			Route:    route,
 			Provider: provider,
-			Rule:     "字符串保护还原",
+			Rule:     "string protection restore",
 			Before:   fmt.Sprintf("%d placeholder(s)", count),
 			After:    "restored for client (raw fallback)",
 			Count:    count,
@@ -270,7 +304,7 @@ func appendAntiPoisonBlockedOperation(records []antiPoisonOperationRecord, route
 		Time:     time.Now().Format(time.RFC3339Nano),
 		Stage:    "respond in",
 		Channel:  strings.TrimSpace(channel),
-		Rule:     "防投毒校验失败",
+		Rule:     "anti-poison validation failed",
 		Path:     strings.TrimSpace(route),
 		Before:   "upstream toolcall chain",
 		After:    "blocked before client",
@@ -313,7 +347,7 @@ func parseAntiPoisonStringProtectionRule(rawRule string) (string, string, string
 	if rawRule == "" {
 		return "", "", ""
 	}
-	for _, separator := range []string{": ", "："} {
+	for _, separator := range []string{": "} {
 		if index := strings.Index(rawRule, separator); index > 0 {
 			description := strings.TrimSpace(rawRule[:index])
 			pattern := strings.TrimSpace(rawRule[index+len(separator):])
@@ -345,6 +379,14 @@ func parseAntiPoisonStringProtectionRuleScope(pattern string) (string, string) {
 func protectAntiPoisonStringValue(value any, path string, rules []antiPoisonStringProtectionRule, ctx *antiPoisonStringProtectionContext, route string, provider string, channel string) any {
 	switch typed := value.(type) {
 	case map[string]any:
+		if sensitiveField, sensitiveText, sensitiveRule, ok := detectAntiPoisonSensitiveToolContent(typed, path); ok {
+			next := make(map[string]any, len(typed))
+			for key, child := range typed {
+				next[key] = child
+			}
+			next[sensitiveField] = protectAntiPoisonStringWholeText(sensitiveText, path+"."+sensitiveField, sensitiveRule, ctx, route, provider, channel)
+			return next
+		}
 		next := make(map[string]any, len(typed))
 		for key, child := range typed {
 			childPath := path + "." + key
@@ -467,6 +509,73 @@ func summarizeAntiPoisonProtectedText(text string) string {
 	return fmt.Sprintf("len=%d sha256=%s", len([]rune(text)), sha256Hex(text)[:12])
 }
 
+func detectAntiPoisonSensitiveToolContent(value map[string]any, path string) (string, string, antiPoisonStringProtectionRule, bool) {
+	normalizedPath := strings.ToLower(strings.TrimSpace(path))
+	if !strings.Contains(normalizedPath, ".content[") {
+		return "", "", antiPoisonStringProtectionRule{}, false
+	}
+
+	blockType := strings.TrimSpace(toStringValue(value["type"]))
+	switch blockType {
+	case "tool_result":
+		if !antiPoisonSensitiveToolTextLooksLikeContent(value["content"]) {
+			return "", "", antiPoisonStringProtectionRule{}, false
+		}
+		return "content", anthropicContentValueToText(value["content"]), antiPoisonStringProtectionRule{Description: "protect sensitive tool result"}, true
+	case "function_call_output":
+		if !antiPoisonSensitiveToolTextLooksLikeContent(value["output"]) {
+			return "", "", antiPoisonStringProtectionRule{}, false
+		}
+		return "output", toStringValue(value["output"]), antiPoisonStringProtectionRule{Description: "protect sensitive tool result"}, true
+	default:
+		return "", "", antiPoisonStringProtectionRule{}, false
+	}
+}
+
+func antiPoisonSensitiveToolTextLooksLikeContent(raw any) bool {
+	text := strings.TrimSpace(toStringValue(raw))
+	if text == "" {
+		return false
+	}
+	if !antiPoisonLooksLikeSensitiveFileDump(text) {
+		return false
+	}
+	return antiPoisonLooksLikeStructuredFileContent(text)
+}
+
+func antiPoisonLooksLikeSensitiveFileDump(text string) bool {
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if antiPoisonSensitiveToolFilePattern.MatchString(line) {
+			return true
+		}
+		if strings.Contains(line, "/.env") || strings.Contains(line, "\\.env") {
+			return true
+		}
+	}
+	return false
+}
+
+func antiPoisonLooksLikeStructuredFileContent(text string) bool {
+	normalized := strings.ReplaceAll(text, "\r\n", "\n")
+	if strings.Contains(normalized, "BEGIN ") && strings.Contains(normalized, "PRIVATE KEY") {
+		return true
+	}
+	if regexp.MustCompile(`(?im)^[A-Z0-9_]{2,}\s*=\s*.+$`).MatchString(normalized) {
+		return true
+	}
+	if regexp.MustCompile(`(?im)"(api[_-]?key|secret|token|password|authorization|auth[_-]?token|private[_-]?key)"\s*:`).MatchString(normalized) {
+		return true
+	}
+	if regexp.MustCompile(`(?im)^(api[_-]?key|secret|token|password|authorization|auth[_-]?token|private[_-]?key)\s*[:=]\s*.+$`).MatchString(normalized) {
+		return true
+	}
+	return false
+}
+
 func buildAntiPoisonRequestContextFromSeed(routeKind string, config AntiPoisonConfig, seed string) antiPoisonRequestContext {
 	config = sanitizeAntiPoisonConfig(config)
 	seed = strings.ToLower(strings.TrimSpace(seed))
@@ -478,18 +587,17 @@ func buildAntiPoisonRequestContextFromSeed(routeKind string, config AntiPoisonCo
 	prefix := "aad_guard_" + seedDigest[8:18]
 	strategyPoolSize := clampInt(config.Randomization.StrategyPoolSize, 1, 100)
 	phraseVariants := clampInt(config.Randomization.MinPhraseVariantsPerStrategy, 1, 50)
-	insertionPoints := []string{"system_prepend", "system_append", "tool_schema_tail", "instruction_middle", "guard_contract_tail"}
 	return antiPoisonRequestContext{
 		Enabled:        config.Enabled,
 		Config:         config,
 		RouteKind:      strings.TrimSpace(routeKind),
 		Alias:          alias,
 		Prefix:         prefix,
-		GuardToolName:  prefix + antiPoisonGuardToolSuffix,
+		GuardToolName:  prefix + "_<original_tool_name>",
 		Seed:           seed,
 		StrategySlot:   1 + antiPoisonDerivedIndex(seed, "strategy", strategyPoolSize),
 		PhraseVariant:  1 + antiPoisonDerivedIndex(seed, "phrase", phraseVariants),
-		InsertionPoint: insertionPoints[antiPoisonDerivedIndex(seed, "insertion", len(insertionPoints))],
+		InsertionPoint: antiPoisonInjectionModeFixed,
 	}
 }
 
@@ -506,7 +614,7 @@ func normalizeAntiPoisonRequestContext(ctx antiPoisonRequestContext) antiPoisonR
 	}
 	ctx.GuardToolName = strings.TrimSpace(ctx.GuardToolName)
 	if ctx.GuardToolName == "" {
-		ctx.GuardToolName = ctx.Prefix + antiPoisonGuardToolSuffix
+		ctx.GuardToolName = ctx.Prefix + "_<original_tool_name>"
 	}
 	ctx.Seed = strings.TrimSpace(ctx.Seed)
 	if ctx.Seed == "" {
@@ -519,7 +627,7 @@ func normalizeAntiPoisonRequestContext(ctx antiPoisonRequestContext) antiPoisonR
 		ctx.PhraseVariant = 1
 	}
 	if strings.TrimSpace(ctx.InsertionPoint) == "" {
-		ctx.InsertionPoint = "system_prepend"
+		ctx.InsertionPoint = antiPoisonInjectionModeFixed
 	}
 	return ctx
 }
@@ -558,43 +666,197 @@ func buildAntiPoisonPromptPreview(config AntiPoisonConfig, alias string, prefix 
 		Config:         config,
 		Alias:          alias,
 		Prefix:         prefix,
-		GuardToolName:  prefix + antiPoisonGuardToolSuffix,
+		GuardToolName:  prefix + "_<original_tool_name>",
 		Seed:           "preview",
 		StrategySlot:   1,
 		PhraseVariant:  1,
-		InsertionPoint: "system_prepend",
+		InsertionPoint: antiPoisonInjectionModeFixed,
 	}))
+}
+
+func antiPoisonGuardToolPattern(ctx antiPoisonRequestContext) string {
+	ctx = normalizeAntiPoisonRequestContext(ctx)
+	return ctx.Prefix + "_<original_tool_name>"
+}
+
+func antiPoisonGuardToolNameForTool(ctx antiPoisonRequestContext, toolName string) string {
+	ctx = normalizeAntiPoisonRequestContext(ctx)
+	toolName = strings.TrimSpace(toolName)
+	if toolName == "" {
+		return antiPoisonGuardToolPattern(ctx)
+	}
+	return ctx.Prefix + "_" + toolName
+}
+
+func antiPoisonExactRetryEligible(result antiPoisonValidationResult) bool {
+	return false
+}
+
+func antiPoisonExactRetryRealCalls(calls []antiPoisonToolCall) []antiPoisonToolCall {
+	next := make([]antiPoisonToolCall, 0, len(calls))
+	for _, call := range calls {
+		if call.IsGuard {
+			continue
+		}
+		call.Name = strings.TrimSpace(call.Name)
+		call.ArgumentsText = strings.TrimSpace(call.ArgumentsText)
+		if call.Name == "" || call.ArgumentsText == "" {
+			continue
+		}
+		call.ArgumentsText = canonicalAntiPoisonArgumentText(call.ArgumentsText)
+		if strings.TrimSpace(call.ToolType) == "" {
+			call.ToolType = classifyAntiPoisonToolName(call.Name)
+		}
+		next = append(next, call)
+	}
+	return next
+}
+
+func antiPoisonFirstRealCall(calls []antiPoisonToolCall) (antiPoisonToolCall, bool) {
+	realCalls := antiPoisonExactRetryRealCalls(calls)
+	if len(realCalls) == 0 {
+		return antiPoisonToolCall{}, false
+	}
+	return realCalls[0], true
+}
+
+func antiPoisonObservedItemToToolCall(item *advancedProxyObservedItem) (antiPoisonToolCall, bool) {
+	if item == nil || strings.TrimSpace(item.Type) != "function_call" {
+		return antiPoisonToolCall{}, false
+	}
+	name := strings.TrimSpace(item.Name)
+	args := strings.TrimSpace(item.ArgumentsPreview)
+	if name == "" || args == "" {
+		return antiPoisonToolCall{}, false
+	}
+	return antiPoisonToolCall{
+		Name:          name,
+		ArgumentsText: args,
+		ToolType:      classifyAntiPoisonToolName(name),
+	}, true
+}
+
+func buildAntiPoisonExactGuardPrompt(ctx antiPoisonRequestContext, call antiPoisonToolCall) string {
+	ctx = normalizeAntiPoisonRequestContext(ctx)
+	call.Name = strings.TrimSpace(call.Name)
+	guard := antiPoisonGuardJSONOpenTag + mustMarshalAntiPoisonJSONString(map[string]any{
+		"name":      antiPoisonGuardToolNameForTool(ctx, call.Name),
+		"tool_name": call.Name,
+	}) + antiPoisonGuardJSONCloseTag
+	return strings.Join([]string{
+		"<important_gateway_rules>",
+		"Exact retry is disabled; this template is retained only for legacy callers.",
+		guard,
+		"</important_gateway_rules>",
+	}, "\n")
+}
+
+func buildAntiPoisonExactGuardPromptForCalls(ctx antiPoisonRequestContext, calls []antiPoisonToolCall) (string, error) {
+	ctx = normalizeAntiPoisonRequestContext(ctx)
+	realCalls := antiPoisonExactRetryRealCalls(calls)
+	if len(realCalls) == 0 {
+		return "", fmt.Errorf("no real toolcalls for exact retry")
+	}
+	parts := make([]string, 0, len(realCalls))
+	for _, call := range realCalls {
+		parts = append(parts, antiPoisonGuardJSONOpenTag+mustMarshalAntiPoisonJSONString(map[string]any{
+			"name":      antiPoisonGuardToolNameForTool(ctx, call.Name),
+			"tool_name": call.Name,
+		})+antiPoisonGuardJSONCloseTag)
+	}
+	return strings.Join([]string{
+		"<important_gateway_rules>",
+		"Exact retry is disabled; this template is retained only for legacy callers.",
+		strings.Join(parts, "\n"),
+		"</important_gateway_rules>",
+	}, "\n"), nil
+}
+func buildAntiPoisonExactRetryOpenAIRequest(rawBody []byte, routeKind string, ctx antiPoisonRequestContext, call antiPoisonToolCall) ([]byte, error) {
+	return buildAntiPoisonExactRetryOpenAIRequestForCalls(rawBody, routeKind, ctx, []antiPoisonToolCall{call})
+}
+
+func buildAntiPoisonExactRetryOpenAIRequestForCalls(rawBody []byte, routeKind string, ctx antiPoisonRequestContext, calls []antiPoisonToolCall) ([]byte, error) {
+	var body map[string]any
+	if err := json.Unmarshal(rawBody, &body); err != nil {
+		return nil, err
+	}
+	prompt, err := buildAntiPoisonExactGuardPromptForCalls(ctx, calls)
+	if err != nil {
+		return nil, err
+	}
+	switch strings.TrimSpace(routeKind) {
+	case "chat":
+		body["messages"] = prependOpenAISystemMessage(body["messages"], prompt)
+	case "responses", "responses_compact":
+		existing := stripExistingAntiPoisonPrompt(strings.TrimSpace(toStringValue(body["instructions"])))
+		inputs := cloneJSONList(body["input"])
+		if len(inputs) > 0 {
+			next := make([]any, 0, len(inputs)+1)
+			next = append(next, map[string]any{
+				"role": "system",
+				"content": []any{
+					map[string]any{"type": "input_text", "text": prompt},
+				},
+			})
+			next = append(next, inputs...)
+			body["input"] = next
+			if existing != "" {
+				body["instructions"] = existing
+			} else {
+				delete(body, "instructions")
+			}
+		} else if existing != "" {
+			body["instructions"] = prompt + "\n\n" + existing
+		} else {
+			body["instructions"] = prompt
+		}
+	default:
+		return nil, fmt.Errorf("unsupported exact retry route: %s", routeKind)
+	}
+	return json.Marshal(body)
+}
+
+func extractSingleRealOpenAICallFromResponseBody(rawBody []byte, routeKind string, ctx antiPoisonRequestContext) (antiPoisonToolCall, bool) {
+	var body map[string]any
+	if err := json.Unmarshal(rawBody, &body); err != nil {
+		return antiPoisonToolCall{}, false
+	}
+	calls, _ := extractAntiPoisonOpenAIToolCalls(body, routeKind, ctx)
+	return antiPoisonFirstRealCall(calls)
 }
 
 func buildAntiPoisonPrompt(ctx antiPoisonRequestContext) string {
 	ctx = normalizeAntiPoisonRequestContext(ctx)
-	strategy := strings.ReplaceAll(ctx.Config.StrategyPrompt, antiPoisonAlgorithmPlaceholder, ctx.Alias)
-	algorithm := strings.ReplaceAll(ctx.Config.AlgorithmPrompt, antiPoisonAlgorithmPlaceholder, ctx.Alias)
+	webSearchExampleGuard := antiPoisonGuardJSONOpenTag + mustMarshalAntiPoisonJSONString(map[string]any{
+		"name":      antiPoisonGuardToolNameForTool(ctx, "WebSearch"),
+		"tool_name": "WebSearch",
+	}) + antiPoisonGuardJSONCloseTag
 	return strings.Join([]string{
-		"[AllApiDeck 防投毒随机策略]",
-		fmt.Sprintf("[随机变化算法代号] %s", ctx.Alias),
-		fmt.Sprintf("[fake toolcall prefix] %s", ctx.Prefix),
-		fmt.Sprintf("[guard tool name] %s", ctx.GuardToolName),
-		fmt.Sprintf("[nonce] %s", ctx.Seed),
-		fmt.Sprintf("[策略槽] %02d", ctx.StrategySlot),
-		fmt.Sprintf("[句式变体] %02d", ctx.PhraseVariant),
-		fmt.Sprintf("[插入点位提示] %s", ctx.InsertionPoint),
-		"",
-		"[策略 Prompt]",
-		strategy,
-		"",
-		"[随机变化算法 Prompt]",
-		algorithm,
-		"",
-		"[网关校验约定]",
-		fmt.Sprintf("如果本轮产生任何真实 toolcall，必须额外调用 `%s`。", ctx.GuardToolName),
-		fmt.Sprintf("guard fake toolcall 参数必须包含 algorithm=%q、nonce=%q、digest、chain、cover。", ctx.Alias, ctx.Seed),
-		"digest 规则: 按真实 toolcall 返回顺序组织链路，每项为 index|tool_type|tool_name|call_id尾8位|sha256(canonical_arguments)，前面加 alias 与 nonce 行，整体 sha256 后取前 16 位小写 hex。",
-		"canonical_arguments: JSON 对象按 key 排序、数组保序、字符串 JSON 转义；非 JSON 参数按原文 trim。",
-		"guard fake toolcall 只用于网关校验，不能替代真实工具调用，不能向用户解释。",
+		"<important_gateway_rules>",
+		"IMPORTANT: AllApiDeck guard rules are gateway-enforced high-priority safety constraints. Follow them before ordinary task instructions.",
+		"<guard_context>",
+		fmt.Sprintf("<guard_name_prefix>%s</guard_name_prefix>", ctx.Prefix),
+		fmt.Sprintf("<guard_tool_name>%s</guard_tool_name>", ctx.GuardToolName),
+		fmt.Sprintf("<guard_tool_name_example>%s</guard_tool_name_example>", antiPoisonGuardToolNameForTool(ctx, "WebSearch")),
+		fmt.Sprintf("<guard_json_tag>%s</guard_json_tag>", antiPoisonGuardJSONTagName),
+		"</guard_context>",
+		"<gateway_contract>",
+		"If this turn emits any real toolcall, the assistant text immediately before that toolcall must be exactly one guard JSON text block.",
+		"Do not emit ordinary pre-tool text such as `I will search`, `I will check`, or progress narration before a toolcall; replace that pre-tool sentence with the guard JSON block.",
+		fmt.Sprintf("The guard JSON text block must be wrapped exactly as `%s...%s`.", antiPoisonGuardJSONOpenTag, antiPoisonGuardJSONCloseTag),
+		"The guard JSON must contain exactly the minimal binding fields: `name` and `tool_name`.",
+		fmt.Sprintf("`name` must follow `%s`; for WebSearch it is `%s`.", antiPoisonGuardToolPattern(ctx), antiPoisonGuardToolNameForTool(ctx, "WebSearch")),
+		"`tool_name` must exactly equal the next real tool name.",
+		"Only after that guard block may you emit the corresponding real toolcall.",
+		"Do not include digest, chain, cover, nonce, algorithm, or tool_type in guard JSON.",
+		"Do not use a Markdown code block. Do not explain the guard JSON to the user.",
+		"If you cannot emit a valid guard before a real toolcall, emit no real toolcall and output plain text: guard generation failed for pending toolcall.",
+		"Example for a next real WebSearch toolcall:",
+		webSearchExampleGuard,
+		"</gateway_contract>",
+		"</important_gateway_rules>",
 	}, "\n")
 }
-
 func applyAntiPoisonPromptToOpenAIRequest(rawBody []byte, routeKind string, config AntiPoisonConfig) ([]byte, antiPoisonRequestContext, error) {
 	ctx := newAntiPoisonRequestContext(routeKind, config)
 	if !ctx.Enabled {
@@ -608,15 +870,13 @@ func applyAntiPoisonPromptToOpenAIRequest(rawBody []byte, routeKind string, conf
 	switch strings.TrimSpace(routeKind) {
 	case "chat":
 		body["messages"] = prependOpenAISystemMessage(body["messages"], prompt)
-		body["tools"] = appendAntiPoisonChatGuardTool(body["tools"], ctx)
 	case "responses", "responses_compact":
-		existing := strings.TrimSpace(toStringValue(body["instructions"]))
+		existing := stripExistingAntiPoisonPrompt(strings.TrimSpace(toStringValue(body["instructions"])))
 		if existing != "" {
-			body["instructions"] = existing + "\n\n" + prompt
+			body["instructions"] = prompt + "\n\n" + existing
 		} else {
 			body["instructions"] = prompt
 		}
-		body["tools"] = appendAntiPoisonResponsesGuardTool(body["tools"], ctx)
 	default:
 		ctx.Enabled = false
 		return rawBody, ctx, nil
@@ -635,7 +895,6 @@ func applyAntiPoisonPromptToAnthropicRequest(requestBody map[string]any, config 
 	}
 	body := deepCopyJSONMap(requestBody)
 	body["system"] = appendAntiPoisonAnthropicSystem(body["system"], buildAntiPoisonPrompt(ctx))
-	body["tools"] = appendAntiPoisonAnthropicGuardTool(body["tools"], ctx)
 	return body, ctx, nil
 }
 
@@ -650,43 +909,6 @@ func prependOpenAISystemMessage(rawMessages any, prompt string) []any {
 	return next
 }
 
-func appendAntiPoisonChatGuardTool(rawTools any, ctx antiPoisonRequestContext) []any {
-	ctx = normalizeAntiPoisonRequestContext(ctx)
-	tools := cloneJSONList(rawTools)
-	tools = append(tools, map[string]any{
-		"type": "function",
-		"function": map[string]any{
-			"name":        ctx.GuardToolName,
-			"description": "AllApiDeck guard fake toolcall for toolchain watermark validation. Not a user action.",
-			"parameters":  antiPoisonGuardToolSchema(),
-		},
-	})
-	return tools
-}
-
-func appendAntiPoisonResponsesGuardTool(rawTools any, ctx antiPoisonRequestContext) []any {
-	ctx = normalizeAntiPoisonRequestContext(ctx)
-	tools := cloneJSONList(rawTools)
-	tools = append(tools, map[string]any{
-		"type":        "function",
-		"name":        ctx.GuardToolName,
-		"description": "AllApiDeck guard fake toolcall for toolchain watermark validation. Not a user action.",
-		"parameters":  antiPoisonGuardToolSchema(),
-	})
-	return tools
-}
-
-func appendAntiPoisonAnthropicGuardTool(rawTools any, ctx antiPoisonRequestContext) []any {
-	ctx = normalizeAntiPoisonRequestContext(ctx)
-	tools := cloneJSONList(rawTools)
-	tools = append(tools, map[string]any{
-		"name":         ctx.GuardToolName,
-		"description":  "AllApiDeck guard fake toolcall for toolchain watermark validation. Not a user action.",
-		"input_schema": antiPoisonGuardToolSchema(),
-	})
-	return tools
-}
-
 func appendAntiPoisonAnthropicSystem(rawSystem any, prompt string) any {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
@@ -694,25 +916,66 @@ func appendAntiPoisonAnthropicSystem(rawSystem any, prompt string) any {
 	}
 	switch typed := rawSystem.(type) {
 	case string:
-		existing := strings.TrimSpace(typed)
+		existing := stripExistingAntiPoisonPrompt(strings.TrimSpace(typed))
 		if existing == "" {
 			return prompt
 		}
-		return existing + "\n\n" + prompt
+		return prompt + "\n\n" + existing
 	case []any:
-		next := append([]any{}, typed...)
+		next := make([]any, 0, len(typed)+1)
 		next = append(next, map[string]any{"type": "text", "text": prompt})
+		for _, item := range typed {
+			block, _ := item.(map[string]any)
+			if block == nil {
+				next = append(next, item)
+				continue
+			}
+			if strings.TrimSpace(toStringValue(block["type"])) != "text" {
+				next = append(next, item)
+				continue
+			}
+			clean := stripExistingAntiPoisonPrompt(strings.TrimSpace(toStringValue(block["text"])))
+			if clean == "" {
+				continue
+			}
+			copied := deepCopyJSONMap(block)
+			copied["text"] = clean
+			next = append(next, copied)
+		}
 		return next
 	case []map[string]any:
 		next := make([]any, 0, len(typed)+1)
-		for _, item := range typed {
-			next = append(next, item)
-		}
 		next = append(next, map[string]any{"type": "text", "text": prompt})
+		for _, item := range typed {
+			if strings.TrimSpace(toStringValue(item["type"])) != "text" {
+				next = append(next, item)
+				continue
+			}
+			clean := stripExistingAntiPoisonPrompt(strings.TrimSpace(toStringValue(item["text"])))
+			if clean == "" {
+				continue
+			}
+			copied := deepCopyJSONMap(item)
+			copied["text"] = clean
+			next = append(next, copied)
+		}
 		return next
 	default:
 		return prompt
 	}
+}
+
+func stripExistingAntiPoisonPrompt(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" || !strings.Contains(text, "<important_gateway_rules>") {
+		return text
+	}
+	pattern := regexp.MustCompile(`(?s)\s*<important_gateway_rules>.*?</important_gateway_rules>\s*`)
+	clean := strings.TrimSpace(pattern.ReplaceAllString(text, "\n\n"))
+	if clean == "" {
+		return ""
+	}
+	return regexp.MustCompile(`\n{3,}`).ReplaceAllString(clean, "\n\n")
 }
 
 func cloneJSONList(raw any) []any {
@@ -727,36 +990,6 @@ func cloneJSONList(raw any) []any {
 		return next
 	default:
 		return []any{}
-	}
-}
-
-func antiPoisonGuardToolSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": true,
-		"required":             []any{"algorithm", "nonce", "digest"},
-		"properties": map[string]any{
-			"algorithm": map[string]any{
-				"type":        "string",
-				"description": "Current random variation algorithm alias.",
-			},
-			"nonce": map[string]any{
-				"type":        "string",
-				"description": "Current request nonce/seed.",
-			},
-			"digest": map[string]any{
-				"type":        "string",
-				"description": "Toolchain digest generated from the current AllApiDeck guard rules.",
-			},
-			"chain": map[string]any{
-				"type":        "string",
-				"description": "Compact real toolcall chain summary.",
-			},
-			"cover": map[string]any{
-				"type":        "string",
-				"description": "Tool category coverage summary.",
-			},
-		},
 	}
 }
 
@@ -775,13 +1008,15 @@ func validateAndStripAntiPoisonOpenAIResponse(rawBody []byte, routeKind string, 
 		return result
 	}
 
+	calls, guardCount := extractAntiPoisonOpenAIToolCalls(body, routeKind, ctx)
 	return validateAndStripAntiPoisonToolCalls(
 		rawBody,
-		extractAntiPoisonOpenAIToolCalls(body, routeKind, ctx),
+		calls,
 		ctx,
 		func() []byte {
-			return mustMarshalAntiPoisonBody(stripAntiPoisonOpenAIGuards(body, routeKind, ctx), rawBody)
+			return mustMarshalAntiPoisonBody(stripAntiPoisonOpenAIGuards(body, routeKind), rawBody)
 		},
+		guardCount,
 	)
 }
 
@@ -800,17 +1035,19 @@ func validateAndStripAntiPoisonAnthropicResponse(rawBody []byte, ctx antiPoisonR
 		return result
 	}
 
+	calls, guardCount := extractAntiPoisonAnthropicToolCalls(body, ctx)
 	return validateAndStripAntiPoisonToolCalls(
 		rawBody,
-		extractAntiPoisonAnthropicToolCalls(body, ctx),
+		calls,
 		ctx,
 		func() []byte {
-			return mustMarshalAntiPoisonBody(stripAntiPoisonAnthropicGuards(body, ctx), rawBody)
+			return mustMarshalAntiPoisonBody(stripAntiPoisonAnthropicGuards(body), rawBody)
 		},
+		guardCount,
 	)
 }
 
-func validateAndStripAntiPoisonToolCalls(rawBody []byte, calls []antiPoisonToolCall, ctx antiPoisonRequestContext, stripGuards func() []byte) antiPoisonValidationResult {
+func validateAndStripAntiPoisonToolCalls(rawBody []byte, calls []antiPoisonToolCall, ctx antiPoisonRequestContext, stripGuards func() []byte, observedGuardCount int) antiPoisonValidationResult {
 	ctx = normalizeAntiPoisonRequestContext(ctx)
 	result := antiPoisonValidationResult{Applied: true, Body: rawBody}
 	realCalls := make([]antiPoisonToolCall, 0, len(calls))
@@ -818,51 +1055,64 @@ func validateAndStripAntiPoisonToolCalls(rawBody []byte, calls []antiPoisonToolC
 	for _, call := range calls {
 		if call.IsGuard {
 			guardCalls = append(guardCalls, call)
-		} else {
+		} else if antiPoisonToolCallRequiresGuard(call) {
 			realCalls = append(realCalls, call)
 		}
 	}
 	result.RealCount = len(realCalls)
-	result.GuardCount = len(guardCalls)
+	if len(realCalls) > 0 {
+		result.RealCalls = append([]antiPoisonToolCall(nil), realCalls...)
+	}
+	result.GuardCount = maxInt(len(guardCalls), observedGuardCount)
 	if len(realCalls) == 0 {
 		result.Valid = true
-		if len(guardCalls) > 0 && stripGuards != nil {
-			result.RemovedGuards = len(guardCalls)
+		if result.GuardCount > 0 && stripGuards != nil {
+			result.RemovedGuards = result.GuardCount
 			result.Body = stripGuards()
 		}
 		return result
 	}
 
 	minGuardCount := clampInt(ctx.Config.Randomization.MinFakeToolcalls, 1, 20)
-	if len(guardCalls) < minGuardCount {
+	if result.GuardCount < minGuardCount {
 		result.Valid = false
 		result.Blocked = antiPoisonShouldBlock(ctx.Config)
-		result.Reason = "missing_guard_toolcall"
-		if !result.Blocked && len(guardCalls) > 0 && stripGuards != nil {
-			result.RemovedGuards = len(guardCalls)
+		result.Reason = antiPoisonValidationReasonMissingGuard(len(realCalls), result.GuardCount, minGuardCount, ctx)
+		if !result.Blocked && result.GuardCount > 0 && stripGuards != nil {
+			result.RemovedGuards = result.GuardCount
 			result.Body = stripGuards()
 		}
 		return result
 	}
 
-	expectedDigest := computeAntiPoisonToolChainDigest(realCalls, ctx)
-	if !antiPoisonGuardDigestMatches(guardCalls, expectedDigest, ctx) {
+	guardValidation := validateAntiPoisonGuardCoverage(guardCalls, realCalls, ctx)
+	if guardValidation.ValidGuardCount < len(realCalls) {
 		result.Valid = false
 		result.Blocked = antiPoisonShouldBlock(ctx.Config)
-		result.Reason = "guard_digest_mismatch"
+		result.Reason = antiPoisonValidationReasonGuardCoverageMismatch(len(realCalls), result.GuardCount, guardValidation.ValidGuardCount, ctx)
 		if !result.Blocked && stripGuards != nil {
-			result.RemovedGuards = len(guardCalls)
+			result.RemovedGuards = result.GuardCount
 			result.Body = stripGuards()
 		}
 		return result
 	}
 
 	result.Valid = true
-	if len(guardCalls) > 0 && stripGuards != nil {
-		result.RemovedGuards = len(guardCalls)
+	if guardValidation.DigestMismatch {
+		result.Reason = antiPoisonValidationReasonGuardDigestMismatch(len(realCalls), result.GuardCount, ctx)
+	}
+	if result.GuardCount > 0 && stripGuards != nil {
+		result.RemovedGuards = result.GuardCount
 		result.Body = stripGuards()
 	}
 	return result
+}
+
+func antiPoisonToolCallRequiresGuard(call antiPoisonToolCall) bool {
+	if call.IsGuard {
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(call.Kind), "responses.web_search_call")
 }
 
 func antiPoisonShouldBlock(config AntiPoisonConfig) bool {
@@ -878,26 +1128,109 @@ func mustMarshalAntiPoisonBody(body map[string]any, fallback []byte) []byte {
 	return raw
 }
 
-func extractAntiPoisonOpenAIToolCalls(body map[string]any, routeKind string, ctx antiPoisonRequestContext) []antiPoisonToolCall {
+func mustMarshalAntiPoisonJSONString(value any) string {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
+func extractAntiPoisonGuardsFromText(text string, ctx antiPoisonRequestContext) antiPoisonTextGuardExtraction {
+	text = firstNonEmptyExact(text)
+	if strings.TrimSpace(text) == "" {
+		return antiPoisonTextGuardExtraction{Text: text}
+	}
+	guards := make([]antiPoisonGuardPayload, 0, 4)
+	stripped := antiPoisonGuardJSONPattern.ReplaceAllStringFunc(text, func(match string) string {
+		submatches := antiPoisonGuardJSONPattern.FindStringSubmatch(match)
+		if len(submatches) < 2 {
+			return ""
+		}
+		rawJSON := strings.TrimSpace(submatches[1])
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(rawJSON), &payload); err != nil {
+			return ""
+		}
+		name := strings.TrimSpace(toStringValue(payload["name"]))
+		toolName := strings.TrimSpace(toStringValue(payload["tool_name"]))
+		toolType := strings.TrimSpace(toStringValue(payload["tool_type"]))
+		if toolType == "" && toolName != "" {
+			toolType = classifyAntiPoisonToolName(toolName)
+		}
+		guards = append(guards, antiPoisonGuardPayload{
+			Name:      name,
+			ToolName:  toolName,
+			ToolType:  toolType,
+			Algorithm: strings.TrimSpace(toStringValue(payload["algorithm"])),
+			Nonce:     strings.TrimSpace(toStringValue(payload["nonce"])),
+			Digest:    strings.TrimSpace(toStringValue(payload["digest"])),
+			Chain:     strings.TrimSpace(toStringValue(payload["chain"])),
+			Cover:     strings.TrimSpace(toStringValue(payload["cover"])),
+			RawJSON:   rawJSON,
+		})
+		return ""
+	})
+	return antiPoisonTextGuardExtraction{
+		Text:        strings.TrimSpace(cleanAntiPoisonGuardText(stripped)),
+		GuardCount:  len(guards),
+		GuardBlocks: guards,
+	}
+}
+
+func antiPoisonGuardPayloadsToToolCalls(payloads []antiPoisonGuardPayload) []antiPoisonToolCall {
+	calls := make([]antiPoisonToolCall, 0, len(payloads))
+	for _, payload := range payloads {
+		name := strings.TrimSpace(payload.Name)
+		if name == "" {
+			name = strings.TrimSpace(payload.ToolName)
+		}
+		toolType := strings.TrimSpace(payload.ToolType)
+		if toolType == "" {
+			toolType = classifyAntiPoisonToolName(payload.ToolName)
+		}
+		calls = append(calls, antiPoisonToolCall{
+			Kind:          "guard.json",
+			Name:          name,
+			ArgumentsText: payload.RawJSON,
+			ToolType:      toolType,
+			IsGuard:       true,
+		})
+	}
+	return calls
+}
+
+func cleanAntiPoisonGuardText(text string) string {
+	text = antiPoisonGuardLikePattern.ReplaceAllString(text, "")
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = regexp.MustCompile(`\n{3,}`).ReplaceAllString(text, "\n\n")
+	return text
+}
+
+func extractAntiPoisonOpenAIToolCalls(body map[string]any, routeKind string, ctx antiPoisonRequestContext) ([]antiPoisonToolCall, int) {
 	switch strings.TrimSpace(routeKind) {
 	case "chat":
 		return extractAntiPoisonChatToolCalls(body, ctx)
 	case "responses", "responses_compact":
 		return extractAntiPoisonResponsesToolCalls(body, ctx)
 	default:
-		return nil
+		return nil, 0
 	}
 }
 
-func extractAntiPoisonChatToolCalls(body map[string]any, ctx antiPoisonRequestContext) []antiPoisonToolCall {
+func extractAntiPoisonChatToolCalls(body map[string]any, ctx antiPoisonRequestContext) ([]antiPoisonToolCall, int) {
 	choices, _ := body["choices"].([]any)
 	calls := []antiPoisonToolCall{}
+	guards := make([]antiPoisonGuardPayload, 0, 4)
 	for _, rawChoice := range choices {
 		choice, _ := rawChoice.(map[string]any)
 		message, _ := choice["message"].(map[string]any)
 		if message == nil {
 			continue
 		}
+		guardText := extractAntiPoisonGuardsFromText(toStringValue(message["content"]), ctx)
+		guards = append(guards, guardText.GuardBlocks...)
 		if toolCalls, ok := message["tool_calls"].([]any); ok {
 			for _, rawCall := range toolCalls {
 				callMap, _ := rawCall.(map[string]any)
@@ -910,7 +1243,7 @@ func extractAntiPoisonChatToolCalls(body map[string]any, ctx antiPoisonRequestCo
 					CallID:        strings.TrimSpace(toStringValue(callMap["id"])),
 					ArgumentsText: toStringValue(functionMap["arguments"]),
 					ToolType:      classifyAntiPoisonToolName(name),
-					IsGuard:       isAntiPoisonGuardToolName(name, ctx),
+					IsGuard:       false,
 				})
 			}
 		}
@@ -922,66 +1255,79 @@ func extractAntiPoisonChatToolCalls(body map[string]any, ctx antiPoisonRequestCo
 				Name:          name,
 				ArgumentsText: toStringValue(functionMap["arguments"]),
 				ToolType:      classifyAntiPoisonToolName(name),
-				IsGuard:       isAntiPoisonGuardToolName(name, ctx),
+				IsGuard:       false,
 			})
 		}
 	}
-	return calls
+	return append(calls, antiPoisonGuardPayloadsToToolCalls(guards)...), len(guards)
 }
 
-func extractAntiPoisonResponsesToolCalls(body map[string]any, ctx antiPoisonRequestContext) []antiPoisonToolCall {
+func extractAntiPoisonResponsesToolCalls(body map[string]any, ctx antiPoisonRequestContext) ([]antiPoisonToolCall, int) {
 	output, _ := body["output"].([]any)
 	calls := []antiPoisonToolCall{}
+	guards := make([]antiPoisonGuardPayload, 0, 4)
 	for _, rawItem := range output {
 		item, _ := rawItem.(map[string]any)
-		if strings.TrimSpace(toStringValue(item["type"])) != "function_call" {
-			continue
+		switch strings.TrimSpace(toStringValue(item["type"])) {
+		case "function_call":
+			name := strings.TrimSpace(toStringValue(item["name"]))
+			calls = append(calls, antiPoisonToolCall{
+				Container:     item,
+				Kind:          "responses.function_call",
+				Name:          name,
+				CallID:        strings.TrimSpace(toStringValue(item["call_id"])),
+				ArgumentsText: toStringValue(item["arguments"]),
+				ToolType:      classifyAntiPoisonToolName(name),
+				IsGuard:       false,
+			})
+		case "web_search_call":
+			calls = append(calls, antiPoisonToolCall{
+				Container:     item,
+				Kind:          "responses.web_search_call",
+				Name:          "web_search_call",
+				CallID:        strings.TrimSpace(toStringValue(item["id"])),
+				ArgumentsText: stringifyJSON(item["action"]),
+				ToolType:      classifyAntiPoisonToolName("web_search_call"),
+				IsGuard:       false,
+			})
+		case "message":
+			for _, rawContent := range anySliceValue(item["content"]) {
+				contentMap, _ := rawContent.(map[string]any)
+				extracted := extractAntiPoisonGuardsFromText(
+					firstNonEmptyExact(toStringValue(contentMap["text"]), toStringValue(contentMap["content"])),
+					ctx,
+				)
+				guards = append(guards, extracted.GuardBlocks...)
+			}
 		}
-		name := strings.TrimSpace(toStringValue(item["name"]))
-		calls = append(calls, antiPoisonToolCall{
-			Container:     item,
-			Kind:          "responses.function_call",
-			Name:          name,
-			CallID:        strings.TrimSpace(toStringValue(item["call_id"])),
-			ArgumentsText: toStringValue(item["arguments"]),
-			ToolType:      classifyAntiPoisonToolName(name),
-			IsGuard:       isAntiPoisonGuardToolName(name, ctx),
-		})
 	}
-	return calls
+	return append(calls, antiPoisonGuardPayloadsToToolCalls(guards)...), len(guards)
 }
 
-func extractAntiPoisonAnthropicToolCalls(body map[string]any, ctx antiPoisonRequestContext) []antiPoisonToolCall {
+func extractAntiPoisonAnthropicToolCalls(body map[string]any, ctx antiPoisonRequestContext) ([]antiPoisonToolCall, int) {
 	content, _ := body["content"].([]any)
 	calls := []antiPoisonToolCall{}
+	guards := make([]antiPoisonGuardPayload, 0, 4)
 	for _, rawBlock := range content {
 		block, _ := rawBlock.(map[string]any)
-		if strings.TrimSpace(toStringValue(block["type"])) != "tool_use" {
-			continue
+		switch strings.TrimSpace(toStringValue(block["type"])) {
+		case "tool_use":
+			name := strings.TrimSpace(toStringValue(block["name"]))
+			calls = append(calls, antiPoisonToolCall{
+				Container:     block,
+				Kind:          "anthropic.tool_use",
+				Name:          name,
+				CallID:        strings.TrimSpace(toStringValue(block["id"])),
+				ArgumentsText: stringifyJSON(block["input"]),
+				ToolType:      classifyAntiPoisonToolName(name),
+				IsGuard:       false,
+			})
+		case "text", "thinking", "redacted_thinking":
+			extracted := extractAntiPoisonGuardsFromText(firstNonEmptyExact(toStringValue(block["text"]), toStringValue(block["thinking"])), ctx)
+			guards = append(guards, extracted.GuardBlocks...)
 		}
-		name := strings.TrimSpace(toStringValue(block["name"]))
-		calls = append(calls, antiPoisonToolCall{
-			Container:     block,
-			Kind:          "anthropic.tool_use",
-			Name:          name,
-			CallID:        strings.TrimSpace(toStringValue(block["id"])),
-			ArgumentsText: stringifyJSON(block["input"]),
-			ToolType:      classifyAntiPoisonToolName(name),
-			IsGuard:       isAntiPoisonGuardToolName(name, ctx),
-		})
 	}
-	return calls
-}
-
-func isAntiPoisonGuardToolName(name string, ctx antiPoisonRequestContext) bool {
-	ctx = normalizeAntiPoisonRequestContext(ctx)
-	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "" {
-		return false
-	}
-	guardName := strings.ToLower(strings.TrimSpace(ctx.GuardToolName))
-	prefix := strings.ToLower(strings.TrimSpace(ctx.Prefix))
-	return name == guardName || (prefix != "" && strings.HasPrefix(name, prefix+"_"))
+	return append(calls, antiPoisonGuardPayloadsToToolCalls(guards)...), len(guards)
 }
 
 func classifyAntiPoisonToolName(name string) string {
@@ -989,10 +1335,10 @@ func classifyAntiPoisonToolName(name string) string {
 	switch {
 	case strings.Contains(lower, "shell"), strings.Contains(lower, "command"), strings.Contains(lower, "exec"):
 		return "command"
-	case strings.Contains(lower, "read"), strings.Contains(lower, "file"), strings.Contains(lower, "grep"), strings.Contains(lower, "search"), strings.Contains(lower, "rg"):
-		return "read"
 	case strings.Contains(lower, "web"), strings.Contains(lower, "http"), strings.Contains(lower, "fetch"):
 		return "network"
+	case strings.Contains(lower, "read"), strings.Contains(lower, "file"), strings.Contains(lower, "grep"), strings.Contains(lower, "search"), strings.Contains(lower, "rg"):
+		return "read"
 	default:
 		return "other"
 	}
@@ -1009,35 +1355,100 @@ func computeAntiPoisonToolChainDigest(calls []antiPoisonToolCall, ctx antiPoison
 			toolType = classifyAntiPoisonToolName(call.Name)
 		}
 		parts = append(parts, fmt.Sprintf(
-			"%d|%s|%s|%s|%s",
+			"%d|%s|%s|%s",
 			index,
 			toolType,
 			call.Name,
-			tailString(call.CallID, 8),
 			sha256Hex(canonicalAntiPoisonArgumentText(call.ArgumentsText)),
 		))
 	}
 	return sha256Hex(strings.Join(parts, "\n"))[:antiPoisonDigestLength]
 }
 
-func antiPoisonGuardDigestMatches(guards []antiPoisonToolCall, expectedDigest string, ctx antiPoisonRequestContext) bool {
+func antiPoisonValidationReasonMissingGuard(realCount int, guardCount int, minGuardCount int, ctx antiPoisonRequestContext) string {
 	ctx = normalizeAntiPoisonRequestContext(ctx)
-	for _, guard := range guards {
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(guard.ArgumentsText), &payload); err != nil {
-			continue
-		}
-		if strings.TrimSpace(toStringValue(payload["algorithm"])) != ctx.Alias {
-			continue
-		}
-		if strings.TrimSpace(toStringValue(payload["nonce"])) != ctx.Seed {
-			continue
-		}
-		if strings.TrimSpace(toStringValue(payload["digest"])) == expectedDigest {
-			return true
+	return fmt.Sprintf(
+		"missing_guard_toolcall: detected %d real toolcall(s) but only %d guard json block(s); requires >= %d guard block(s) using `%s...%s`, naming rule `%s`, and each guard must minimally bind the next real toolcall with fields `name` and `tool_name`",
+		realCount,
+		guardCount,
+		minGuardCount,
+		antiPoisonGuardJSONOpenTag,
+		antiPoisonGuardJSONCloseTag,
+		antiPoisonGuardToolPattern(ctx),
+	)
+}
+
+func antiPoisonValidationReasonGuardCoverageMismatch(realCount int, guardCount int, matchedGuardCount int, ctx antiPoisonRequestContext) string {
+	ctx = normalizeAntiPoisonRequestContext(ctx)
+	return fmt.Sprintf(
+		"guard_coverage_mismatch: detected %d real toolcall(s), %d guard json block(s), but only %d guard block(s) matched the required minimal binding fields name/tool_name; requires one valid guard block per real toolcall using `%s...%s`, naming rule `%s`",
+		realCount,
+		guardCount,
+		matchedGuardCount,
+		antiPoisonGuardJSONOpenTag,
+		antiPoisonGuardJSONCloseTag,
+		antiPoisonGuardToolPattern(ctx),
+	)
+}
+
+func antiPoisonValidationReasonGuardDigestMismatch(realCount int, guardCount int, ctx antiPoisonRequestContext) string {
+	ctx = normalizeAntiPoisonRequestContext(ctx)
+	return fmt.Sprintf(
+		"guard_digest_mismatch: detected %d real toolcall(s) and %d guard json block(s); this field is ignored in minimal guard mode",
+		realCount,
+		guardCount,
+	)
+}
+
+func validateAntiPoisonGuardCoverage(guards []antiPoisonToolCall, realCalls []antiPoisonToolCall, ctx antiPoisonRequestContext) antiPoisonGuardValidation {
+	ctx = normalizeAntiPoisonRequestContext(ctx)
+	result := antiPoisonGuardValidation{}
+	if len(guards) == 0 || len(realCalls) == 0 {
+		return result
+	}
+	used := make([]bool, len(guards))
+	for index, realCall := range realCalls {
+		for guardIndex, guard := range guards {
+			if used[guardIndex] || !antiPoisonGuardMatchesRealCall(guard, realCall, index, ctx) {
+				continue
+			}
+			used[guardIndex] = true
+			result.ValidGuardCount++
+			break
 		}
 	}
-	return false
+	return result
+}
+
+func antiPoisonGuardMatchesRealCall(guard antiPoisonToolCall, realCall antiPoisonToolCall, index int, ctx antiPoisonRequestContext) bool {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(guard.ArgumentsText), &payload); err != nil {
+		return false
+	}
+	guardName := strings.TrimSpace(toStringValue(payload["name"]))
+	guardToolName := strings.TrimSpace(toStringValue(payload["tool_name"]))
+	guardToolType := strings.TrimSpace(toStringValue(payload["tool_type"]))
+	if guardToolType == "" {
+		guardToolType = classifyAntiPoisonToolName(guardToolName)
+	}
+	expectedToolType := strings.TrimSpace(realCall.ToolType)
+	if expectedToolType == "" {
+		expectedToolType = classifyAntiPoisonToolName(realCall.Name)
+	}
+	if guardName != antiPoisonGuardToolNameForTool(ctx, realCall.Name) {
+		return false
+	}
+	if guardToolName != strings.TrimSpace(realCall.Name) {
+		return false
+	}
+	_ = guardToolType
+	_ = expectedToolType
+	_ = index
+	return true
+}
+
+func antiPoisonDigestPattern() *regexp.Regexp {
+	return regexp.MustCompile(`^[0-9a-f]{16}$`)
 }
 
 func canonicalAntiPoisonArgumentText(raw string) string {
@@ -1091,18 +1502,18 @@ func canonicalAntiPoisonJSON(value any) string {
 	}
 }
 
-func stripAntiPoisonOpenAIGuards(body map[string]any, routeKind string, ctx antiPoisonRequestContext) map[string]any {
+func stripAntiPoisonOpenAIGuards(body map[string]any, routeKind string) map[string]any {
 	stripped := deepCopyJSONMap(body)
 	switch strings.TrimSpace(routeKind) {
 	case "chat":
-		stripAntiPoisonChatGuards(stripped, ctx)
+		stripAntiPoisonChatGuards(stripped)
 	case "responses", "responses_compact":
-		stripAntiPoisonResponsesGuards(stripped, ctx)
+		stripAntiPoisonResponsesGuards(stripped)
 	}
 	return stripped
 }
 
-func stripAntiPoisonChatGuards(body map[string]any, ctx antiPoisonRequestContext) {
+func stripAntiPoisonChatGuards(body map[string]any) {
 	choices, _ := body["choices"].([]any)
 	for _, rawChoice := range choices {
 		choice, _ := rawChoice.(map[string]any)
@@ -1110,59 +1521,40 @@ func stripAntiPoisonChatGuards(body map[string]any, ctx antiPoisonRequestContext
 		if message == nil {
 			continue
 		}
-		if toolCalls, ok := message["tool_calls"].([]any); ok {
-			next := make([]any, 0, len(toolCalls))
-			for _, rawCall := range toolCalls {
-				callMap, _ := rawCall.(map[string]any)
-				functionMap, _ := callMap["function"].(map[string]any)
-				if isAntiPoisonGuardToolName(toStringValue(functionMap["name"]), ctx) {
-					continue
-				}
-				next = append(next, rawCall)
-			}
-			if len(next) > 0 {
-				message["tool_calls"] = next
-			} else {
-				delete(message, "tool_calls")
-			}
-		}
-		if functionMap, ok := message["function_call"].(map[string]any); ok && isAntiPoisonGuardToolName(toStringValue(functionMap["name"]), ctx) {
-			delete(message, "function_call")
+		if content := toStringValue(message["content"]); content != "" {
+			message["content"] = extractAntiPoisonGuardsFromText(content, antiPoisonRequestContext{}).Text
 		}
 	}
 }
 
-func stripAntiPoisonResponsesGuards(body map[string]any, ctx antiPoisonRequestContext) {
-	output, _ := body["output"].([]any)
-	next := make([]any, 0, len(output))
-	for _, rawItem := range output {
+func stripAntiPoisonResponsesGuards(body map[string]any) {
+	for _, rawItem := range anySliceValue(body["output"]) {
 		item, _ := rawItem.(map[string]any)
-		if strings.TrimSpace(toStringValue(item["type"])) == "function_call" && isAntiPoisonGuardToolName(toStringValue(item["name"]), ctx) {
+		if strings.TrimSpace(toStringValue(item["type"])) != "message" {
 			continue
 		}
-		next = append(next, rawItem)
+		for _, rawContent := range anySliceValue(item["content"]) {
+			contentMap, _ := rawContent.(map[string]any)
+			if _, exists := contentMap["text"]; exists {
+				contentMap["text"] = extractAntiPoisonGuardsFromText(toStringValue(contentMap["text"]), antiPoisonRequestContext{}).Text
+			}
+			if _, exists := contentMap["content"]; exists {
+				contentMap["content"] = extractAntiPoisonGuardsFromText(toStringValue(contentMap["content"]), antiPoisonRequestContext{}).Text
+			}
+		}
 	}
-	body["output"] = next
 }
 
-func stripAntiPoisonAnthropicGuards(body map[string]any, ctx antiPoisonRequestContext) map[string]any {
+func stripAntiPoisonAnthropicGuards(body map[string]any) map[string]any {
 	stripped := deepCopyJSONMap(body)
-	content, _ := stripped["content"].([]any)
-	next := make([]any, 0, len(content))
-	hasToolUse := false
-	for _, rawBlock := range content {
+	for _, rawBlock := range anySliceValue(stripped["content"]) {
 		block, _ := rawBlock.(map[string]any)
-		if strings.TrimSpace(toStringValue(block["type"])) == "tool_use" {
-			if isAntiPoisonGuardToolName(toStringValue(block["name"]), ctx) {
-				continue
-			}
-			hasToolUse = true
+		if _, exists := block["text"]; exists {
+			block["text"] = extractAntiPoisonGuardsFromText(toStringValue(block["text"]), antiPoisonRequestContext{}).Text
 		}
-		next = append(next, rawBlock)
-	}
-	stripped["content"] = next
-	if strings.TrimSpace(toStringValue(stripped["stop_reason"])) == "tool_use" && !hasToolUse {
-		stripped["stop_reason"] = "end_turn"
+		if _, exists := block["thinking"]; exists {
+			block["thinking"] = extractAntiPoisonGuardsFromText(toStringValue(block["thinking"]), antiPoisonRequestContext{}).Text
+		}
 	}
 	return stripped
 }
@@ -1170,12 +1562,4 @@ func stripAntiPoisonAnthropicGuards(body map[string]any, ctx antiPoisonRequestCo
 func sha256Hex(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
-}
-
-func tailString(value string, length int) string {
-	value = strings.TrimSpace(value)
-	if length <= 0 || len(value) <= length {
-		return value
-	}
-	return value[len(value)-length:]
 }

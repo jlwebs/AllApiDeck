@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -21,9 +22,15 @@ type antiPoisonStreamToolState struct {
 	Key       string
 	Order     int
 	Index     int
+	Kind      string
 	Name      string
 	CallID    string
 	Arguments string
+}
+
+type antiPoisonStreamTextState struct {
+	Key  string
+	Text string
 }
 
 func parseAdvancedProxySSEEvents(raw []byte) ([]advancedProxySSEEvent, error) {
@@ -112,7 +119,7 @@ func setAdvancedProxySSEJSONPayload(event *advancedProxySSEEvent, data map[strin
 func antiPoisonStreamValidationResult(calls []antiPoisonToolCall, ctx antiPoisonRequestContext) antiPoisonValidationResult {
 	return validateAndStripAntiPoisonToolCalls([]byte("{}"), calls, ctx, func() []byte {
 		return []byte("{}")
-	})
+	}, 0)
 }
 
 func appendAntiPoisonStreamOperation(records []antiPoisonOperationRecord, route string, provider string, channel string, rule string, before string, after string, count int, blocked bool, reason string) []antiPoisonOperationRecord {
@@ -146,7 +153,7 @@ func appendAntiPoisonStreamValidationOps(records []antiPoisonOperationRecord, re
 			route,
 			provider,
 			channel,
-			"流式 guard toolcall 剥离",
+			"流式 guard JSON 剥离",
 			fmt.Sprintf("real=%d guard=%d", result.RealCount, result.GuardCount),
 			"guard stripped before client",
 			result.RemovedGuards,
@@ -265,7 +272,19 @@ func sanitizeAntiPoisonOpenAIChatStreamBody(raw []byte, ctx antiPoisonRequestCon
 		return raw, antiPoisonValidationResult{Applied: true, Body: raw, Blocked: antiPoisonShouldBlock(ctx.Config), Reason: "invalid_stream_sse"}, err
 	}
 	states := map[string]*antiPoisonStreamToolState{}
+	textStates := map[string]*antiPoisonStreamTextState{}
 	order := 0
+	resolveTextState := func(key string) *antiPoisonStreamTextState {
+		if strings.TrimSpace(key) == "" {
+			key = fmt.Sprintf("choice:%d", len(textStates))
+		}
+		state, exists := textStates[key]
+		if !exists {
+			state = &antiPoisonStreamTextState{Key: key}
+			textStates[key] = state
+		}
+		return state
+	}
 	for _, event := range events {
 		data, ok := advancedProxySSEJSONPayload(event)
 		if !ok {
@@ -284,6 +303,9 @@ func sanitizeAntiPoisonOpenAIChatStreamBody(raw []byte, ctx antiPoisonRequestCon
 			delta, _ := choice["delta"].(map[string]any)
 			if delta == nil {
 				continue
+			}
+			if content := toStringValue(delta["content"]); content != "" {
+				resolveTextState(fmt.Sprintf("choice:%d", choiceIndex)).Text += content
 			}
 			toolCalls, _ := delta["tool_calls"].([]any)
 			for toolOffset, rawCall := range toolCalls {
@@ -318,23 +340,30 @@ func sanitizeAntiPoisonOpenAIChatStreamBody(raw []byte, ctx antiPoisonRequestCon
 			}
 		}
 	}
-	calls, guardKeys := antiPoisonStreamStatesToCalls(states, ctx, "chat.tool_call")
-	result := antiPoisonStreamValidationResult(calls, ctx)
+	calls := antiPoisonStreamStatesToCalls(states, "chat.tool_call")
+	guardCalls, guardCount := antiPoisonStreamGuardCallsFromTextStates(textStates, ctx)
+	if guardCount == 0 {
+		guardCalls, guardCount = antiPoisonStreamGuardCallsFromRawEvents(events, ctx)
+	}
+	allCalls := append(calls, guardCalls...)
+	result := validateAndStripAntiPoisonToolCalls([]byte("{}"), allCalls, ctx, func() []byte {
+		return []byte("{}")
+	}, guardCount)
 	result.Body = raw
-	result.RemovedGuards = len(guardKeys)
+	result.RemovedGuards = guardCount
 	if result.Blocked {
 		return raw, result, nil
 	}
-	if len(guardKeys) == 0 {
+	if guardCount == 0 {
 		result.Body = raw
 		return raw, result, nil
 	}
-	sanitized := stripAntiPoisonOpenAIChatStreamGuardEvents(events, guardKeys, result.RealCount == 0)
+	sanitized := stripAntiPoisonOpenAIChatStreamGuardEvents(events, result.RealCount == 0, ctx)
 	result.Body = sanitized
 	return sanitized, result, nil
 }
 
-func antiPoisonStreamStatesToCalls(states map[string]*antiPoisonStreamToolState, ctx antiPoisonRequestContext, kind string) ([]antiPoisonToolCall, map[string]bool) {
+func antiPoisonStreamStatesToCalls(states map[string]*antiPoisonStreamToolState, kind string) []antiPoisonToolCall {
 	items := make([]*antiPoisonStreamToolState, 0, len(states))
 	for _, state := range states {
 		if state == nil || strings.TrimSpace(state.Name) == "" {
@@ -346,29 +375,144 @@ func antiPoisonStreamStatesToCalls(states map[string]*antiPoisonStreamToolState,
 		return items[i].Order < items[j].Order
 	})
 	calls := make([]antiPoisonToolCall, 0, len(items))
-	guardKeys := map[string]bool{}
+	dedupeIndex := map[string]int{}
 	for _, state := range items {
-		isGuard := isAntiPoisonGuardToolName(state.Name, ctx)
-		if isGuard {
-			guardKeys[state.Key] = true
+		callKind := strings.TrimSpace(state.Kind)
+		if callKind == "" {
+			callKind = kind
 		}
-		calls = append(calls, antiPoisonToolCall{
-			Kind:          kind,
+		call := antiPoisonToolCall{
+			Kind:          callKind,
 			Name:          state.Name,
 			CallID:        state.CallID,
 			ArgumentsText: state.Arguments,
 			ToolType:      classifyAntiPoisonToolName(state.Name),
-			IsGuard:       isGuard,
-		})
+			IsGuard:       false,
+		}
+		if key := antiPoisonStreamToolCallDedupeKey(call); key != "" {
+			if index, exists := dedupeIndex[key]; exists {
+				calls[index] = mergeAntiPoisonStreamToolCall(calls[index], call)
+				continue
+			}
+			dedupeIndex[key] = len(calls)
+		}
+		calls = append(calls, call)
 	}
-	return calls, guardKeys
+	return calls
 }
 
-func stripAntiPoisonOpenAIChatStreamGuardEvents(events []advancedProxySSEEvent, guardKeys map[string]bool, guardOnly bool) []byte {
+func antiPoisonStreamToolCallDedupeKey(call antiPoisonToolCall) string {
+	if callID := strings.TrimSpace(call.CallID); callID != "" {
+		return "call:" + callID
+	}
+	name := strings.TrimSpace(call.Name)
+	args := canonicalAntiPoisonArgumentText(call.ArgumentsText)
+	if name != "" && args != "" {
+		return "nameargs:" + name + "|" + args
+	}
+	return ""
+}
+
+func mergeAntiPoisonStreamToolCall(current antiPoisonToolCall, next antiPoisonToolCall) antiPoisonToolCall {
+	if strings.TrimSpace(current.Name) == "" {
+		current.Name = next.Name
+	}
+	if strings.TrimSpace(current.CallID) == "" {
+		current.CallID = next.CallID
+	}
+	if strings.TrimSpace(current.ToolType) == "" {
+		current.ToolType = next.ToolType
+	}
+	currentArgs := strings.TrimSpace(current.ArgumentsText)
+	nextArgs := strings.TrimSpace(next.ArgumentsText)
+	if currentArgs == "" || (nextArgs != "" && len(nextArgs) > len(currentArgs)) {
+		current.ArgumentsText = next.ArgumentsText
+	}
+	return current
+}
+
+func antiPoisonStreamGuardCallsFromTextStates(states map[string]*antiPoisonStreamTextState, ctx antiPoisonRequestContext) ([]antiPoisonToolCall, int) {
+	keys := make([]string, 0, len(states))
+	for key := range states {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	guards := make([]antiPoisonGuardPayload, 0, 4)
+	for _, key := range keys {
+		state := states[key]
+		if state == nil || strings.TrimSpace(state.Text) == "" {
+			continue
+		}
+		extracted := extractAntiPoisonGuardsFromText(state.Text, ctx)
+		guards = append(guards, extracted.GuardBlocks...)
+	}
+	return antiPoisonGuardPayloadsToToolCalls(guards), len(guards)
+}
+
+func extractAntiPoisonGuardsFromEscapedSSEPayload(payload string, ctx antiPoisonRequestContext) antiPoisonTextGuardExtraction {
+	payload = firstNonEmptyExact(payload)
+	if strings.TrimSpace(payload) == "" || !strings.Contains(payload, antiPoisonGuardJSONOpenTag) {
+		return antiPoisonTextGuardExtraction{Text: payload}
+	}
+	pattern := regexp.MustCompile(`(?s)` + regexp.QuoteMeta(antiPoisonGuardJSONOpenTag) + `.*?` + regexp.QuoteMeta(antiPoisonGuardJSONCloseTag))
+	guards := make([]antiPoisonGuardPayload, 0, 4)
+	stripped := pattern.ReplaceAllStringFunc(payload, func(match string) string {
+		decoded := ""
+		if err := json.Unmarshal([]byte(`"`+match+`"`), &decoded); err == nil {
+			extracted := extractAntiPoisonGuardsFromText(decoded, ctx)
+			guards = append(guards, extracted.GuardBlocks...)
+		}
+		return ""
+	})
+	return antiPoisonTextGuardExtraction{
+		Text:        stripped,
+		GuardCount:  len(guards),
+		GuardBlocks: guards,
+	}
+}
+
+func antiPoisonStreamGuardCallsFromRawEvents(events []advancedProxySSEEvent, ctx antiPoisonRequestContext) ([]antiPoisonToolCall, int) {
+	guards := make([]antiPoisonGuardPayload, 0, 4)
+	for _, event := range events {
+		payload := advancedProxySSEEventPayload(event)
+		if strings.TrimSpace(payload) == "" || payload == "[DONE]" || !strings.Contains(payload, antiPoisonGuardJSONOpenTag) {
+			continue
+		}
+		if _, ok := advancedProxySSEJSONPayload(event); ok {
+			continue
+		}
+		extracted := extractAntiPoisonGuardsFromEscapedSSEPayload(payload, ctx)
+		guards = append(guards, extracted.GuardBlocks...)
+	}
+	return antiPoisonGuardPayloadsToToolCalls(guards), len(guards)
+}
+
+func stripAntiPoisonGuardJSONFromSSEPayload(payload string, ctx antiPoisonRequestContext) string {
+	if strings.TrimSpace(payload) == "" || payload == "[DONE]" || !strings.Contains(payload, antiPoisonGuardJSONOpenTag) {
+		return payload
+	}
+	extracted := extractAntiPoisonGuardsFromEscapedSSEPayload(payload, ctx)
+	if extracted.GuardCount <= 0 {
+		return payload
+	}
+	return extracted.Text
+}
+
+func stripAntiPoisonGuardJSONFromSSEEvent(event *advancedProxySSEEvent, ctx antiPoisonRequestContext) {
+	if event == nil {
+		return
+	}
+	for index, part := range event.Data {
+		event.Data[index] = stripAntiPoisonGuardJSONFromSSEPayload(part, ctx)
+	}
+}
+
+func stripAntiPoisonOpenAIChatStreamGuardEvents(events []advancedProxySSEEvent, guardOnly bool, ctx antiPoisonRequestContext) []byte {
 	next := make([]advancedProxySSEEvent, 0, len(events))
 	for _, event := range events {
 		data, ok := advancedProxySSEJSONPayload(event)
 		if !ok {
+			stripAntiPoisonGuardJSONFromSSEEvent(&event, ctx)
 			next = append(next, event)
 			continue
 		}
@@ -378,30 +522,11 @@ func stripAntiPoisonOpenAIChatStreamGuardEvents(events []advancedProxySSEEvent, 
 			if choice == nil {
 				continue
 			}
-			choiceIndex := toIntValue(choice["index"])
-			if _, exists := choice["index"]; !exists {
-				choiceIndex = choiceOffset
-			}
+			_ = choiceOffset
 			delta, _ := choice["delta"].(map[string]any)
 			if delta != nil {
-				if toolCalls, ok := delta["tool_calls"].([]any); ok && len(toolCalls) > 0 {
-					filtered := make([]any, 0, len(toolCalls))
-					for toolOffset, rawCall := range toolCalls {
-						callMap, _ := rawCall.(map[string]any)
-						toolIndex := toIntValue(callMap["index"])
-						if _, exists := callMap["index"]; !exists {
-							toolIndex = toolOffset
-						}
-						if guardKeys[fmt.Sprintf("%d:%d", choiceIndex, toolIndex)] {
-							continue
-						}
-						filtered = append(filtered, rawCall)
-					}
-					if len(filtered) == 0 {
-						delete(delta, "tool_calls")
-					} else {
-						delta["tool_calls"] = filtered
-					}
+				if content := toStringValue(delta["content"]); content != "" {
+					delta["content"] = extractAntiPoisonGuardsFromText(content, ctx).Text
 				}
 			}
 			if guardOnly && strings.TrimSpace(toStringValue(choice["finish_reason"])) == "tool_calls" {
@@ -409,6 +534,7 @@ func stripAntiPoisonOpenAIChatStreamGuardEvents(events []advancedProxySSEEvent, 
 			}
 		}
 		setAdvancedProxySSEJSONPayload(&event, data)
+		stripAntiPoisonGuardJSONFromSSEEvent(&event, ctx)
 		next = append(next, event)
 	}
 	return encodeAdvancedProxySSEEvents(next)
@@ -420,6 +546,7 @@ func sanitizeAntiPoisonOpenAIResponsesStreamBody(raw []byte, ctx antiPoisonReque
 		return raw, antiPoisonValidationResult{Applied: true, Body: raw, Blocked: antiPoisonShouldBlock(ctx.Config), Reason: "invalid_stream_sse"}, err
 	}
 	states := map[string]*antiPoisonStreamToolState{}
+	textStates := map[string]*antiPoisonStreamTextState{}
 	order := 0
 	resolveState := func(key string) *antiPoisonStreamToolState {
 		if strings.TrimSpace(key) == "" {
@@ -433,6 +560,17 @@ func sanitizeAntiPoisonOpenAIResponsesStreamBody(raw []byte, ctx antiPoisonReque
 		}
 		return state
 	}
+	resolveTextState := func(key string) *antiPoisonStreamTextState {
+		if strings.TrimSpace(key) == "" {
+			key = fmt.Sprintf("text:%d", len(textStates))
+		}
+		state, exists := textStates[key]
+		if !exists {
+			state = &antiPoisonStreamTextState{Key: key}
+			textStates[key] = state
+		}
+		return state
+	}
 	for _, event := range events {
 		data, ok := advancedProxySSEJSONPayload(event)
 		if !ok {
@@ -442,17 +580,39 @@ func sanitizeAntiPoisonOpenAIResponsesStreamBody(raw []byte, ctx antiPoisonReque
 		itemMap, _ := data["item"].(map[string]any)
 		switch eventType {
 		case "response.output_item.added", "response.output_item.done":
-			if strings.TrimSpace(toStringValue(itemMap["type"])) != "function_call" {
+			itemType := strings.TrimSpace(toStringValue(itemMap["type"]))
+			if itemType == "function_call" {
+				state := resolveState(resolveAntiPoisonResponsesStreamToolKey(data, itemMap))
+				state.Kind = firstNonEmpty("responses.function_call", state.Kind)
+				state.CallID = firstNonEmpty(strings.TrimSpace(toStringValue(itemMap["call_id"])), state.CallID, strings.TrimSpace(toStringValue(itemMap["id"])))
+				state.Name = firstNonEmpty(strings.TrimSpace(toStringValue(itemMap["name"])), state.Name)
+				if args := stringifyAntiPoisonStreamArguments(itemMap["arguments"]); args != "" {
+					state.Arguments = accumulateAdvancedProxyToolArguments(state.Arguments, args)
+				}
 				continue
 			}
-			state := resolveState(resolveAntiPoisonResponsesStreamToolKey(data, itemMap))
-			state.CallID = firstNonEmpty(strings.TrimSpace(toStringValue(itemMap["call_id"])), state.CallID, strings.TrimSpace(toStringValue(itemMap["id"])))
-			state.Name = firstNonEmpty(strings.TrimSpace(toStringValue(itemMap["name"])), state.Name)
-			if args := stringifyAntiPoisonStreamArguments(itemMap["arguments"]); args != "" {
-				state.Arguments = accumulateAdvancedProxyToolArguments(state.Arguments, args)
+			if itemType == "web_search_call" {
+				state := resolveState(resolveAntiPoisonResponsesStreamToolKey(data, itemMap))
+				state.Kind = firstNonEmpty("responses.web_search_call", state.Kind)
+				state.CallID = firstNonEmpty(strings.TrimSpace(toStringValue(itemMap["id"])), state.CallID, strings.TrimSpace(toStringValue(data["item_id"])))
+				state.Name = firstNonEmpty("web_search_call", state.Name)
+				if args := stringifyAntiPoisonStreamArguments(itemMap["action"]); args != "" {
+					state.Arguments = accumulateAdvancedProxyToolArguments(state.Arguments, args)
+				}
+				continue
+			}
+			if itemType == "message" {
+				for contentIndex, rawContent := range anySliceValue(itemMap["content"]) {
+					contentMap, _ := rawContent.(map[string]any)
+					text := firstNonEmptyExact(toStringValue(contentMap["text"]), toStringValue(contentMap["content"]))
+					if text != "" {
+						resolveTextState(fmt.Sprintf("%s:content:%d", resolveAntiPoisonResponsesStreamToolKey(data, itemMap), contentIndex)).Text += text
+					}
+				}
 			}
 		case "response.function_call_arguments.delta", "response.function_call_arguments.done":
 			state := resolveState(resolveAntiPoisonResponsesStreamToolKey(data, itemMap))
+			state.Kind = firstNonEmpty("responses.function_call", state.Kind)
 			state.CallID = firstNonEmpty(strings.TrimSpace(toStringValue(data["call_id"])), state.CallID, strings.TrimSpace(toStringValue(data["item_id"])))
 			state.Name = firstNonEmpty(strings.TrimSpace(toStringValue(data["name"])), state.Name, strings.TrimSpace(toStringValue(itemMap["name"])))
 			if delta := toStringValue(data["delta"]); delta != "" {
@@ -464,33 +624,64 @@ func sanitizeAntiPoisonOpenAIResponsesStreamBody(raw []byte, ctx antiPoisonReque
 			if args := stringifyAntiPoisonStreamArguments(itemMap["arguments"]); args != "" {
 				state.Arguments = accumulateAdvancedProxyToolArguments(state.Arguments, args)
 			}
+		case "response.output_text.delta", "response.output_text.done", "response.refusal.delta", "response.refusal.done":
+			text := firstNonEmptyExact(toStringValue(data["delta"]), toStringValue(data["text"]))
+			if text != "" {
+				key := fmt.Sprintf("item:%s:content:%s", strings.TrimSpace(toStringValue(data["item_id"])), strings.TrimSpace(toStringValue(data["content_index"])))
+				resolveTextState(key).Text += text
+			}
 		case "response.completed":
 			responseMap, _ := data["response"].(map[string]any)
 			for _, rawItem := range anySliceValue(responseMap["output"]) {
 				outputItem, _ := rawItem.(map[string]any)
-				if strings.TrimSpace(toStringValue(outputItem["type"])) != "function_call" {
-					continue
-				}
-				state := resolveState(resolveAntiPoisonResponsesStreamToolKey(map[string]any{}, outputItem))
-				state.CallID = firstNonEmpty(strings.TrimSpace(toStringValue(outputItem["call_id"])), state.CallID, strings.TrimSpace(toStringValue(outputItem["id"])))
-				state.Name = firstNonEmpty(strings.TrimSpace(toStringValue(outputItem["name"])), state.Name)
-				if args := stringifyAntiPoisonStreamArguments(outputItem["arguments"]); args != "" {
-					state.Arguments = accumulateAdvancedProxyToolArguments(state.Arguments, args)
+				switch strings.TrimSpace(toStringValue(outputItem["type"])) {
+				case "function_call":
+					state := resolveState(resolveAntiPoisonResponsesStreamToolKey(map[string]any{}, outputItem))
+					state.Kind = firstNonEmpty("responses.function_call", state.Kind)
+					state.CallID = firstNonEmpty(strings.TrimSpace(toStringValue(outputItem["call_id"])), state.CallID, strings.TrimSpace(toStringValue(outputItem["id"])))
+					state.Name = firstNonEmpty(strings.TrimSpace(toStringValue(outputItem["name"])), state.Name)
+					if args := stringifyAntiPoisonStreamArguments(outputItem["arguments"]); args != "" {
+						state.Arguments = accumulateAdvancedProxyToolArguments(state.Arguments, args)
+					}
+				case "web_search_call":
+					state := resolveState(resolveAntiPoisonResponsesStreamToolKey(map[string]any{}, outputItem))
+					state.Kind = firstNonEmpty("responses.web_search_call", state.Kind)
+					state.CallID = firstNonEmpty(strings.TrimSpace(toStringValue(outputItem["id"])), state.CallID)
+					state.Name = firstNonEmpty("web_search_call", state.Name)
+					if args := stringifyAntiPoisonStreamArguments(outputItem["action"]); args != "" {
+						state.Arguments = accumulateAdvancedProxyToolArguments(state.Arguments, args)
+					}
+				case "message":
+					itemKey := resolveAntiPoisonResponsesStreamToolKey(map[string]any{}, outputItem)
+					for contentIndex, rawContent := range anySliceValue(outputItem["content"]) {
+						contentMap, _ := rawContent.(map[string]any)
+						text := firstNonEmptyExact(toStringValue(contentMap["text"]), toStringValue(contentMap["content"]))
+						if text != "" {
+							resolveTextState(fmt.Sprintf("%s:content:%d", itemKey, contentIndex)).Text += text
+						}
+					}
 				}
 			}
 		}
 	}
-	calls, guardKeys := antiPoisonStreamStatesToCalls(states, ctx, "responses.function_call")
-	result := antiPoisonStreamValidationResult(calls, ctx)
+	calls := antiPoisonStreamStatesToCalls(states, "responses.function_call")
+	guardCalls, guardCount := antiPoisonStreamGuardCallsFromTextStates(textStates, ctx)
+	if guardCount == 0 {
+		guardCalls, guardCount = antiPoisonStreamGuardCallsFromRawEvents(events, ctx)
+	}
+	allCalls := append(calls, guardCalls...)
+	result := validateAndStripAntiPoisonToolCalls([]byte("{}"), allCalls, ctx, func() []byte {
+		return []byte("{}")
+	}, guardCount)
 	result.Body = raw
-	result.RemovedGuards = len(guardKeys)
+	result.RemovedGuards = guardCount
 	if result.Blocked {
 		return raw, result, nil
 	}
-	if len(guardKeys) == 0 {
+	if guardCount == 0 {
 		return raw, result, nil
 	}
-	sanitized := stripAntiPoisonOpenAIResponsesStreamGuardEvents(events, guardKeys)
+	sanitized := stripAntiPoisonOpenAIResponsesStreamGuardEvents(events, ctx)
 	result.Body = sanitized
 	return sanitized, result, nil
 }
@@ -540,11 +731,12 @@ func anySliceValue(value any) []any {
 	return nil
 }
 
-func stripAntiPoisonOpenAIResponsesStreamGuardEvents(events []advancedProxySSEEvent, guardKeys map[string]bool) []byte {
+func stripAntiPoisonOpenAIResponsesStreamGuardEvents(events []advancedProxySSEEvent, ctx antiPoisonRequestContext) []byte {
 	next := make([]advancedProxySSEEvent, 0, len(events))
 	for _, event := range events {
 		data, ok := advancedProxySSEJSONPayload(event)
 		if !ok {
+			stripAntiPoisonGuardJSONFromSSEEvent(&event, ctx)
 			next = append(next, event)
 			continue
 		}
@@ -552,32 +744,55 @@ func stripAntiPoisonOpenAIResponsesStreamGuardEvents(events []advancedProxySSEEv
 		itemMap, _ := data["item"].(map[string]any)
 		switch eventType {
 		case "response.output_item.added", "response.output_item.done":
-			if strings.TrimSpace(toStringValue(itemMap["type"])) == "function_call" && guardKeys[resolveAntiPoisonResponsesStreamToolKey(data, itemMap)] {
-				continue
+			if strings.TrimSpace(toStringValue(itemMap["type"])) == "message" {
+				for _, rawContent := range anySliceValue(itemMap["content"]) {
+					contentMap, _ := rawContent.(map[string]any)
+					if _, exists := contentMap["text"]; exists {
+						contentMap["text"] = extractAntiPoisonGuardsFromText(toStringValue(contentMap["text"]), ctx).Text
+					}
+					if _, exists := contentMap["content"]; exists {
+						contentMap["content"] = extractAntiPoisonGuardsFromText(toStringValue(contentMap["content"]), ctx).Text
+					}
+				}
 			}
-		case "response.function_call_arguments.delta", "response.function_call_arguments.done":
-			if guardKeys[resolveAntiPoisonResponsesStreamToolKey(data, itemMap)] {
-				continue
+		case "response.output_text.delta", "response.output_text.done", "response.refusal.delta", "response.refusal.done":
+			if value := firstNonEmptyExact(toStringValue(data["delta"]), toStringValue(data["text"])); value != "" {
+				clean := extractAntiPoisonGuardsFromText(value, ctx).Text
+				if _, exists := data["delta"]; exists {
+					data["delta"] = clean
+				}
+				if _, exists := data["text"]; exists {
+					data["text"] = clean
+				}
 			}
 		case "response.completed":
 			responseMap, _ := data["response"].(map[string]any)
 			if responseMap != nil {
-				responseMap["output"] = stripAntiPoisonResponsesStreamOutput(responseMap["output"], guardKeys)
+				responseMap["output"] = stripAntiPoisonResponsesStreamOutput(responseMap["output"], ctx)
 			}
 		}
 		setAdvancedProxySSEJSONPayload(&event, data)
+		stripAntiPoisonGuardJSONFromSSEEvent(&event, ctx)
 		next = append(next, event)
 	}
 	return encodeAdvancedProxySSEEvents(next)
 }
 
-func stripAntiPoisonResponsesStreamOutput(rawOutput any, guardKeys map[string]bool) []any {
+func stripAntiPoisonResponsesStreamOutput(rawOutput any, ctx antiPoisonRequestContext) []any {
 	output := anySliceValue(rawOutput)
 	next := make([]any, 0, len(output))
 	for _, rawItem := range output {
 		item, _ := rawItem.(map[string]any)
-		if strings.TrimSpace(toStringValue(item["type"])) == "function_call" && guardKeys[resolveAntiPoisonResponsesStreamToolKey(map[string]any{}, item)] {
-			continue
+		if strings.TrimSpace(toStringValue(item["type"])) == "message" {
+			for _, rawContent := range anySliceValue(item["content"]) {
+				contentMap, _ := rawContent.(map[string]any)
+				if _, exists := contentMap["text"]; exists {
+					contentMap["text"] = extractAntiPoisonGuardsFromText(toStringValue(contentMap["text"]), ctx).Text
+				}
+				if _, exists := contentMap["content"]; exists {
+					contentMap["content"] = extractAntiPoisonGuardsFromText(toStringValue(contentMap["content"]), ctx).Text
+				}
+			}
 		}
 		next = append(next, rawItem)
 	}
@@ -594,6 +809,7 @@ func sanitizeAntiPoisonAnthropicStreamBody(raw []byte, ctx antiPoisonRequestCont
 		return raw, antiPoisonValidationResult{Applied: true, Body: raw, Blocked: antiPoisonShouldBlock(ctx.Config), Reason: "invalid_stream_sse"}, err
 	}
 	states := map[int]*antiPoisonStreamToolState{}
+	textStates := map[int]*antiPoisonStreamTextState{}
 	order := 0
 	for _, event := range events {
 		data, ok := advancedProxySSEJSONPayload(event)
@@ -605,33 +821,57 @@ func sanitizeAntiPoisonAnthropicStreamBody(raw []byte, ctx antiPoisonRequestCont
 		switch eventType {
 		case "content_block_start":
 			block, _ := data["content_block"].(map[string]any)
-			if strings.TrimSpace(toStringValue(block["type"])) != "tool_use" {
+			blockType := strings.TrimSpace(toStringValue(block["type"]))
+			if blockType == "tool_use" {
+				state := states[index]
+				if state == nil {
+					state = &antiPoisonStreamToolState{Key: fmt.Sprintf("%d", index), Order: order, Index: index}
+					order++
+					states[index] = state
+				}
+				state.CallID = firstNonEmpty(strings.TrimSpace(toStringValue(block["id"])), state.CallID)
+				state.Name = firstNonEmpty(strings.TrimSpace(toStringValue(block["name"])), state.Name)
+				if args := stringifyAntiPoisonStreamArguments(block["input"]); args != "" {
+					state.Arguments = accumulateAdvancedProxyToolArguments(state.Arguments, args)
+				}
 				continue
 			}
-			state := states[index]
-			if state == nil {
-				state = &antiPoisonStreamToolState{Key: fmt.Sprintf("%d", index), Order: order, Index: index}
-				order++
-				states[index] = state
-			}
-			state.CallID = firstNonEmpty(strings.TrimSpace(toStringValue(block["id"])), state.CallID)
-			state.Name = firstNonEmpty(strings.TrimSpace(toStringValue(block["name"])), state.Name)
-			if args := stringifyAntiPoisonStreamArguments(block["input"]); args != "" {
-				state.Arguments = accumulateAdvancedProxyToolArguments(state.Arguments, args)
+			if blockType == "text" || blockType == "thinking" || blockType == "redacted_thinking" {
+				state := textStates[index]
+				if state == nil {
+					state = &antiPoisonStreamTextState{Key: fmt.Sprintf("%d", index)}
+					textStates[index] = state
+				}
+				text := firstNonEmptyExact(toStringValue(block["text"]), toStringValue(block["thinking"]))
+				if text != "" {
+					state.Text += text
+				}
 			}
 		case "content_block_delta":
 			delta, _ := data["delta"].(map[string]any)
-			if strings.TrimSpace(toStringValue(delta["type"])) != "input_json_delta" {
+			deltaType := strings.TrimSpace(toStringValue(delta["type"]))
+			if deltaType == "input_json_delta" {
+				state := states[index]
+				if state == nil {
+					state = &antiPoisonStreamToolState{Key: fmt.Sprintf("%d", index), Order: order, Index: index}
+					order++
+					states[index] = state
+				}
+				if partial := toStringValue(delta["partial_json"]); partial != "" {
+					state.Arguments = accumulateAdvancedProxyToolArguments(state.Arguments, partial)
+				}
 				continue
 			}
-			state := states[index]
-			if state == nil {
-				state = &antiPoisonStreamToolState{Key: fmt.Sprintf("%d", index), Order: order, Index: index}
-				order++
-				states[index] = state
-			}
-			if partial := toStringValue(delta["partial_json"]); partial != "" {
-				state.Arguments = accumulateAdvancedProxyToolArguments(state.Arguments, partial)
+			if deltaType == "text_delta" {
+				state := textStates[index]
+				if state == nil {
+					state = &antiPoisonStreamTextState{Key: fmt.Sprintf("%d", index)}
+					textStates[index] = state
+				}
+				text := firstNonEmptyExact(toStringValue(delta["text"]), toStringValue(data["text"]))
+				if text != "" {
+					state.Text += text
+				}
 			}
 		}
 	}
@@ -642,40 +882,65 @@ func sanitizeAntiPoisonAnthropicStreamBody(raw []byte, ctx antiPoisonRequestCont
 		}
 		stateMap[fmt.Sprintf("%d", index)] = state
 	}
-	calls, guardKeys := antiPoisonStreamStatesToCalls(stateMap, ctx, "anthropic.tool_use")
-	result := antiPoisonStreamValidationResult(calls, ctx)
+	textStateMap := map[string]*antiPoisonStreamTextState{}
+	for index, state := range textStates {
+		if state == nil {
+			continue
+		}
+		textStateMap[fmt.Sprintf("%d", index)] = state
+	}
+	calls := antiPoisonStreamStatesToCalls(stateMap, "anthropic.tool_use")
+	guardCalls, guardCount := antiPoisonStreamGuardCallsFromTextStates(textStateMap, ctx)
+	if guardCount == 0 {
+		guardCalls, guardCount = antiPoisonStreamGuardCallsFromRawEvents(events, ctx)
+	}
+	allCalls := append(calls, guardCalls...)
+	result := validateAndStripAntiPoisonToolCalls([]byte("{}"), allCalls, ctx, func() []byte {
+		return []byte("{}")
+	}, guardCount)
 	result.Body = raw
-	result.RemovedGuards = len(guardKeys)
+	result.RemovedGuards = guardCount
 	if result.Blocked {
 		return raw, result, nil
 	}
-	if len(guardKeys) == 0 {
+	if guardCount == 0 {
 		return raw, result, nil
 	}
-	sanitized := stripAntiPoisonAnthropicStreamGuardEvents(events, guardKeys, result.RealCount == 0)
+	sanitized := stripAntiPoisonAnthropicStreamGuardEvents(events, result.RealCount == 0, ctx)
 	result.Body = sanitized
 	return sanitized, result, nil
 }
 
-func stripAntiPoisonAnthropicStreamGuardEvents(events []advancedProxySSEEvent, guardKeys map[string]bool, guardOnly bool) []byte {
+func stripAntiPoisonAnthropicStreamGuardEvents(events []advancedProxySSEEvent, guardOnly bool, ctx antiPoisonRequestContext) []byte {
 	next := make([]advancedProxySSEEvent, 0, len(events))
 	for _, event := range events {
 		data, ok := advancedProxySSEJSONPayload(event)
 		if !ok {
+			stripAntiPoisonGuardJSONFromSSEEvent(&event, ctx)
 			next = append(next, event)
 			continue
 		}
 		eventType := firstNonEmpty(strings.TrimSpace(event.Event), strings.TrimSpace(toStringValue(data["type"])))
-		indexKey := fmt.Sprintf("%d", toIntValue(data["index"]))
 		switch eventType {
 		case "content_block_start":
 			block, _ := data["content_block"].(map[string]any)
-			if strings.TrimSpace(toStringValue(block["type"])) == "tool_use" && guardKeys[indexKey] {
-				continue
+			blockType := strings.TrimSpace(toStringValue(block["type"]))
+			if blockType == "text" || blockType == "thinking" || blockType == "redacted_thinking" {
+				if _, exists := block["text"]; exists {
+					block["text"] = extractAntiPoisonGuardsFromText(toStringValue(block["text"]), ctx).Text
+				}
+				if _, exists := block["thinking"]; exists {
+					block["thinking"] = extractAntiPoisonGuardsFromText(toStringValue(block["thinking"]), ctx).Text
+				}
 			}
-		case "content_block_delta", "content_block_stop":
-			if guardKeys[indexKey] {
-				continue
+		case "content_block_delta":
+			if delta, _ := data["delta"].(map[string]any); delta != nil && strings.TrimSpace(toStringValue(delta["type"])) == "text_delta" {
+				if _, exists := delta["text"]; exists {
+					delta["text"] = extractAntiPoisonGuardsFromText(toStringValue(delta["text"]), ctx).Text
+				}
+			}
+			if _, exists := data["text"]; exists {
+				data["text"] = extractAntiPoisonGuardsFromText(toStringValue(data["text"]), ctx).Text
 			}
 		case "message_delta":
 			if guardOnly {
@@ -685,6 +950,7 @@ func stripAntiPoisonAnthropicStreamGuardEvents(events []advancedProxySSEEvent, g
 			}
 		}
 		setAdvancedProxySSEJSONPayload(&event, data)
+		stripAntiPoisonGuardJSONFromSSEEvent(&event, ctx)
 		next = append(next, event)
 	}
 	return encodeAdvancedProxySSEEvents(next)
@@ -698,7 +964,18 @@ func readAndPrepareAntiPoisonOpenAIStream(streamBody io.Reader, recordContext *a
 	if recordContext == nil {
 		return raw, antiPoisonValidationResult{Body: raw}, nil
 	}
-	route := firstNonEmpty(recordContext.ClientRoute, recordContext.OutboundRoute, recordContext.AntiPoisonCtx.RouteKind)
+	recordContext.UpstreamResponseRaw = string(raw)
+	recordContext.UpstreamResponsePreview = summarizeAdvancedProxyRawStreamPreview(raw)
+	recordContext.UpstreamToolCalls, recordContext.UpstreamToolArgsPreview, recordContext.UpstreamAssistantPreview, recordContext.UpstreamLatestObserved = summarizeAdvancedProxyRawStreamFeedbackContext(raw, recordContext.ObservedFormat)
+	route := firstNonEmpty(
+		normalizeAdvancedProxyObservedFormat(recordContext.ObservedFormat),
+		normalizeAdvancedProxyObservedFormat(recordContext.OutboundRoute),
+		normalizeAdvancedProxyObservedFormat(recordContext.ClientRoute),
+		normalizeAdvancedProxyObservedFormat(recordContext.AntiPoisonCtx.RouteKind),
+		recordContext.OutboundRoute,
+		recordContext.ClientRoute,
+		recordContext.AntiPoisonCtx.RouteKind,
+	)
 	provider := advancedProxyProviderLabel(recordContext.Provider)
 	sanitized := raw
 	result := antiPoisonValidationResult{Body: raw}
@@ -728,6 +1005,7 @@ func readAndPrepareAntiPoisonOpenAIStream(streamBody io.Reader, recordContext *a
 	sanitized = restoreAntiPoisonStringProtectionInSSEBody(sanitized, &recordContext.StringProtect, route, provider, "openai")
 	recordContext.AntiPoisonOps = append(recordContext.AntiPoisonOps, recordContext.StringProtect.Records...)
 	result.Body = sanitized
+	recordContext.DeliveredResponsePreview = summarizeAdvancedProxyRawStreamPreview(sanitized)
 	return sanitized, result, nil
 }
 
@@ -739,6 +1017,9 @@ func readAndPrepareAntiPoisonAnthropicStream(streamBody io.Reader, recordContext
 	if recordContext == nil {
 		return raw, antiPoisonValidationResult{Body: raw}, nil
 	}
+	recordContext.UpstreamResponseRaw = string(raw)
+	recordContext.UpstreamResponsePreview = summarizeAdvancedProxyRawStreamPreview(raw)
+	recordContext.UpstreamToolCalls, recordContext.UpstreamToolArgsPreview, recordContext.UpstreamAssistantPreview, recordContext.UpstreamLatestObserved = summarizeAdvancedProxyRawStreamFeedbackContext(raw, recordContext.ObservedFormat)
 	route := firstNonEmpty(recordContext.ClientRoute, recordContext.OutboundRoute, recordContext.AntiPoisonCtx.RouteKind)
 	provider := advancedProxyProviderLabel(recordContext.Provider)
 	sanitized := raw
@@ -769,5 +1050,6 @@ func readAndPrepareAntiPoisonAnthropicStream(streamBody io.Reader, recordContext
 	sanitized = restoreAntiPoisonStringProtectionInSSEBody(sanitized, &recordContext.StringProtect, route, provider, "claude")
 	recordContext.AntiPoisonOps = append(recordContext.AntiPoisonOps, recordContext.StringProtect.Records...)
 	result.Body = sanitized
+	recordContext.DeliveredResponsePreview = summarizeAdvancedProxyRawStreamPreview(sanitized)
 	return sanitized, result, nil
 }

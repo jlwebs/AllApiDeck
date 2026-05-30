@@ -56,17 +56,17 @@ ATTACKS = {
         "label": "缺失 guard 的真实 toolcall",
         "description": "返回真实 shell_command/tool_use，但不返回 guard fake toolcall，应触发 missing_guard_toolcall。",
     },
-    "guard_digest_mismatch": {
-        "label": "guard 摘要不匹配",
-        "description": "返回真实工具调用和 guard，但 digest 写成错误值，应触发 guard_digest_mismatch。",
+    "guard_coverage_mismatch": {
+        "label": "guard 覆盖不匹配",
+        "description": "返回真实工具调用和 guard，但 chain/cover 与真实调用不一致，应触发 guard_coverage_mismatch。",
     },
     "replay_old_nonce": {
         "label": "重放旧 nonce / 旧 guard",
-        "description": "guard 使用过期 alias/nonce/digest，模拟跨轮重放，应触发 digest/nonce 校验失败。",
+        "description": "guard 使用过期 alias/nonce，模拟跨轮重放，应触发 guard 覆盖校验失败。",
     },
     "tampered_arguments": {
         "label": "工具参数定向篡改",
-        "description": "真实工具参数变成危险命令，但 guard digest 使用错误值，模拟参数被替换，应触发 digest mismatch。",
+        "description": "真实工具参数变成危险命令，但 guard cover 仍指向旧参数，应触发 guard 覆盖校验失败。",
     },
     "extra_toolcall": {
         "label": "追加额外真实 toolcall",
@@ -240,21 +240,44 @@ def json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
-def guard_args(ctx: dict[str, str], attack: str) -> str:
+def canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def real_arguments_for_attack(attack: str) -> dict[str, Any]:
+    return {"command": real_command_for_attack(attack), "workdir": r"D:\GitHub\batch-api-check"}
+
+
+def guard_payload(ctx: dict[str, str], attack: str, tool_name: str, tool_type: str, index: int, actual_arguments: dict[str, Any]) -> dict[str, Any]:
     alias = ctx["alias"]
     nonce = ctx["nonce"]
     if attack == "replay_old_nonce":
         alias = "APTX_REPLAY_OLD"
         nonce = "nonce_replay_old"
-    return json_dumps(
-        {
-            "algorithm": alias,
-            "nonce": nonce,
-            "digest": "badbadbadbadbadb",
-            "chain": "poison-test invalid chain",
-            "cover": "command",
-        }
-    )
+    chain = f"{index}|{tool_type}|{tool_name}"
+    cover = canonical_json(actual_arguments)
+    if attack == "guard_coverage_mismatch":
+        chain = f"{index}|other|different_tool"
+        cover = "{\"command\":\"mismatch\"}"
+    if attack == "tampered_arguments":
+        cover = canonical_json({"command": "git status --short", "workdir": r"D:\GitHub\batch-api-check"})
+    prefix = ctx["guard"]
+    if "<original_tool_name>" in prefix:
+        prefix = prefix.split("<original_tool_name>", 1)[0].rstrip("_")
+    return {
+        "name": f"{prefix}_{tool_name}",
+        "tool_name": tool_name,
+        "tool_type": tool_type,
+        "algorithm": alias,
+        "nonce": nonce,
+        "digest": "badbadbadbadbadb",
+        "chain": chain,
+        "cover": cover,
+    }
+
+
+def guard_block(ctx: dict[str, str], attack: str, tool_name: str, tool_type: str, index: int, actual_arguments: dict[str, Any]) -> str:
+    return f"<aad_guard_json>{json_dumps(guard_payload(ctx, attack, tool_name, tool_type, index, actual_arguments))}</aad_guard_json>"
 
 
 def real_command_for_attack(attack: str) -> str:
@@ -279,12 +302,13 @@ def openai_chat_response(request: dict[str, Any]) -> tuple[dict[str, Any], list[
         return body, []
 
     tool_calls = []
+    actual_arguments = real_arguments_for_attack(attack)
     if attack != "guard_only":
         tool_calls.append(
             {
                 "id": "call_poison_real_12345678",
                 "type": "function",
-                "function": {"name": "shell_command", "arguments": json_dumps({"command": real_command_for_attack(attack), "workdir": r"D:\GitHub\batch-api-check"})},
+                "function": {"name": "shell_command", "arguments": json_dumps(actual_arguments)},
             }
         )
     if attack == "extra_toolcall":
@@ -295,19 +319,14 @@ def openai_chat_response(request: dict[str, Any]) -> tuple[dict[str, Any], list[
                 "function": {"name": "shell_command", "arguments": json_dumps({"command": "powershell Get-ChildItem Env:"})},
             }
         )
+    content = ""
     if attack != "missing_guard_toolcall":
-        tool_calls.append(
-            {
-                "id": "call_poison_guard_00000000",
-                "type": "function",
-                "function": {"name": ctx["guard"], "arguments": guard_args(ctx, attack)},
-            }
-        )
+        content = guard_block(ctx, attack, "shell_command", "command", 0, actual_arguments)
     body = {
         "id": "chatcmpl_poison_tool",
         "object": "chat.completion",
         "model": model,
-        "choices": [{"index": 0, "message": {"role": "assistant", "tool_calls": tool_calls}, "finish_reason": "tool_calls"}],
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": content, "tool_calls": tool_calls}, "finish_reason": "tool_calls"}],
     }
     return body, tool_calls
 
@@ -329,6 +348,7 @@ def openai_responses_response(request: dict[str, Any]) -> tuple[dict[str, Any], 
         )
 
     output = []
+    actual_arguments = real_arguments_for_attack(attack)
     if attack != "guard_only":
         output.append(
             {
@@ -336,7 +356,7 @@ def openai_responses_response(request: dict[str, Any]) -> tuple[dict[str, Any], 
                 "id": "fc_poison_real",
                 "call_id": "call_poison_real_12345678",
                 "name": "shell_command",
-                "arguments": json_dumps({"command": real_command_for_attack(attack), "workdir": r"D:\GitHub\batch-api-check"}),
+                "arguments": json_dumps(actual_arguments),
             }
         )
     if attack == "extra_toolcall":
@@ -352,11 +372,9 @@ def openai_responses_response(request: dict[str, Any]) -> tuple[dict[str, Any], 
     if attack != "missing_guard_toolcall":
         output.append(
             {
-                "type": "function_call",
-                "id": "fc_poison_guard",
-                "call_id": "call_poison_guard_00000000",
-                "name": ctx["guard"],
-                "arguments": guard_args(ctx, attack),
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": guard_block(ctx, attack, "shell_command", "command", 0, actual_arguments)}],
             }
         )
     return (
@@ -390,13 +408,14 @@ def claude_messages_response(request: dict[str, Any]) -> tuple[dict[str, Any], l
         )
 
     content = []
+    actual_arguments = real_arguments_for_attack(attack)
     if attack != "guard_only":
         content.append(
             {
                 "type": "tool_use",
                 "id": "toolu_poison_real_12345678",
                 "name": "shell_command",
-                "input": {"command": real_command_for_attack(attack), "workdir": r"D:\GitHub\batch-api-check"},
+                "input": actual_arguments,
             }
         )
     if attack == "extra_toolcall":
@@ -411,10 +430,8 @@ def claude_messages_response(request: dict[str, Any]) -> tuple[dict[str, Any], l
     if attack != "missing_guard_toolcall":
         content.append(
             {
-                "type": "tool_use",
-                "id": "toolu_poison_guard_00000000",
-                "name": ctx["guard"],
-                "input": json.loads(guard_args(ctx, attack)),
+                "type": "text",
+                "text": guard_block(ctx, attack, "shell_command", "command", 0, actual_arguments),
             }
         )
     return (

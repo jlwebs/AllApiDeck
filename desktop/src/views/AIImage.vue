@@ -350,6 +350,7 @@ import { hydrateLastResultsSnapshotCache } from '../utils/historySnapshotStore.j
 import { loadPanelRecords } from '../utils/keyPanelStore.js';
 import { maskApiKey } from '../utils/normal.js';
 import { apiFetch, isProbablyWailsRuntime } from '../utils/runtimeApi.js';
+import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
 
 const RESOLUTION_OPTIONS = [
   { label: '720P', value: '720p', width: 1280, height: 720 },
@@ -448,7 +449,7 @@ const draft = reactive({
 
 const maskedRecordKeyLabel = computed(() => maskApiKey(String(targetRecord.value?.apiKey || '').trim()) || '未命名 Key');
 const activeItem = computed(() => historyItems.value.find(item => item.id === activeItemId.value) || historyItems.value[0] || null);
-const hasPreferredModel = computed(() => modelOptions.value.some(item => item.value === 'gpt-5.3-codex'));
+const hasPreferredModel = computed(() => modelOptions.value.some(item => isPreferredImageModel(item.value)));
 const currentRequestSize = computed(() => buildResolvedSize(draft.resolutionPreset, draft.aspectRatio));
 const supportsTransparentBackground = computed(() => draft.outputFormat === 'png' || draft.outputFormat === 'webp');
 const supportsOutputCompression = computed(() => draft.outputFormat === 'jpeg' || draft.outputFormat === 'webp');
@@ -482,8 +483,8 @@ const resultPanelHint = computed(() => {
 const modelSelectionHint = computed(() => {
   if (modelLoading.value) return '正在加载模型列表...';
   if (!modelOptions.value.length) return '暂未拿到模型列表，请确认 Base URL / API Key 是否正确。';
-  if (hasPreferredModel.value) return '已优先命中 gpt-5.3-codex。';
-  if (!draft.model) return '当前列表没有 gpt-5.3-codex，请手动选择支持 Responses 生图的 OpenAI 模型。';
+  if (hasPreferredModel.value) return '已优先命中图像模型。';
+  if (!draft.model) return '当前列表没有可用的非 Codex 模型，请手动选择支持 Responses 生图的模型。';
   return '如返回纯文本而不是图片，通常代表当前号池不支持 image_generation 工具。';
 });
 const workflowModeHint = computed(() => {
@@ -565,6 +566,14 @@ function isOpenAIFamilyModel(model) {
   return /^(gpt|chatgpt|o1|o3|o4|dall)/i.test(String(model || '').trim());
 }
 
+function isCodexModel(model) {
+  return /codex/i.test(String(model || '').trim());
+}
+
+function isPreferredImageModel(model) {
+  return /(?:gpt-image|chatgpt-image|dall-e|image)/i.test(String(model || '').trim());
+}
+
 function normalizeModelCandidates(record, extraModels = []) {
   const combined = [
     ...(Array.isArray(record?.modelsList) ? record.modelsList : []),
@@ -583,10 +592,10 @@ function normalizeModelCandidates(record, extraModels = []) {
 }
 
 function getModelPriority(model) {
-  if (model === 'gpt-5.3-codex') return 0;
-  if (/gpt-image|chatgpt-image/i.test(model)) return 1;
-  if (isOpenAIFamilyModel(model)) return 2;
-  return 3;
+  if (isPreferredImageModel(model)) return 0;
+  if (isOpenAIFamilyModel(model) && !isCodexModel(model)) return 1;
+  if (!isCodexModel(model)) return 2;
+  return 9;
 }
 
 function buildModelOptions(record, extraModels = []) {
@@ -601,10 +610,13 @@ function buildModelOptions(record, extraModels = []) {
 }
 
 function pickPreferredModel(fallback = '') {
-  if (modelOptions.value.some(item => item.value === 'gpt-5.3-codex')) return 'gpt-5.3-codex';
+  const preferredImage = modelOptions.value.find(item => isPreferredImageModel(item.value))?.value || '';
+  if (preferredImage) return preferredImage;
   const normalizedFallback = String(fallback || '').trim();
-  if (normalizedFallback && modelOptions.value.some(item => item.value === normalizedFallback)) return normalizedFallback;
-  return modelOptions.value.find(item => isOpenAIFamilyModel(item.value))?.value || modelOptions.value[0]?.value || '';
+  if (normalizedFallback && !isCodexModel(normalizedFallback) && modelOptions.value.some(item => item.value === normalizedFallback)) return normalizedFallback;
+  return modelOptions.value.find(item => isOpenAIFamilyModel(item.value) && !isCodexModel(item.value))?.value
+    || modelOptions.value.find(item => !isCodexModel(item.value))?.value
+    || '';
 }
 
 function buildDefaultPrompt(record) {
@@ -1354,10 +1366,126 @@ async function refreshModelOptions(showFeedback = false) {
 function buildRequestBody(finalPrompt) {
   return {
     model: String(draft.model || '').trim(),
+    include: ['reasoning.encrypted_content'],
     input: buildResponsesInput(finalPrompt),
     tools: [buildImageGenerationTool()],
     tool_choice: 'auto',
+    stream: true,
   };
+}
+
+function parseResponsesStreamPayload(responseText) {
+  const text = String(responseText || '');
+  const events = [];
+  let eventName = '';
+  let dataLines = [];
+  const flush = () => {
+    if (!eventName && dataLines.length === 0) return;
+    const data = dataLines.join('\n').trim();
+    if (data && data !== '[DONE]') {
+      events.push({ event: eventName, data });
+    }
+    eventName = '';
+    dataLines = [];
+  };
+
+  text.replace(/\r\n/g, '\n').split('\n').forEach(line => {
+    if (line.trim() === '') {
+      flush();
+      return;
+    }
+    if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim();
+      return;
+    }
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  });
+  flush();
+
+  let completedResponse = null;
+  let latestResponse = null;
+  const output = [];
+  const upsertOutput = (index, item) => {
+    if (!item || typeof item !== 'object') return;
+    const id = String(item.id || item.item_id || '').trim();
+    const existingIndex = output.findIndex(entry => (id && (entry?.id === id || entry?.item_id === id)) || (Number.isInteger(index) && entry?.output_index === index));
+    const normalized = Number.isInteger(index) ? { output_index: index, ...item } : item;
+    if (existingIndex >= 0) output[existingIndex] = { ...output[existingIndex], ...normalized };
+    else output.push(normalized);
+  };
+  events.forEach(item => {
+    let payload = null;
+    try {
+      payload = JSON.parse(item.data);
+    } catch {
+      return;
+    }
+    if (payload?.response && typeof payload.response === 'object') {
+      latestResponse = payload.response;
+    }
+    if (payload?.type === 'response.completed' && payload?.response) {
+      completedResponse = payload.response;
+    }
+    const outputItem = payload?.item || payload?.output_item;
+    if (outputItem && typeof outputItem === 'object') {
+      upsertOutput(Number.isInteger(payload?.output_index) ? payload.output_index : null, outputItem);
+    }
+    if (payload?.type === 'response.image_generation_call.partial_image' && String(payload?.partial_image_b64 || '').trim()) {
+      upsertOutput(Number.isInteger(payload?.output_index) ? payload.output_index : null, {
+        id: payload.item_id,
+        item_id: payload.item_id,
+        type: 'image_generation_call',
+        status: 'completed',
+        result: String(payload.partial_image_b64 || '').trim(),
+      });
+    }
+    if (payload?.type === 'image_generation.partial_image' && String(payload?.b64_json || '').trim()) {
+      upsertOutput(Number.isInteger(payload?.output_index) ? payload.output_index : null, {
+        id: payload.item_id,
+        item_id: payload.item_id,
+        type: 'image_generation_call',
+        status: 'completed',
+        result: String(payload.b64_json || '').trim(),
+      });
+    }
+  });
+
+  if (completedResponse) return completedResponse;
+  if (latestResponse?.output) return latestResponse;
+  return output.length ? { output } : null;
+}
+
+function parseResponsesPayload(responseText, contentType = '') {
+  const rawText = String(responseText || '').trim();
+  if (!rawText) return null;
+  if (/text\/event-stream/i.test(String(contentType || '')) || /^event:|^data:/m.test(rawText)) {
+    return parseResponsesStreamPayload(rawText);
+  }
+  return JSON.parse(rawText || 'null');
+}
+
+function logImageRequestDiagnostic(stage, detail = {}) {
+  try {
+    logClientDiagnostic('ai-image.request', JSON.stringify({
+      stage,
+      endpoint: String(detail.endpoint || ''),
+      status: detail.status,
+      contentType: String(detail.contentType || ''),
+      responseStart: String(detail.responseText || '').slice(0, 800),
+      request: detail.requestBody ? {
+        model: String(detail.requestBody.model || ''),
+        stream: detail.requestBody.stream === true,
+        topLevelKeys: Object.keys(detail.requestBody || {}).sort(),
+        toolTypes: Array.isArray(detail.requestBody.tools) ? detail.requestBody.tools.map(tool => String(tool?.type || '')) : [],
+        toolKeys: Array.isArray(detail.requestBody.tools) ? detail.requestBody.tools.map(tool => Object.keys(tool || {}).sort()) : [],
+        inputContentTypes: Array.isArray(detail.requestBody.input)
+          ? detail.requestBody.input.flatMap(item => Array.isArray(item?.content) ? item.content.map(content => String(content?.type || '')) : [])
+          : [],
+      } : null,
+    }));
+  } catch {}
 }
 
 async function requestImageGeneration(requestBody) {
@@ -1371,18 +1499,32 @@ async function requestImageGeneration(requestBody) {
         headers: {
           Authorization: `Bearer ${String(draft.apiKey || '').trim()}`,
           'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
         },
         body: JSON.stringify(requestBody),
         timeoutMs: IMAGE_REQUEST_TIMEOUT_MS,
       });
       const responseText = await response.text().catch(() => '');
+      const contentType = response.headers?.get?.('content-type') || '';
       if (!response.ok) {
+        logImageRequestDiagnostic('http_error', {
+          endpoint,
+          status: response.status,
+          contentType,
+          responseText,
+          requestBody,
+        });
         errors.push(`${endpoint} -> ${buildErrorMessage(response.status, responseText)}`);
         continue;
       }
-      const payload = JSON.parse(responseText || 'null');
+      const payload = parseResponsesPayload(responseText, contentType);
       return { endpoint, payload };
     } catch (error) {
+      logImageRequestDiagnostic('exception', {
+        endpoint,
+        responseText: error?.stack || error?.message || String(error || ''),
+        requestBody,
+      });
       errors.push(`${endpoint} -> ${error?.message || '请求失败'}`);
     }
   }
@@ -1399,6 +1541,9 @@ function validateGenerateRequest() {
   }
   if (!String(draft.model || '').trim()) {
     return '请先选择一个支持 Responses 生图的模型';
+  }
+  if (isCodexModel(draft.model)) {
+    return '当前选择的是 Codex 专用模型，不支持 AI 绘图。请改选 gpt-image / chatgpt-image / 其他支持 image_generation 的 Responses 模型';
   }
   if (!String(draft.prompt || '').trim()) {
     return '请输入提示词';

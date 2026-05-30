@@ -1522,8 +1522,10 @@ func extractResponsesOutputText(responsePayload map[string]any) string {
 
 func executeResponsesCheckAttempt(payload normalizedCheckKeyPayload, targetURL string) checkExecutionResult {
 	requestBody := map[string]any{
-		"model": payload.Model,
-		"input": buildResponsesCheckInput(payload.Messages),
+		"model":   payload.Model,
+		"include": []string{"reasoning.encrypted_content"},
+		"input":   buildResponsesCheckInput(payload.Messages),
+		"stream":  true,
 	}
 
 	appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] try(responses) %s | %s", payload.Model, targetURL))
@@ -1548,7 +1550,7 @@ func executeResponsesCheckAttempt(payload normalizedCheckKeyPayload, targetURL s
 
 	req.Header.Set("Authorization", "Bearer "+payload.Key)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("User-Agent", "Mozilla/5.0 BatchApiCheck/1.0")
 	for key, value := range buildCompatHeaders(payload.UID) {
 		req.Header.Set(key, value)
@@ -1624,6 +1626,45 @@ func executeResponsesCheckAttempt(payload normalizedCheckKeyPayload, targetURL s
 				Message:   errMessage,
 				Retryable: isRetryableCheckStatus(resp.StatusCode),
 			},
+		}
+	}
+
+	if strings.Contains(contentType, "text/event-stream") || strings.HasPrefix(strings.TrimSpace(string(rawBody)), "data:") {
+		parseResult := parseSSECompletionStream(bytes.NewReader(rawBody), start)
+		if parseResult.ChunkCount > 0 {
+			ttftLog := "ttft=-"
+			if parseResult.HasTTFT {
+				ttftLog = fmt.Sprintf("ttft=%dms", parseResult.TTFTMs)
+			}
+			usage := normalizeUsageTokenTotals(parseResult.Usage)
+			appendLine(resolveCheckLogPath(), fmt.Sprintf("[CHECK] ok(responses-sse) %s | %s | chunks=%d | %s | %s", payload.Model, targetURL, parseResult.ChunkCount, duration, ttftLog))
+			messagePayload := map[string]any{
+				"role":    "assistant",
+				"content": parseResult.Content,
+			}
+			if parseResult.ReasoningContent != "" {
+				messagePayload["reasoning_content"] = parseResult.ReasoningContent
+			}
+			body := map[string]any{
+				"model": firstNonEmpty(parseResult.ReturnedModel, payload.Model),
+				"choices": []map[string]any{
+					{
+						"message": messagePayload,
+					},
+				},
+				"usage":             usage,
+				"isStreamAssembled": true,
+				"message":           "success",
+			}
+			if parseResult.HasTTFT {
+				body["ttftMs"] = parseResult.TTFTMs
+			}
+			return checkExecutionResult{
+				ok:       true,
+				endpoint: targetURL,
+				status:   http.StatusOK,
+				body:     body,
+			}
 		}
 	}
 
@@ -2242,6 +2283,41 @@ func parseSSECompletionStream(reader io.Reader, startedAt time.Time) sseCompleti
 		}
 		if chunk["usage"] != nil {
 			result.Usage = chunk["usage"]
+		}
+
+		eventType := strings.TrimSpace(toStringValue(chunk["type"]))
+		switch eventType {
+		case "response.output_text.delta", "response.refusal.delta":
+			textPiece := firstNonEmpty(toStringValue(chunk["delta"]), toStringValue(chunk["text"]))
+			if !result.HasTTFT && strings.TrimSpace(textPiece) != "" {
+				elapsedMs := time.Since(startedAt).Milliseconds()
+				if elapsedMs < 0 {
+					elapsedMs = 0
+				}
+				result.TTFTMs = elapsedMs
+				result.HasTTFT = true
+			}
+			result.Content += textPiece
+			continue
+		case "response.output_text.done", "response.refusal.done":
+			if result.Content == "" {
+				result.Content = toStringValue(chunk["text"])
+			}
+			continue
+		case "response.completed":
+			responseMap, _ := chunk["response"].(map[string]any)
+			if responseMap != nil {
+				if result.ReturnedModel == "" {
+					result.ReturnedModel = strings.TrimSpace(toStringValue(responseMap["model"]))
+				}
+				if responseMap["usage"] != nil {
+					result.Usage = responseMap["usage"]
+				}
+				if text := extractResponsesOutputText(responseMap); text != "" && result.Content == "" {
+					result.Content = text
+				}
+			}
+			continue
 		}
 
 		choices, _ := chunk["choices"].([]any)

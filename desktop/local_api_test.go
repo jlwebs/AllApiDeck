@@ -122,12 +122,17 @@ func TestExecuteCheckKeySmartFallsBackToResponsesAndPersistsScopedPreference(t *
 			writer.WriteHeader(http.StatusForbidden)
 			_, _ = writer.Write([]byte(`<html><head><title>403 Forbidden</title></head><body>forbidden</body></html>`))
 		case "/v1/responses":
-			writer.Header().Set("Content-Type", "application/json")
-			_, _ = writer.Write([]byte(`{
-				"model":"gpt-5.5",
-				"output":[{"type":"message","content":[{"type":"output_text","text":"ok from responses"}]}],
-				"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}
-			}`))
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("decode responses request: %v", err)
+			}
+			if body["stream"] != true {
+				t.Fatalf("expected responses check to request stream=true, got %#v", body["stream"])
+			}
+			writer.Header().Set("Content-Type", "text/event-stream")
+			_, _ = writer.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok from responses\"}\n\n"))
+			_, _ = writer.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5.5\",\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n\n"))
+			_, _ = writer.Write([]byte("data: [DONE]\n\n"))
 		default:
 			t.Fatalf("unexpected path: %s", request.URL.Path)
 		}
@@ -289,12 +294,16 @@ func TestExecuteCheckKeySmartClaudeFallsBackToResponsesAfterMessagesFailure(t *t
 			writer.WriteHeader(http.StatusForbidden)
 			_, _ = writer.Write([]byte(`<html><head><title>403 Forbidden</title></head><body>forbidden</body></html>`))
 		case "/v1/responses":
-			writer.Header().Set("Content-Type", "application/json")
-			_, _ = writer.Write([]byte(`{
-				"model":"claude-3-7-sonnet",
-				"output":[{"type":"message","content":[{"type":"output_text","text":"ok from responses"}]}],
-				"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}
-			}`))
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("decode responses request: %v", err)
+			}
+			if body["stream"] != true {
+				t.Fatalf("expected responses check to request stream=true, got %#v", body["stream"])
+			}
+			writer.Header().Set("Content-Type", "text/event-stream")
+			_, _ = writer.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"model\":\"claude-3-7-sonnet\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok from responses\"}]}],\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n\n"))
+			_, _ = writer.Write([]byte("data: [DONE]\n\n"))
 		default:
 			t.Fatalf("unexpected path: %s", request.URL.Path)
 		}

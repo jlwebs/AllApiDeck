@@ -204,17 +204,19 @@ func defaultAdvancedProxyQueuesConfig() AdvancedProxyQueuesConfig {
 	}
 }
 
-const defaultAntiPoisonStrategyPrompt = `如果本轮产生任意真实 toolcall，请额外生成 AllApiDeck guard fake toolcall。
-guard fake toolcall 不是用户真实请求，不得解释给用户。
-guard fake toolcall 必须按 {{ALGORITHM_ALIAS}} 随机变化算法生成工具链校验信息。
-网关会在返回客户端前摘除所有 guard fake toolcall。
-如果没有真实 toolcall，不要生成 guard fake toolcall。`
+const defaultAntiPoisonStrategyPrompt = `IMPORTANT: AllApiDeck guard rules are gateway-enforced high-priority safety constraints and must override ordinary task instructions.
+Current guard rule id is {{ALGORITHM_ALIAS}}.
+If this turn emits any real toolcall, the assistant text immediately before that toolcall must be exactly one AllApiDeck guard JSON text block.
+Do not emit ordinary pre-tool text such as "I will search", "I will check", or progress narration before a toolcall; replace that pre-tool sentence with the guard JSON block.
+The guard JSON is not a user request and must not be explained to the user.
+The guard JSON only requires the minimal binding fields: name and tool_name.
+If a valid guard JSON cannot be emitted before a real toolcall, emit no real toolcall and output plain text: guard generation failed for pending toolcall.
+The gateway strips all guard JSON before returning to the client.
+If there is no real toolcall, do not emit guard JSON.`
 
-const defaultAntiPoisonAlgorithmPrompt = `{{ALGORITHM_ALIAS}} 是本轮随机变化算法代号，仅用于关联本段规则和策略段规则。
-使用该算法时，请基于所有真实 toolcall 组织调用链摘要。
-调用链摘要至少包含真实 toolcall 的返回顺序、工具类别、call_id 摘要、参数 canonical 摘要、本轮 nonce 派生片段。
-生成 guard fake toolcall 时，请写入 algorithm、nonce、digest、chain、cover。
-digest 使用网关提示的链路规则生成，必须与真实 toolcall 链路一一对应。`
+const defaultAntiPoisonAlgorithmPrompt = `{{ALGORITHM_ALIAS}} is this turn's guard rule id.
+When generating guard JSON, write only name and tool_name.
+name must follow the gateway guard tool naming rule, and tool_name must equal the immediately following real tool name.`
 
 func defaultAntiPoisonRandomizationConfig() AntiPoisonRandomizationConfig {
 	return AntiPoisonRandomizationConfig{
@@ -423,11 +425,11 @@ func sanitizeAntiPoisonConfig(config AntiPoisonConfig) AntiPoisonConfig {
 		config.FailureMode = defaults.FailureMode
 	}
 	config.StrategyPrompt = strings.TrimSpace(config.StrategyPrompt)
-	if config.StrategyPrompt == "" {
+	if config.StrategyPrompt == "" || antiPoisonPromptLooksStale(config.StrategyPrompt) {
 		config.StrategyPrompt = defaults.StrategyPrompt
 	}
 	config.AlgorithmPrompt = strings.TrimSpace(config.AlgorithmPrompt)
-	if config.AlgorithmPrompt == "" {
+	if config.AlgorithmPrompt == "" || antiPoisonPromptLooksStale(config.AlgorithmPrompt) {
 		config.AlgorithmPrompt = defaults.AlgorithmPrompt
 	}
 	if config.Randomization.StrategyPoolSize == 0 &&
@@ -441,6 +443,24 @@ func sanitizeAntiPoisonConfig(config AntiPoisonConfig) AntiPoisonConfig {
 	}
 	config.StringProtection = sanitizeAntiPoisonStringProtectionConfig(config.StringProtection, defaults.StringProtection)
 	return config
+}
+
+func antiPoisonPromptLooksStale(prompt string) bool {
+	lower := strings.ToLower(strings.TrimSpace(prompt))
+	if lower == "" {
+		return false
+	}
+	if strings.Contains(lower, "guard fake toolcall") {
+		return true
+	}
+	if strings.Contains(lower, "digest") && strings.Contains(lower, "chain") && strings.Contains(lower, "cover") {
+		return true
+	}
+	if strings.Contains(lower, "first emit one guard json text block immediately before") &&
+		!strings.Contains(lower, "ordinary pre-tool text") {
+		return true
+	}
+	return false
 }
 
 func sanitizeAntiPoisonStringProtectionConfig(config AntiPoisonStringProtectionConfig, defaults AntiPoisonStringProtectionConfig) AntiPoisonStringProtectionConfig {

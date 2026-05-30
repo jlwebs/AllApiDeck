@@ -485,6 +485,26 @@ export namespace main {
 	        this.reason = source["reason"];
 	    }
 	}
+	export class advancedProxyObservedItem {
+	    type: string;
+	    name?: string;
+	    argumentsPreview?: string;
+	    textPreview?: string;
+	    rawPreview?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new advancedProxyObservedItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.name = source["name"];
+	        this.argumentsPreview = source["argumentsPreview"];
+	        this.textPreview = source["textPreview"];
+	        this.rawPreview = source["rawPreview"];
+	    }
+	}
 	export class AdvancedProxyRequestRouteStep {
 	    route: string;
 	    source?: string;
@@ -527,6 +547,14 @@ export namespace main {
 	    errorDetail: string;
 	    source: string;
 	    requestBody?: string;
+	    antiPoisonPromptPreview?: string;
+	    upstreamResponsePreview?: string;
+	    upstreamResponseRaw?: string;
+	    responsePreview?: string;
+	    upstreamToolCalls?: string[];
+	    upstreamToolArgsPreview?: string[];
+	    upstreamAssistantPreview?: string;
+	    upstreamLatestObserved?: advancedProxyObservedItem;
 	    antiPoisonOps?: antiPoisonOperationRecord[];
 	
 	    static createFrom(source: any = {}) {
@@ -560,6 +588,14 @@ export namespace main {
 	        this.errorDetail = source["errorDetail"];
 	        this.source = source["source"];
 	        this.requestBody = source["requestBody"];
+	        this.antiPoisonPromptPreview = source["antiPoisonPromptPreview"];
+	        this.upstreamResponsePreview = source["upstreamResponsePreview"];
+	        this.upstreamResponseRaw = source["upstreamResponseRaw"];
+	        this.responsePreview = source["responsePreview"];
+	        this.upstreamToolCalls = source["upstreamToolCalls"];
+	        this.upstreamToolArgsPreview = source["upstreamToolArgsPreview"];
+	        this.upstreamAssistantPreview = source["upstreamAssistantPreview"];
+	        this.upstreamLatestObserved = this.convertValues(source["upstreamLatestObserved"], advancedProxyObservedItem);
 	        this.antiPoisonOps = this.convertValues(source["antiPoisonOps"], antiPoisonOperationRecord);
 	    }
 	
@@ -1320,6 +1356,7 @@ export namespace main {
 	        this.localStorageKeyCount = source["localStorageKeyCount"];
 	    }
 	}
+	
 	
 	
 	export class desktopProfileAssistOpenRequest {

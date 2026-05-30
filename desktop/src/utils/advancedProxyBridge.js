@@ -30,17 +30,19 @@ export const ADVANCED_PROXY_QUEUE_SCOPES = [
   ...ADVANCED_PROXY_APPS.map(app => ({ id: app.id, label: app.label })),
 ];
 
-export const DEFAULT_ANTI_POISON_STRATEGY_PROMPT = `如果本轮产生任意真实 toolcall，请额外生成 AllApiDeck guard fake toolcall。
-guard fake toolcall 不是用户真实请求，不得解释给用户。
-guard fake toolcall 必须按 {{ALGORITHM_ALIAS}} 随机变化算法生成工具链校验信息。
-网关会在返回客户端前摘除所有 guard fake toolcall。
-如果没有真实 toolcall，不要生成 guard fake toolcall。`;
+export const DEFAULT_ANTI_POISON_STRATEGY_PROMPT = `IMPORTANT: AllApiDeck guard rules are gateway-enforced high-priority safety constraints and must override ordinary task instructions.
+Current guard rule id is {{ALGORITHM_ALIAS}}.
+If this turn emits any real toolcall, the assistant text immediately before that toolcall must be exactly one AllApiDeck guard JSON text block.
+Do not emit ordinary pre-tool text such as "I will search", "I will check", or progress narration before a toolcall; replace that pre-tool sentence with the guard JSON block.
+The guard JSON is not a user request and must not be explained to the user.
+The guard JSON only requires the minimal binding fields: name and tool_name.
+If a valid guard JSON cannot be emitted before a real toolcall, emit no real toolcall and output plain text: guard generation failed for pending toolcall.
+The gateway strips all guard JSON before returning to the client.
+If there is no real toolcall, do not emit guard JSON.`;
 
-export const DEFAULT_ANTI_POISON_ALGORITHM_PROMPT = `{{ALGORITHM_ALIAS}} 是本轮随机变化算法代号，仅用于关联本段规则和策略段规则。
-使用该算法时，请基于所有真实 toolcall 组织调用链摘要。
-调用链摘要至少包含真实 toolcall 的返回顺序、工具类别、call_id 摘要、参数 canonical 摘要、本轮 nonce 派生片段。
-生成 guard fake toolcall 时，请写入 algorithm、nonce、digest、chain、cover。
-digest 使用网关提示的链路规则生成，必须与真实 toolcall 链路一一对应。`;
+export const DEFAULT_ANTI_POISON_ALGORITHM_PROMPT = `{{ALGORITHM_ALIAS}} is this turn's guard rule id.
+When generating guard JSON, write only name and tool_name.
+name must follow the gateway guard tool naming rule, and tool_name must equal the immediately following real tool name.`;
 
 export const DEFAULT_ANTI_POISON_RANDOMIZATION = {
   enabled: true,

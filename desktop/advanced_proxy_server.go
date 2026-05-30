@@ -53,21 +53,29 @@ type rawProviderAttemptResult struct {
 }
 
 type advancedProxyStreamRequestRecordContext struct {
-	AppType         string
-	ClientRoute     string
-	InboundEndpoint string
-	OutboundRoute   string
-	RouteTrace      []AdvancedProxyRequestRouteStep
-	Source          string
-	Provider        AdvancedProxyProvider
-	TargetURL       string
-	RequestBody     []byte
-	ResolvedModel   string
-	StartedAt       time.Time
-	ObservedFormat  string
-	AntiPoisonCtx   antiPoisonRequestContext
-	StringProtect   antiPoisonStringProtectionContext
-	AntiPoisonOps   []antiPoisonOperationRecord
+	AppType                  string
+	ClientRoute              string
+	InboundEndpoint          string
+	OutboundRoute            string
+	RouteTrace               []AdvancedProxyRequestRouteStep
+	Source                   string
+	Provider                 AdvancedProxyProvider
+	TargetURL                string
+	RequestBody              []byte
+	TimeoutSeconds           int
+	ResolvedModel            string
+	StartedAt                time.Time
+	ObservedFormat           string
+	AntiPoisonCtx            antiPoisonRequestContext
+	StringProtect            antiPoisonStringProtectionContext
+	AntiPoisonOps            []antiPoisonOperationRecord
+	UpstreamResponsePreview  string
+	UpstreamResponseRaw      string
+	DeliveredResponsePreview string
+	UpstreamToolCalls        []string
+	UpstreamToolArgsPreview  []string
+	UpstreamAssistantPreview string
+	UpstreamLatestObserved   *advancedProxyObservedItem
 }
 
 type advancedProxyStreamObservation struct {
@@ -142,6 +150,141 @@ func previewAdvancedProxyText(raw string, limit int) string {
 		return normalized
 	}
 	return string(runes[:limit]) + "..."
+}
+
+func summarizeAdvancedProxyStreamResult(parts ...string) string {
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		filtered = append(filtered, part)
+	}
+	if len(filtered) == 0 {
+		return ""
+	}
+	return previewAdvancedProxyText(strings.Join(filtered, " | "), 2200)
+}
+
+func summarizeAdvancedProxyRawStreamPreview(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	return previewAdvancedProxyText(string(raw), 2200)
+}
+
+func summarizeAdvancedProxyRawStreamFeedbackContext(raw []byte, observedFormat string) ([]string, []string, string, *advancedProxyObservedItem) {
+	if len(raw) == 0 {
+		return nil, nil, "", nil
+	}
+	events, err := parseAdvancedProxySSEEvents(raw)
+	if err != nil {
+		return nil, nil, previewAdvancedProxyText(string(raw), 800), &advancedProxyObservedItem{
+			Type:       "raw_stream",
+			RawPreview: string(raw),
+		}
+	}
+	toolNames := make([]string, 0, 8)
+	toolArgs := make([]string, 0, 8)
+	textParts := make([]string, 0, 16)
+	var latest *advancedProxyObservedItem
+	appendTool := func(name string, args string) {
+		name = strings.TrimSpace(name)
+		args = strings.TrimSpace(args)
+		if name != "" {
+			toolNames = append(toolNames, name)
+		}
+		if args != "" {
+			toolArgs = append(toolArgs, args)
+		}
+		latest = &advancedProxyObservedItem{
+			Type:             "function_call",
+			Name:             name,
+			ArgumentsPreview: args,
+			RawPreview:       args,
+		}
+	}
+	appendText := func(text string) {
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return
+		}
+		textParts = append(textParts, text)
+		latest = &advancedProxyObservedItem{
+			Type:        "message",
+			TextPreview: strings.Join(textParts, " "),
+			RawPreview:  text,
+		}
+	}
+	switch normalizeAdvancedProxyObservedFormat(observedFormat) {
+	case "responses":
+		for _, event := range events {
+			data, ok := advancedProxySSEJSONPayload(event)
+			if !ok {
+				continue
+			}
+			eventType := firstNonEmpty(strings.TrimSpace(event.Event), strings.TrimSpace(toStringValue(data["type"])))
+			itemMap, _ := data["item"].(map[string]any)
+			switch eventType {
+			case "response.output_item.added", "response.output_item.done":
+				itemType := strings.TrimSpace(toStringValue(itemMap["type"]))
+				switch itemType {
+				case "function_call":
+					appendTool(toStringValue(itemMap["name"]), stringifyJSON(itemMap["arguments"]))
+				case "web_search_call":
+					appendTool("web_search_call", stringifyJSON(itemMap["action"]))
+				}
+			case "response.function_call_arguments.done":
+				appendTool(firstNonEmpty(toStringValue(data["name"]), toStringValue(itemMap["name"])), firstNonEmpty(stringifyJSON(data["arguments"]), stringifyJSON(itemMap["arguments"])))
+			case "response.output_text.delta", "response.refusal.delta":
+				appendText(firstNonEmptyExact(toStringValue(data["delta"]), toStringValue(data["text"])))
+			case "response.completed":
+				responseMap, _ := data["response"].(map[string]any)
+				for _, rawItem := range anySliceValue(responseMap["output"]) {
+					outputItem, _ := rawItem.(map[string]any)
+					itemType := strings.TrimSpace(toStringValue(outputItem["type"]))
+					switch itemType {
+					case "function_call":
+						appendTool(toStringValue(outputItem["name"]), stringifyJSON(outputItem["arguments"]))
+					case "web_search_call":
+						appendTool("web_search_call", stringifyJSON(outputItem["action"]))
+					case "message":
+						if content, ok := outputItem["content"].([]any); ok {
+							for _, rawContent := range content {
+								contentMap, _ := rawContent.(map[string]any)
+								appendText(firstNonEmptyExact(toStringValue(contentMap["text"]), toStringValue(contentMap["content"])))
+							}
+						}
+					}
+				}
+			}
+		}
+	default:
+		for _, event := range events {
+			data, ok := advancedProxySSEJSONPayload(event)
+			if !ok {
+				continue
+			}
+			choices, _ := data["choices"].([]any)
+			for _, rawChoice := range choices {
+				choiceMap, _ := rawChoice.(map[string]any)
+				delta, _ := choiceMap["delta"].(map[string]any)
+				if delta == nil {
+					continue
+				}
+				appendText(toStringValue(delta["content"]))
+				if toolCalls, ok := delta["tool_calls"].([]any); ok {
+					for _, rawCall := range toolCalls {
+						callMap, _ := rawCall.(map[string]any)
+						functionMap, _ := callMap["function"].(map[string]any)
+						appendTool(toStringValue(functionMap["name"]), toStringValue(functionMap["arguments"]))
+					}
+				}
+			}
+		}
+	}
+	return normalizeAdvancedProxyPreviewList(toolNames, 24, 160), normalizeAdvancedProxyPreviewList(toolArgs, 24, 280), previewAdvancedProxyText(strings.Join(textParts, " "), 800), latest
 }
 
 func (s *advancedProxyEncryptedContentHealStore) get(sessionKey string) int {
@@ -1672,8 +1815,15 @@ func recordAdvancedProxyStreamObservation(recordContext *advancedProxyStreamRequ
 			observation.InputTokens,
 			observation.OutputTokens,
 			errorDetail,
+			recordContext.UpstreamResponsePreview,
+			recordContext.UpstreamResponseRaw,
+			recordContext.DeliveredResponsePreview,
 			recordContext.RouteTrace,
 			recordContext.AntiPoisonOps,
+			recordContext.UpstreamToolCalls,
+			recordContext.UpstreamToolArgsPreview,
+			recordContext.UpstreamAssistantPreview,
+			recordContext.UpstreamLatestObserved,
 		)
 	default:
 		recordAdvancedProxyOpenAIStreamAttemptWithTraceAndOps(
@@ -1694,8 +1844,15 @@ func recordAdvancedProxyStreamObservation(recordContext *advancedProxyStreamRequ
 			observation.InputTokens,
 			observation.OutputTokens,
 			errorDetail,
+			recordContext.UpstreamResponsePreview,
+			recordContext.UpstreamResponseRaw,
+			recordContext.DeliveredResponsePreview,
 			recordContext.RouteTrace,
 			recordContext.AntiPoisonOps,
+			recordContext.UpstreamToolCalls,
+			recordContext.UpstreamToolArgsPreview,
+			recordContext.UpstreamAssistantPreview,
+			recordContext.UpstreamLatestObserved,
 		)
 	}
 }
@@ -1879,6 +2036,9 @@ func proxyAnthropicStreamToClientWithMetrics(writer http.ResponseWriter, streamB
 		if streamErr != nil {
 			errorDetail = streamErr.Error()
 		}
+		if recordContext.DeliveredResponsePreview == "" {
+			recordContext.DeliveredResponsePreview = summarizeAdvancedProxyRawStreamPreview(streamRaw)
+		}
 		recordAdvancedProxyStreamObservation(recordContext, observation, http.StatusOK, errorDetail)
 	}
 	return streamErr
@@ -1944,6 +2104,9 @@ func proxyOpenAIStreamToClientWithMetrics(writer http.ResponseWriter, streamBody
 	if streamErr != nil {
 		errorDetail = fmt.Sprintf("stream forward failed: %s", streamErr.Error())
 	}
+	if recordContext != nil && recordContext.DeliveredResponsePreview == "" {
+		recordContext.DeliveredResponsePreview = summarizeAdvancedProxyRawStreamPreview(streamRaw)
+	}
 	recordAdvancedProxyStreamObservation(recordContext, observation, http.StatusOK, errorDetail)
 	return streamErr
 }
@@ -1970,6 +2133,9 @@ func writeAnthropicSSEFromOpenAIResponsesStreamWithRecord(writer http.ResponseWr
 			return
 		}
 		observation.markCompleted(time.Now())
+		if strings.TrimSpace(recordContext.DeliveredResponsePreview) == "" && strings.TrimSpace(streamRecordDetail) != "" {
+			recordContext.DeliveredResponsePreview = streamRecordDetail
+		}
 		recordAdvancedProxyStreamObservation(recordContext, observation, http.StatusOK, streamRecordDetail)
 	}()
 
@@ -2032,6 +2198,20 @@ func writeAnthropicSSEFromOpenAIResponsesStreamWithRecord(writer http.ResponseWr
 	webSearchToolUseIDs := map[string]string{}
 	streamedOutputText := map[string]string{}
 	streamedOutputAnnotations := map[string][]any{}
+	streamPreviewText := ""
+	streamPreviewStopReason := ""
+
+	appendStreamPreviewText := func(text string) {
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return
+		}
+		if streamPreviewText == "" {
+			streamPreviewText = text
+			return
+		}
+		streamPreviewText = previewAdvancedProxyText(streamPreviewText+" "+text, 320)
+	}
 
 	emitMessageStart := func() {
 		if messageStarted {
@@ -2083,6 +2263,7 @@ func writeAnthropicSSEFromOpenAIResponsesStreamWithRecord(writer http.ResponseWr
 		if messageStopped {
 			return
 		}
+		streamPreviewStopReason = strings.TrimSpace(stopReason)
 		closeIndex(&currentTextIndex)
 		closeIndex(&currentThinkingIndex)
 		closeOpenTools()
@@ -2567,6 +2748,7 @@ func writeAnthropicSSEFromOpenAIResponsesStreamWithRecord(writer http.ResponseWr
 			if delta == "" {
 				return
 			}
+			appendStreamPreviewText(delta)
 			streamedOutputText[resolveResponsesOutputTextKey(data)] += delta
 			index := ensureTextBlock("text")
 			writeEvent("content_block_delta", map[string]any{
@@ -2790,6 +2972,22 @@ func writeAnthropicSSEFromOpenAIResponsesStreamWithRecord(writer http.ResponseWr
 		return
 	}
 	emitMessageStop(mapOpenAIResponsesStopReason("completed", hasToolUse, ""))
+	if streamRecordDetail == "" {
+		streamRecordDetail = summarizeAdvancedProxyStreamResult(
+			fmt.Sprintf("stop_reason=%s", firstNonEmpty(streamPreviewStopReason, "end_turn")),
+			fmt.Sprintf("tool_use=%t", hasToolUse),
+			fmt.Sprintf("web_search=%d", webSearchRequests),
+			func() string {
+				if strings.TrimSpace(streamPreviewText) == "" {
+					return "text=-"
+				}
+				return "text=" + previewAdvancedProxyText(streamPreviewText, 220)
+			}(),
+		)
+	}
+	if recordContext != nil && strings.TrimSpace(streamRecordDetail) != "" {
+		recordContext.DeliveredResponsePreview = streamRecordDetail
+	}
 }
 
 func isAdvancedProxyTimeoutStatusCode(statusCode int) bool {
@@ -2958,6 +3156,9 @@ func writeAnthropicSSEFromOpenAIChatStreamWithRecord(writer http.ResponseWriter,
 			return
 		}
 		observation.markCompleted(time.Now())
+		if strings.TrimSpace(recordContext.DeliveredResponsePreview) == "" && strings.TrimSpace(streamRecordDetail) != "" {
+			recordContext.DeliveredResponsePreview = streamRecordDetail
+		}
 		recordAdvancedProxyStreamObservation(recordContext, observation, http.StatusOK, streamRecordDetail)
 	}()
 
@@ -2998,6 +3199,8 @@ func writeAnthropicSSEFromOpenAIChatStreamWithRecord(writer http.ResponseWriter,
 	currentBlockType := ""
 	currentBlockIndex := -1
 	stopReason := "end_turn"
+	hasToolUse := false
+	streamPreviewText := ""
 	usage := map[string]any{
 		"input_tokens":  0,
 		"output_tokens": 0,
@@ -3005,6 +3208,17 @@ func writeAnthropicSSEFromOpenAIChatStreamWithRecord(writer http.ResponseWriter,
 	toolStates := map[int]*anthropicToolStreamState{}
 	openToolIndices := map[int]struct{}{}
 	var startToolState func(state *anthropicToolStreamState)
+	appendStreamPreviewText := func(text string) {
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return
+		}
+		if streamPreviewText == "" {
+			streamPreviewText = text
+			return
+		}
+		streamPreviewText = previewAdvancedProxyText(streamPreviewText+" "+text, 320)
+	}
 
 	emitMessageStart := func() {
 		if messageStarted {
@@ -3236,6 +3450,7 @@ func writeAnthropicSSEFromOpenAIChatStreamWithRecord(writer http.ResponseWriter,
 		}
 
 		if text := toStringValue(delta["content"]); text != "" {
+			appendStreamPreviewText(text)
 			ensureContentBlock("text", map[string]any{
 				"type": "text",
 				"text": "",
@@ -3251,6 +3466,7 @@ func writeAnthropicSSEFromOpenAIChatStreamWithRecord(writer http.ResponseWriter,
 		}
 
 		if toolCalls, ok := delta["tool_calls"].([]any); ok && len(toolCalls) > 0 {
+			hasToolUse = true
 			closeCurrentBlock()
 			for _, rawToolCall := range toolCalls {
 				toolCallMap, ok := rawToolCall.(map[string]any)
@@ -3299,6 +3515,16 @@ func writeAnthropicSSEFromOpenAIChatStreamWithRecord(writer http.ResponseWriter,
 	emitMessageStart()
 	emitMessageDelta()
 	writeEvent("message_stop", map[string]any{"type": "message_stop"})
+	streamRecordDetail = summarizeAdvancedProxyStreamResult(
+		fmt.Sprintf("stop_reason=%s", firstNonEmpty(strings.TrimSpace(mapOpenAIStopReason(stopReason)), "end_turn")),
+		fmt.Sprintf("tool_use=%t", hasToolUse),
+		func() string {
+			if strings.TrimSpace(streamPreviewText) == "" {
+				return "text=-"
+			}
+			return "text=" + previewAdvancedProxyText(streamPreviewText, 220)
+		}(),
+	)
 }
 
 func buildOpenAIProviderHeaders(provider AdvancedProxyProvider) map[string]string {
@@ -3537,10 +3763,11 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 						Source:          currentRouteSource,
 						Provider:        provider,
 						TargetURL:       targetURL,
-						RequestBody:     rawTransformed,
-						ResolvedModel:   resolvedPhaseModel,
-						StartedAt:       attemptStartedAt,
-						ObservedFormat:  phase.apiFormat,
+					RequestBody:     rawTransformed,
+					TimeoutSeconds:  timeoutSeconds,
+					ResolvedModel:   resolvedPhaseModel,
+					StartedAt:       attemptStartedAt,
+					ObservedFormat:  phase.apiFormat,
 						AntiPoisonCtx:   antiPoisonCtx,
 						StringProtect:   stringProtectionCtx,
 					},
@@ -3921,6 +4148,8 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 		preferenceValue    int
 		preferenceScopeKey string
 		source             string
+		antiPoisonCtx      antiPoisonRequestContext
+		stringProtect      antiPoisonStringProtectionContext
 	}
 
 	buildTargets := func(outboundRoute string) []string {
@@ -3996,6 +4225,8 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 				preferenceValue:    preferenceValue,
 				preferenceScopeKey: strings.TrimSpace(preferenceScopeKey),
 				source:             source,
+				antiPoisonCtx:      antiPoisonCtx,
+				stringProtect:      stringProtectionCtx,
 			})
 		}
 		appendChatPhase := func(source string, preferenceValue int, preferenceScopeKey string) {
@@ -4008,6 +4239,8 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 					preferenceValue:    preferenceValue,
 					preferenceScopeKey: strings.TrimSpace(preferenceScopeKey),
 					source:             source,
+					antiPoisonCtx:      antiPoisonCtx,
+					stringProtect:      stringProtectionCtx,
 				})
 			}
 		}
@@ -4067,6 +4300,8 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 			requestBody:   normalizedBody,
 			resolvedModel: resolvedModel,
 			source:        phaseSource,
+			antiPoisonCtx: antiPoisonCtx,
+			stringProtect: stringProtectionCtx,
 		})
 	}
 
@@ -4357,6 +4592,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 					Provider:        provider,
 					TargetURL:       targetURL,
 					RequestBody:     phase.requestBody,
+					TimeoutSeconds:  timeoutSeconds,
 					ResolvedModel:   phaseModel,
 					StartedAt:       attemptStartedAt,
 					ObservedFormat:  recordCtxObservedFormat,

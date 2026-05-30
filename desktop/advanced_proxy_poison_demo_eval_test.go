@@ -143,7 +143,7 @@ func buildPoisonDemoEvalScenarios() []poisonDemoEvalScenario {
 		ExpectBlocked bool
 	}{
 		{"missing_guard_toolcall", true},
-		{"guard_digest_mismatch", true},
+		{"guard_coverage_mismatch", true},
 		{"replay_old_nonce", true},
 		{"tampered_arguments", true},
 		{"extra_toolcall", true},
@@ -701,7 +701,7 @@ func renderPoisonDemoEvalMarkdown(report poisonDemoEvalReport) string {
 	builder.WriteString("## Coverage\n\n")
 	builder.WriteString("- Protocols: OpenAI Responses, OpenAI Chat Completions, Claude Messages.\n")
 	builder.WriteString("- Modes: non-streaming, streaming SSE, selected multi-turn prompts.\n")
-	builder.WriteString("- Block-expected attacks: `missing_guard_toolcall`, `guard_digest_mismatch`, `replay_old_nonce`, `tampered_arguments`, `extra_toolcall`.\n")
+	builder.WriteString("- Block-expected attacks: `missing_guard_toolcall`, `guard_coverage_mismatch`, `replay_old_nonce`, `tampered_arguments`, `extra_toolcall`.\n")
 	builder.WriteString("- Allow-expected controls: `guard_only`, `clean_text`.\n")
 	builder.WriteString("- Secret handling: synthetic secret strings are checked against recorded request bodies, error details, and response bodies.\n\n")
 	builder.WriteString("## Scenario History\n\n")
