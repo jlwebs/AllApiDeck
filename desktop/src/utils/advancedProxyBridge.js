@@ -59,7 +59,7 @@ export const DEFAULT_ANTI_POISON_STRING_PROTECTION = {
   enabled: true,
   rules: [
     '保护 JSON 字段名命中值: key:(?i)^(api[_-]?key|secret|client[_-]?secret|token|access[_-]?token|refresh[_-]?token|session[_-]?token|password|authorization|auth[_-]?token|credential|credentials|private[_-]?key)$',
-    '保护用户尖括号标记内容: user_text:<[^<>\r\n]{1,512}>',
+    '保护用户双尖括号标记内容: user_text:<<[^<>\r\n]{1,512}>>',
     '保护 JSON/YAML/TOML 敏感 key: (?i)("?(api[_-]?key|secret|token|password|authorization|auth[_-]?token|private[_-]?key)"?\\s*[:=]\\s*)("[^"]{8,}"|\\\'[^\\\']{8,}\\\'|[^\\s,;}"\\\']{8,})',
     '保护 Bearer/Basic/Auth 头值: (?i)\\b(Bearer|Basic|Authorization)\\s+[A-Za-z0-9._~+/=-]{12,}',
     '保护环境变量式密钥: (?i)\\b[A-Z0-9_]*(KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\\s*=\\s*[^\\s\\\'"`]{8,}',
@@ -70,6 +70,11 @@ export const DEFAULT_ANTI_POISON_STRING_PROTECTION = {
 function isLegacyAntiPoisonFileMentionProtectionRule(rule) {
   const text = String(rule || '');
   return text.includes('保护点号开头配置文件路径') || text.includes('保护常见配置文件路径');
+}
+
+function isLegacyAntiPoisonSingleAngleUserTextRule(rule) {
+  const text = String(rule || '');
+  return text.includes('保护用户尖括号标记内容') || text.includes('user_text:<[^<>\\r\\n]{1,512}>');
 }
 
 function hasAntiPoisonRuleScope(rules, scope) {
@@ -365,7 +370,10 @@ function normalizeAntiPoisonSection(input = {}) {
   let stringProtectionRules = Array.isArray(rawStringProtection.rules)
     ? rawStringProtection.rules.map(rule => String(rule || '').trim()).filter(Boolean)
     : [];
-  stringProtectionRules = stringProtectionRules.filter(rule => !isLegacyAntiPoisonFileMentionProtectionRule(rule));
+  stringProtectionRules = stringProtectionRules.filter(rule => (
+    !isLegacyAntiPoisonFileMentionProtectionRule(rule)
+    && !isLegacyAntiPoisonSingleAngleUserTextRule(rule)
+  ));
   if (stringProtectionRules.length && !hasAntiPoisonRuleScope(stringProtectionRules, 'user_text')) {
     const userTextRule = DEFAULT_ANTI_POISON_STRING_PROTECTION.rules.find(rule => String(rule || '').toLowerCase().includes('user_text:'));
     if (userTextRule) {

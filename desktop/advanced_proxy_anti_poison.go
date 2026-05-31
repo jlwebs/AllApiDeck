@@ -845,6 +845,34 @@ func antiPoisonGuardToolNameForTool(ctx antiPoisonRequestContext, toolName strin
 	return ctx.Prefix + "_" + toolName
 }
 
+func normalizeAntiPoisonGuardToolBindingName(name string) string {
+	name = strings.TrimSpace(name)
+	for _, prefix := range []string{"functions.", "function.", "tools.", "tool."} {
+		if strings.HasPrefix(name, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(name, prefix))
+		}
+	}
+	return name
+}
+
+func antiPoisonGuardNameMatchesTool(ctx antiPoisonRequestContext, guardName string, realToolName string) bool {
+	ctx = normalizeAntiPoisonRequestContext(ctx)
+	guardName = strings.TrimSpace(guardName)
+	realToolName = strings.TrimSpace(realToolName)
+	if guardName == "" || realToolName == "" {
+		return false
+	}
+	if guardName == antiPoisonGuardToolNameForTool(ctx, realToolName) {
+		return true
+	}
+	prefix := strings.TrimSpace(ctx.Prefix) + "_"
+	if !strings.HasPrefix(guardName, prefix) {
+		return false
+	}
+	guardToolName := strings.TrimSpace(strings.TrimPrefix(guardName, prefix))
+	return normalizeAntiPoisonGuardToolBindingName(guardToolName) == normalizeAntiPoisonGuardToolBindingName(realToolName)
+}
+
 func antiPoisonExactRetryEligible(result antiPoisonValidationResult) bool {
 	return false
 }
@@ -1688,10 +1716,10 @@ func antiPoisonGuardMatchesRealCall(guard antiPoisonToolCall, realCall antiPoiso
 	if expectedToolType == "" {
 		expectedToolType = classifyAntiPoisonToolName(realCall.Name)
 	}
-	if guardName != antiPoisonGuardToolNameForTool(ctx, realCall.Name) {
+	if !antiPoisonGuardNameMatchesTool(ctx, guardName, realCall.Name) {
 		return false
 	}
-	if guardToolName != strings.TrimSpace(realCall.Name) {
+	if normalizeAntiPoisonGuardToolBindingName(guardToolName) != normalizeAntiPoisonGuardToolBindingName(realCall.Name) {
 		return false
 	}
 	_ = guardToolType

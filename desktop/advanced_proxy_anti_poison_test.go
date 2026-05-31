@@ -962,6 +962,30 @@ func TestAntiPoisonIgnoresLegacyAliasFieldInMinimalMode(t *testing.T) {
 	}
 }
 
+func TestAntiPoisonGuardMatchesNamespacedCodexToolName(t *testing.T) {
+	ctx := testAntiPoisonContext("responses")
+	raw := mustJSON(t, map[string]any{
+		"id": "resp_test",
+		"output": []any{
+			map[string]any{"type": "message", "content": []any{
+				map[string]any{"type": "output_text", "text": antiPoisonGuardJSONOpenTag + mustJSONString(t, map[string]any{
+					"name":      antiPoisonGuardToolNameForTool(ctx, "shell_command"),
+					"tool_name": "functions.shell_command",
+				}) + antiPoisonGuardJSONCloseTag},
+			}},
+			map[string]any{"type": "function_call", "call_id": "call_real_123456", "name": "shell_command", "arguments": `{"command":"Get-Location"}`},
+		},
+	})
+
+	result := validateAndStripAntiPoisonOpenAIResponse(raw, "responses", ctx)
+	if !result.Valid || result.Blocked {
+		t.Fatalf("expected namespaced Codex tool guard to match real tool, got %#v", result)
+	}
+	if strings.Contains(string(result.Body), antiPoisonGuardJSONOpenTag) || strings.Contains(string(result.Body), "functions.shell_command") {
+		t.Fatalf("expected guard json stripped from response body, got %s", result.Body)
+	}
+}
+
 func TestAntiPoisonMissingGuardReasonIsExplicit(t *testing.T) {
 	ctx := testAntiPoisonContext("responses")
 	raw := []byte(`{
@@ -1143,7 +1167,7 @@ func TestAntiPoisonStringProtectionMasksUserMarkedAngleContent(t *testing.T) {
 				"content": []any{
 					map[string]any{
 						"type": "input_text",
-						"text": "login with <passw0rd> and mention .env only as a filename",
+						"text": "login with <<passw0rd>> and mention .env only as a filename",
 					},
 				},
 			},
@@ -1154,13 +1178,13 @@ func TestAntiPoisonStringProtectionMasksUserMarkedAngleContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("protect failed: %v", err)
 	}
-	if strings.Contains(string(protected), "<passw0rd>") || !strings.Contains(string(protected), "__AAD_STR_") {
+	if strings.Contains(string(protected), "<<passw0rd>>") || !strings.Contains(string(protected), "__AAD_STR_") {
 		t.Fatalf("expected user-marked angle content protected, got %s", protected)
 	}
 	if !strings.Contains(string(protected), ".env") {
 		t.Fatalf("expected plain file mention retained, got %s", protected)
 	}
-	if len(ctx.Records) != 1 || ctx.Records[0].Before != "<passw0rd>" || !strings.Contains(ctx.Records[0].Rule, "尖括号") {
+	if len(ctx.Records) != 1 || ctx.Records[0].Before != "<<passw0rd>>" || !strings.Contains(ctx.Records[0].Rule, "双尖括号") {
 		t.Fatalf("expected one user-marked protection record, got %#v", ctx.Records)
 	}
 	if !strings.Contains(ctx.Records[0].Context, "login with") || !strings.Contains(ctx.Records[0].Context, ".env") {
@@ -1185,8 +1209,36 @@ func TestAntiPoisonStringProtectionMasksUserMarkedAngleContent(t *testing.T) {
 		t.Fatalf("restored response must remain valid JSON: %v body=%s", err, restored)
 	}
 	text := decoded["output"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
-	if !strings.Contains(text, "<passw0rd>") || strings.Contains(text, placeholder) {
+	if !strings.Contains(text, "<<passw0rd>>") || strings.Contains(text, placeholder) {
 		t.Fatalf("expected user-marked content restored, got %s", text)
+	}
+}
+
+func TestAntiPoisonStringProtectionDoesNotMaskSingleAngleUserContextTag(t *testing.T) {
+	config := testAntiPoisonConfig()
+	raw := mustJSON(t, map[string]any{
+		"input": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type": "input_text",
+						"text": "<environment_context>\n  <cwd>C:\\repo</cwd>\n</environment_context>",
+					},
+				},
+			},
+		},
+	})
+
+	protected, ctx, err := applyAntiPoisonStringProtectionToJSONBody(raw, config, "responses", "provider-test", "openai")
+	if err != nil {
+		t.Fatalf("protect failed: %v", err)
+	}
+	if strings.Contains(string(protected), "__AAD_STR_") {
+		t.Fatalf("expected single-angle context tags to remain visible, got %s", protected)
+	}
+	if len(ctx.Records) != 0 {
+		t.Fatalf("expected no records for single-angle context tags, got %#v", ctx.Records)
 	}
 }
 

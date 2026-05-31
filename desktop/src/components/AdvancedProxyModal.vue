@@ -504,7 +504,7 @@
         <div class="advanced-proxy-anti-poison-card-head advanced-proxy-anti-poison-card-head-actions">
           <div>
             <h4>字符串保护规则</h4>
-            <p>一行一个规则描述，冒号后为正则；支持 <code>key:</code> 字段名、<code>path:</code> 路径、<code>text:</code> 全文本、<code>user_text:</code> 默认保护用户主动标记 <code>&lt;&gt;</code> 括号内机密内容。</p>
+            <p>一行一个规则描述，冒号后为正则；支持 <code>key:</code> 字段名、<code>path:</code> 路径、<code>text:</code> 全文本、<code>user_text:</code> 默认保护用户主动标记 <code>&lt;&lt;&gt;&gt;</code> 双尖括号内机密内容。</p>
           </div>
           <div class="advanced-proxy-anti-poison-actions">
             <button type="button" class="advanced-proxy-anti-poison-soft-button" @click="antiPoisonRulesOpen = !antiPoisonRulesOpen">

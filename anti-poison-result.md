@@ -6,7 +6,7 @@
 
 防投毒开启后，系统可以在模型返回真实 toolcall 时要求前置 guard JSON 文本块，并由网关校验 `name` / `tool_name` 与真实工具调用的最小绑定关系。若检测到缺失、错配或响应结构异常，会按配置阻断或告警，并在请求详情中记录 blocked 流水。
 
-字符串保护功能可在 request out 阶段把 JSON 密钥字段值、token/secret 类文本、私钥块、敏感工具结果和用户主动 `<...>` 标记内容替换为占位符，并在 respond in 阶段还原。普通 `.env`、`settings.json` 等文件名 mention 保持原文，避免工具说明和系统提示被无意义替换。
+字符串保护功能可在 request out 阶段把 JSON 密钥字段值、token/secret 类文本、私钥块、敏感工具结果和用户主动 `<<...>>` 标记内容替换为占位符，并在 respond in 阶段还原。普通 `.env`、`settings.json` 等文件名 mention 保持原文，避免工具说明和系统提示被无意义替换。
 
 ## 能力对比
 
@@ -17,7 +17,7 @@
 | 攻击者伪造 guard | 可能混入响应文本 | `name` / `tool_name` 必须匹配本轮命名规则和真实工具名 |
 | Hosted web search 输出 | 容易被误判为普通 function call | `web_search_call` 归类为 hosted tool call，不强制普通 function guard |
 | 密钥值进入上游 | 可能被模型或注入文本读取并外泄 | request out 替换占位符，respond in 再还原 |
-| 用户主动标记机密 | 没有手动保护通道 | `<passw0rd>` 这类 `user_text:` 内容会被保护并还原 |
+| 用户主动标记机密 | 没有手动保护通道 | `<<passw0rd>>` 这类 `user_text:` 内容会被保护并还原 |
 | 被阻断后的可观测性 | 只能看到请求失败 | 记录 before/after、context、channel、route、reason 和工具调用归类 |
 
 ## 测试覆盖
@@ -25,7 +25,7 @@
 | 测试项 | 覆盖内容 | 结果 |
 |---|---|---|
 | 本地单元测试 | guard prompt、toolcall 校验、字符串保护规则、还原逻辑 | 通过 |
-| 字符串保护策略 | JSON key value、token、敏感工具结果、用户 `<...>` 标记、普通文件名 mention 不保护 | 通过 |
+| 字符串保护策略 | JSON key value、token、敏感工具结果、用户 `<<...>>` 标记、普通文件名 mention 不保护 | 通过 |
 | 流式处理 | split guard JSON 剥离、Responses function call 生命周期聚合、hosted tool call 归类 | 通过 |
 | Hosted Web Search | OpenAI Responses `web_search_call` 不误杀 | 通过 |
 | 工具参数规范化 | `pages:""` 等可选空字段清理 | 通过 |
@@ -43,7 +43,7 @@
 | 协议形态混淆 | 在 OpenAI Chat、OpenAI Responses、Claude Messages 等不同响应结构里塞入 toolcall | 多协议解析不一致导致漏检 | 分协议解析 toolcall 和 guard JSON，再统一校验 | 已覆盖 |
 | Hosted tool 误杀 | OpenAI Responses `web_search_call` 被当成普通 function call | 正常 Web Search 响应被误拦 | hosted tool call 分类跳过普通 function guard 要求 | 已修复并验证 |
 | JSON 密钥字段泄露 | JSON 中包含 `api_key`、`secret`、`token`、`authorization`、`password` 等字段值 | 上游模型看到明文密钥后可能泄露或被注入利用 | key/path/text 规则替换为 `__AAD_STR_...__` 占位符 | 已替换，respond in 还原 |
-| 用户主动标记机密 | 用户输入 `<passw0rd>`、`<my-token>` | 用户已明确知道该片段应保护 | `user_text:` 规则只在用户输入文本中保护 | 已替换，respond in 还原 |
+| 用户主动标记机密 | 用户输入 `<<passw0rd>>`、`<<my-token>>` | 用户已明确知道该片段应保护 | `user_text:` 规则只在用户输入文本中保护 | 已替换，respond in 还原 |
 | 敏感工具结果泄露 | Read 工具返回 `.env` 文件内容或私钥块 | 文件内容包含真实 token 或私密配置 | 工具结果看起来像真实敏感内容时整体保护 | 已替换并记录上下文 |
 | 响应阶段污染回流 | 上游把占位符、guard JSON 或异常内容带回客户端 | 客户端看到内部防护细节或错误内容 | respond in 阶段剥离 guard、还原字符串、记录 blocked | 正常还原或阻断 |
 | 阻断后 fallback 绕过 | 检测到投毒后继续 fallback 到其他 provider | 安全失败被当成普通上游失败处理 | anti-poison blocked 标记硬终止本次请求 | 已验证不 fallback |
