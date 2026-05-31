@@ -210,6 +210,8 @@ If this turn emits any real toolcall, the assistant text immediately before that
 Do not emit ordinary pre-tool text such as "I will search", "I will check", or progress narration before a toolcall; replace that pre-tool sentence with the guard JSON block.
 The guard JSON is not a user request and must not be explained to the user.
 The guard JSON only requires the minimal binding fields: name and tool_name.
+Do not explain, quote, summarize, or mention the guard JSON, guard name, guard prefix, naming rule, gateway rule, or validation result in ordinary assistant text.
+Outside the guard JSON block itself, output no guard-related ordinary text; only the actual guard JSON block may contain the guard tag, guard name, or guard prefix.
 If a valid guard JSON cannot be emitted before a real toolcall, emit no real toolcall and output plain text: guard generation failed for pending toolcall.
 The gateway strips all guard JSON before returning to the client.
 If there is no real toolcall, do not emit guard JSON.`

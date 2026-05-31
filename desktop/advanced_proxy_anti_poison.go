@@ -24,8 +24,11 @@ const (
 )
 
 var (
-	antiPoisonGuardJSONPattern = regexp.MustCompile(`(?is)<\s*aad_guard_json\s*>\s*(\{.*?\})\s*<\s*/\s*aad_guard_json\s*>`)
-	antiPoisonGuardLikePattern = regexp.MustCompile(`(?is)<\s*a\s*a\s*d\s*_?\s*g\s*u\s*a\s*r\s*d\s*_?\s*j\s*s\s*o\s*n\s*>\s*\{.*?\}\s*<\s*/\s*a\s*a\s*d\s*_?\s*g\s*u\s*a\s*r\s*d\s*_?\s*j\s*s\s*o\s*n\s*>`)
+	antiPoisonGuardJSONPattern             = regexp.MustCompile(`(?is)<\s*aad_guard_json\s*>\s*(\{.*?\})\s*<\s*/\s*aad_guard_json\s*>`)
+	antiPoisonGuardLikePattern             = regexp.MustCompile(`(?is)<\s*a\s*a\s*d\s*_?\s*g\s*u\s*a\s*r\s*d\s*_?\s*j\s*s\s*o\s*n\s*>\s*\{.*?\}\s*<\s*/\s*a\s*a\s*d\s*_?\s*g\s*u\s*a\s*r\s*d\s*_?\s*j\s*s\s*o\s*n\s*>`)
+	antiPoisonHistoricalGuardRulePattern   = regexp.MustCompile("(?i)naming rule `aad_guard_[a-f0-9]{10}_[^`]+`")
+	antiPoisonHistoricalGuardNamePattern   = regexp.MustCompile(`(?i)aad_guard_[a-f0-9]{10}_[A-Za-z0-9_.:-]+`)
+	antiPoisonHistoricalFailureLinePattern = regexp.MustCompile(`(?im)^.*(?:AllApiDeck anti-poison validation failed|missing_guard_toolcall|guard_coverage_mismatch|guard_digest_mismatch).*$(?:\r?\n)?`)
 )
 
 type antiPoisonRequestContext struct {
@@ -95,6 +98,7 @@ type antiPoisonOperationRecord struct {
 	Path     string `json:"path"`
 	Before   string `json:"before"`
 	After    string `json:"after"`
+	Context  string `json:"context"`
 	Count    int    `json:"count"`
 	Route    string `json:"route"`
 	Provider string `json:"provider"`
@@ -107,6 +111,12 @@ type antiPoisonStringProtectionContext struct {
 	Records []antiPoisonOperationRecord
 	mapping map[string]string
 	seq     int
+}
+
+type antiPoisonStringRestoreHit struct {
+	Placeholder string
+	Original    string
+	Count       int
 }
 
 type antiPoisonStringProtectionRule struct {
@@ -186,7 +196,7 @@ func restoreAntiPoisonStringProtectionInJSONBody(rawBody []byte, ctx *antiPoison
 	decoder := json.NewDecoder(strings.NewReader(string(rawBody)))
 	decoder.UseNumber()
 	if err := decoder.Decode(&body); err == nil {
-		restored, count := restoreAntiPoisonStringValue(body, ctx.mapping)
+		restored, count, hits := restoreAntiPoisonStringValueWithHits(body, ctx.mapping)
 		if count > 0 {
 			nextRaw, marshalErr := json.Marshal(restored)
 			if marshalErr == nil {
@@ -196,8 +206,8 @@ func restoreAntiPoisonStringProtectionInJSONBody(rawBody []byte, ctx *antiPoison
 					Route:    route,
 					Provider: provider,
 					Rule:     "string protection restore",
-					Before:   fmt.Sprintf("%d placeholder(s)", count),
-					After:    "restored for client",
+					Before:   summarizeAntiPoisonRestorePlaceholders(hits),
+					After:    summarizeAntiPoisonRestoreOriginals(hits),
 					Count:    count,
 				})
 				appendAdvancedProxyLogf(
@@ -216,13 +226,15 @@ func restoreAntiPoisonStringProtectionInJSONBody(rawBody []byte, ctx *antiPoison
 
 	restored := string(rawBody)
 	count := 0
+	hits := make([]antiPoisonStringRestoreHit, 0, len(ctx.mapping))
 	for placeholder, original := range ctx.mapping {
-		hits := strings.Count(restored, placeholder)
-		if hits <= 0 {
+		placeholderHits := strings.Count(restored, placeholder)
+		if placeholderHits <= 0 {
 			continue
 		}
 		restored = strings.ReplaceAll(restored, placeholder, original)
-		count += hits
+		count += placeholderHits
+		hits = appendAntiPoisonRestoreHits(hits, []antiPoisonStringRestoreHit{{Placeholder: placeholder, Original: original, Count: placeholderHits}})
 	}
 	if count > 0 {
 		ctx.addRecord(antiPoisonOperationRecord{
@@ -231,8 +243,8 @@ func restoreAntiPoisonStringProtectionInJSONBody(rawBody []byte, ctx *antiPoison
 			Route:    route,
 			Provider: provider,
 			Rule:     "string protection restore",
-			Before:   fmt.Sprintf("%d placeholder(s)", count),
-			After:    "restored for client (raw fallback)",
+			Before:   summarizeAntiPoisonRestorePlaceholders(hits),
+			After:    summarizeAntiPoisonRestoreOriginals(hits),
 			Count:    count,
 			Reason:   "invalid_json_raw_fallback",
 		})
@@ -248,40 +260,92 @@ func restoreAntiPoisonStringProtectionInJSONBody(rawBody []byte, ctx *antiPoison
 }
 
 func restoreAntiPoisonStringValue(value any, mapping map[string]string) (any, int) {
+	restored, count, _ := restoreAntiPoisonStringValueWithHits(value, mapping)
+	return restored, count
+}
+
+func restoreAntiPoisonStringValueWithHits(value any, mapping map[string]string) (any, int, []antiPoisonStringRestoreHit) {
 	switch typed := value.(type) {
 	case map[string]any:
 		next := make(map[string]any, len(typed))
 		count := 0
+		hits := make([]antiPoisonStringRestoreHit, 0)
 		for key, child := range typed {
-			restored, hits := restoreAntiPoisonStringValue(child, mapping)
+			restored, childCount, childHits := restoreAntiPoisonStringValueWithHits(child, mapping)
 			next[key] = restored
-			count += hits
+			count += childCount
+			hits = appendAntiPoisonRestoreHits(hits, childHits)
 		}
-		return next, count
+		return next, count, hits
 	case []any:
 		next := make([]any, 0, len(typed))
 		count := 0
+		hits := make([]antiPoisonStringRestoreHit, 0)
 		for _, child := range typed {
-			restored, hits := restoreAntiPoisonStringValue(child, mapping)
+			restored, childCount, childHits := restoreAntiPoisonStringValueWithHits(child, mapping)
 			next = append(next, restored)
-			count += hits
+			count += childCount
+			hits = appendAntiPoisonRestoreHits(hits, childHits)
 		}
-		return next, count
+		return next, count, hits
 	case string:
 		result := typed
 		count := 0
+		hits := make([]antiPoisonStringRestoreHit, 0)
 		for placeholder, original := range mapping {
-			hits := strings.Count(result, placeholder)
-			if hits <= 0 {
+			placeholderHits := strings.Count(result, placeholder)
+			if placeholderHits <= 0 {
 				continue
 			}
 			result = strings.ReplaceAll(result, placeholder, original)
-			count += hits
+			count += placeholderHits
+			hits = appendAntiPoisonRestoreHits(hits, []antiPoisonStringRestoreHit{{Placeholder: placeholder, Original: original, Count: placeholderHits}})
 		}
-		return result, count
+		return result, count, hits
 	default:
-		return value, 0
+		return value, 0, nil
 	}
+}
+
+func appendAntiPoisonRestoreHits(base []antiPoisonStringRestoreHit, additions []antiPoisonStringRestoreHit) []antiPoisonStringRestoreHit {
+	for _, addition := range additions {
+		merged := false
+		for index := range base {
+			if base[index].Placeholder == addition.Placeholder && base[index].Original == addition.Original {
+				base[index].Count += addition.Count
+				merged = true
+				break
+			}
+		}
+		if !merged {
+			base = append(base, addition)
+		}
+	}
+	return base
+}
+
+func summarizeAntiPoisonRestorePlaceholders(hits []antiPoisonStringRestoreHit) string {
+	parts := make([]string, 0, len(hits))
+	for _, hit := range hits {
+		if hit.Count > 1 {
+			parts = append(parts, fmt.Sprintf("%s x%d", hit.Placeholder, hit.Count))
+			continue
+		}
+		parts = append(parts, hit.Placeholder)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func summarizeAntiPoisonRestoreOriginals(hits []antiPoisonStringRestoreHit) string {
+	parts := make([]string, 0, len(hits))
+	for _, hit := range hits {
+		if hit.Count > 1 {
+			parts = append(parts, fmt.Sprintf("%s x%d", hit.Original, hit.Count))
+			continue
+		}
+		parts = append(parts, hit.Original)
+	}
+	return strings.Join(parts, "\n")
 }
 
 func annotateAntiPoisonStringProtectionRecords(records []antiPoisonOperationRecord, route string, provider string) []antiPoisonOperationRecord {
@@ -462,7 +526,7 @@ func protectAntiPoisonStringWholeText(text string, path string, rule antiPoisonS
 	if strings.TrimSpace(text) == "" || ctx == nil || strings.Contains(text, "__AAD_STR_") {
 		return text
 	}
-	return storeAntiPoisonProtectedString(text, path, rule.Description, ctx, route, provider, channel)
+	return storeAntiPoisonProtectedString(text, path, rule.Description, summarizeAntiPoisonPayloadContext(text, text), ctx, route, provider, channel)
 }
 
 func protectAntiPoisonStringText(text string, path string, rules []antiPoisonStringProtectionRule, ctx *antiPoisonStringProtectionContext, route string, provider string, channel string) string {
@@ -474,17 +538,18 @@ func protectAntiPoisonStringText(text string, path string, rules []antiPoisonStr
 		if rule.Regexp == nil || strings.TrimSpace(rule.Scope) != "text" {
 			continue
 		}
+		originalText := result
 		result = rule.Regexp.ReplaceAllStringFunc(result, func(match string) string {
 			if match == "" || strings.Contains(match, "__AAD_STR_") {
 				return match
 			}
-			return storeAntiPoisonProtectedString(match, path, rule.Description, ctx, route, provider, channel)
+			return storeAntiPoisonProtectedString(match, path, rule.Description, summarizeAntiPoisonPayloadContext(originalText, match), ctx, route, provider, channel)
 		})
 	}
 	return result
 }
 
-func storeAntiPoisonProtectedString(original string, path string, ruleDescription string, ctx *antiPoisonStringProtectionContext, route string, provider string, channel string) string {
+func storeAntiPoisonProtectedString(original string, path string, ruleDescription string, context string, ctx *antiPoisonStringProtectionContext, route string, provider string, channel string) string {
 	placeholder := fmt.Sprintf("__AAD_STR_%s_%03d__", randomAntiPoisonHex(4), len(ctx.mapping)+1)
 	ctx.mapping[placeholder] = original
 	ctx.addRecord(antiPoisonOperationRecord{
@@ -494,6 +559,7 @@ func storeAntiPoisonProtectedString(original string, path string, ruleDescriptio
 		Path:     path,
 		Before:   summarizeAntiPoisonProtectedText(original),
 		After:    placeholder,
+		Context:  context,
 		Count:    1,
 		Route:    route,
 		Provider: provider,
@@ -501,12 +567,43 @@ func storeAntiPoisonProtectedString(original string, path string, ruleDescriptio
 	return placeholder
 }
 
+func summarizeAntiPoisonPayloadContext(text string, match string) string {
+	text = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n"))
+	if text == "" {
+		return ""
+	}
+	match = strings.TrimSpace(match)
+	if match == "" {
+		return previewAdvancedProxyText(text, 480)
+	}
+	index := strings.Index(text, match)
+	if index < 0 {
+		return previewAdvancedProxyText(text, 480)
+	}
+	start := index - 220
+	if start < 0 {
+		start = 0
+	}
+	end := index + len(match) + 220
+	if end > len(text) {
+		end = len(text)
+	}
+	context := strings.TrimSpace(text[start:end])
+	if start > 0 {
+		context = "..." + context
+	}
+	if end < len(text) {
+		context += "..."
+	}
+	return context
+}
+
 func summarizeAntiPoisonProtectedText(text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return "empty"
 	}
-	return fmt.Sprintf("len=%d sha256=%s", len([]rune(text)), sha256Hex(text)[:12])
+	return text
 }
 
 func detectAntiPoisonSensitiveToolContent(value map[string]any, path string) (string, string, antiPoisonStringProtectionRule, bool) {
@@ -780,6 +877,7 @@ func buildAntiPoisonExactRetryOpenAIRequestForCalls(rawBody []byte, routeKind st
 	if err := json.Unmarshal(rawBody, &body); err != nil {
 		return nil, err
 	}
+	body = sanitizeAntiPoisonHistoricalContextMap(body)
 	prompt, err := buildAntiPoisonExactGuardPromptForCalls(ctx, calls)
 	if err != nil {
 		return nil, err
@@ -849,7 +947,8 @@ func buildAntiPoisonPrompt(ctx antiPoisonRequestContext) string {
 		"`tool_name` must exactly equal the next real tool name.",
 		"Only after that guard block may you emit the corresponding real toolcall.",
 		"Do not include digest, chain, cover, nonce, algorithm, or tool_type in guard JSON.",
-		"Do not use a Markdown code block. Do not explain the guard JSON to the user.",
+		"Do not use a Markdown code block. Do not explain, quote, summarize, or mention the guard JSON, guard name, guard prefix, naming rule, gateway rule, or validation result in any ordinary assistant text.",
+		"Outside the guard JSON block itself, output no guard-related ordinary text; only the actual guard JSON block may contain the guard tag, guard name, or guard prefix.",
 		"If you cannot emit a valid guard before a real toolcall, emit no real toolcall and output plain text: guard generation failed for pending toolcall.",
 		"Example for a next real WebSearch toolcall:",
 		webSearchExampleGuard,
@@ -866,6 +965,7 @@ func applyAntiPoisonPromptToOpenAIRequest(rawBody []byte, routeKind string, conf
 	if err := json.Unmarshal(rawBody, &body); err != nil {
 		return rawBody, ctx, err
 	}
+	body = sanitizeAntiPoisonHistoricalContextMap(body)
 	prompt := buildAntiPoisonPrompt(ctx)
 	switch strings.TrimSpace(routeKind) {
 	case "chat":
@@ -893,7 +993,7 @@ func applyAntiPoisonPromptToAnthropicRequest(requestBody map[string]any, config 
 	if !ctx.Enabled {
 		return requestBody, ctx, nil
 	}
-	body := deepCopyJSONMap(requestBody)
+	body := sanitizeAntiPoisonHistoricalContextMap(deepCopyJSONMap(requestBody))
 	body["system"] = appendAntiPoisonAnthropicSystem(body["system"], buildAntiPoisonPrompt(ctx))
 	return body, ctx, nil
 }
@@ -976,6 +1076,99 @@ func stripExistingAntiPoisonPrompt(text string) string {
 		return ""
 	}
 	return regexp.MustCompile(`\n{3,}`).ReplaceAllString(clean, "\n\n")
+}
+
+func sanitizeAntiPoisonHistoricalContextMap(body map[string]any) map[string]any {
+	if body == nil {
+		return body
+	}
+	cleaned, _ := sanitizeAntiPoisonHistoricalContextValue(body).(map[string]any)
+	if cleaned == nil {
+		return body
+	}
+	sanitizeAntiPoisonToolArgumentsInPlace(cleaned)
+	return cleaned
+}
+
+func sanitizeAntiPoisonHistoricalContextValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		next := make(map[string]any, len(typed))
+		for key, item := range typed {
+			next[key] = sanitizeAntiPoisonHistoricalContextValue(item)
+		}
+		return next
+	case []any:
+		next := make([]any, 0, len(typed))
+		for _, item := range typed {
+			next = append(next, sanitizeAntiPoisonHistoricalContextValue(item))
+		}
+		return next
+	case []map[string]any:
+		next := make([]any, 0, len(typed))
+		for _, item := range typed {
+			next = append(next, sanitizeAntiPoisonHistoricalContextMap(item))
+		}
+		return next
+	case string:
+		return sanitizeAntiPoisonHistoricalContextText(typed)
+	default:
+		return value
+	}
+}
+
+func sanitizeAntiPoisonHistoricalContextText(text string) string {
+	if text == "" || (!strings.Contains(strings.ToLower(text), "guard") && !strings.Contains(text, "AllApiDeck anti-poison")) {
+		return text
+	}
+	clean := stripExistingAntiPoisonPrompt(text)
+	clean = antiPoisonGuardLikePattern.ReplaceAllString(clean, "")
+	clean = antiPoisonHistoricalGuardRulePattern.ReplaceAllString(clean, "")
+	clean = antiPoisonHistoricalGuardNamePattern.ReplaceAllString(clean, "")
+	clean = antiPoisonHistoricalFailureLinePattern.ReplaceAllString(clean, "")
+	clean = strings.ReplaceAll(clean, "\r\n", "\n")
+	clean = strings.ReplaceAll(clean, "\r", "\n")
+	clean = regexp.MustCompile(`[ \t]{2,}`).ReplaceAllString(clean, " ")
+	clean = regexp.MustCompile(`[ \t]+\n`).ReplaceAllString(clean, "\n")
+	clean = regexp.MustCompile(`\n{3,}`).ReplaceAllString(clean, "\n\n")
+	return strings.TrimSpace(clean)
+}
+
+func sanitizeAntiPoisonToolArgumentsInPlace(body map[string]any) {
+	if body == nil {
+		return
+	}
+	for _, rawItem := range anySliceValue(body["input"]) {
+		item, _ := rawItem.(map[string]any)
+		if strings.TrimSpace(toStringValue(item["type"])) != "function_call" {
+			continue
+		}
+		if normalized, err := normalizeToolArgumentsJSON(item["arguments"]); err == nil {
+			item["arguments"] = normalized
+		}
+	}
+	for _, rawItem := range anySliceValue(body["output"]) {
+		item, _ := rawItem.(map[string]any)
+		if strings.TrimSpace(toStringValue(item["type"])) != "function_call" {
+			continue
+		}
+		if normalized, err := normalizeToolArgumentsJSON(item["arguments"]); err == nil {
+			item["arguments"] = normalized
+		}
+	}
+	for _, rawMessage := range anySliceValue(body["messages"]) {
+		message, _ := rawMessage.(map[string]any)
+		for _, rawToolCall := range anySliceValue(message["tool_calls"]) {
+			toolCall, _ := rawToolCall.(map[string]any)
+			functionMap, _ := toolCall["function"].(map[string]any)
+			if functionMap == nil {
+				continue
+			}
+			if normalized, err := normalizeToolArgumentsJSON(functionMap["arguments"]); err == nil {
+				functionMap["arguments"] = normalized
+			}
+		}
+	}
 }
 
 func cloneJSONList(raw any) []any {
@@ -1530,6 +1723,12 @@ func stripAntiPoisonChatGuards(body map[string]any) {
 func stripAntiPoisonResponsesGuards(body map[string]any) {
 	for _, rawItem := range anySliceValue(body["output"]) {
 		item, _ := rawItem.(map[string]any)
+		if strings.TrimSpace(toStringValue(item["type"])) == "function_call" {
+			if normalized, err := normalizeToolArgumentsJSON(item["arguments"]); err == nil {
+				item["arguments"] = normalized
+			}
+			continue
+		}
 		if strings.TrimSpace(toStringValue(item["type"])) != "message" {
 			continue
 		}

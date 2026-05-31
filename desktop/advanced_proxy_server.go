@@ -19,7 +19,10 @@ import (
 	"time"
 )
 
-const advancedProxySSEScannerMaxTokenSize = 16 * 1024 * 1024
+const (
+	advancedProxySSEScannerMaxTokenSize = 16 * 1024 * 1024
+	advancedProxyMaxRequestBodyBytes    = 64 * 1024 * 1024
+)
 
 var webSearchResultURLPattern = regexp.MustCompile(`https?://[^\s<>"')\]]+`)
 var encryptedContentNeedlePattern = regexp.MustCompile(`(?i)encrypted_content`)
@@ -3763,11 +3766,11 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 						Source:          currentRouteSource,
 						Provider:        provider,
 						TargetURL:       targetURL,
-					RequestBody:     rawTransformed,
-					TimeoutSeconds:  timeoutSeconds,
-					ResolvedModel:   resolvedPhaseModel,
-					StartedAt:       attemptStartedAt,
-					ObservedFormat:  phase.apiFormat,
+						RequestBody:     rawTransformed,
+						TimeoutSeconds:  timeoutSeconds,
+						ResolvedModel:   resolvedPhaseModel,
+						StartedAt:       attemptStartedAt,
+						ObservedFormat:  phase.apiFormat,
 						AntiPoisonCtx:   antiPoisonCtx,
 						StringProtect:   stringProtectionCtx,
 					},
@@ -4883,8 +4886,8 @@ func (a *App) handleAdvancedProxyClaude(writer http.ResponseWriter, request *htt
 	}
 
 	var requestBody map[string]any
-	if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 4*1024*1024)).Decode(&requestBody); err != nil {
-		writeAnthropicProxyError(writer, http.StatusBadRequest, "invalid JSON request body")
+	if err := json.NewDecoder(http.MaxBytesReader(writer, request.Body, advancedProxyMaxRequestBodyBytes)).Decode(&requestBody); err != nil {
+		writeAnthropicProxyError(writer, http.StatusBadRequest, fmt.Sprintf("invalid JSON request body: %v", err))
 		return
 	}
 
@@ -5099,9 +5102,9 @@ func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWrit
 		return
 	}
 
-	rawBody, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, 4*1024*1024))
+	rawBody, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, advancedProxyMaxRequestBodyBytes))
 	if err != nil {
-		writeOpenAIProxyError(writer, http.StatusBadRequest, "failed to read request body", "advanced_proxy_error", "invalid_request_error")
+		writeOpenAIProxyError(writer, http.StatusBadRequest, fmt.Sprintf("failed to read request body: %v", err), "advanced_proxy_error", "invalid_request_error")
 		return
 	}
 	requestBody := map[string]any{}

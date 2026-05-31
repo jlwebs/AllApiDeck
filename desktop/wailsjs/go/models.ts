@@ -458,6 +458,7 @@ export namespace main {
 	    path: string;
 	    before: string;
 	    after: string;
+	    context: string;
 	    count: number;
 	    route: string;
 	    provider: string;
@@ -478,6 +479,7 @@ export namespace main {
 	        this.path = source["path"];
 	        this.before = source["before"];
 	        this.after = source["after"];
+	        this.context = source["context"];
 	        this.count = source["count"];
 	        this.route = source["route"];
 	        this.provider = source["provider"];

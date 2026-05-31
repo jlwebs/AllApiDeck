@@ -608,13 +608,14 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in antiPoisonOperationRows" :key="row.id" :class="{ 'advanced-proxy-anti-poison-blocked-row': row.blocked }">
+              <tr v-for="row in antiPoisonOperationRows" :key="row.id" :class="{ 'advanced-proxy-anti-poison-blocked-row': row.blocked, 'advanced-proxy-anti-poison-failed-row': row.failed }">
                 <td class="advanced-proxy-anti-poison-time-cell">{{ row.time }}</td>
-                <td><span class="advanced-proxy-anti-poison-stage-pill" :class="{ 'is-blocked': row.blocked }">{{ row.stage }}</span></td>
+                <td><span class="advanced-proxy-anti-poison-stage-pill" :class="{ 'is-blocked': row.blocked, 'is-failed': row.failed }">{{ row.stage }}</span></td>
                 <td>{{ row.channel }}</td>
                 <td>
                   <div class="advanced-proxy-anti-poison-rule-cell">
                     <span>{{ row.rule }}</span>
+                    <span v-if="row.statusText" class="advanced-proxy-anti-poison-status-note">{{ row.statusText }}</span>
                     <button type="button" class="advanced-proxy-anti-poison-row-detail-button" @click.stop="showAntiPoisonOperationDetail(row)">
                       详情
                     </button>
@@ -801,6 +802,31 @@ const antiPoisonOperationRows = computed(() => {
   const rows = [];
   const records = Array.isArray(antiPoisonRequestRecords.value) ? antiPoisonRequestRecords.value : [];
   records.forEach(record => {
+    const statusCode = Number(record?.statusCode || 0);
+    const requestFailed = statusCode >= 400;
+    if (requestFailed) {
+      const errorDetail = normalizeAntiPoisonDetailText(record?.errorDetail)
+        || normalizeAntiPoisonDetailText(record?.responsePreview)
+        || normalizeAntiPoisonDetailText(record?.upstreamResponsePreview)
+        || (statusCode ? `HTTP ${statusCode}` : '请求失败');
+      const row = {
+        id: String(`${record?.id || 'record'}-upstream-error`),
+        time: formatAntiPoisonOperationTime(record?.recordedAt),
+        stage: 'upstream error',
+        channel: String(record?.appType || '-'),
+        rule: '上游请求失败',
+        path: String(record?.outboundRoute || record?.clientRoute || '-'),
+        before: '-',
+        after: errorDetail,
+        count: 1,
+        blocked: false,
+        failed: true,
+        statusText: statusCode ? `HTTP ${statusCode}` : '请求失败',
+        requestError: errorDetail,
+      };
+      row.detailText = buildAntiPoisonOperationDetailText(row, record, null, -1);
+      rows.push(row);
+    }
     const ops = Array.isArray(record?.antiPoisonOps) ? record.antiPoisonOps : [];
     ops.forEach((op, index) => {
       const row = {
@@ -814,6 +840,13 @@ const antiPoisonOperationRows = computed(() => {
         after: String(op?.after || '-'),
         count: Number(op?.count || 0),
         blocked: op?.blocked === true || String(op?.reason || '').includes('anti_poison'),
+        failed: requestFailed,
+        statusText: requestFailed && statusCode ? `请求失败 HTTP ${statusCode}` : '',
+        requestError: requestFailed
+          ? normalizeAntiPoisonDetailText(record?.errorDetail)
+            || normalizeAntiPoisonDetailText(record?.responsePreview)
+            || normalizeAntiPoisonDetailText(record?.upstreamResponsePreview)
+          : '',
       };
       row.detailText = buildAntiPoisonOperationDetailText(row, record, op, index);
       rows.push(row);
@@ -864,6 +897,8 @@ const antiPoisonPreviewText = computed(() => {
     `guard JSON name must follow ${guardToolName}; for WebSearch it is ${guardToolExample}.`,
     'guard JSON only requires the minimal binding fields: name and tool_name.',
     'tool_name must equal the immediately following real tool name.',
+    'Do not explain, quote, summarize, or mention guard JSON / guard name / naming rule in ordinary assistant text.',
+    'Outside the guard JSON block itself, output no guard-related ordinary text; only the actual guard JSON block may contain the guard tag, guard name, or guard prefix.',
     'Do not include digest, chain, cover, nonce, algorithm, or tool_type.',
     'After validation, the gateway strips guard JSON before returning to the client.',
   ].join('\n');
@@ -2138,8 +2173,17 @@ function formatAntiPoisonOperationTime(value) {
   });
 }
 
+function normalizeAntiPoisonDetailText(value) {
+  return String(value ?? '').trim();
+}
+
 function buildAntiPoisonOperationDetailText(row, record, op, index) {
-  const reason = op?.reason || record?.errorDetail || '';
+  const statusCode = Number(record?.statusCode || 0);
+  const upstreamError = normalizeAntiPoisonDetailText(record?.errorDetail)
+    || (statusCode >= 400 ? normalizeAntiPoisonDetailText(record?.responsePreview) : '')
+    || (statusCode >= 400 ? normalizeAntiPoisonDetailText(record?.upstreamResponsePreview) : '')
+    || normalizeAntiPoisonDetailText(row?.requestError);
+  const opReason = normalizeAntiPoisonDetailText(op?.reason);
   const toolCalls = Array.isArray(record?.upstreamToolCalls) ? record.upstreamToolCalls : [];
   const toolArgs = Array.isArray(record?.upstreamToolArgsPreview) ? record.upstreamToolArgsPreview : [];
   const routeTrace = Array.isArray(record?.routeTrace) ? record.routeTrace : [];
@@ -2160,14 +2204,23 @@ function buildAntiPoisonOperationDetailText(row, record, op, index) {
       source: record?.source,
       stream: record?.stream,
       blocked: row.blocked,
+      failed: row.failed,
     }],
-    ['失败原因', {
-      rule: row.rule,
-      reason,
-      errorDetail: record?.errorDetail || '',
-      before: row.before,
-      after: row.after,
-      count: row.count,
+    ['请求结果', {
+      statusCode: record?.statusCode,
+      failed: row.failed,
+      errorDetail: upstreamError,
+      responsePreview: record?.responsePreview || '',
+      upstreamResponsePreview: record?.upstreamResponsePreview || '',
+    }],
+    ['防投毒流水', {
+      rule: op ? row.rule : '',
+      reason: opReason,
+      blocked: row.blocked,
+      before: op ? row.before : '',
+      after: op ? row.after : '',
+      payloadContext: op?.context || '',
+      count: op ? row.count : 0,
     }],
     ['工具调用归类', {
       totalObserved: toolCalls.length,
@@ -2986,6 +3039,26 @@ function resetAntiPoisonPromptsToDefault() {
   background: rgba(255, 235, 230, 0.92);
 }
 
+.advanced-proxy-anti-poison-status-note {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: rgba(190, 53, 34, 0.12);
+  color: #9e2f20;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.advanced-proxy-anti-poison-failed-row td {
+  background: rgba(255, 247, 229, 0.82);
+  color: #8a4d00 !important;
+}
+
+.advanced-proxy-anti-poison-failed-row td code {
+  background: rgba(191, 117, 20, 0.12);
+  color: #8a4d00;
+}
+
 .advanced-proxy-anti-poison-blocked-row td {
   background: rgba(255, 235, 230, 0.78);
   color: #7c2418 !important;
@@ -3017,6 +3090,11 @@ function resetAntiPoisonPromptsToDefault() {
 .advanced-proxy-anti-poison-stage-pill.is-blocked {
   background: rgba(217, 86, 61, 0.18);
   color: #9e2f20;
+}
+
+.advanced-proxy-anti-poison-stage-pill.is-failed {
+  background: rgba(191, 117, 20, 0.16);
+  color: #8a4d00;
 }
 
 :global(.advanced-proxy-anti-poison-operation-detail) {

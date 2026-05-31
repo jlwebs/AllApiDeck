@@ -1796,12 +1796,16 @@ func anthropicContentToChatPayloads(role string, content any) ([]map[string]any,
 					})
 				}
 			case "tool_use":
+				arguments, err := normalizeToolArgumentsJSON(blockMap["input"])
+				if err != nil {
+					arguments = stringifyJSON(blockMap["input"])
+				}
 				toolCalls = append(toolCalls, map[string]any{
 					"id":   firstNonEmpty(strings.TrimSpace(toStringValue(blockMap["id"])), fmt.Sprintf("tool_%d", len(toolCalls)+1)),
 					"type": "function",
 					"function": map[string]any{
 						"name":      firstNonEmpty(strings.TrimSpace(toStringValue(blockMap["name"])), "tool"),
-						"arguments": stringifyJSON(blockMap["input"]),
+						"arguments": arguments,
 					},
 				})
 			case "tool_result":
@@ -1860,11 +1864,15 @@ func anthropicContentToResponsesPayloads(role string, content any) ([]map[string
 					})
 				}
 			case "tool_use":
+				arguments, err := normalizeToolArgumentsJSON(blockMap["input"])
+				if err != nil {
+					arguments = stringifyJSON(blockMap["input"])
+				}
 				toolCalls = append(toolCalls, map[string]any{
 					"type":      "function_call",
 					"call_id":   firstNonEmpty(strings.TrimSpace(toStringValue(blockMap["id"])), fmt.Sprintf("tool_%d", len(toolCalls)+1)),
 					"name":      firstNonEmpty(strings.TrimSpace(toStringValue(blockMap["name"])), "tool"),
-					"arguments": stringifyJSON(blockMap["input"]),
+					"arguments": arguments,
 				})
 			case "tool_result":
 				toolResults = append(toolResults, map[string]any{

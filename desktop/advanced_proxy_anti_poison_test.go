@@ -205,6 +205,86 @@ func TestApplyAntiPoisonPromptToResponsesRequestReplacesExistingGuardBlock(t *te
 	}
 }
 
+func TestApplyAntiPoisonPromptToResponsesRequestSanitizesHistoricalGuardArtifacts(t *testing.T) {
+	config := testAntiPoisonConfig()
+	oldGuard := antiPoisonGuardJSONOpenTag + `{"name":"aad_guard_1f85d1c995_Read","tool_name":"Read"}` + antiPoisonGuardJSONCloseTag
+	raw := mustJSON(t, map[string]any{
+		"model":        "gpt-test",
+		"instructions": "<important_gateway_rules>\nold guard aad_guard_1f85d1c995_Read\n</important_gateway_rules>\n\nUSER_ORIGINAL_INSTRUCTIONS",
+		"input": []any{
+			map[string]any{
+				"role": "assistant",
+				"content": []any{
+					map[string]any{"type": "output_text", "text": oldGuard + "\nAllApiDeck anti-poison validation failed: missing_guard_toolcall: naming rule `aad_guard_1f85d1c995_<original_tool_name>`"},
+				},
+			},
+			map[string]any{
+				"type":    "function_call_output",
+				"call_id": "call_old",
+				"output":  "guard_coverage_mismatch aad_guard_579e08c748_Read should not remain",
+			},
+			map[string]any{"role": "user", "content": "read env.txt"},
+		},
+	})
+
+	nextRaw, ctx, err := applyAntiPoisonPromptToOpenAIRequest(raw, "responses", config)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(nextRaw, &body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	encoded := stringifyJSON(body)
+	if strings.Count(toStringValue(body["instructions"]), "<important_gateway_rules>") != 1 {
+		t.Fatalf("expected exactly one current guard prompt, got %s", encoded)
+	}
+	if !strings.Contains(encoded, antiPoisonGuardToolNameForTool(ctx, "WebSearch")) || !strings.Contains(encoded, "USER_ORIGINAL_INSTRUCTIONS") {
+		t.Fatalf("expected current guard prompt and original instructions, got %s", encoded)
+	}
+	for _, stale := range []string{"aad_guard_1f85d1c995", "aad_guard_579e08c748", "missing_guard_toolcall", "guard_coverage_mismatch", "AllApiDeck anti-poison validation failed"} {
+		if strings.Contains(encoded, stale) {
+			t.Fatalf("expected stale artifact %q removed, got %s", stale, encoded)
+		}
+	}
+	if strings.Contains(encoded, oldGuard) || strings.Contains(stringifyJSON(body["input"]), antiPoisonGuardJSONOpenTag) {
+		t.Fatalf("expected historical guard json stripped from conversation history, got %s", encoded)
+	}
+}
+
+func TestApplyAntiPoisonPromptToChatRequestSanitizesHistoricalGuardArtifacts(t *testing.T) {
+	config := testAntiPoisonConfig()
+	raw := mustJSON(t, map[string]any{
+		"model": "gpt-test",
+		"messages": []any{
+			map[string]any{
+				"role":    "assistant",
+				"content": antiPoisonGuardJSONOpenTag + `{"name":"aad_guard_1f85d1c995_Read","tool_name":"Read"}` + antiPoisonGuardJSONCloseTag + "\nmissing_guard_toolcall naming rule `aad_guard_1f85d1c995_<original_tool_name>`",
+			},
+			map[string]any{"role": "user", "content": "read env.txt"},
+		},
+		"tools": []any{map[string]any{"type": "function", "function": map[string]any{"name": "Read", "parameters": map[string]any{"type": "object"}}}},
+	})
+
+	nextRaw, ctx, err := applyAntiPoisonPromptToOpenAIRequest(raw, "chat", config)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(nextRaw, &body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	encoded := stringifyJSON(body)
+	if !strings.Contains(encoded, antiPoisonGuardToolNameForTool(ctx, "WebSearch")) {
+		t.Fatalf("expected current guard prompt, got %s", encoded)
+	}
+	for _, stale := range []string{"aad_guard_1f85d1c995", "missing_guard_toolcall"} {
+		if strings.Contains(encoded, stale) {
+			t.Fatalf("expected stale artifact %q removed, got %s", stale, encoded)
+		}
+	}
+}
+
 func TestAppendAntiPoisonAnthropicSystemPrependsPrompt(t *testing.T) {
 	prompt := "<important_gateway_rules>\nIMPORTANT: AllApiDeck guard rules"
 
@@ -504,6 +584,47 @@ func TestSanitizeAntiPoisonOpenAIResponsesStreamBodyStripsGuardLikeNoise(t *test
 	}
 }
 
+func TestSanitizeAntiPoisonOpenAIResponsesStreamBodyStripsSplitGuardJSON(t *testing.T) {
+	ctx := testAntiPoisonContext("responses")
+	realCall := antiPoisonToolCall{
+		Name:          "Read",
+		ArgumentsText: `{"file_path":"env.txt"}`,
+		ToolType:      "read",
+	}
+	guardText := guardJSONBlock(t, ctx, realCall, computeAntiPoisonToolChainDigest([]antiPoisonToolCall{realCall}, ctx))
+	parts := []string{guardText[:16], guardText[16:64], guardText[64:]}
+	lines := make([]string, 0, 16)
+	for _, part := range parts {
+		payload := mustJSONString(t, map[string]any{
+			"type":          "response.output_text.delta",
+			"item_id":       "msg_split_guard",
+			"content_index": 0,
+			"delta":         part,
+		})
+		lines = append(lines, "event: response.output_text.delta", "data: "+payload, "")
+	}
+	lines = append(lines,
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Read","arguments":"{\"file_path\":\"env.txt\"}"}}`,
+		``,
+	)
+	raw := []byte(strings.Join(lines, "\n"))
+
+	sanitized, result, err := sanitizeAntiPoisonOpenAIResponsesStreamBody(raw, ctx)
+	if err != nil {
+		t.Fatalf("sanitize responses stream failed: %v", err)
+	}
+	if result.Blocked || !result.Valid {
+		t.Fatalf("expected valid sanitized stream, got %#v", result)
+	}
+	if strings.Contains(string(sanitized), "aad_guard") || strings.Contains(string(sanitized), antiPoisonGuardJSONOpenTag) {
+		t.Fatalf("expected split guard stripped before client, got %s", sanitized)
+	}
+	if !strings.Contains(string(sanitized), `"Read"`) {
+		t.Fatalf("expected real toolcall retained, got %s", sanitized)
+	}
+}
+
 func TestSanitizeAntiPoisonOpenAIResponsesStreamIgnoresInstructionEchoGuardExamples(t *testing.T) {
 	ctx := testAntiPoisonContext("responses")
 	exampleCall := antiPoisonToolCall{
@@ -743,6 +864,38 @@ func TestApplyAntiPoisonPromptToAnthropicRequest(t *testing.T) {
 	}
 }
 
+func TestApplyAntiPoisonPromptToAnthropicRequestSanitizesHistoricalGuardArtifacts(t *testing.T) {
+	config := testAntiPoisonConfig()
+	request := map[string]any{
+		"model":  "claude-test",
+		"system": []any{map[string]any{"type": "text", "text": "<important_gateway_rules>\nold aad_guard_1f85d1c995_Read\n</important_gateway_rules>\n\nYou are Claude Code."}},
+		"messages": []any{
+			map[string]any{
+				"role": "assistant",
+				"content": []any{
+					map[string]any{"type": "text", "text": antiPoisonGuardJSONOpenTag + `{"name":"aad_guard_1f85d1c995_Read","tool_name":"Read"}` + antiPoisonGuardJSONCloseTag + "\nAllApiDeck anti-poison validation failed: guard_coverage_mismatch naming rule `aad_guard_1f85d1c995_<original_tool_name>`"},
+				},
+			},
+			map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "read env.txt"}}},
+		},
+		"tools": []any{map[string]any{"name": "Read", "input_schema": map[string]any{"type": "object"}}},
+	}
+
+	next, ctx, err := applyAntiPoisonPromptToAnthropicRequest(request, config)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	encoded := stringifyJSON(next)
+	if !strings.Contains(encoded, antiPoisonGuardToolNameForTool(ctx, "WebSearch")) || !strings.Contains(encoded, "You are Claude Code.") {
+		t.Fatalf("expected current guard prompt and original system, got %s", encoded)
+	}
+	for _, stale := range []string{"aad_guard_1f85d1c995", "guard_coverage_mismatch", "AllApiDeck anti-poison validation failed"} {
+		if strings.Contains(encoded, stale) {
+			t.Fatalf("expected stale artifact %q removed, got %s", stale, encoded)
+		}
+	}
+}
+
 func TestValidateAndStripAntiPoisonAnthropicToolUse(t *testing.T) {
 	ctx := testAntiPoisonContext("claude_messages")
 	realCall := antiPoisonToolCall{
@@ -905,6 +1058,9 @@ func TestAntiPoisonStringProtectionProtectsAndRestoresJSONBody(t *testing.T) {
 	if !strings.Contains(string(protected), "__AAD_STR_") {
 		t.Fatalf("expected placeholder in protected body: %s", protected)
 	}
+	if !strings.Contains(ctx.Records[0].Context, "please read") || !strings.Contains(ctx.Records[0].Context, "sk-1234567890abcdef") {
+		t.Fatalf("expected protection record context to include payload excerpt, got %#v", ctx.Records[0])
+	}
 
 	restored := restoreAntiPoisonStringProtectionInJSONBody(protected, &ctx, "chat", "provider-test", "openai")
 	if !strings.Contains(string(restored), ".env") || !strings.Contains(string(restored), "sk-1234567890abcdef") {
@@ -912,6 +1068,13 @@ func TestAntiPoisonStringProtectionProtectsAndRestoresJSONBody(t *testing.T) {
 	}
 	if len(ctx.Records) < 2 {
 		t.Fatalf("expected respond in restore record, got %#v", ctx.Records)
+	}
+	restoreRecord := ctx.Records[len(ctx.Records)-1]
+	if !strings.Contains(restoreRecord.Before, "__AAD_STR_") || strings.Contains(restoreRecord.Before, "sk-1234567890abcdef") {
+		t.Fatalf("expected restore before to show placeholder, got %#v", restoreRecord)
+	}
+	if !strings.Contains(restoreRecord.After, "sk-1234567890abcdef") || strings.Contains(restoreRecord.After, "restored for client") {
+		t.Fatalf("expected restore after to show original value, got %#v", restoreRecord)
 	}
 }
 
@@ -1027,8 +1190,8 @@ func TestAntiPoisonStringProtectionProtectsJSONKeyValues(t *testing.T) {
 	if len(ctx.Records) != 1 {
 		t.Fatalf("expected one key protection record, got %#v", ctx.Records)
 	}
-	if !strings.Contains(ctx.Records[0].Before, "sha256=") || strings.Contains(ctx.Records[0].Before, "sk-json-key-value") {
-		t.Fatalf("expected safe before summary, got %#v", ctx.Records[0])
+	if ctx.Records[0].Before != `sk-json-key-value-with-quotes-"-and-slash-\` {
+		t.Fatalf("expected original protected value in before, got %#v", ctx.Records[0])
 	}
 
 	upstreamResponse := mustJSON(t, map[string]any{

@@ -184,12 +184,13 @@ func restoreAntiPoisonStringProtectionInSSEBody(raw []byte, ctx *antiPoisonStrin
 		return restoreAntiPoisonStringProtectionInJSONBody(raw, ctx, route, provider, channel)
 	}
 	total := 0
+	hits := make([]antiPoisonStringRestoreHit, 0)
 	for index := range events {
 		data, ok := advancedProxySSEJSONPayload(events[index])
 		if !ok {
 			continue
 		}
-		restored, count := restoreAntiPoisonStringValue(data, ctx.mapping)
+		restored, count, eventHits := restoreAntiPoisonStringValueWithHits(data, ctx.mapping)
 		if count <= 0 {
 			continue
 		}
@@ -199,6 +200,7 @@ func restoreAntiPoisonStringProtectionInSSEBody(raw []byte, ctx *antiPoisonStrin
 		}
 		setAdvancedProxySSEJSONPayload(&events[index], restoredMap)
 		total += count
+		hits = appendAntiPoisonRestoreHits(hits, eventHits)
 	}
 	if total <= 0 {
 		return raw
@@ -209,8 +211,8 @@ func restoreAntiPoisonStringProtectionInSSEBody(raw []byte, ctx *antiPoisonStrin
 		Route:    route,
 		Provider: provider,
 		Rule:     "字符串保护还原",
-		Before:   fmt.Sprintf("%d placeholder(s)", total),
-		After:    "restored for client stream",
+		Before:   summarizeAntiPoisonRestorePlaceholders(hits),
+		After:    summarizeAntiPoisonRestoreOriginals(hits),
 		Count:    total,
 	})
 	appendAdvancedProxyLogf(
@@ -732,8 +734,55 @@ func anySliceValue(value any) []any {
 }
 
 func stripAntiPoisonOpenAIResponsesStreamGuardEvents(events []advancedProxySSEEvent, ctx antiPoisonRequestContext) []byte {
+	type textDeltaRef struct {
+		EventIndex int
+		Field      string
+		Value      string
+	}
+	deltaRefsByKey := map[string][]textDeltaRef{}
+	for eventIndex, event := range events {
+		data, ok := advancedProxySSEJSONPayload(event)
+		if !ok {
+			continue
+		}
+		eventType := firstNonEmpty(strings.TrimSpace(event.Event), strings.TrimSpace(toStringValue(data["type"])))
+		if eventType != "response.output_text.delta" && eventType != "response.refusal.delta" {
+			continue
+		}
+		key := fmt.Sprintf("%s:%s:%s", eventType, strings.TrimSpace(toStringValue(data["item_id"])), strings.TrimSpace(toStringValue(data["content_index"])))
+		for _, field := range []string{"delta", "text"} {
+			if value := toStringValue(data[field]); value != "" {
+				deltaRefsByKey[key] = append(deltaRefsByKey[key], textDeltaRef{EventIndex: eventIndex, Field: field, Value: value})
+				break
+			}
+		}
+	}
+	cleanedDeltaValues := map[int]map[string]string{}
+	for _, refs := range deltaRefsByKey {
+		var combined strings.Builder
+		for _, ref := range refs {
+			combined.WriteString(ref.Value)
+		}
+		cleaned := extractAntiPoisonGuardsFromText(combined.String(), ctx).Text
+		remaining := cleaned
+		for _, ref := range refs {
+			piece := ""
+			if remaining != "" {
+				take := len(ref.Value)
+				if take > len(remaining) {
+					take = len(remaining)
+				}
+				piece = remaining[:take]
+				remaining = remaining[take:]
+			}
+			if cleanedDeltaValues[ref.EventIndex] == nil {
+				cleanedDeltaValues[ref.EventIndex] = map[string]string{}
+			}
+			cleanedDeltaValues[ref.EventIndex][ref.Field] = piece
+		}
+	}
 	next := make([]advancedProxySSEEvent, 0, len(events))
-	for _, event := range events {
+	for eventIndex, event := range events {
 		data, ok := advancedProxySSEJSONPayload(event)
 		if !ok {
 			stripAntiPoisonGuardJSONFromSSEEvent(&event, ctx)
@@ -756,6 +805,12 @@ func stripAntiPoisonOpenAIResponsesStreamGuardEvents(events []advancedProxySSEEv
 				}
 			}
 		case "response.output_text.delta", "response.output_text.done", "response.refusal.delta", "response.refusal.done":
+			if cleanedFields := cleanedDeltaValues[eventIndex]; cleanedFields != nil {
+				for field, value := range cleanedFields {
+					data[field] = value
+				}
+				break
+			}
 			if value := firstNonEmptyExact(toStringValue(data["delta"]), toStringValue(data["text"])); value != "" {
 				clean := extractAntiPoisonGuardsFromText(value, ctx).Text
 				if _, exists := data["delta"]; exists {
