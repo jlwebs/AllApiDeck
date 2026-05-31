@@ -59,14 +59,23 @@ export const DEFAULT_ANTI_POISON_STRING_PROTECTION = {
   enabled: true,
   rules: [
     '保护 JSON 字段名命中值: key:(?i)^(api[_-]?key|secret|client[_-]?secret|token|access[_-]?token|refresh[_-]?token|session[_-]?token|password|authorization|auth[_-]?token|credential|credentials|private[_-]?key)$',
-    '保护点号开头配置文件路径: (?i)\\.(env(?:\\.[A-Za-z0-9_-]+)?|npmrc|pypirc|yarnrc|netrc|gitconfig|git-credentials)\\b',
-    '保护常见配置文件路径: (?i)\\b[A-Za-z0-9_.\\\\/-]*(\\.env|\\.npmrc|\\.pypirc|\\.yarnrc|\\.netrc|config\\.(json|ya?ml|toml|ini)|settings\\.(json|ya?ml|toml|ini))\\b',
+    '保护用户尖括号标记内容: user_text:<[^<>\r\n]{1,512}>',
     '保护 JSON/YAML/TOML 敏感 key: (?i)("?(api[_-]?key|secret|token|password|authorization|auth[_-]?token|private[_-]?key)"?\\s*[:=]\\s*)("[^"]{8,}"|\\\'[^\\\']{8,}\\\'|[^\\s,;}"\\\']{8,})',
     '保护 Bearer/Basic/Auth 头值: (?i)\\b(Bearer|Basic|Authorization)\\s+[A-Za-z0-9._~+/=-]{12,}',
     '保护环境变量式密钥: (?i)\\b[A-Z0-9_]*(KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\\s*=\\s*[^\\s\\\'"`]{8,}',
     '保护疑似私钥块: -----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]{20,}?-----END [A-Z ]*PRIVATE KEY-----',
   ],
 };
+
+function isLegacyAntiPoisonFileMentionProtectionRule(rule) {
+  const text = String(rule || '');
+  return text.includes('保护点号开头配置文件路径') || text.includes('保护常见配置文件路径');
+}
+
+function hasAntiPoisonRuleScope(rules, scope) {
+  const prefix = `${String(scope || '').toLowerCase()}:`;
+  return rules.some(rule => String(rule || '').toLowerCase().includes(prefix));
+}
 
 const DEFAULT_BASE_PATHS = Object.fromEntries(
   ADVANCED_PROXY_APPS.map(app => [app.id, app.defaultBasePath]),
@@ -353,9 +362,16 @@ function normalizeAntiPoisonSection(input = {}) {
   randomization.minFakeToolcalls = Math.max(1, Number(randomization.minFakeToolcalls || DEFAULT_ANTI_POISON_RANDOMIZATION.minFakeToolcalls));
   randomization.requirePerToolTypeMarker = randomization.requirePerToolTypeMarker !== false;
   const rawStringProtection = isPlainObject(input?.stringProtection) ? input.stringProtection : {};
-  const stringProtectionRules = Array.isArray(rawStringProtection.rules)
+  let stringProtectionRules = Array.isArray(rawStringProtection.rules)
     ? rawStringProtection.rules.map(rule => String(rule || '').trim()).filter(Boolean)
     : [];
+  stringProtectionRules = stringProtectionRules.filter(rule => !isLegacyAntiPoisonFileMentionProtectionRule(rule));
+  if (stringProtectionRules.length && !hasAntiPoisonRuleScope(stringProtectionRules, 'user_text')) {
+    const userTextRule = DEFAULT_ANTI_POISON_STRING_PROTECTION.rules.find(rule => String(rule || '').toLowerCase().includes('user_text:'));
+    if (userTextRule) {
+      stringProtectionRules.push(userTextRule);
+    }
+  }
   const stringProtection = {
     enabled: rawStringProtection.enabled !== false,
     rules: stringProtectionRules.length ? stringProtectionRules : [...DEFAULT_ANTI_POISON_STRING_PROTECTION.rules],

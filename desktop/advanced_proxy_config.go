@@ -236,8 +236,7 @@ func defaultAntiPoisonStringProtectionConfig() AntiPoisonStringProtectionConfig 
 		Enabled: true,
 		Rules: []string{
 			`保护 JSON 字段名命中值: key:(?i)^(api[_-]?key|secret|client[_-]?secret|token|access[_-]?token|refresh[_-]?token|session[_-]?token|password|authorization|auth[_-]?token|credential|credentials|private[_-]?key)$`,
-			`保护点号开头配置文件路径: (?i)\.(env(?:\.[A-Za-z0-9_-]+)?|npmrc|pypirc|yarnrc|netrc|gitconfig|git-credentials)\b`,
-			`保护常见配置文件路径: (?i)\b[A-Za-z0-9_.\\/-]*(\.env|\.npmrc|\.pypirc|\.yarnrc|\.netrc|config\.(json|ya?ml|toml|ini)|settings\.(json|ya?ml|toml|ini))\b`,
+			"保护用户尖括号标记内容: user_text:<[^<>\r\n]{1,512}>",
 			`保护 JSON/YAML/TOML 敏感 key: (?i)("?(api[_-]?key|secret|token|password|authorization|auth[_-]?token|private[_-]?key)"?\s*[:=]\s*)("[^"]{8,}"|'[^']{8,}'|[^\s,;}"']{8,})`,
 			`保护 Bearer/Basic/Auth 头值: (?i)\b(Bearer|Basic|Authorization)\s+[A-Za-z0-9._~+/=-]{12,}`,
 			`保护常见 LLM/API key 形态: (?i)\b(?:sk|sk-ant|sk-proj|sk-live|sk-test|xox[baprs]|gh[pousr]|AIza)[A-Za-z0-9._=-]{12,}\b`,
@@ -477,7 +476,7 @@ func sanitizeAntiPoisonStringProtectionConfig(config AntiPoisonStringProtectionC
 	seen := map[string]struct{}{}
 	for _, rule := range config.Rules {
 		rule = strings.TrimSpace(rule)
-		if rule == "" {
+		if rule == "" || isLegacyAntiPoisonFileMentionProtectionRule(rule) {
 			continue
 		}
 		if _, exists := seen[rule]; exists {
@@ -492,8 +491,32 @@ func sanitizeAntiPoisonStringProtectionConfig(config AntiPoisonStringProtectionC
 	if len(cleaned) == 0 {
 		cleaned = append([]string(nil), defaults.Rules...)
 	}
+	if !antiPoisonStringProtectionRulesContainScope(cleaned, "user_text") {
+		for _, defaultRule := range defaults.Rules {
+			_, scope, _ := parseAntiPoisonStringProtectionRule(defaultRule)
+			if scope == "user_text" {
+				cleaned = append(cleaned, defaultRule)
+				break
+			}
+		}
+	}
 	config.Rules = cleaned
 	return config
+}
+
+func isLegacyAntiPoisonFileMentionProtectionRule(rule string) bool {
+	return strings.Contains(rule, "保护点号开头配置文件路径") || strings.Contains(rule, "保护常见配置文件路径")
+}
+
+func antiPoisonStringProtectionRulesContainScope(rules []string, scope string) bool {
+	scope = strings.TrimSpace(strings.ToLower(scope))
+	for _, rule := range rules {
+		_, currentScope, _ := parseAntiPoisonStringProtectionRule(rule)
+		if strings.TrimSpace(strings.ToLower(currentScope)) == scope {
+			return true
+		}
+	}
+	return false
 }
 
 func isZeroAntiPoisonConfig(config AntiPoisonConfig) bool {

@@ -1134,6 +1134,86 @@ func TestAntiPoisonStringProtectionDoesNotMaskPlainSensitiveFileNameMention(t *t
 	}
 }
 
+func TestAntiPoisonStringProtectionMasksUserMarkedAngleContent(t *testing.T) {
+	config := testAntiPoisonConfig()
+	raw := mustJSON(t, map[string]any{
+		"input": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{
+						"type": "input_text",
+						"text": "login with <passw0rd> and mention .env only as a filename",
+					},
+				},
+			},
+		},
+	})
+
+	protected, ctx, err := applyAntiPoisonStringProtectionToJSONBody(raw, config, "responses", "provider-test", "openai")
+	if err != nil {
+		t.Fatalf("protect failed: %v", err)
+	}
+	if strings.Contains(string(protected), "<passw0rd>") || !strings.Contains(string(protected), "__AAD_STR_") {
+		t.Fatalf("expected user-marked angle content protected, got %s", protected)
+	}
+	if !strings.Contains(string(protected), ".env") {
+		t.Fatalf("expected plain file mention retained, got %s", protected)
+	}
+	if len(ctx.Records) != 1 || ctx.Records[0].Before != "<passw0rd>" || !strings.Contains(ctx.Records[0].Rule, "尖括号") {
+		t.Fatalf("expected one user-marked protection record, got %#v", ctx.Records)
+	}
+	if !strings.Contains(ctx.Records[0].Context, "login with") || !strings.Contains(ctx.Records[0].Context, ".env") {
+		t.Fatalf("expected protection record context to include surrounding user text, got %#v", ctx.Records[0])
+	}
+
+	var placeholder string
+	for key := range ctx.mapping {
+		placeholder = key
+	}
+	if placeholder == "" {
+		t.Fatalf("expected placeholder mapping, got %#v", ctx.mapping)
+	}
+	upstreamResponse := mustJSON(t, map[string]any{
+		"output": []any{
+			map[string]any{"type": "message", "content": []any{map[string]any{"type": "output_text", "text": "received " + placeholder}}},
+		},
+	})
+	restored := restoreAntiPoisonStringProtectionInJSONBody(upstreamResponse, &ctx, "responses", "provider-test", "openai")
+	var decoded map[string]any
+	if err := json.Unmarshal(restored, &decoded); err != nil {
+		t.Fatalf("restored response must remain valid JSON: %v body=%s", err, restored)
+	}
+	text := decoded["output"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "<passw0rd>") || strings.Contains(text, placeholder) {
+		t.Fatalf("expected user-marked content restored, got %s", text)
+	}
+}
+
+func TestAntiPoisonStringProtectionDoesNotMaskAngleContentOutsideUserText(t *testing.T) {
+	config := testAntiPoisonConfig()
+	raw := mustJSON(t, map[string]any{
+		"tools": []any{
+			map[string]any{
+				"type":        "function",
+				"name":        "read_file",
+				"description": "Read <path> and mention .env in documentation",
+			},
+		},
+	})
+
+	protected, ctx, err := applyAntiPoisonStringProtectionToJSONBody(raw, config, "responses", "provider-test", "openai")
+	if err != nil {
+		t.Fatalf("protect failed: %v", err)
+	}
+	if strings.Contains(string(protected), "__AAD_STR_") {
+		t.Fatalf("expected tool documentation angle content to remain visible, got %s", protected)
+	}
+	if len(ctx.Records) != 0 {
+		t.Fatalf("expected no records outside user text, got %#v", ctx.Records)
+	}
+}
+
 func TestAntiPoisonStringProtectionMasksSensitiveToolReadContent(t *testing.T) {
 	config := testAntiPoisonConfig()
 	raw := mustJSON(t, map[string]any{

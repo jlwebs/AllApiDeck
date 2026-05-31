@@ -180,7 +180,7 @@ func applyAntiPoisonStringProtectionToJSONBody(rawBody []byte, config AntiPoison
 	if len(rules) == 0 {
 		return rawBody, ctx, nil
 	}
-	next := protectAntiPoisonStringValue(body, "$", rules, &ctx, route, provider, channel)
+	next := protectAntiPoisonStringValue(body, "$", rules, &ctx, route, provider, channel, false)
 	nextRaw, err := json.Marshal(next)
 	if err != nil {
 		return rawBody, ctx, err
@@ -435,12 +435,14 @@ func parseAntiPoisonStringProtectionRuleScope(pattern string) (string, string) {
 		return "path", strings.TrimSpace(pattern[len("path:"):])
 	case strings.HasPrefix(lower, "text:"):
 		return "text", strings.TrimSpace(pattern[len("text:"):])
+	case strings.HasPrefix(lower, "user_text:"):
+		return "user_text", strings.TrimSpace(pattern[len("user_text:"):])
 	default:
 		return "text", pattern
 	}
 }
 
-func protectAntiPoisonStringValue(value any, path string, rules []antiPoisonStringProtectionRule, ctx *antiPoisonStringProtectionContext, route string, provider string, channel string) any {
+func protectAntiPoisonStringValue(value any, path string, rules []antiPoisonStringProtectionRule, ctx *antiPoisonStringProtectionContext, route string, provider string, channel string, userTextContext bool) any {
 	switch typed := value.(type) {
 	case map[string]any:
 		if sensitiveField, sensitiveText, sensitiveRule, ok := detectAntiPoisonSensitiveToolContent(typed, path); ok {
@@ -452,23 +454,24 @@ func protectAntiPoisonStringValue(value any, path string, rules []antiPoisonStri
 			return next
 		}
 		next := make(map[string]any, len(typed))
+		childUserTextContext := userTextContext || strings.EqualFold(strings.TrimSpace(toStringValue(typed["role"])), "user")
 		for key, child := range typed {
 			childPath := path + "." + key
 			if matchedRule := matchAntiPoisonStringProtectionKeyRule(key, childPath, rules); matchedRule != nil {
 				next[key] = protectAntiPoisonStringValueByRule(child, childPath, *matchedRule, ctx, route, provider, channel)
 				continue
 			}
-			next[key] = protectAntiPoisonStringValue(child, childPath, rules, ctx, route, provider, channel)
+			next[key] = protectAntiPoisonStringValue(child, childPath, rules, ctx, route, provider, channel, childUserTextContext)
 		}
 		return next
 	case []any:
 		next := make([]any, 0, len(typed))
 		for index, child := range typed {
-			next = append(next, protectAntiPoisonStringValue(child, fmt.Sprintf("%s[%d]", path, index), rules, ctx, route, provider, channel))
+			next = append(next, protectAntiPoisonStringValue(child, fmt.Sprintf("%s[%d]", path, index), rules, ctx, route, provider, channel, userTextContext))
 		}
 		return next
 	case string:
-		return protectAntiPoisonStringText(typed, path, rules, ctx, route, provider, channel)
+		return protectAntiPoisonStringText(typed, path, rules, ctx, route, provider, channel, userTextContext)
 	default:
 		return value
 	}
@@ -501,7 +504,7 @@ func protectAntiPoisonStringValueByRule(value any, path string, rule antiPoisonS
 	case map[string]any:
 		next := make(map[string]any, len(typed))
 		for key, child := range typed {
-			next[key] = protectAntiPoisonStringValue(child, path+"."+key, []antiPoisonStringProtectionRule{rule}, ctx, route, provider, channel)
+			next[key] = protectAntiPoisonStringValue(child, path+"."+key, []antiPoisonStringProtectionRule{rule}, ctx, route, provider, channel, false)
 		}
 		return next
 	case []any:
@@ -511,7 +514,7 @@ func protectAntiPoisonStringValueByRule(value any, path string, rule antiPoisonS
 			if _, ok := child.(string); ok {
 				next = append(next, protectAntiPoisonStringValueByRule(child, childPath, rule, ctx, route, provider, channel))
 			} else {
-				next = append(next, protectAntiPoisonStringValue(child, childPath, []antiPoisonStringProtectionRule{rule}, ctx, route, provider, channel))
+				next = append(next, protectAntiPoisonStringValue(child, childPath, []antiPoisonStringProtectionRule{rule}, ctx, route, provider, channel, false))
 			}
 		}
 		return next
@@ -529,13 +532,17 @@ func protectAntiPoisonStringWholeText(text string, path string, rule antiPoisonS
 	return storeAntiPoisonProtectedString(text, path, rule.Description, summarizeAntiPoisonPayloadContext(text, text), ctx, route, provider, channel)
 }
 
-func protectAntiPoisonStringText(text string, path string, rules []antiPoisonStringProtectionRule, ctx *antiPoisonStringProtectionContext, route string, provider string, channel string) string {
+func protectAntiPoisonStringText(text string, path string, rules []antiPoisonStringProtectionRule, ctx *antiPoisonStringProtectionContext, route string, provider string, channel string, userTextContext bool) string {
 	if text == "" || ctx == nil {
 		return text
 	}
 	result := text
 	for _, rule := range rules {
-		if rule.Regexp == nil || strings.TrimSpace(rule.Scope) != "text" {
+		scope := strings.TrimSpace(rule.Scope)
+		if rule.Regexp == nil || (scope != "text" && scope != "user_text") {
+			continue
+		}
+		if scope == "user_text" && !isAntiPoisonUserTextPath(path, userTextContext) {
 			continue
 		}
 		originalText := result
@@ -543,10 +550,63 @@ func protectAntiPoisonStringText(text string, path string, rules []antiPoisonStr
 			if match == "" || strings.Contains(match, "__AAD_STR_") {
 				return match
 			}
+			if scope == "user_text" && isAntiPoisonReservedMarkup(match) {
+				return match
+			}
 			return storeAntiPoisonProtectedString(match, path, rule.Description, summarizeAntiPoisonPayloadContext(originalText, match), ctx, route, provider, channel)
 		})
 	}
 	return result
+}
+
+func isAntiPoisonUserTextPath(path string, userTextContext bool) bool {
+	path = strings.ToLower(strings.TrimSpace(path))
+	if path == "$.input" || path == "$.prompt" {
+		return true
+	}
+	if strings.HasPrefix(path, "$.messages[") && strings.HasSuffix(path, ".content") {
+		return userTextContext
+	}
+	if strings.HasPrefix(path, "$.input[") && strings.HasSuffix(path, ".content") {
+		return userTextContext
+	}
+	if strings.HasPrefix(path, "$.input[") && !strings.Contains(path, ".content[") {
+		return userTextContext
+	}
+	if !userTextContext {
+		return false
+	}
+	if strings.HasPrefix(path, "$.messages[") && strings.HasSuffix(path, ".content") {
+		return true
+	}
+	if strings.HasPrefix(path, "$.messages[") && strings.Contains(path, ".content[") {
+		return strings.HasSuffix(path, ".text") || strings.HasSuffix(path, ".content")
+	}
+	if strings.HasPrefix(path, "$.input[") && strings.Contains(path, ".content[") {
+		return strings.HasSuffix(path, ".text") || strings.HasSuffix(path, ".content")
+	}
+	return false
+}
+
+func isAntiPoisonReservedMarkup(match string) bool {
+	inner := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(match, "<"), ">"))
+	if inner == "" {
+		return true
+	}
+	if strings.ContainsAny(inner, " \t/") {
+		return true
+	}
+	reserved := map[string]struct{}{
+		"command-args":         {},
+		"command-message":      {},
+		"command-name":         {},
+		"local-command-caveat": {},
+		"local-command-stdout": {},
+		"system-reminder":      {},
+		"tool_use_error":       {},
+	}
+	_, ok := reserved[strings.ToLower(inner)]
+	return ok
 }
 
 func storeAntiPoisonProtectedString(original string, path string, ruleDescription string, context string, ctx *antiPoisonStringProtectionContext, route string, provider string, channel string) string {
