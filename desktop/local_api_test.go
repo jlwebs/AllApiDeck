@@ -45,6 +45,55 @@ func TestBuildCheckRequestHeadersAppliesMappedHeaders(t *testing.T) {
 	}
 }
 
+func TestBuildCheckRequestHeadersAppliesExpandedClaudeMappedHeaders(t *testing.T) {
+	headers, match := buildCheckRequestHeaders(normalizedCheckKeyPayload{
+		Key:   "sk-test",
+		Model: "claude-3-7-sonnet",
+		UserAgentMappings: []checkUserAgentMapping{
+			{
+				ModelContains: "claude",
+				TargetUA: strings.Join([]string{
+					"User-Agent: claude-cli/2.1.129 (external, cli)",
+					"x-app: cli",
+					"anthropic-version: 2023-06-01",
+					"anthropic-beta: claude-code-20250219,interleaved-thinking-2025-05-14",
+					"anthropic-dangerous-direct-browser-access: true",
+					"X-Stainless-Arch: x64",
+					"X-Stainless-Lang: js",
+					"X-Stainless-OS: Windows",
+					"X-Stainless-Package-Version: 0.93.0",
+					"X-Stainless-Retry-Count: 0",
+					"X-Stainless-Runtime: node",
+					"X-Stainless-Runtime-Version: v24.3.0",
+					"X-Stainless-Timeout: 600",
+				}, "\n"),
+			},
+		},
+	})
+	if match != "claude" {
+		t.Fatalf("unexpected mapping match: %q", match)
+	}
+	for key, want := range map[string]string{
+		"User-Agent":                                 "claude-cli/2.1.129 (external, cli)",
+		"X-App":                                      "cli",
+		"Anthropic-Version":                          "2023-06-01",
+		"Anthropic-Beta":                             "claude-code-20250219,interleaved-thinking-2025-05-14",
+		"Anthropic-Dangerous-Direct-Browser-Access": "true",
+		"X-Stainless-Arch":                           "x64",
+		"X-Stainless-Lang":                           "js",
+		"X-Stainless-Os":                             "Windows",
+		"X-Stainless-Package-Version":                "0.93.0",
+		"X-Stainless-Retry-Count":                    "0",
+		"X-Stainless-Runtime":                        "node",
+		"X-Stainless-Runtime-Version":                "v24.3.0",
+		"X-Stainless-Timeout":                        "600",
+	} {
+		if headers[key] != want {
+			t.Fatalf("expected header %s=%q, got %#v", key, want, headers)
+		}
+	}
+}
+
 func TestBuildCheckEndpointCandidatesAnyrouterOrder(t *testing.T) {
 	t.Setenv("BATCH_API_CHECK_RUNTIME_DIR", t.TempDir())
 	resetCheckProtocolPreferencesForTests()

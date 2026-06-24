@@ -1,6 +1,22 @@
 export const DEFAULT_CODEX_TARGET_UA = `originator: Codex Desktop
 user-agent: Codex Desktop/0.142.0-alpha.6 (Windows 10.0.19044; x86_64) unknown (Codex Desktop; 26.616.51431)`;
 
+export const LEGACY_DEFAULT_CLAUDE_TARGET_UA = 'User-Agent: claude-cli/2.1.129 (external, cli); x-app: cli';
+
+export const DEFAULT_CLAUDE_TARGET_UA = `User-Agent: claude-cli/2.1.129 (external, cli)
+x-app: cli
+anthropic-version: 2023-06-01
+anthropic-beta: claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24
+anthropic-dangerous-direct-browser-access: true
+X-Stainless-Arch: x64
+X-Stainless-Lang: js
+X-Stainless-OS: Windows
+X-Stainless-Package-Version: 0.93.0
+X-Stainless-Retry-Count: 0
+X-Stainless-Runtime: node
+X-Stainless-Runtime-Version: v24.3.0
+X-Stainless-Timeout: 600`;
+
 export const DEFAULT_USER_AGENT_MAPPINGS = Object.freeze([
   Object.freeze({
     modelContains: 'gpt',
@@ -8,7 +24,7 @@ export const DEFAULT_USER_AGENT_MAPPINGS = Object.freeze([
   }),
   Object.freeze({
     modelContains: 'claude',
-    targetUA: 'User-Agent: claude-cli/2.1.129 (external, cli); x-app: cli',
+    targetUA: DEFAULT_CLAUDE_TARGET_UA,
   }),
 ]);
 
@@ -32,6 +48,20 @@ export function normalizeUserAgentMappingEntry(value) {
   };
 }
 
+function upgradeDefaultUserAgentMappingEntry(entry) {
+  const normalized = normalizeUserAgentMappingEntry(entry);
+  if (
+    normalized.modelContains.toLowerCase() === 'claude' &&
+    normalized.targetUA === LEGACY_DEFAULT_CLAUDE_TARGET_UA
+  ) {
+    return {
+      ...normalized,
+      targetUA: DEFAULT_CLAUDE_TARGET_UA,
+    };
+  }
+  return normalized;
+}
+
 export function normalizeUserAgentMappings(value, options = {}) {
   const fallbackToDefault = options?.fallbackToDefault === true;
   if (value == null) {
@@ -39,7 +69,7 @@ export function normalizeUserAgentMappings(value, options = {}) {
   }
 
   const normalized = (Array.isArray(value) ? value : [])
-    .map(normalizeUserAgentMappingEntry);
+    .map(upgradeDefaultUserAgentMappingEntry);
 
   if (!normalized.length && fallbackToDefault) {
     return cloneDefaultUserAgentMappings();

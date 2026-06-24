@@ -82,7 +82,7 @@
             </div>
           </a-space>
 
-          <p><b>User-Agent 映射</b></p>
+          <p class="settings-section-title settings-section-title-spaced"><b>User-Agent 映射</b></p>
           <div class="ua-mapping-card">
             <div class="ua-mapping-head">
               <div class="ua-mapping-caption">按模型名包含匹配，命中后把右侧内容作为请求头块应用到快测请求。</div>
@@ -121,7 +121,7 @@
             </div>
             <div class="settings-muted-text">
               <div>支持纯 UA 文本，也支持多行或分号分隔的 `Header: Value`。</div>
-              <div>默认规则：`gpt` 会注入 Codex Desktop 的 `Originator` 和 `User-Agent`；`claude` 会注入 `claude-cli` 的 `User-Agent` 和 `X-App`。</div>
+              <div>默认规则：`gpt` 会注入 Codex Desktop 的 `Originator` 和 `User-Agent`；`claude` 会注入 `claude-cli`、`X-App`、`anthropic-*` 与 `X-Stainless-*` 头。</div>
             </div>
           </div>
           <a-divider />
@@ -632,6 +632,14 @@ async function loadDesktopLogs() {
   font-size: 12px;
   color: #8c8c8c;
   margin-bottom: 6px;
+}
+
+.settings-section-title {
+  margin: 0 0 12px;
+}
+
+.settings-section-title-spaced {
+  margin-top: 24px;
 }
 
 .settings-switch-row {
