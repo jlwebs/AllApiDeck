@@ -101,14 +101,14 @@
               <a-input
                 v-model:value="mapping.modelContains"
                 placeholder="例如 gpt"
-                @blur="saveUserAgentMappingsDraft"
-                @pressEnter="saveUserAgentMappingsDraft"
+                @blur="void saveUserAgentMappingsDraft()"
+                @pressEnter="void saveUserAgentMappingsDraft()"
               />
               <a-textarea
                 v-model:value="mapping.targetUA"
                 :rows="3"
                 placeholder="可填单个 UA，或多行 Header: Value"
-                @blur="saveUserAgentMappingsDraft"
+                @blur="void saveUserAgentMappingsDraft()"
               />
               <a-button
                 danger
@@ -216,6 +216,7 @@ import { message } from 'ant-design-vue';
 import { isProbablyWailsRuntime } from '../utils/runtimeApi.js';
 import { isDesktopLogBridgeAvailable, listDesktopLogFiles, readDesktopLogFile } from '../utils/desktopLogBridge.js';
 import { isChromeProfileAuthBridgeAvailable } from '../utils/profileAuthBridge.js';
+import { getAdvancedProxyConfig, setAdvancedProxyConfig } from '../utils/advancedProxyBridge.js';
 import {
   getOutboundProxyConfig,
   loadUserAgentMappings,
@@ -420,18 +421,22 @@ function handleThemeModeSelection(nextMode) {
   message.success('界面主题已切换');
 }
 
-function saveUserAgentMappingsDraft() {
+async function saveUserAgentMappingsDraft() {
   userAgentMappings.value = saveUserAgentMappings(userAgentMappings.value);
+  try {
+    const config = await getAdvancedProxyConfig();
+    await setAdvancedProxyConfig(config);
+  } catch {}
 }
 
 function addUserAgentMappingRow() {
   userAgentMappings.value = [...userAgentMappings.value, { modelContains: '', targetUA: '' }];
-  saveUserAgentMappingsDraft();
+  void saveUserAgentMappingsDraft();
 }
 
 function removeUserAgentMappingRow(index) {
   userAgentMappings.value = userAgentMappings.value.filter((_, itemIndex) => itemIndex !== index);
-  saveUserAgentMappingsDraft();
+  void saveUserAgentMappingsDraft();
 }
 
 async function loadProxyDraft() {

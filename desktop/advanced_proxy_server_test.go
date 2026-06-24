@@ -428,20 +428,50 @@ func TestOpenAIResponsesToAnthropicSynthesizesLifecycleFromTextURLsWithoutCall(t
 }
 
 func TestBuildClaudeProviderHeadersPreservesAnthropicHeaders(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+	if _, err := saveAdvancedProxyConfig(AdvancedProxyConfig{
+		Enabled: true,
+		Queues: defaultAdvancedProxyQueuesConfig(),
+		UserAgentMappings: []checkUserAgentMapping{
+			{
+				ModelContains: "claude",
+				TargetUA: strings.Join([]string{
+					"User-Agent: claude-cli/2.1.129 (external, cli)",
+					"x-app: cli",
+				}, "\n"),
+			},
+		},
+		Claude: ClaudeProxyCompatConfig{
+			BasePath:  advancedProxyClaudeBasePath,
+			Providers: []AdvancedProxyProvider{},
+		},
+		Codex:    AdvancedProxyAppConfig{BasePath: advancedProxyCodexBasePath},
+		OpenCode: AdvancedProxyAppConfig{BasePath: advancedProxyOpenCodePath},
+		OpenClaw: AdvancedProxyAppConfig{BasePath: advancedProxyOpenClawPath},
+		Failover: defaultAdvancedProxyConfig().Failover,
+		Rectifier: defaultAdvancedProxyConfig().Rectifier,
+		Optimizer: defaultAdvancedProxyConfig().Optimizer,
+		AntiPoison: defaultAdvancedProxyConfig().AntiPoison,
+	}); err != nil {
+		t.Fatalf("save advanced proxy config: %v", err)
+	}
+
 	headers := http.Header{}
-	headers.Set("User-Agent", "Claude-Client")
 	headers.Set("anthropic-version", "2023-06-01")
 	headers.Set("anthropic-beta", "claude-code-20250219,test-beta")
 
 	result := buildClaudeProviderHeaders(
-		AdvancedProxyProvider{APIKey: "sk-test"},
+		AdvancedProxyProvider{APIKey: "sk-test", Model: "claude-sonnet-4-6"},
 		"anthropic",
 		headers,
 		false,
 	)
 
-	if result["User-Agent"] != "Claude-Client" {
-		t.Fatalf("expected user-agent passthrough, got %q", result["User-Agent"])
+	if result["User-Agent"] != "claude-cli/2.1.129 (external, cli)" {
+		t.Fatalf("expected mapped user-agent, got %q", result["User-Agent"])
+	}
+	if result["X-App"] != "cli" {
+		t.Fatalf("expected mapped x-app header, got %q", result["X-App"])
 	}
 	if result["anthropic-version"] != "2023-06-01" {
 		t.Fatalf("expected anthropic-version passthrough, got %q", result["anthropic-version"])
@@ -451,6 +481,51 @@ func TestBuildClaudeProviderHeadersPreservesAnthropicHeaders(t *testing.T) {
 	}
 	if result["x-api-key"] != "sk-test" {
 		t.Fatalf("expected x-api-key to be set, got %q", result["x-api-key"])
+	}
+}
+
+func TestBuildOpenAIProviderHeadersAppliesMappedHeadersByProviderModel(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+	if _, err := saveAdvancedProxyConfig(AdvancedProxyConfig{
+		Enabled: true,
+		Queues: defaultAdvancedProxyQueuesConfig(),
+		UserAgentMappings: []checkUserAgentMapping{
+			{
+				ModelContains: "gpt",
+				TargetUA: strings.Join([]string{
+					"originator: Codex Desktop",
+					"user-agent: Codex Desktop/0.142.0-alpha.6 (Windows 10.0.19044; x86_64) unknown (Codex Desktop; 26.616.51431)",
+				}, "\n"),
+			},
+		},
+		Claude: ClaudeProxyCompatConfig{
+			BasePath:  advancedProxyClaudeBasePath,
+			Providers: []AdvancedProxyProvider{},
+		},
+		Codex:    AdvancedProxyAppConfig{BasePath: advancedProxyCodexBasePath},
+		OpenCode: AdvancedProxyAppConfig{BasePath: advancedProxyOpenCodePath},
+		OpenClaw: AdvancedProxyAppConfig{BasePath: advancedProxyOpenClawPath},
+		Failover: defaultAdvancedProxyConfig().Failover,
+		Rectifier: defaultAdvancedProxyConfig().Rectifier,
+		Optimizer: defaultAdvancedProxyConfig().Optimizer,
+		AntiPoison: defaultAdvancedProxyConfig().AntiPoison,
+	}); err != nil {
+		t.Fatalf("save advanced proxy config: %v", err)
+	}
+
+	result := buildOpenAIProviderHeaders(AdvancedProxyProvider{
+		APIKey: "sk-test",
+		Model:  "gpt-5",
+	})
+
+	if result["User-Agent"] != "Codex Desktop/0.142.0-alpha.6 (Windows 10.0.19044; x86_64) unknown (Codex Desktop; 26.616.51431)" {
+		t.Fatalf("expected mapped user-agent, got %q", result["User-Agent"])
+	}
+	if result["Originator"] != "Codex Desktop" {
+		t.Fatalf("expected mapped originator, got %q", result["Originator"])
+	}
+	if result["Authorization"] != "Bearer sk-test" {
+		t.Fatalf("expected authorization header, got %q", result["Authorization"])
 	}
 }
 

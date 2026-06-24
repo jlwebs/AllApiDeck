@@ -132,6 +132,7 @@ type AdvancedProxyConfig struct {
 	ListenHost       string                    `json:"listenHost"`
 	ListenPort       int                       `json:"listenPort"`
 	Queues           AdvancedProxyQueuesConfig `json:"queues"`
+	UserAgentMappings []checkUserAgentMapping  `json:"userAgentMappings"`
 	Claude           ClaudeProxyCompatConfig   `json:"claude"`
 	Codex            AdvancedProxyAppConfig    `json:"codex"`
 	OpenCode         AdvancedProxyAppConfig    `json:"opencode"`
@@ -265,6 +266,7 @@ func defaultAdvancedProxyConfig() AdvancedProxyConfig {
 		ListenHost:   bridgeServerHost,
 		ListenPort:   bridgeServerPortStart,
 		Queues:       defaultAdvancedProxyQueuesConfig(),
+		UserAgentMappings: nil,
 		Claude: ClaudeProxyCompatConfig{
 			Enabled:      false,
 			BasePath:     advancedProxyClaudeBasePath,
@@ -372,6 +374,7 @@ func sanitizeAdvancedProxyConfig(config AdvancedProxyConfig) AdvancedProxyConfig
 	if config.ListenPort <= 0 {
 		config.ListenPort = defaults.ListenPort
 	}
+	config.UserAgentMappings = sanitizeAdvancedProxyUserAgentMappings(config.UserAgentMappings)
 
 	config.Queues.Global = sanitizeAdvancedProxyQueueConfig(config.Queues.Global, defaults.Queues.Global, legacyGlobalProviders)
 	config.Queues.Claude = sanitizeAdvancedProxyQueueConfig(config.Queues.Claude, defaults.Queues.Claude, nil)
@@ -415,6 +418,27 @@ func sanitizeAdvancedProxyConfig(config AdvancedProxyConfig) AdvancedProxyConfig
 	config.AntiPoison = sanitizeAntiPoisonConfig(config.AntiPoison)
 	config.Enabled = advancedProxyAnyAppEnabled(config)
 	return config
+}
+
+func sanitizeAdvancedProxyUserAgentMappings(input []checkUserAgentMapping) []checkUserAgentMapping {
+	if len(input) == 0 {
+		return nil
+	}
+	result := make([]checkUserAgentMapping, 0, len(input))
+	for _, item := range input {
+		normalized := checkUserAgentMapping{
+			ModelContains: strings.TrimSpace(item.ModelContains),
+			TargetUA:      strings.TrimSpace(item.TargetUA),
+		}
+		if normalized.ModelContains == "" || normalized.TargetUA == "" {
+			continue
+		}
+		result = append(result, normalized)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func sanitizeAntiPoisonConfig(config AntiPoisonConfig) AntiPoisonConfig {

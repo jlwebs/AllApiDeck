@@ -1,4 +1,5 @@
 import { isProbablyWailsRuntime } from './runtimeApi.js';
+import { loadUserAgentMappings } from './systemSettings.js';
 
 const STORAGE_KEY = 'batch_api_check_advanced_proxy_config_v1';
 const TAKEOVER_MAP_STORAGE_KEY = 'batch_api_check_advanced_proxy_takeover_map_v1';
@@ -131,6 +132,7 @@ export function createDefaultAdvancedProxyConfig() {
     debugLogging: false,
     listenHost: '127.0.0.1',
     listenPort: 8888,
+    userAgentMappings: [],
     queues: {
       global: getDefaultQueueSection(false),
       claude: getDefaultQueueSection(true),
@@ -453,6 +455,7 @@ export function normalizeAdvancedProxyConfig(input) {
   next.listenHost = String(next.listenHost || defaults.listenHost).trim() || defaults.listenHost;
   next.listenPort = Number(next.listenPort || defaults.listenPort) || defaults.listenPort;
   next.debugLogging = next.debugLogging === true;
+  next.userAgentMappings = loadUserAgentMappings();
 
   next.queues.global = normalizeQueueSection(
     next.queues.global,

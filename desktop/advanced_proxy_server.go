@@ -3023,10 +3023,27 @@ func observeAdvancedProxyAttempt(appType string, provider AdvancedProxyProvider,
 	advancedProxyRuntime.ObserveProviderOutcome(appType, provider, statusCode, elapsed, success, timeout)
 }
 
+func buildAdvancedProxyMappedHeaders(provider AdvancedProxyProvider) (map[string]string, string) {
+	config, err := loadAdvancedProxyConfig()
+	if err != nil {
+		return nil, ""
+	}
+	return resolveMappedHeadersForCheckModel(provider.Model, config.UserAgentMappings)
+}
+
 func buildClaudeProviderHeaders(provider AdvancedProxyProvider, apiFormat string, requestHeaders http.Header, stream bool) map[string]string {
 	headers := map[string]string{
 		"Content-Type": "application/json",
 		"User-Agent":   "AllApiDeck/advanced-proxy",
+	}
+	mappedHeaders, _ := buildAdvancedProxyMappedHeaders(provider)
+	if len(mappedHeaders) > 0 {
+		for key, value := range mappedHeaders {
+			if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+				continue
+			}
+			headers[key] = value
+		}
 	}
 	if stream {
 		headers["Accept"] = "text/event-stream"
@@ -3034,8 +3051,15 @@ func buildClaudeProviderHeaders(provider AdvancedProxyProvider, apiFormat string
 		headers["Accept"] = "application/json"
 	}
 	if requestHeaders != nil {
-		if userAgent := strings.TrimSpace(requestHeaders.Get("User-Agent")); userAgent != "" {
-			headers["User-Agent"] = userAgent
+		if _, mappedUserAgent := mappedHeaders["User-Agent"]; !mappedUserAgent {
+			if userAgent := strings.TrimSpace(requestHeaders.Get("User-Agent")); userAgent != "" {
+				headers["User-Agent"] = userAgent
+			}
+		}
+		if _, mappedOriginator := mappedHeaders["Originator"]; !mappedOriginator {
+			if originator := strings.TrimSpace(requestHeaders.Get("Originator")); originator != "" {
+				headers["Originator"] = originator
+			}
 		}
 	}
 	if apiFormat == "anthropic" {
@@ -3535,12 +3559,21 @@ func writeAnthropicSSEFromOpenAIChatStreamWithRecord(writer http.ResponseWriter,
 }
 
 func buildOpenAIProviderHeaders(provider AdvancedProxyProvider) map[string]string {
-	return map[string]string{
+	headers := map[string]string{
 		"Content-Type":  "application/json",
 		"Accept":        "application/json, text/event-stream",
 		"User-Agent":    "AllApiDeck/advanced-proxy",
 		"Authorization": "Bearer " + provider.APIKey,
 	}
+	if mappedHeaders, _ := buildAdvancedProxyMappedHeaders(provider); len(mappedHeaders) > 0 {
+		for key, value := range mappedHeaders {
+			if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+				continue
+			}
+			headers[key] = value
+		}
+	}
+	return headers
 }
 
 func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody map[string]any, requestHeaders http.Header, stream bool, config AdvancedProxyConfig) providerAttemptResult {

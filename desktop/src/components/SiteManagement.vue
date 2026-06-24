@@ -1186,11 +1186,12 @@ const refreshSiteTreeModels = async (record, options = {}) => {
 
   if (apiBaseUrl) {
     const failedDetails = [];
+    const siteUserId = getBridgeComparableUserId(record);
     await Promise.all(mergedTokens.map(async token => {
       const tokenKey = String(token?.key || token?.access_token || '').trim();
       if (!tokenKey) return;
       try {
-        const payload = await fetchModelList(apiBaseUrl, tokenKey);
+        const payload = await fetchModelList(apiBaseUrl, tokenKey, { uid: siteUserId });
         const modelNames = extractModelNamesFromPayload(payload);
         if (modelNames.length > 0) {
           tokenModelsByKey.set(tokenKey, modelNames);

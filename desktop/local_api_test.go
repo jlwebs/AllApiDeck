@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -90,6 +92,46 @@ func TestBuildCheckRequestHeadersAppliesExpandedClaudeMappedHeaders(t *testing.T
 	} {
 		if headers[key] != want {
 			t.Fatalf("expected header %s=%q, got %#v", key, want, headers)
+		}
+	}
+}
+
+func TestHandleLocalProxyGetForwardsCompatUidHeaders(t *testing.T) {
+	var capturedHeaders http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		capturedHeaders = request.Header.Clone()
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"data":["gpt-5-nano"],"success":true}`)
+	}))
+	defer server.Close()
+
+	target := "/api/proxy-get?url=" + url.QueryEscape(server.URL+"/api/user/models") + "&uid=5004"
+	parsed, err := url.Parse(target)
+	if err != nil {
+		t.Fatalf("parse target: %v", err)
+	}
+
+	resp, err := handleLocalProxyGet(parsed, map[string]string{
+		"Authorization": "Bearer sk-test",
+	})
+	if err != nil {
+		t.Fatalf("handleLocalProxyGet: %v", err)
+	}
+	if resp.Status != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", resp.Status, resp.Body)
+	}
+	for key, want := range map[string]string{
+		"Authorization":  "Bearer sk-test",
+		"One-Api-User":   "5004",
+		"New-Api-User":   "5004",
+		"Veloera-User":   "5004",
+		"Voapi-User":     "5004",
+		"User-Id":        "5004",
+		"Rix-Api-User":   "5004",
+		"Neo-Api-User":   "5004",
+	} {
+		if got := capturedHeaders.Get(key); got != want {
+			t.Fatalf("expected header %s=%q, got %q", key, want, got)
 		}
 	}
 }

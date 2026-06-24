@@ -2050,6 +2050,16 @@ function buildModelProbeSiteCacheRecord(record) {
   };
 }
 
+function getModelProbeComparableUserId(siteLike) {
+  return String(
+    siteLike?.resolvedUserId ||
+    siteLike?.resolved_user_id ||
+    siteLike?.accountInfo?.id ||
+    siteLike?.account_info?.id ||
+    ''
+  ).trim();
+}
+
 function mergeModelProbeSiteCacheRecords(records) {
   const mergedMap = new Map();
   (Array.isArray(records) ? records : []).forEach(item => {
@@ -2171,7 +2181,11 @@ async function handleBatchRowContextModelProbe(records) {
   for (const rawRecord of siteCacheRecords) {
     let siteCacheRecord = { ...rawRecord };
     try {
-      const modelResponse = await fetchModelList(siteCacheRecord.siteUrl, siteCacheRecord.resolvedAccessToken);
+      const modelResponse = await fetchModelList(
+        siteCacheRecord.siteUrl,
+        siteCacheRecord.resolvedAccessToken,
+        { uid: getModelProbeComparableUserId(siteCacheRecord) }
+      );
       const rawCandidates = modelResponse?.data || modelResponse?.models || [];
       const normalizedCandidates = normalizeModels(rawCandidates);
       if (normalizedCandidates.length > 0) {

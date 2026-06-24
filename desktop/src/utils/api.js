@@ -1,14 +1,23 @@
 import { apiFetch } from './runtimeApi.js';
 
-export async function fetchModelList(apiUrl, apiKey) {
+function normalizeModelListUid(uid) {
+  const normalized = String(uid || '').trim();
+  return /^\d+$/.test(normalized) ? normalized : '';
+}
+
+export async function fetchModelList(apiUrl, apiKey, options = {}) {
   const endpoints = buildModelEndpointCandidates(apiUrl);
   const errors = [];
   const controllers = endpoints.map(() => new AbortController());
+  const normalizedUid = normalizeModelListUid(options?.uid);
 
   try {
     const winner = await Promise.any(
       endpoints.map((endpoint, index) =>
-        requestModelList(endpoint, apiKey, controllers[index].signal)
+        requestModelList(endpoint, apiKey, {
+          signal: controllers[index].signal,
+          uid: normalizedUid,
+        })
           .then(result => ({ index, result }))
           .catch(error => {
             errors.push(`${endpoint} -> ${error.message}`);
@@ -30,14 +39,15 @@ export async function fetchModelList(apiUrl, apiKey) {
   }
 }
 
-async function requestModelList(endpoint, apiKey, signal) {
-  const target = `/api/proxy-get?url=${encodeURIComponent(endpoint)}`;
+async function requestModelList(endpoint, apiKey, options = {}) {
+  const normalizedUid = normalizeModelListUid(options?.uid);
+  const target = `/api/proxy-get?url=${encodeURIComponent(endpoint)}${normalizedUid ? `&uid=${encodeURIComponent(normalizedUid)}` : ''}`;
   const response = await apiFetch(target, {
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
-    signal,
+    signal: options?.signal,
   });
 
   if (!response.ok) {
@@ -175,6 +185,10 @@ function buildModelEndpointCandidates(apiUrl) {
 
   return Array.from(endpoints);
 }
+
+export const __modelListTestUtils = {
+  normalizeModelListUid,
+};
 
 function stripKnownApiSuffix(input) {
   const patterns = [
