@@ -1,8 +1,13 @@
 import { isProbablyWailsRuntime } from './runtimeApi.js';
+import {
+  cloneDefaultUserAgentMappings,
+  normalizeUserAgentMappings,
+} from './userAgentMappings.js';
 
 const DESKTOP_TOKEN_SOURCE_MODE_STORAGE_KEY = 'batch_api_check_desktop_token_source_mode';
 const TREE_EXPANDED_STORAGE_KEY = 'batch_api_check_tree_expanded_v1';
 const OUTBOUND_PROXY_STORAGE_KEY = 'batch_api_check_outbound_proxy_v1';
+const USER_AGENT_MAPPINGS_STORAGE_KEY = 'batch_api_check_user_agent_mappings_v1';
 
 export const OUTBOUND_PROXY_MODE_OPTIONS = [
   { label: '系统代理', value: 'system' },
@@ -99,4 +104,23 @@ export async function setOutboundProxyConfig(config) {
   }
   cacheOutboundProxyConfig(nextConfig);
   return nextConfig;
+}
+
+export function loadUserAgentMappings() {
+  try {
+    return normalizeUserAgentMappings(
+      JSON.parse(localStorage.getItem(USER_AGENT_MAPPINGS_STORAGE_KEY) || 'null'),
+      { fallbackToDefault: true }
+    );
+  } catch {
+    return cloneDefaultUserAgentMappings();
+  }
+}
+
+export function saveUserAgentMappings(value) {
+  const normalized = normalizeUserAgentMappings(value, { fallbackToDefault: false });
+  try {
+    localStorage.setItem(USER_AGENT_MAPPINGS_STORAGE_KEY, JSON.stringify(normalized));
+  } catch {}
+  return normalized;
 }

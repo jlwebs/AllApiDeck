@@ -375,6 +375,48 @@ func TestValidateAntiPoisonResponsesAllowsHostedWebSearchCallWithoutGuard(t *tes
 	}
 }
 
+func TestValidateAntiPoisonResponsesAllowsCodexStructuredWebSearchFunctionCallWithoutGuard(t *testing.T) {
+	ctx := testAntiPoisonContext("responses")
+	ctx.AppType = "codex"
+	raw := mustJSON(t, map[string]any{
+		"id": "resp_test",
+		"output": []any{
+			map[string]any{
+				"type":      "function_call",
+				"call_id":   "call_real_123456",
+				"name":      "WebSearch",
+				"arguments": `{"query":"today top news"}`,
+			},
+		},
+	})
+
+	result := validateAndStripAntiPoisonOpenAIResponse(raw, "responses", ctx)
+	if !result.Valid || result.Blocked || result.RealCount != 0 || result.GuardCount != 0 {
+		t.Fatalf("expected codex structured WebSearch function_call to bypass text-guard requirement, got %#v", result)
+	}
+}
+
+func TestValidateAntiPoisonResponsesStillBlocksCodexStructuredShellCommandWithoutGuard(t *testing.T) {
+	ctx := testAntiPoisonContext("responses")
+	ctx.AppType = "codex"
+	raw := mustJSON(t, map[string]any{
+		"id": "resp_test",
+		"output": []any{
+			map[string]any{
+				"type":      "function_call",
+				"call_id":   "call_real_123456",
+				"name":      "shell_command",
+				"arguments": `{"command":"git diff -- file"}`,
+			},
+		},
+	})
+
+	result := validateAndStripAntiPoisonOpenAIResponse(raw, "responses", ctx)
+	if result.Valid || !result.Blocked || !strings.Contains(result.Reason, "missing_guard_toolcall") {
+		t.Fatalf("expected codex structured shell_command to remain blocked without guard, got %#v", result)
+	}
+}
+
 func TestValidateAntiPoisonResponsesIgnoresDigestMismatchInMinimalMode(t *testing.T) {
 	config := testAntiPoisonConfig()
 	config.FailureMode = "warn"

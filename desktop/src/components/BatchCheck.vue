@@ -714,7 +714,9 @@ import { extractChromeProfileTokens, isChromeProfileAuthBridgeAvailable
 } from '../utils/profileAuthBridge.js';
 import { maximiseMainWindow
 } from '../utils/windowSizing.js';
-import { loadTreeExpandedSetting
+import {
+  loadTreeExpandedSetting,
+  loadUserAgentMappings,
 } from '../utils/systemSettings.js';
 import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel
 } from '../utils/balance.js';
@@ -7212,6 +7214,7 @@ const runSingleTest = async (task, customPayload = null) => {
         siteType: customPayload?.siteType || task.siteType || task.accountData?.site_type || task.accountData?.siteType || '',
         messages: messagesToUse,
         timeoutMs: backendTimeoutMs,
+        userAgentMappings: loadUserAgentMappings(),
         _isFirst: isFirst
       };
     

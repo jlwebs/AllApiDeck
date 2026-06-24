@@ -34,6 +34,7 @@ var (
 type antiPoisonRequestContext struct {
 	Enabled        bool
 	Config         AntiPoisonConfig
+	AppType        string
 	RouteKind      string
 	Alias          string
 	Prefix         string
@@ -760,6 +761,7 @@ func buildAntiPoisonRequestContextFromSeed(routeKind string, config AntiPoisonCo
 
 func normalizeAntiPoisonRequestContext(ctx antiPoisonRequestContext) antiPoisonRequestContext {
 	ctx.Config = sanitizeAntiPoisonConfig(ctx.Config)
+	ctx.AppType = strings.TrimSpace(ctx.AppType)
 	ctx.RouteKind = strings.TrimSpace(ctx.RouteKind)
 	ctx.Alias = strings.TrimSpace(ctx.Alias)
 	if ctx.Alias == "" {
@@ -1336,7 +1338,7 @@ func validateAndStripAntiPoisonToolCalls(rawBody []byte, calls []antiPoisonToolC
 	for _, call := range calls {
 		if call.IsGuard {
 			guardCalls = append(guardCalls, call)
-		} else if antiPoisonToolCallRequiresGuard(call) {
+		} else if antiPoisonToolCallRequiresGuard(call, ctx) {
 			realCalls = append(realCalls, call)
 		}
 	}
@@ -1389,8 +1391,15 @@ func validateAndStripAntiPoisonToolCalls(rawBody []byte, calls []antiPoisonToolC
 	return result
 }
 
-func antiPoisonToolCallRequiresGuard(call antiPoisonToolCall) bool {
+func antiPoisonToolCallRequiresGuard(call antiPoisonToolCall, ctx antiPoisonRequestContext) bool {
+	ctx = normalizeAntiPoisonRequestContext(ctx)
 	if call.IsGuard {
+		return false
+	}
+	normalizedName := normalizeAntiPoisonGuardToolBindingName(call.Name)
+	if strings.EqualFold(ctx.AppType, "codex") &&
+		strings.EqualFold(strings.TrimSpace(call.Kind), "responses.function_call") &&
+		strings.EqualFold(normalizedName, "WebSearch") {
 		return false
 	}
 	return !strings.EqualFold(strings.TrimSpace(call.Kind), "responses.web_search_call")

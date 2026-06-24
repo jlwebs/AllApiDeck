@@ -2621,7 +2621,7 @@ func TestForwardOpenAIRequestViaProviderFallbacksResponsesToChatOnSuccessfulErro
 	}
 }
 
-func TestForwardOpenAIRequestViaProviderBlocksResponsesAfterMissingGuardWithoutRetry(t *testing.T) {
+func TestForwardOpenAIRequestViaProviderAllowsCodexResponsesStructuredFunctionCallWithoutGuard(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 
 	type capturedRequest struct {
@@ -2684,8 +2684,85 @@ func TestForwardOpenAIRequestViaProviderBlocksResponsesAfterMissingGuardWithoutR
 	}`)
 
 	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, false, config)
+	if result.StatusCode != http.StatusOK || result.AntiPoisonBlocked {
+		t.Fatalf("expected codex structured responses toolcall to bypass missing-guard block, got %#v body=%s", result, string(result.Body))
+	}
+	if strings.Contains(string(result.Body), "anti_poison_validation_failed") {
+		t.Fatalf("expected successful responses body, got %s", string(result.Body))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) != 1 {
+		t.Fatalf("expected no retry request, got %#v", requests)
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderStillBlocksNonCodexResponsesStructuredFunctionCallWithoutGuard(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	type capturedRequest struct {
+		Path string
+		Body map[string]any
+	}
+
+	var mu sync.Mutex
+	requests := make([]capturedRequest, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		rawRequest, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rawRequest, &body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+
+		mu.Lock()
+		requests = append(requests, capturedRequest{Path: request.URL.Path, Body: body})
+		mu.Unlock()
+
+		if request.URL.Path != "/v1/responses" && request.URL.Path != "/responses" {
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{
+			"id":"resp_missing_guard_openclaw",
+			"object":"response",
+			"status":"completed",
+			"output":[
+				{"type":"function_call","id":"fc_1","call_id":"call_1","name":"WebSearch","arguments":"{\"allowed_domains\":[],\"blocked_domains\":[],\"query\":\"2026年5月26日 上证新闻\"}"},
+				{"type":"message","role":"assistant","content":[{"type":"output_text","text":"我来搜索一下今天相关的新闻。"}]}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "missing-guard-openclaw-provider",
+		RowKey:    "row-missing-guard-openclaw",
+		Name:      "Missing Guard OpenClaw Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test-openclaw",
+		APIFormat: "openai_responses",
+	}
+	config := defaultAdvancedProxyConfig()
+	config.AntiPoison.Enabled = true
+	config.AntiPoison.StrictMode = true
+	config.AntiPoison.FailureMode = "block"
+	config.AntiPoison.StringProtection.Enabled = false
+
+	rawBody := []byte(`{
+		"model":"gpt-5.4",
+		"stream":false,
+		"input":[
+			{"role":"user","content":[{"type":"input_text","text":"联网搜索今日新闻"}]}
+		]
+	}`)
+
+	result := forwardOpenAIRequestViaProvider("openclaw", provider, "responses", rawBody, false, config)
 	if result.StatusCode != http.StatusBadGateway || !result.AntiPoisonBlocked {
-		t.Fatalf("expected missing guard to block without retry, got %#v body=%s", result, string(result.Body))
+		t.Fatalf("expected non-codex responses structured toolcall to remain blocked, got %#v body=%s", result, string(result.Body))
 	}
 	if !strings.Contains(string(result.Body), "anti_poison_validation_failed") {
 		t.Fatalf("expected anti-poison validation error body, got %s", string(result.Body))
@@ -2698,7 +2775,7 @@ func TestForwardOpenAIRequestViaProviderBlocksResponsesAfterMissingGuardWithoutR
 	}
 }
 
-func TestForwardOpenAIRequestViaProviderBlocksResponsesAfterMultipleMissingGuardsWithoutRetry(t *testing.T) {
+func TestForwardOpenAIRequestViaProviderAllowsCodexResponsesMultipleStructuredFunctionCallsWithoutGuard(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 
 	type capturedRequest struct {
@@ -2765,8 +2842,8 @@ func TestForwardOpenAIRequestViaProviderBlocksResponsesAfterMultipleMissingGuard
 	}`)
 
 	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, false, config)
-	if result.StatusCode != http.StatusBadGateway || !result.AntiPoisonBlocked {
-		t.Fatalf("expected multi-call missing guard to block without retry, got %#v body=%s", result, string(result.Body))
+	if result.StatusCode != http.StatusOK || result.AntiPoisonBlocked {
+		t.Fatalf("expected codex multi-call structured responses toolcalls to bypass missing-guard block, got %#v body=%s", result, string(result.Body))
 	}
 
 	mu.Lock()
@@ -3406,6 +3483,51 @@ func TestProxyOpenAIStreamToClientWithMetricsBlocksInvalidGuard(t *testing.T) {
 	}
 	if !strings.Contains(body, "shell_command") {
 		t.Fatalf("expected real toolcall kept, got %s", body)
+	}
+}
+
+func TestProxyOpenAIStreamToClientWithMetricsEmitsClientSafeResponsesTerminationOnBlockedStream(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+	ctx := buildAntiPoisonRequestContextFromSeed("responses", testAntiPoisonConfig(), "0011223344556677")
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"resp_blocked","status":"in_progress","model":"gpt-5.5"}}`,
+		``,
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_real_1","name":"shell_command","arguments":"{\"command\":\"git status\"}"}}`,
+		``,
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"id":"resp_blocked","status":"completed","output":[{"type":"function_call","id":"fc_1","call_id":"call_real_1","name":"shell_command","arguments":"{\"command\":\"git status\"}"}]}}`,
+		``,
+	}, "\n")))
+	recorder := httptest.NewRecorder()
+	recordCtx := &advancedProxyStreamRequestRecordContext{
+		AppType:         "openclaw",
+		ClientRoute:     "responses",
+		InboundEndpoint: buildAdvancedProxyOpenAIInboundEndpoint("openclaw", "responses"),
+		OutboundRoute:   "responses",
+		ObservedFormat:  "responses",
+		Provider: AdvancedProxyProvider{
+			ID:   "provider-stream-openai",
+			Name: "provider-stream-openai",
+		},
+		StartedAt:     time.Now(),
+		AntiPoisonCtx: ctx,
+	}
+	if err := proxyOpenAIStreamToClientWithMetrics(recorder, streamBody, recordCtx); err != nil {
+		t.Fatalf("proxy stream failed: %v", err)
+	}
+	body := recorder.Body.String()
+	for _, needle := range []string{
+		`event: response.created`,
+		`event: response.completed`,
+		`"status":"failed"`,
+		`"anti_poison_validation_failed"`,
+		`data: [DONE]`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("expected blocked responses stream to contain %q, got %s", needle, body)
+		}
 	}
 }
 
@@ -4348,6 +4470,81 @@ func runAntiPoisonE2EProtocolCase(t *testing.T, protocol antiPoisonE2EProtocolCa
 	assertAntiPoisonRecordBlockedForTest(t, attack.Reason)
 }
 
+func runAntiPoisonE2EProtocolCaseExpectPass(t *testing.T, protocol antiPoisonE2EProtocolCase, attack antiPoisonE2EAttackCase) {
+	t.Helper()
+	resetAdvancedProxyRuntimeForTest(t)
+
+	poisonBlockPathCalls := 0
+	fallbackCalls := 0
+	poisonServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		writer.Header().Set("Content-Type", "application/json")
+		if protocol.BlockPath != nil && !protocol.BlockPath(request.URL.Path) {
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = writer.Write([]byte(`{"error":{"message":"unknown API route"}}`))
+			return
+		}
+		poisonBlockPathCalls++
+		_, _ = writer.Write(protocol.BuildResponse(t, request.URL.Path, body, attack))
+	}))
+	defer poisonServer.Close()
+	fallbackServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		fallbackCalls++
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"chatcmpl_fallback","object":"chat.completion","model":"gpt-test","choices":[{"message":{"role":"assistant","content":"fallback should not run"},"finish_reason":"stop"}]}`))
+	}))
+	defer fallbackServer.Close()
+
+	providers := []AdvancedProxyProvider{
+		{
+			ID:        "poison-provider",
+			RowKey:    "row-poison",
+			Name:      "Poison Provider",
+			BaseURL:   poisonServer.URL,
+			APIKey:    "sk-poison",
+			APIFormat: protocol.ProviderFormat,
+			Model:     protocol.ProviderModel,
+			Enabled:   true,
+			SortIndex: 1,
+		},
+		{
+			ID:        "fallback-provider",
+			RowKey:    "row-fallback",
+			Name:      "Fallback Provider",
+			BaseURL:   fallbackServer.URL,
+			APIKey:    "sk-fallback",
+			APIFormat: protocol.ProviderFormat,
+			Model:     protocol.ProviderModel,
+			Enabled:   true,
+			SortIndex: 2,
+		},
+	}
+	config := buildAntiPoisonE2EConfig(providers)
+	if _, err := saveAdvancedProxyConfig(config); err != nil {
+		t.Fatalf("save advanced proxy config: %v", err)
+	}
+
+	app := &App{}
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1"+protocol.ClientPath, strings.NewReader(protocol.RequestBody))
+	request.RemoteAddr = "127.0.0.1:45231"
+	recorder := httptest.NewRecorder()
+	app.handleAdvancedProxyCodex(recorder, request)
+
+	response := recorder.Result()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected responses request to pass, got status=%d body=%s", response.StatusCode, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"type":"function_call"`) {
+		t.Fatalf("expected successful responses toolcall body, got %s", recorder.Body.String())
+	}
+	if poisonBlockPathCalls != 1 {
+		t.Fatalf("expected poison target route called once, got %d", poisonBlockPathCalls)
+	}
+	if fallbackCalls != 0 {
+		t.Fatalf("expected no fallback call on successful pass-through, fallbackCalls=%d", fallbackCalls)
+	}
+}
+
 func TestAdvancedProxyAntiPoisonE2EProtocolMatrix(t *testing.T) {
 	protocols := []antiPoisonE2EProtocolCase{
 		{
@@ -4444,11 +4641,49 @@ func TestAdvancedProxyAntiPoisonE2EProtocolMatrix(t *testing.T) {
 
 	for _, protocol := range protocols {
 		for _, attack := range buildAntiPoisonE2EToolCallPayload() {
+			if protocol.Name == "openai responses" {
+				continue
+			}
 			t.Run(protocol.Name+"/"+attack.Name, func(t *testing.T) {
 				runAntiPoisonE2EProtocolCase(t, protocol, attack)
 			})
 		}
 	}
+}
+
+func TestAdvancedProxyAntiPoisonE2ECodexResponsesAllowsStructuredWebSearchWithoutTextGuard(t *testing.T) {
+	protocol := antiPoisonE2EProtocolCase{
+		Name:           "openai responses",
+		AppType:        "codex",
+		ClientPath:     advancedProxyCodexBasePath + "/responses",
+		ProviderFormat: "openai_responses",
+		ProviderModel:  "gpt-test",
+		RequestBody:    `{"model":"gpt-test","input":[{"role":"user","content":[{"type":"input_text","text":"run guarded command"}]}],"stream":false}`,
+		BlockPath: func(path string) bool {
+			return strings.HasSuffix(path, "/responses")
+		},
+		BuildResponse: func(t *testing.T, path string, body []byte, attack antiPoisonE2EAttackCase) []byte {
+			if !strings.HasSuffix(path, "/responses") {
+				t.Fatalf("unexpected responses path: %s", path)
+			}
+			return mustJSON(t, map[string]any{
+				"id":     "resp_poison",
+				"object": "response",
+				"status": "completed",
+				"model":  "gpt-test",
+				"output": []any{
+					map[string]any{
+						"type":      "function_call",
+						"call_id":   "call_attack_resp_12345678",
+						"name":      "WebSearch",
+						"arguments": `{"query":"today top news"}`,
+					},
+				},
+			})
+		},
+	}
+
+	runAntiPoisonE2EProtocolCaseExpectPass(t, protocol, antiPoisonE2EAttackCase{Name: "codex structured websearch"})
 }
 
 func TestAdvancedProxyRPMIgnoresLegacyAppScopes(t *testing.T) {

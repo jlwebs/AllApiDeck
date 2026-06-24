@@ -81,6 +81,49 @@
               <a-switch :checked="treeExpanded" @update:checked="handleTreeExpandedChange" />
             </div>
           </a-space>
+
+          <p><b>User-Agent 映射</b></p>
+          <div class="ua-mapping-card">
+            <div class="ua-mapping-head">
+              <div class="ua-mapping-caption">按模型名包含匹配，命中后把右侧内容作为请求头块应用到快测请求。</div>
+              <a-button size="small" @click="addUserAgentMappingRow">新增一行</a-button>
+            </div>
+            <div class="ua-mapping-grid ua-mapping-grid-head">
+              <div>Model包含</div>
+              <div>目标UA</div>
+              <div></div>
+            </div>
+            <div
+              v-for="(mapping, index) in userAgentMappings"
+              :key="`ua-mapping-${index}`"
+              class="ua-mapping-grid"
+            >
+              <a-input
+                v-model:value="mapping.modelContains"
+                placeholder="例如 gpt"
+                @blur="saveUserAgentMappingsDraft"
+                @pressEnter="saveUserAgentMappingsDraft"
+              />
+              <a-textarea
+                v-model:value="mapping.targetUA"
+                :rows="3"
+                placeholder="可填单个 UA，或多行 Header: Value"
+                @blur="saveUserAgentMappingsDraft"
+              />
+              <a-button
+                danger
+                size="small"
+                :disabled="userAgentMappings.length <= 1"
+                @click="removeUserAgentMappingRow(index)"
+              >
+                删除
+              </a-button>
+            </div>
+            <div class="settings-muted-text">
+              <div>支持纯 UA 文本，也支持多行或分号分隔的 `Header: Value`。</div>
+              <div>默认规则：`gpt` 会注入 Codex Desktop 的 `Originator` 和 `User-Agent`；`claude` 会注入 `claude-cli` 的 `User-Agent` 和 `X-App`。</div>
+            </div>
+          </div>
           <a-divider />
           <div class="settings-version-text">
             {{ appLabel }}
@@ -175,10 +218,12 @@ import { isDesktopLogBridgeAvailable, listDesktopLogFiles, readDesktopLogFile } 
 import { isChromeProfileAuthBridgeAvailable } from '../utils/profileAuthBridge.js';
 import {
   getOutboundProxyConfig,
+  loadUserAgentMappings,
   normalizeDesktopTokenSourceMode,
   normalizeOutboundProxyConfig,
   saveDesktopTokenSourceMode,
   saveTreeExpandedSetting,
+  saveUserAgentMappings,
   setOutboundProxyConfig,
 } from '../utils/systemSettings.js';
 import {
@@ -235,6 +280,7 @@ const desktopLogFiles = ref([]);
 const selectedDesktopLogGroup = ref('');
 const selectedDesktopLogPath = ref('');
 const selectedDesktopLogContent = ref('');
+const userAgentMappings = ref(loadUserAgentMappings());
 const themeMode = ref(getStoredThemeMode());
 const themeModeOptions = THEME_MODE_OPTIONS;
 const ERROR_SUMMARY_GROUP_KEY = '__error_summary__';
@@ -289,6 +335,7 @@ const appLabel = computed(() => props.appVersion
 watch(() => props.open, open => {
   if (!open) return;
   themeMode.value = getStoredThemeMode();
+  userAgentMappings.value = loadUserAgentMappings();
   void loadProxyDraft();
   if (isWailsRuntime) {
     void loadDesktopLogs();
@@ -371,6 +418,20 @@ function handleTreeExpandedChange(checked) {
 function handleThemeModeSelection(nextMode) {
   themeMode.value = applyThemeMode(nextMode);
   message.success('界面主题已切换');
+}
+
+function saveUserAgentMappingsDraft() {
+  userAgentMappings.value = saveUserAgentMappings(userAgentMappings.value);
+}
+
+function addUserAgentMappingRow() {
+  userAgentMappings.value = [...userAgentMappings.value, { modelContains: '', targetUA: '' }];
+  saveUserAgentMappingsDraft();
+}
+
+function removeUserAgentMappingRow(index) {
+  userAgentMappings.value = userAgentMappings.value.filter((_, itemIndex) => itemIndex !== index);
+  saveUserAgentMappingsDraft();
 }
 
 async function loadProxyDraft() {
@@ -689,6 +750,37 @@ async function loadDesktopLogs() {
   margin-bottom: 16px;
 }
 
+.ua-mapping-card {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.ua-mapping-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.ua-mapping-caption {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #627064;
+}
+
+.ua-mapping-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.7fr) minmax(0, 1.3fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.ua-mapping-grid-head {
+  font-size: 12px;
+  color: #8c8c8c;
+}
+
 .portable-settings-card {
   display: grid;
   gap: 18px;
@@ -770,6 +862,11 @@ async function loadDesktopLogs() {
   color: #b7c7b1;
 }
 
+:deep(body.dark-mode) .ua-mapping-caption,
+:deep(body.dark-mode) .ua-mapping-grid-head {
+  color: #b7c7b1;
+}
+
 :deep(body.gaia-dark) .theme-mode-card {
   border-color: rgba(101, 129, 138, 0.18);
   background:
@@ -819,12 +916,21 @@ async function loadDesktopLogs() {
   color: #d7b088;
 }
 
+:deep(body.gaia-dark) .ua-mapping-caption,
+:deep(body.gaia-dark) .ua-mapping-grid-head {
+  color: #9eb2b3;
+}
+
 @media (max-width: 720px) {
   .proxy-custom-row {
     grid-template-columns: 1fr;
   }
 
   .theme-mode-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ua-mapping-grid {
     grid-template-columns: 1fr;
   }
 

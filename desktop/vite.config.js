@@ -2052,6 +2052,9 @@ function proxyMiddlewarePlugin() {
                   key: String(params.tokenKey || '').trim(),
                   model: params.model,
                   messages: params.messages,
+                  timeoutMs: params.timeoutMs,
+                  siteType: params.siteType || site?.site_type || '',
+                  userAgentMappings: params.userAgentMappings,
                   uid,
                 };
               } else if (!normalized?.uid && params?.uid) {

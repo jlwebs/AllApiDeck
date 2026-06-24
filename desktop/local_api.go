@@ -460,13 +460,19 @@ func handleLocalProfileAssistClose(method string, body string) (*bridgeHTTPRespo
 }
 
 type normalizedCheckKeyPayload struct {
-	URL       string
-	Key       string
-	Model     string
-	UID       string
-	SiteType  string
-	TimeoutMs int
-	Messages  any
+	URL               string
+	Key               string
+	Model             string
+	UID               string
+	SiteType          string
+	TimeoutMs         int
+	Messages          any
+	UserAgentMappings []checkUserAgentMapping
+}
+
+type checkUserAgentMapping struct {
+	ModelContains string
+	TargetUA      string
 }
 
 type checkEndpointAttempt struct {
@@ -531,15 +537,228 @@ var checkEndpointStripPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`/api$`),
 }
 
+const defaultCheckUserAgent = "Mozilla/5.0 BatchApiCheck/1.0"
+
+var checkMappedHeaderNameSpecialCases = map[string]string{
+	"accept":        "Accept",
+	"authorization": "Authorization",
+	"content-type":  "Content-Type",
+	"originator":    "Originator",
+	"user-agent":    "User-Agent",
+	"x-api-key":     "X-Api-Key",
+	"x-app":         "X-App",
+}
+
+func normalizeCheckUserAgentMapping(raw any) checkUserAgentMapping {
+	item, ok := raw.(map[string]any)
+	if !ok {
+		return checkUserAgentMapping{}
+	}
+	return checkUserAgentMapping{
+		ModelContains: strings.TrimSpace(firstNonEmpty(
+			toStringValue(item["modelContains"]),
+			toStringValue(item["model"]),
+		)),
+		TargetUA: strings.TrimSpace(firstNonEmpty(
+			toStringValue(item["targetUA"]),
+			toStringValue(item["targetUa"]),
+			toStringValue(item["target"]),
+			toStringValue(item["headers"]),
+		)),
+	}
+}
+
+func normalizeCheckUserAgentMappings(raw any) []checkUserAgentMapping {
+	items, ok := raw.([]any)
+	if !ok || len(items) == 0 {
+		return nil
+	}
+	result := make([]checkUserAgentMapping, 0, len(items))
+	for _, item := range items {
+		normalized := normalizeCheckUserAgentMapping(item)
+		if normalized.ModelContains == "" && normalized.TargetUA == "" {
+			continue
+		}
+		result = append(result, normalized)
+	}
+	return result
+}
+
+func canonicalizeMappedHeaderName(raw string) string {
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	if normalized == "" {
+		return ""
+	}
+	if mapped, ok := checkMappedHeaderNameSpecialCases[normalized]; ok {
+		return mapped
+	}
+	parts := strings.Split(normalized, "-")
+	for index, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[index] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	return strings.Join(parts, "-")
+}
+
+func isMappedHeaderNameChar(value byte) bool {
+	return (value >= 'a' && value <= 'z') ||
+		(value >= 'A' && value <= 'Z') ||
+		(value >= '0' && value <= '9') ||
+		value == '-'
+}
+
+func looksLikeMappedHeaderStart(text string, start int) bool {
+	index := start
+	for index < len(text) {
+		if text[index] != ' ' && text[index] != '\t' {
+			break
+		}
+		index += 1
+	}
+	nameStart := index
+	for index < len(text) && isMappedHeaderNameChar(text[index]) {
+		index += 1
+	}
+	return index > nameStart && index < len(text) && text[index] == ':'
+}
+
+func splitMappedHeaderSegments(text string) []string {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	segments := make([]string, 0, 4)
+	start := 0
+	for index := 0; index < len(text); index += 1 {
+		switch text[index] {
+		case '\r', '\n':
+			segment := strings.TrimSpace(text[start:index])
+			if segment != "" {
+				segments = append(segments, segment)
+			}
+			if text[index] == '\r' && index+1 < len(text) && text[index+1] == '\n' {
+				index += 1
+			}
+			start = index + 1
+		case ';':
+			if !looksLikeMappedHeaderStart(text, index+1) {
+				continue
+			}
+			segment := strings.TrimSpace(text[start:index])
+			if segment != "" {
+				segments = append(segments, segment)
+			}
+			start = index + 1
+		}
+	}
+	last := strings.TrimSpace(text[start:])
+	if last != "" {
+		segments = append(segments, last)
+	}
+	return segments
+}
+
+func parseMappedCheckHeaders(raw string) map[string]string {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return map[string]string{}
+	}
+	segments := splitMappedHeaderSegments(text)
+	headers := map[string]string{}
+	sawHeaderSyntax := false
+	for _, segment := range segments {
+		separatorIndex := strings.Index(segment, ":")
+		if separatorIndex <= 0 {
+			continue
+		}
+		rawName := strings.TrimSpace(segment[:separatorIndex])
+		rawValue := strings.TrimSpace(segment[separatorIndex+1:])
+		if rawName == "" || rawValue == "" {
+			continue
+		}
+		valid := true
+		for index := 0; index < len(rawName); index += 1 {
+			if !isMappedHeaderNameChar(rawName[index]) {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			continue
+		}
+		sawHeaderSyntax = true
+		headers[canonicalizeMappedHeaderName(rawName)] = rawValue
+	}
+	if sawHeaderSyntax {
+		return headers
+	}
+	return map[string]string{
+		"User-Agent": text,
+	}
+}
+
+func resolveMappedHeadersForCheckModel(model string, mappings []checkUserAgentMapping) (map[string]string, string) {
+	normalizedModel := strings.ToLower(strings.TrimSpace(model))
+	if normalizedModel == "" || len(mappings) == 0 {
+		return nil, ""
+	}
+	for _, mapping := range mappings {
+		modelContains := strings.TrimSpace(mapping.ModelContains)
+		targetUA := strings.TrimSpace(mapping.TargetUA)
+		if modelContains == "" || targetUA == "" {
+			continue
+		}
+		if !strings.Contains(normalizedModel, strings.ToLower(modelContains)) {
+			continue
+		}
+		headers := parseMappedCheckHeaders(targetUA)
+		if len(headers) == 0 {
+			continue
+		}
+		return headers, modelContains
+	}
+	return nil, ""
+}
+
+func applyRequestHeaders(req *http.Request, headers map[string]string) {
+	if req == nil {
+		return
+	}
+	for key, value := range headers {
+		if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+			continue
+		}
+		req.Header.Set(key, value)
+	}
+}
+
+func buildCheckRequestHeaders(payload normalizedCheckKeyPayload) (map[string]string, string) {
+	headers := map[string]string{
+		"Authorization": "Bearer " + payload.Key,
+		"Content-Type":  "application/json",
+		"User-Agent":    defaultCheckUserAgent,
+	}
+	for key, value := range buildCompatHeaders(payload.UID) {
+		headers[key] = value
+	}
+	mappedHeaders, match := resolveMappedHeadersForCheckModel(payload.Model, payload.UserAgentMappings)
+	for key, value := range mappedHeaders {
+		headers[key] = value
+	}
+	return headers, match
+}
+
 func normalizeCheckKeyPayload(payload map[string]any) (normalizedCheckKeyPayload, error) {
 	normalized := normalizedCheckKeyPayload{
-		URL:       strings.TrimRight(strings.TrimSpace(toStringValue(payload["url"])), "/"),
-		Key:       strings.TrimSpace(toStringValue(payload["key"])),
-		Model:     strings.TrimSpace(toStringValue(payload["model"])),
-		UID:       strings.TrimSpace(toStringValue(payload["uid"])),
-		SiteType:  strings.ToLower(strings.TrimSpace(toStringValue(payload["siteType"]))),
-		TimeoutMs: int(toFloat64OrZero(payload["timeoutMs"])),
-		Messages:  payload["messages"],
+		URL:               strings.TrimRight(strings.TrimSpace(toStringValue(payload["url"])), "/"),
+		Key:               strings.TrimSpace(toStringValue(payload["key"])),
+		Model:             strings.TrimSpace(toStringValue(payload["model"])),
+		UID:               strings.TrimSpace(toStringValue(payload["uid"])),
+		SiteType:          strings.ToLower(strings.TrimSpace(toStringValue(payload["siteType"]))),
+		TimeoutMs:         int(toFloat64OrZero(payload["timeoutMs"])),
+		Messages:          payload["messages"],
+		UserAgentMappings: normalizeCheckUserAgentMappings(payload["userAgentMappings"]),
 	}
 
 	if normalized.TimeoutMs <= 0 {
@@ -924,12 +1143,16 @@ func buildCheckDiagnostics(payload normalizedCheckKeyPayload, attempts []checkEn
 		})
 	}
 
-	return map[string]any{
+	diagnostics := map[string]any{
 		"inputUrl":  payload.URL,
 		"model":     payload.Model,
 		"timeoutMs": payload.TimeoutMs,
 		"attempts":  items,
 	}
+	if _, match := resolveMappedHeadersForCheckModel(payload.Model, payload.UserAgentMappings); match != "" {
+		diagnostics["userAgentMapping"] = match
+	}
+	return diagnostics
 }
 
 func resolveCheckProtocolPreferenceHostKey(rawURL string) string {
@@ -1086,12 +1309,8 @@ func executeCheckKey(payload normalizedCheckKeyPayload) (int, map[string]any) {
 		return http.StatusBadRequest, map[string]any{"error": map[string]any{"message": err.Error()}}
 	}
 
-	req.Header.Set("Authorization", "Bearer "+payload.Key)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 BatchApiCheck/1.0")
-	for key, value := range buildCompatHeaders(payload.UID) {
-		req.Header.Set(key, value)
-	}
+	requestHeaders, _ := buildCheckRequestHeaders(payload)
+	applyRequestHeaders(req, requestHeaders)
 
 	client, err := newOutboundHTTPClient(time.Duration(payload.TimeoutMs) * time.Millisecond)
 	if err != nil {
@@ -1228,12 +1447,8 @@ func executeCheckKeyAttempt(payload normalizedCheckKeyPayload, targetURL string)
 		}
 	}
 
-	req.Header.Set("Authorization", "Bearer "+payload.Key)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 BatchApiCheck/1.0")
-	for key, value := range buildCompatHeaders(payload.UID) {
-		req.Header.Set(key, value)
-	}
+	requestHeaders, _ := buildCheckRequestHeaders(payload)
+	applyRequestHeaders(req, requestHeaders)
 
 	client, err := newOutboundHTTPClient(time.Duration(payload.TimeoutMs) * time.Millisecond)
 	if err != nil {
@@ -1548,13 +1763,9 @@ func executeResponsesCheckAttempt(payload normalizedCheckKeyPayload, targetURL s
 		}
 	}
 
-	req.Header.Set("Authorization", "Bearer "+payload.Key)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("User-Agent", "Mozilla/5.0 BatchApiCheck/1.0")
-	for key, value := range buildCompatHeaders(payload.UID) {
-		req.Header.Set(key, value)
-	}
+	requestHeaders, _ := buildCheckRequestHeaders(payload)
+	requestHeaders["Accept"] = "text/event-stream"
+	applyRequestHeaders(req, requestHeaders)
 
 	client, err := newOutboundHTTPClient(time.Duration(payload.TimeoutMs) * time.Millisecond)
 	if err != nil {
@@ -1816,11 +2027,10 @@ func executeAnthropicCheckAttempt(payload normalizedCheckKeyPayload, targetURL s
 		}
 	}
 
-	req.Header.Set("Authorization", "Bearer "+payload.Key)
-	req.Header.Set("x-api-key", payload.Key)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 BatchApiCheck/1.0")
+	requestHeaders, _ := buildCheckRequestHeaders(payload)
+	requestHeaders["x-api-key"] = payload.Key
+	requestHeaders["anthropic-version"] = "2023-06-01"
+	applyRequestHeaders(req, requestHeaders)
 
 	client, err := newOutboundHTTPClient(time.Duration(payload.TimeoutMs) * time.Millisecond)
 	if err != nil {

@@ -4,9 +4,46 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestParseMappedCheckHeadersSupportsSemicolonDelimitedHeaders(t *testing.T) {
+	got := parseMappedCheckHeaders("User-Agent: claude-cli/2.1.129 (external, cli); x-app: cli")
+	want := map[string]string{
+		"User-Agent": "claude-cli/2.1.129 (external, cli)",
+		"X-App":      "cli",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected headers: got=%#v want=%#v", got, want)
+	}
+}
+
+func TestBuildCheckRequestHeadersAppliesMappedHeaders(t *testing.T) {
+	headers, match := buildCheckRequestHeaders(normalizedCheckKeyPayload{
+		Key:   "sk-test",
+		Model: "gpt-4o-mini",
+		UserAgentMappings: []checkUserAgentMapping{
+			{
+				ModelContains: "gpt",
+				TargetUA:      "originator: Codex Desktop\nuser-agent: Codex Desktop/0.142.0-alpha.6 (Windows 10.0.19044; x86_64) unknown (Codex Desktop; 26.616.51431)",
+			},
+		},
+	})
+	if match != "gpt" {
+		t.Fatalf("unexpected mapping match: %q", match)
+	}
+	if headers["Originator"] != "Codex Desktop" {
+		t.Fatalf("expected originator header, got %#v", headers)
+	}
+	if headers["User-Agent"] != "Codex Desktop/0.142.0-alpha.6 (Windows 10.0.19044; x86_64) unknown (Codex Desktop; 26.616.51431)" {
+		t.Fatalf("unexpected user-agent header: %#v", headers)
+	}
+	if headers["Authorization"] != "Bearer sk-test" {
+		t.Fatalf("expected authorization header, got %#v", headers)
+	}
+}
 
 func TestBuildCheckEndpointCandidatesAnyrouterOrder(t *testing.T) {
 	t.Setenv("BATCH_API_CHECK_RUNTIME_DIR", t.TempDir())

@@ -952,7 +952,7 @@ import { normalizeCCSwitchEndpoint } from '../utils/ccSwitch.js';
 import { resolveOpenAIExportBaseUrl } from '../utils/exportEndpoint.js';
 import { getAppliedThemeMode, isDarkThemeMode, THEME_MODE_CHANGE_EVENT } from '../utils/theme.js';
 import { exitSidebarMode, isManualSidebarBridgeAvailable, isSidebarBridgeAvailable, openManualSidebarPanel } from '../utils/windowMode.js';
-import { loadDesktopTokenSourceMode, loadTreeExpandedSetting } from '../utils/systemSettings.js';
+import { loadDesktopTokenSourceMode, loadTreeExpandedSetting, loadUserAgentMappings } from '../utils/systemSettings.js';
 import { buildPerformanceTooltipLines, derivePerformanceMetricsFromResponse, hasPerformanceMetrics } from '../utils/performanceMetrics.js';
 import {
   hydrateLastResultsSnapshotCache,
@@ -3199,7 +3199,16 @@ async function executeQuickTest({ apiKey, siteUrl, model, siteType = '' }) {
   const response = await apiFetch('/api/check-key', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: normalizeSiteUrl(siteUrl), key: apiKey, model, siteType, messages: buildQuickTestMessages(), timeoutMs, _isFirst: false }),
+    body: JSON.stringify({
+      url: normalizeSiteUrl(siteUrl),
+      key: apiKey,
+      model,
+      siteType,
+      messages: buildQuickTestMessages(),
+      timeoutMs,
+      userAgentMappings: loadUserAgentMappings(),
+      _isFirst: false,
+    }),
   });
   if (!response.ok) {
     const rawError = await safeReadResponsePayload(response);

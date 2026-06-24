@@ -2065,7 +2065,11 @@ func proxyOpenAIStreamToClientWithMetrics(writer http.ResponseWriter, streamBody
 	if guardResult.Blocked {
 		observation.markFirstOutput(time.Now())
 		observation.markCompleted(time.Now())
-		writeOpenAIStreamAntiPoisonError(writer, "AllApiDeck anti-poison validation failed: "+guardResult.Reason)
+		observedFormat := ""
+		if recordContext != nil {
+			observedFormat = firstNonEmpty(recordContext.ObservedFormat, recordContext.ClientRoute, recordContext.OutboundRoute)
+		}
+		writeOpenAIStreamAntiPoisonError(writer, "AllApiDeck anti-poison validation failed: "+guardResult.Reason, observedFormat)
 		if recordContext != nil {
 			recordAdvancedProxyStreamObservation(recordContext, observation, http.StatusBadGateway, guardResult.Reason)
 		}
@@ -3561,7 +3565,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 			appendAdvancedProxyLogf("[CLAUDE_PROXY_SANITIZE] provider=%s sanitized_orphan_tool_results=%d", advancedProxyProviderLabel(provider), sanitizedCount)
 		}
 	}
-	antiPoisonCtx := antiPoisonRequestContext{Config: sanitizeAntiPoisonConfig(config.AntiPoison), RouteKind: "claude_messages"}
+	antiPoisonCtx := antiPoisonRequestContext{Config: sanitizeAntiPoisonConfig(config.AntiPoison), AppType: "claude", RouteKind: "claude_messages"}
 	if config.AntiPoison.Enabled {
 		guardedPayload, guardCtx, guardErr := applyAntiPoisonPromptToAnthropicRequest(basePayload, config.AntiPoison)
 		if guardErr != nil {
@@ -4091,7 +4095,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 	if resolvedModel == "" {
 		resolvedModel = strings.TrimSpace(provider.Model)
 	}
-	antiPoisonCtx := antiPoisonRequestContext{Config: sanitizeAntiPoisonConfig(config.AntiPoison), RouteKind: routeKind}
+	antiPoisonCtx := antiPoisonRequestContext{Config: sanitizeAntiPoisonConfig(config.AntiPoison), AppType: appType, RouteKind: routeKind}
 	stringProtectionCtx := antiPoisonStringProtectionContext{}
 	if config.AntiPoison.Enabled {
 		guardedBody, guardCtx, guardErr := applyAntiPoisonPromptToOpenAIRequest(normalizedBody, routeKind, config.AntiPoison)
@@ -4105,6 +4109,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 			)
 		} else if guardCtx.Enabled {
 			normalizedBody = guardedBody
+			guardCtx.AppType = appType
 			antiPoisonCtx = guardCtx
 			appendAdvancedProxyLogf(
 				"[ANTI_POISON_PROMPT_APPLY] app=%s route=%s provider=%s alias=%s guard=%s strategy=%d phrase=%d insertion=%s",

@@ -1,5 +1,9 @@
 // Shared API key check logic for both Vite middleware and local proxy routes.
 
+import { resolveMappedHeadersForModel } from '../../src/utils/userAgentMappings.js';
+
+const DEFAULT_CHECK_USER_AGENT = 'Mozilla/5.0 ApiChecker/1.0';
+
 function clampTimeoutMs(value, fallback = 55000) {
   if (!Number.isFinite(Number(value))) {
     return fallback;
@@ -20,6 +24,25 @@ function buildCompatHeaders(uid) {
     'User-id': normalizedUid,
     'Rix-Api-User': normalizedUid,
     'neo-api-user': normalizedUid,
+  };
+}
+
+function buildCheckRequestHeaders({ key, uid, model, userAgentMappings }) {
+  const headers = {
+    Authorization: `Bearer ${key}`,
+    'Content-Type': 'application/json',
+    'User-Agent': DEFAULT_CHECK_USER_AGENT,
+    ...buildCompatHeaders(uid),
+  };
+
+  const mapped = resolveMappedHeadersForModel(model, userAgentMappings);
+  if (mapped?.headers) {
+    Object.assign(headers, mapped.headers);
+  }
+
+  return {
+    headers,
+    mappedMatch: String(mapped?.match || '').trim(),
   };
 }
 
@@ -143,10 +166,11 @@ function extractResponseErrorMessage(text, status) {
   return message;
 }
 
-async function requestChatCompletion({ endpoint, key, model, messages, uid, timeoutMs }, log = console.log) {
+async function requestChatCompletion({ endpoint, key, model, messages, uid, timeoutMs, userAgentMappings }, log = console.log) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const startTime = Date.now();
+  const requestHeaders = buildCheckRequestHeaders({ key, uid, model, userAgentMappings });
 
   log(
     `[CHECK] trying endpoint=${endpoint} | model=${model} | key=${String(key || '').slice(0, 12)}... | timeout=${timeoutMs}ms`,
@@ -155,12 +179,7 @@ async function requestChatCompletion({ endpoint, key, model, messages, uid, time
   try {
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 ApiChecker/1.0',
-        ...buildCompatHeaders(uid),
-      },
+      headers: requestHeaders.headers,
       body: JSON.stringify({
         model,
         messages: messages || [{ role: 'user', content: 'hi' }],
@@ -330,11 +349,13 @@ async function requestChatCompletion({ endpoint, key, model, messages, uid, time
   }
 }
 
-export async function checkKey({ url, key, model, messages, uid, timeoutMs }, log = console.log) {
+export async function checkKey({ url, key, model, messages, uid, timeoutMs, userAgentMappings }, log = console.log) {
   const normalizedTimeoutMs = clampTimeoutMs(timeoutMs);
   const inputUrl = normalizeUrlInput(url);
   const endpoints = buildChatEndpointCandidates(inputUrl);
   const attempts = [];
+  const mapped = resolveMappedHeadersForModel(model, userAgentMappings);
+  const mappedMatch = String(mapped?.match || '').trim();
 
   if (!inputUrl || endpoints.length === 0) {
     return {
@@ -356,6 +377,7 @@ export async function checkKey({ url, key, model, messages, uid, timeoutMs }, lo
       messages,
       uid,
       timeoutMs: normalizedTimeoutMs,
+      userAgentMappings,
     }, log);
 
     if (result.ok) {
@@ -365,6 +387,7 @@ export async function checkKey({ url, key, model, messages, uid, timeoutMs }, lo
         timeoutMs: normalizedTimeoutMs,
         resolvedEndpoint: result.endpoint,
         attempts,
+        ...(mappedMatch ? { userAgentMapping: mappedMatch } : {}),
       };
       return result.result;
     }
@@ -384,6 +407,7 @@ export async function checkKey({ url, key, model, messages, uid, timeoutMs }, lo
               model: String(model || '').trim(),
               timeoutMs: normalizedTimeoutMs,
               attempts,
+              ...(mappedMatch ? { userAgentMapping: mappedMatch } : {}),
             },
           },
         },
@@ -402,6 +426,7 @@ export async function checkKey({ url, key, model, messages, uid, timeoutMs }, lo
           model: String(model || '').trim(),
           timeoutMs: normalizedTimeoutMs,
           attempts,
+          ...(mappedMatch ? { userAgentMapping: mappedMatch } : {}),
         },
       },
     },

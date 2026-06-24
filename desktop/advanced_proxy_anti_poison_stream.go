@@ -225,16 +225,49 @@ func restoreAntiPoisonStringProtectionInSSEBody(raw []byte, ctx *antiPoisonStrin
 	return encodeAdvancedProxySSEEvents(events)
 }
 
-func writeOpenAIStreamAntiPoisonError(writer http.ResponseWriter, message string) {
-	payload := map[string]any{
-		"error": map[string]any{
-			"message": firstNonEmpty(strings.TrimSpace(message), "AllApiDeck anti-poison validation failed"),
-			"type":    "invalid_request_error",
-			"code":    "anti_poison_validation_failed",
+func writeOpenAIStreamAntiPoisonError(writer http.ResponseWriter, message string, observedFormat string) {
+	resolved := firstNonEmpty(strings.TrimSpace(message), "AllApiDeck anti-poison validation failed")
+	if normalizeAdvancedProxyObservedFormat(observedFormat) != "responses" {
+		payload := map[string]any{
+			"error": map[string]any{
+				"message": resolved,
+				"type":    "invalid_request_error",
+				"code":    "anti_poison_validation_failed",
+			},
+		}
+		raw, _ := json.Marshal(payload)
+		_, _ = fmt.Fprintf(writer, "data: %s\n\n", string(raw))
+		if flusher, ok := writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		return
+	}
+	createdPayload := map[string]any{
+		"type": "response.created",
+		"response": map[string]any{
+			"id":     "resp_aad_blocked",
+			"object": "response",
+			"status": "in_progress",
 		},
 	}
-	raw, _ := json.Marshal(payload)
-	_, _ = fmt.Fprintf(writer, "data: %s\n\n", string(raw))
+	completedPayload := map[string]any{
+		"type": "response.completed",
+		"response": map[string]any{
+			"id":     "resp_aad_blocked",
+			"object": "response",
+			"status": "failed",
+			"error": map[string]any{
+				"message": resolved,
+				"type":    "invalid_request_error",
+				"code":    "anti_poison_validation_failed",
+			},
+		},
+	}
+	createdRaw, _ := json.Marshal(createdPayload)
+	completedRaw, _ := json.Marshal(completedPayload)
+	_, _ = fmt.Fprintf(writer, "event: response.created\ndata: %s\n\n", string(createdRaw))
+	_, _ = fmt.Fprintf(writer, "event: response.completed\ndata: %s\n\n", string(completedRaw))
+	_, _ = fmt.Fprintf(writer, "data: [DONE]\n\n")
 	if flusher, ok := writer.(http.Flusher); ok {
 		flusher.Flush()
 	}

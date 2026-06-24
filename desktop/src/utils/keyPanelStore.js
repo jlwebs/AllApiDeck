@@ -4,6 +4,7 @@ import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from './balanc
 import { buildQuickTestMessages } from './quickTestPrompts.js';
 import { derivePerformanceMetricsFromResponse } from './performanceMetrics.js';
 import { getCachedLastResultsSnapshotRaw } from './historySnapshotStore.js';
+import { loadUserAgentMappings } from './systemSettings.js';
 
 export const STORAGE_KEY = 'api_check_key_management_records_v1';
 export const MANUAL_STORAGE_KEY = 'api_check_key_management_manual_records_v1';
@@ -528,6 +529,7 @@ export async function runRecordQuickTest(record, contextMap) {
       siteType: String(nextRecord.siteType || nextRecord.site_type || '').trim(),
       messages: buildQuickTestMessages(),
       timeoutMs,
+      userAgentMappings: loadUserAgentMappings(),
       _isFirst: false,
     }),
   });
