@@ -431,7 +431,7 @@ func TestBuildClaudeProviderHeadersPreservesAnthropicHeaders(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 	if _, err := saveAdvancedProxyConfig(AdvancedProxyConfig{
 		Enabled: true,
-		Queues: defaultAdvancedProxyQueuesConfig(),
+		Queues:  defaultAdvancedProxyQueuesConfig(),
 		UserAgentMappings: []checkUserAgentMapping{
 			{
 				ModelContains: "claude",
@@ -445,12 +445,12 @@ func TestBuildClaudeProviderHeadersPreservesAnthropicHeaders(t *testing.T) {
 			BasePath:  advancedProxyClaudeBasePath,
 			Providers: []AdvancedProxyProvider{},
 		},
-		Codex:    AdvancedProxyAppConfig{BasePath: advancedProxyCodexBasePath},
-		OpenCode: AdvancedProxyAppConfig{BasePath: advancedProxyOpenCodePath},
-		OpenClaw: AdvancedProxyAppConfig{BasePath: advancedProxyOpenClawPath},
-		Failover: defaultAdvancedProxyConfig().Failover,
-		Rectifier: defaultAdvancedProxyConfig().Rectifier,
-		Optimizer: defaultAdvancedProxyConfig().Optimizer,
+		Codex:      AdvancedProxyAppConfig{BasePath: advancedProxyCodexBasePath},
+		OpenCode:   AdvancedProxyAppConfig{BasePath: advancedProxyOpenCodePath},
+		OpenClaw:   AdvancedProxyAppConfig{BasePath: advancedProxyOpenClawPath},
+		Failover:   defaultAdvancedProxyConfig().Failover,
+		Rectifier:  defaultAdvancedProxyConfig().Rectifier,
+		Optimizer:  defaultAdvancedProxyConfig().Optimizer,
 		AntiPoison: defaultAdvancedProxyConfig().AntiPoison,
 	}); err != nil {
 		t.Fatalf("save advanced proxy config: %v", err)
@@ -489,7 +489,7 @@ func TestBuildOpenAIProviderHeadersAppliesMappedHeadersByProviderModel(t *testin
 	resetAdvancedProxyRuntimeForTest(t)
 	if _, err := saveAdvancedProxyConfig(AdvancedProxyConfig{
 		Enabled: true,
-		Queues: defaultAdvancedProxyQueuesConfig(),
+		Queues:  defaultAdvancedProxyQueuesConfig(),
 		UserAgentMappings: []checkUserAgentMapping{
 			{
 				ModelContains: "gpt",
@@ -503,12 +503,12 @@ func TestBuildOpenAIProviderHeadersAppliesMappedHeadersByProviderModel(t *testin
 			BasePath:  advancedProxyClaudeBasePath,
 			Providers: []AdvancedProxyProvider{},
 		},
-		Codex:    AdvancedProxyAppConfig{BasePath: advancedProxyCodexBasePath},
-		OpenCode: AdvancedProxyAppConfig{BasePath: advancedProxyOpenCodePath},
-		OpenClaw: AdvancedProxyAppConfig{BasePath: advancedProxyOpenClawPath},
-		Failover: defaultAdvancedProxyConfig().Failover,
-		Rectifier: defaultAdvancedProxyConfig().Rectifier,
-		Optimizer: defaultAdvancedProxyConfig().Optimizer,
+		Codex:      AdvancedProxyAppConfig{BasePath: advancedProxyCodexBasePath},
+		OpenCode:   AdvancedProxyAppConfig{BasePath: advancedProxyOpenCodePath},
+		OpenClaw:   AdvancedProxyAppConfig{BasePath: advancedProxyOpenClawPath},
+		Failover:   defaultAdvancedProxyConfig().Failover,
+		Rectifier:  defaultAdvancedProxyConfig().Rectifier,
+		Optimizer:  defaultAdvancedProxyConfig().Optimizer,
 		AntiPoison: defaultAdvancedProxyConfig().AntiPoison,
 	}); err != nil {
 		t.Fatalf("save advanced proxy config: %v", err)
@@ -530,11 +530,11 @@ func TestBuildOpenAIProviderHeadersAppliesMappedHeadersByProviderModel(t *testin
 	}
 }
 
-func TestBuildOpenAIProviderHeadersAppliesMappedHeadersByRequestModel(t *testing.T) {
+func TestBuildOpenAIProviderHeadersAppliesMappedHeadersByNearestModel(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 	if _, err := saveAdvancedProxyConfig(AdvancedProxyConfig{
 		Enabled: true,
-		Queues: defaultAdvancedProxyQueuesConfig(),
+		Queues:  defaultAdvancedProxyQueuesConfig(),
 		UserAgentMappings: []checkUserAgentMapping{
 			{
 				ModelContains: "gpt",
@@ -548,12 +548,12 @@ func TestBuildOpenAIProviderHeadersAppliesMappedHeadersByRequestModel(t *testing
 			BasePath:  advancedProxyClaudeBasePath,
 			Providers: []AdvancedProxyProvider{},
 		},
-		Codex:    AdvancedProxyAppConfig{BasePath: advancedProxyCodexBasePath},
-		OpenCode: AdvancedProxyAppConfig{BasePath: advancedProxyOpenCodePath},
-		OpenClaw: AdvancedProxyAppConfig{BasePath: advancedProxyOpenClawPath},
-		Failover: defaultAdvancedProxyConfig().Failover,
-		Rectifier: defaultAdvancedProxyConfig().Rectifier,
-		Optimizer: defaultAdvancedProxyConfig().Optimizer,
+		Codex:      AdvancedProxyAppConfig{BasePath: advancedProxyCodexBasePath},
+		OpenCode:   AdvancedProxyAppConfig{BasePath: advancedProxyOpenCodePath},
+		OpenClaw:   AdvancedProxyAppConfig{BasePath: advancedProxyOpenClawPath},
+		Failover:   defaultAdvancedProxyConfig().Failover,
+		Rectifier:  defaultAdvancedProxyConfig().Rectifier,
+		Optimizer:  defaultAdvancedProxyConfig().Optimizer,
 		AntiPoison: defaultAdvancedProxyConfig().AntiPoison,
 	}); err != nil {
 		t.Fatalf("save advanced proxy config: %v", err)
@@ -2443,43 +2443,45 @@ func TestForwardOpenAIRequestViaProviderUsesProviderModelForResponsesRoute(t *te
 	}
 }
 
-func TestForwardOpenAIRequestViaProviderMapsUAByOriginalRequestModel(t *testing.T) {
+func TestForwardOpenAIRequestViaProviderPrefersFinalClaudeModelForUA(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 	if _, err := saveAdvancedProxyConfig(AdvancedProxyConfig{
 		Enabled: true,
-		Queues: defaultAdvancedProxyQueuesConfig(),
+		Queues:  defaultAdvancedProxyQueuesConfig(),
 		Claude: ClaudeProxyCompatConfig{
 			BasePath:  advancedProxyClaudeBasePath,
 			Providers: []AdvancedProxyProvider{},
 		},
-		Codex:    AdvancedProxyAppConfig{BasePath: advancedProxyCodexBasePath},
-		OpenCode: AdvancedProxyAppConfig{BasePath: advancedProxyOpenCodePath},
-		OpenClaw: AdvancedProxyAppConfig{BasePath: advancedProxyOpenClawPath},
-		Failover: defaultAdvancedProxyConfig().Failover,
-		Rectifier: defaultAdvancedProxyConfig().Rectifier,
-		Optimizer: defaultAdvancedProxyConfig().Optimizer,
+		Codex:      AdvancedProxyAppConfig{BasePath: advancedProxyCodexBasePath},
+		OpenCode:   AdvancedProxyAppConfig{BasePath: advancedProxyOpenCodePath},
+		OpenClaw:   AdvancedProxyAppConfig{BasePath: advancedProxyOpenClawPath},
+		Failover:   defaultAdvancedProxyConfig().Failover,
+		Rectifier:  defaultAdvancedProxyConfig().Rectifier,
+		Optimizer:  defaultAdvancedProxyConfig().Optimizer,
 		AntiPoison: defaultAdvancedProxyConfig().AntiPoison,
 	}); err != nil {
 		t.Fatalf("save advanced proxy config: %v", err)
 	}
 
 	var capturedUserAgent string
+	var capturedXApp string
 	var capturedOriginator string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		capturedUserAgent = request.Header.Get("User-Agent")
+		capturedXApp = request.Header.Get("X-App")
 		capturedOriginator = request.Header.Get("Originator")
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"id":"resp_ua","object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`))
+		_, _ = writer.Write([]byte(`{"id":"resp_claude_ua","object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`))
 	}))
 	defer server.Close()
 
 	provider := AdvancedProxyProvider{
-		ID:        "request-model-ua-provider",
-		RowKey:    "row-request-model-ua",
-		Name:      "Request Model UA Provider",
+		ID:        "final-claude-ua-provider",
+		RowKey:    "row-final-claude-ua",
+		Name:      "Final Claude UA Provider",
 		BaseURL:   server.URL,
-		APIKey:    "sk-request-model-ua",
-		Model:     "gemini-3-flash-previewcloud",
+		APIKey:    "sk-final-claude-ua",
+		Model:     "claude-sonnet-4-6",
 		APIFormat: "openai_responses",
 	}
 
@@ -2489,13 +2491,16 @@ func TestForwardOpenAIRequestViaProviderMapsUAByOriginalRequestModel(t *testing.
 		"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
 	}`), false, AdvancedProxyConfig{})
 	if result.StatusCode != http.StatusOK {
-		t.Fatalf("expected request-model UA request to succeed, got %#v", result)
+		t.Fatalf("expected final-claude UA request to succeed, got %#v", result)
 	}
-	if capturedUserAgent != "Codex Desktop/0.142.0-alpha.6 (Windows 10.0.19044; x86_64) unknown (Codex Desktop; 26.616.51431)" {
-		t.Fatalf("expected mapped upstream user-agent, got %q", capturedUserAgent)
+	if capturedUserAgent != "claude-cli/2.1.129 (external, cli)" {
+		t.Fatalf("expected final model to select claude user-agent, got %q", capturedUserAgent)
 	}
-	if capturedOriginator != "Codex Desktop" {
-		t.Fatalf("expected mapped upstream originator, got %q", capturedOriginator)
+	if capturedXApp != "cli" {
+		t.Fatalf("expected final model to select claude x-app, got %q", capturedXApp)
+	}
+	if capturedOriginator == "Codex Desktop" {
+		t.Fatalf("expected final claude model not to use codex originator, got %q", capturedOriginator)
 	}
 }
 
@@ -3847,7 +3852,6 @@ func TestWriteAnthropicSSEFromOpenAIResponsesStreamWithRecordBlocksInvalidGuard(
 		t.Fatalf("expected anthropic error event for invalid guard stream, got %s", body)
 	}
 }
-
 
 func TestHandleAdvancedProxyCodexForcesProbeWhenSingleProviderCircuitIsOpen(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)

@@ -259,8 +259,8 @@ export namespace main {
 		}
 	}
 	export class checkUserAgentMapping {
-	    ModelContains: string;
-	    TargetUA: string;
+	    modelContains: string;
+	    targetUA: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new checkUserAgentMapping(source);
@@ -268,8 +268,8 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.ModelContains = source["ModelContains"];
-	        this.TargetUA = source["TargetUA"];
+	        this.modelContains = source["modelContains"];
+	        this.targetUA = source["targetUA"];
 	    }
 	}
 	export class AdvancedProxyProvider {

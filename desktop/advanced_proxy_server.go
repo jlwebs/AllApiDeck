@@ -3028,7 +3028,11 @@ func buildAdvancedProxyMappedHeaders(provider AdvancedProxyProvider, mappingMode
 	if err != nil {
 		return nil, ""
 	}
-	return resolveMappedHeadersForCheckModel(firstNonEmpty(strings.TrimSpace(mappingModel), strings.TrimSpace(provider.Model)), config.UserAgentMappings)
+	model := strings.TrimSpace(mappingModel)
+	if model == "" {
+		model = strings.TrimSpace(provider.Model)
+	}
+	return resolveMappedHeadersForCheckModel(model, config.UserAgentMappings)
 }
 
 func buildClaudeProviderHeaders(provider AdvancedProxyProvider, apiFormat string, requestHeaders http.Header, stream bool, mappingModel string) map[string]string {
@@ -3991,14 +3995,6 @@ func normalizeOpenAIProviderDispatchRoute(apiFormat string) string {
 	}
 }
 
-func extractJSONRequestModel(rawBody []byte) string {
-	requestBody := map[string]any{}
-	if err := json.Unmarshal(rawBody, &requestBody); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(toStringValue(requestBody["model"]))
-}
-
 func normalizeOpenAIProxyRequestForProvider(rawBody []byte, provider AdvancedProxyProvider) ([]byte, string, error) {
 	requestBody := map[string]any{}
 	if err := json.Unmarshal(rawBody, &requestBody); err != nil {
@@ -4038,7 +4034,6 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 
 	failoverActive := config.Failover.Enabled && config.Failover.AutoFailoverEnabled
 	timeoutSeconds := computeAdvancedProxyTimeoutSeconds(stream, failoverActive, config.Failover)
-	originalRequestModel := extractJSONRequestModel(rawBody)
 
 	preparedBody, healingContext, prepareErr := prepareOpenAIRequestForEncryptedContentHealing(rawBody, appType)
 	if prepareErr != nil {
@@ -4399,8 +4394,14 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 				routeKind,
 			)
 			attemptStartedAt := time.Now()
-			headerMappingModel := firstNonEmpty(originalRequestModel, phase.resolvedModel, phaseModel, provider.Model)
-			statusCode, headers, body, streamBody, elapsed, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildOpenAIProviderHeaders(provider, headerMappingModel), phase.requestBody, timeoutSeconds, stream)
+			statusCode, headers, body, streamBody, elapsed, err := performRawUpstreamRequest(
+				http.MethodPost,
+				targetURL,
+				buildOpenAIProviderHeaders(provider, phaseModel),
+				phase.requestBody,
+				timeoutSeconds,
+				stream,
+			)
 			if err != nil {
 				advancedProxyRuntime.MarkResult(appType, provider, phase.outboundRoute, targetURL, false)
 				observeAdvancedProxyAttempt(appType, provider, statusCode, elapsed, err)

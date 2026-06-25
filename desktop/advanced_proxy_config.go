@@ -127,22 +127,22 @@ type AntiPoisonConfig struct {
 }
 
 type AdvancedProxyConfig struct {
-	Enabled          bool                      `json:"enabled"`
-	DebugLogging     bool                      `json:"debugLogging"`
-	ListenHost       string                    `json:"listenHost"`
-	ListenPort       int                       `json:"listenPort"`
-	Queues           AdvancedProxyQueuesConfig `json:"queues"`
-	UserAgentMappings []checkUserAgentMapping  `json:"userAgentMappings"`
-	Claude           ClaudeProxyCompatConfig   `json:"claude"`
-	Codex            AdvancedProxyAppConfig    `json:"codex"`
-	OpenCode         AdvancedProxyAppConfig    `json:"opencode"`
-	OpenClaw         AdvancedProxyAppConfig    `json:"openclaw"`
-	Failover         AppFailoverConfig         `json:"failover"`
-	HighAvailability HighAvailabilityConfig    `json:"highAvailability"`
-	Rectifier        RectifierConfig           `json:"rectifier"`
-	Optimizer        OptimizerConfig           `json:"optimizer"`
-	AntiPoison       AntiPoisonConfig          `json:"antiPoison"`
-	UpdatedAt        string                    `json:"updatedAt"`
+	Enabled           bool                      `json:"enabled"`
+	DebugLogging      bool                      `json:"debugLogging"`
+	ListenHost        string                    `json:"listenHost"`
+	ListenPort        int                       `json:"listenPort"`
+	Queues            AdvancedProxyQueuesConfig `json:"queues"`
+	UserAgentMappings []checkUserAgentMapping   `json:"userAgentMappings"`
+	Claude            ClaudeProxyCompatConfig   `json:"claude"`
+	Codex             AdvancedProxyAppConfig    `json:"codex"`
+	OpenCode          AdvancedProxyAppConfig    `json:"opencode"`
+	OpenClaw          AdvancedProxyAppConfig    `json:"openclaw"`
+	Failover          AppFailoverConfig         `json:"failover"`
+	HighAvailability  HighAvailabilityConfig    `json:"highAvailability"`
+	Rectifier         RectifierConfig           `json:"rectifier"`
+	Optimizer         OptimizerConfig           `json:"optimizer"`
+	AntiPoison        AntiPoisonConfig          `json:"antiPoison"`
+	UpdatedAt         string                    `json:"updatedAt"`
 }
 
 type FailoverQueueItem struct {
@@ -291,11 +291,11 @@ func defaultAdvancedProxyUserAgentMappings() []checkUserAgentMapping {
 
 func defaultAdvancedProxyConfig() AdvancedProxyConfig {
 	return AdvancedProxyConfig{
-		Enabled:      false,
-		DebugLogging: false,
-		ListenHost:   bridgeServerHost,
-		ListenPort:   bridgeServerPortStart,
-		Queues:       defaultAdvancedProxyQueuesConfig(),
+		Enabled:           false,
+		DebugLogging:      false,
+		ListenHost:        bridgeServerHost,
+		ListenPort:        bridgeServerPortStart,
+		Queues:            defaultAdvancedProxyQueuesConfig(),
 		UserAgentMappings: defaultAdvancedProxyUserAgentMappings(),
 		Claude: ClaudeProxyCompatConfig{
 			Enabled:      false,
