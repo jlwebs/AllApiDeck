@@ -3028,10 +3028,7 @@ func buildAdvancedProxyMappedHeaders(provider AdvancedProxyProvider, mappingMode
 	if err != nil {
 		return nil, ""
 	}
-	model := strings.TrimSpace(mappingModel)
-	if model == "" {
-		model = strings.TrimSpace(provider.Model)
-	}
+	model := strings.TrimSpace(provider.Model)
 	return resolveMappedHeadersForCheckModel(model, config.UserAgentMappings)
 }
 

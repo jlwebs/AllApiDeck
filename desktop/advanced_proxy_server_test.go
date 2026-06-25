@@ -530,7 +530,7 @@ func TestBuildOpenAIProviderHeadersAppliesMappedHeadersByProviderModel(t *testin
 	}
 }
 
-func TestBuildOpenAIProviderHeadersAppliesMappedHeadersByNearestModel(t *testing.T) {
+func TestBuildOpenAIProviderHeadersIgnoresInboundModelForMappedHeaders(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 	if _, err := saveAdvancedProxyConfig(AdvancedProxyConfig{
 		Enabled: true,
@@ -564,11 +564,63 @@ func TestBuildOpenAIProviderHeadersAppliesMappedHeadersByNearestModel(t *testing
 		Model:  "gemini-3-flash-previewcloud",
 	}, "gpt-5.5")
 
-	if result["User-Agent"] != "Codex Desktop/0.142.0-alpha.6 (Windows 10.0.19044; x86_64) unknown (Codex Desktop; 26.616.51431)" {
-		t.Fatalf("expected request-model mapped user-agent, got %q", result["User-Agent"])
+	if result["User-Agent"] != "AllApiDeck/advanced-proxy" {
+		t.Fatalf("expected provider-model-only user-agent mapping, got %q", result["User-Agent"])
 	}
-	if result["Originator"] != "Codex Desktop" {
-		t.Fatalf("expected request-model mapped originator, got %q", result["Originator"])
+	if result["Originator"] != "" {
+		t.Fatalf("expected no originator from inbound model mapping, got %q", result["Originator"])
+	}
+}
+
+func TestBuildOpenAIProviderHeadersUsesClaudeProviderModelForMappedHeaders(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+	if _, err := saveAdvancedProxyConfig(AdvancedProxyConfig{
+		Enabled: true,
+		Queues:  defaultAdvancedProxyQueuesConfig(),
+		UserAgentMappings: []checkUserAgentMapping{
+			{
+				ModelContains: "gpt",
+				TargetUA: strings.Join([]string{
+					"originator: Codex Desktop",
+					"user-agent: Codex Desktop/0.142.0-alpha.6 (Windows 10.0.19044; x86_64) unknown (Codex Desktop; 26.616.51431)",
+				}, "\n"),
+			},
+			{
+				ModelContains: "claude",
+				TargetUA: strings.Join([]string{
+					"User-Agent: claude-cli/2.1.129 (external, cli)",
+					"x-app: cli",
+				}, "\n"),
+			},
+		},
+		Claude: ClaudeProxyCompatConfig{
+			BasePath:  advancedProxyClaudeBasePath,
+			Providers: []AdvancedProxyProvider{},
+		},
+		Codex:      AdvancedProxyAppConfig{BasePath: advancedProxyCodexBasePath},
+		OpenCode:   AdvancedProxyAppConfig{BasePath: advancedProxyOpenCodePath},
+		OpenClaw:   AdvancedProxyAppConfig{BasePath: advancedProxyOpenClawPath},
+		Failover:   defaultAdvancedProxyConfig().Failover,
+		Rectifier:  defaultAdvancedProxyConfig().Rectifier,
+		Optimizer:  defaultAdvancedProxyConfig().Optimizer,
+		AntiPoison: defaultAdvancedProxyConfig().AntiPoison,
+	}); err != nil {
+		t.Fatalf("save advanced proxy config: %v", err)
+	}
+
+	result := buildOpenAIProviderHeaders(AdvancedProxyProvider{
+		APIKey: "sk-test",
+		Model:  "claude-opus-4-6",
+	}, "gpt-5.5")
+
+	if result["User-Agent"] != "claude-cli/2.1.129 (external, cli)" {
+		t.Fatalf("expected provider-model claude user-agent, got %q", result["User-Agent"])
+	}
+	if result["X-App"] != "cli" {
+		t.Fatalf("expected provider-model claude x-app, got %q", result["X-App"])
+	}
+	if result["Originator"] != "" {
+		t.Fatalf("expected no codex originator from inbound model mapping, got %q", result["Originator"])
 	}
 }
 
