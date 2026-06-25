@@ -417,7 +417,7 @@ func runAntiPoisonReqFetchLiveAttempt(t *testing.T, provider AdvancedProxyProvid
 	statusCode, _, _, streamBody, elapsed, err := performRawUpstreamRequest(
 		http.MethodPost,
 		targetURL,
-		buildOpenAIProviderHeaders(provider),
+		buildOpenAIProviderHeaders(provider, ""),
 		protectedBody,
 		computeAdvancedProxyTimeoutSeconds(true, false, config.Failover),
 		true,

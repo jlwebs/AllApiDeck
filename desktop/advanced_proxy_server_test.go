@@ -465,6 +465,7 @@ func TestBuildClaudeProviderHeadersPreservesAnthropicHeaders(t *testing.T) {
 		"anthropic",
 		headers,
 		false,
+		"",
 	)
 
 	if result["User-Agent"] != "claude-cli/2.1.129 (external, cli)" {
@@ -516,7 +517,7 @@ func TestBuildOpenAIProviderHeadersAppliesMappedHeadersByProviderModel(t *testin
 	result := buildOpenAIProviderHeaders(AdvancedProxyProvider{
 		APIKey: "sk-test",
 		Model:  "gpt-5",
-	})
+	}, "")
 
 	if result["User-Agent"] != "Codex Desktop/0.142.0-alpha.6 (Windows 10.0.19044; x86_64) unknown (Codex Desktop; 26.616.51431)" {
 		t.Fatalf("expected mapped user-agent, got %q", result["User-Agent"])
@@ -526,6 +527,48 @@ func TestBuildOpenAIProviderHeadersAppliesMappedHeadersByProviderModel(t *testin
 	}
 	if result["Authorization"] != "Bearer sk-test" {
 		t.Fatalf("expected authorization header, got %q", result["Authorization"])
+	}
+}
+
+func TestBuildOpenAIProviderHeadersAppliesMappedHeadersByRequestModel(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+	if _, err := saveAdvancedProxyConfig(AdvancedProxyConfig{
+		Enabled: true,
+		Queues: defaultAdvancedProxyQueuesConfig(),
+		UserAgentMappings: []checkUserAgentMapping{
+			{
+				ModelContains: "gpt",
+				TargetUA: strings.Join([]string{
+					"originator: Codex Desktop",
+					"user-agent: Codex Desktop/0.142.0-alpha.6 (Windows 10.0.19044; x86_64) unknown (Codex Desktop; 26.616.51431)",
+				}, "\n"),
+			},
+		},
+		Claude: ClaudeProxyCompatConfig{
+			BasePath:  advancedProxyClaudeBasePath,
+			Providers: []AdvancedProxyProvider{},
+		},
+		Codex:    AdvancedProxyAppConfig{BasePath: advancedProxyCodexBasePath},
+		OpenCode: AdvancedProxyAppConfig{BasePath: advancedProxyOpenCodePath},
+		OpenClaw: AdvancedProxyAppConfig{BasePath: advancedProxyOpenClawPath},
+		Failover: defaultAdvancedProxyConfig().Failover,
+		Rectifier: defaultAdvancedProxyConfig().Rectifier,
+		Optimizer: defaultAdvancedProxyConfig().Optimizer,
+		AntiPoison: defaultAdvancedProxyConfig().AntiPoison,
+	}); err != nil {
+		t.Fatalf("save advanced proxy config: %v", err)
+	}
+
+	result := buildOpenAIProviderHeaders(AdvancedProxyProvider{
+		APIKey: "sk-test",
+		Model:  "gemini-3-flash-previewcloud",
+	}, "gpt-5.5")
+
+	if result["User-Agent"] != "Codex Desktop/0.142.0-alpha.6 (Windows 10.0.19044; x86_64) unknown (Codex Desktop; 26.616.51431)" {
+		t.Fatalf("expected request-model mapped user-agent, got %q", result["User-Agent"])
+	}
+	if result["Originator"] != "Codex Desktop" {
+		t.Fatalf("expected request-model mapped originator, got %q", result["Originator"])
 	}
 }
 
@@ -2397,6 +2440,62 @@ func TestForwardOpenAIRequestViaProviderUsesProviderModelForResponsesRoute(t *te
 	}
 	if records[0].Model != provider.Model {
 		t.Fatalf("expected request record model %q, got %#v", provider.Model, records[0])
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderMapsUAByOriginalRequestModel(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+	if _, err := saveAdvancedProxyConfig(AdvancedProxyConfig{
+		Enabled: true,
+		Queues: defaultAdvancedProxyQueuesConfig(),
+		Claude: ClaudeProxyCompatConfig{
+			BasePath:  advancedProxyClaudeBasePath,
+			Providers: []AdvancedProxyProvider{},
+		},
+		Codex:    AdvancedProxyAppConfig{BasePath: advancedProxyCodexBasePath},
+		OpenCode: AdvancedProxyAppConfig{BasePath: advancedProxyOpenCodePath},
+		OpenClaw: AdvancedProxyAppConfig{BasePath: advancedProxyOpenClawPath},
+		Failover: defaultAdvancedProxyConfig().Failover,
+		Rectifier: defaultAdvancedProxyConfig().Rectifier,
+		Optimizer: defaultAdvancedProxyConfig().Optimizer,
+		AntiPoison: defaultAdvancedProxyConfig().AntiPoison,
+	}); err != nil {
+		t.Fatalf("save advanced proxy config: %v", err)
+	}
+
+	var capturedUserAgent string
+	var capturedOriginator string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		capturedUserAgent = request.Header.Get("User-Agent")
+		capturedOriginator = request.Header.Get("Originator")
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"resp_ua","object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "request-model-ua-provider",
+		RowKey:    "row-request-model-ua",
+		Name:      "Request Model UA Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-request-model-ua",
+		Model:     "gemini-3-flash-previewcloud",
+		APIFormat: "openai_responses",
+	}
+
+	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", []byte(`{
+		"model":"gpt-5.5",
+		"stream":false,
+		"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
+	}`), false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("expected request-model UA request to succeed, got %#v", result)
+	}
+	if capturedUserAgent != "Codex Desktop/0.142.0-alpha.6 (Windows 10.0.19044; x86_64) unknown (Codex Desktop; 26.616.51431)" {
+		t.Fatalf("expected mapped upstream user-agent, got %q", capturedUserAgent)
+	}
+	if capturedOriginator != "Codex Desktop" {
+		t.Fatalf("expected mapped upstream originator, got %q", capturedOriginator)
 	}
 }
 

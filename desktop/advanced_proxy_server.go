@@ -3023,20 +3023,20 @@ func observeAdvancedProxyAttempt(appType string, provider AdvancedProxyProvider,
 	advancedProxyRuntime.ObserveProviderOutcome(appType, provider, statusCode, elapsed, success, timeout)
 }
 
-func buildAdvancedProxyMappedHeaders(provider AdvancedProxyProvider) (map[string]string, string) {
+func buildAdvancedProxyMappedHeaders(provider AdvancedProxyProvider, mappingModel string) (map[string]string, string) {
 	config, err := loadAdvancedProxyConfig()
 	if err != nil {
 		return nil, ""
 	}
-	return resolveMappedHeadersForCheckModel(provider.Model, config.UserAgentMappings)
+	return resolveMappedHeadersForCheckModel(firstNonEmpty(strings.TrimSpace(mappingModel), strings.TrimSpace(provider.Model)), config.UserAgentMappings)
 }
 
-func buildClaudeProviderHeaders(provider AdvancedProxyProvider, apiFormat string, requestHeaders http.Header, stream bool) map[string]string {
+func buildClaudeProviderHeaders(provider AdvancedProxyProvider, apiFormat string, requestHeaders http.Header, stream bool, mappingModel string) map[string]string {
 	headers := map[string]string{
 		"Content-Type": "application/json",
 		"User-Agent":   "AllApiDeck/advanced-proxy",
 	}
-	mappedHeaders, _ := buildAdvancedProxyMappedHeaders(provider)
+	mappedHeaders, _ := buildAdvancedProxyMappedHeaders(provider, mappingModel)
 	if len(mappedHeaders) > 0 {
 		for key, value := range mappedHeaders {
 			if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
@@ -3558,14 +3558,14 @@ func writeAnthropicSSEFromOpenAIChatStreamWithRecord(writer http.ResponseWriter,
 	)
 }
 
-func buildOpenAIProviderHeaders(provider AdvancedProxyProvider) map[string]string {
+func buildOpenAIProviderHeaders(provider AdvancedProxyProvider, mappingModel string) map[string]string {
 	headers := map[string]string{
 		"Content-Type":  "application/json",
 		"Accept":        "application/json, text/event-stream",
 		"User-Agent":    "AllApiDeck/advanced-proxy",
 		"Authorization": "Bearer " + provider.APIKey,
 	}
-	if mappedHeaders, _ := buildAdvancedProxyMappedHeaders(provider); len(mappedHeaders) > 0 {
+	if mappedHeaders, _ := buildAdvancedProxyMappedHeaders(provider, mappingModel); len(mappedHeaders) > 0 {
 		for key, value := range mappedHeaders {
 			if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
 				continue
@@ -3737,7 +3737,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 					return providerAttemptResult{StatusCode: http.StatusBadGateway, Message: "invalid upstream JSON request"}
 				}
 				attemptStartedAt := time.Now()
-				statusCode, responseHeaders, rawResponse, streamBody, elapsed, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, phase.apiFormat, requestHeaders, stream), rawTransformed, timeoutSeconds, true)
+				statusCode, responseHeaders, rawResponse, streamBody, elapsed, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, phase.apiFormat, requestHeaders, stream, resolvedPhaseModel), rawTransformed, timeoutSeconds, true)
 				if err != nil {
 					advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, false)
 					observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, err)
@@ -3815,7 +3815,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 			}
 
 		retryCurrentTarget:
-			statusCode, responseHeaders, rawResponse, elapsed, err := performJSONUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, phase.apiFormat, requestHeaders, stream), transformed, timeoutSeconds)
+			statusCode, responseHeaders, rawResponse, elapsed, err := performJSONUpstreamRequest(http.MethodPost, targetURL, buildClaudeProviderHeaders(provider, phase.apiFormat, requestHeaders, stream, resolvedPhaseModel), transformed, timeoutSeconds)
 			if err != nil {
 				advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, false)
 				observeAdvancedProxyAttempt("claude", provider, statusCode, elapsed, err)
@@ -3991,6 +3991,14 @@ func normalizeOpenAIProviderDispatchRoute(apiFormat string) string {
 	}
 }
 
+func extractJSONRequestModel(rawBody []byte) string {
+	requestBody := map[string]any{}
+	if err := json.Unmarshal(rawBody, &requestBody); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(toStringValue(requestBody["model"]))
+}
+
 func normalizeOpenAIProxyRequestForProvider(rawBody []byte, provider AdvancedProxyProvider) ([]byte, string, error) {
 	requestBody := map[string]any{}
 	if err := json.Unmarshal(rawBody, &requestBody); err != nil {
@@ -4030,6 +4038,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 
 	failoverActive := config.Failover.Enabled && config.Failover.AutoFailoverEnabled
 	timeoutSeconds := computeAdvancedProxyTimeoutSeconds(stream, failoverActive, config.Failover)
+	originalRequestModel := extractJSONRequestModel(rawBody)
 
 	preparedBody, healingContext, prepareErr := prepareOpenAIRequestForEncryptedContentHealing(rawBody, appType)
 	if prepareErr != nil {
@@ -4390,7 +4399,8 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 				routeKind,
 			)
 			attemptStartedAt := time.Now()
-			statusCode, headers, body, streamBody, elapsed, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildOpenAIProviderHeaders(provider), phase.requestBody, timeoutSeconds, stream)
+			headerMappingModel := firstNonEmpty(originalRequestModel, phase.resolvedModel, phaseModel, provider.Model)
+			statusCode, headers, body, streamBody, elapsed, err := performRawUpstreamRequest(http.MethodPost, targetURL, buildOpenAIProviderHeaders(provider, headerMappingModel), phase.requestBody, timeoutSeconds, stream)
 			if err != nil {
 				advancedProxyRuntime.MarkResult(appType, provider, phase.outboundRoute, targetURL, false)
 				observeAdvancedProxyAttempt(appType, provider, statusCode, elapsed, err)

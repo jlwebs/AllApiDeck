@@ -471,8 +471,8 @@ type normalizedCheckKeyPayload struct {
 }
 
 type checkUserAgentMapping struct {
-	ModelContains string
-	TargetUA      string
+	ModelContains string `json:"modelContains"`
+	TargetUA      string `json:"targetUA"`
 }
 
 type checkEndpointAttempt struct {

@@ -258,6 +258,20 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class checkUserAgentMapping {
+	    ModelContains: string;
+	    TargetUA: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new checkUserAgentMapping(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ModelContains = source["ModelContains"];
+	        this.TargetUA = source["TargetUA"];
+	    }
+	}
 	export class AdvancedProxyProvider {
 	    id: string;
 	    rowKey?: string;
@@ -366,6 +380,7 @@ export namespace main {
 	    listenHost: string;
 	    listenPort: number;
 	    queues: AdvancedProxyQueuesConfig;
+	    userAgentMappings: checkUserAgentMapping[];
 	    claude: ClaudeProxyCompatConfig;
 	    codex: AdvancedProxyAppConfig;
 	    opencode: AdvancedProxyAppConfig;
@@ -388,6 +403,7 @@ export namespace main {
 	        this.listenHost = source["listenHost"];
 	        this.listenPort = source["listenPort"];
 	        this.queues = this.convertValues(source["queues"], AdvancedProxyQueuesConfig);
+	        this.userAgentMappings = this.convertValues(source["userAgentMappings"], checkUserAgentMapping);
 	        this.claude = this.convertValues(source["claude"], ClaudeProxyCompatConfig);
 	        this.codex = this.convertValues(source["codex"], AdvancedProxyAppConfig);
 	        this.opencode = this.convertValues(source["opencode"], AdvancedProxyAppConfig);
@@ -1358,6 +1374,7 @@ export namespace main {
 	        this.localStorageKeyCount = source["localStorageKeyCount"];
 	    }
 	}
+	
 	
 	
 	

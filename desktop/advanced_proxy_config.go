@@ -259,6 +259,36 @@ func defaultAntiPoisonConfig() AntiPoisonConfig {
 	}
 }
 
+func defaultAdvancedProxyUserAgentMappings() []checkUserAgentMapping {
+	return []checkUserAgentMapping{
+		{
+			ModelContains: "gpt",
+			TargetUA: strings.Join([]string{
+				"originator: Codex Desktop",
+				"user-agent: Codex Desktop/0.142.0-alpha.6 (Windows 10.0.19044; x86_64) unknown (Codex Desktop; 26.616.51431)",
+			}, "\n"),
+		},
+		{
+			ModelContains: "claude",
+			TargetUA: strings.Join([]string{
+				"User-Agent: claude-cli/2.1.129 (external, cli)",
+				"x-app: cli",
+				"anthropic-version: 2023-06-01",
+				"anthropic-beta: claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24",
+				"anthropic-dangerous-direct-browser-access: true",
+				"X-Stainless-Arch: x64",
+				"X-Stainless-Lang: js",
+				"X-Stainless-OS: Windows",
+				"X-Stainless-Package-Version: 0.93.0",
+				"X-Stainless-Retry-Count: 0",
+				"X-Stainless-Runtime: node",
+				"X-Stainless-Runtime-Version: v24.3.0",
+				"X-Stainless-Timeout: 600",
+			}, "\n"),
+		},
+	}
+}
+
 func defaultAdvancedProxyConfig() AdvancedProxyConfig {
 	return AdvancedProxyConfig{
 		Enabled:      false,
@@ -266,7 +296,7 @@ func defaultAdvancedProxyConfig() AdvancedProxyConfig {
 		ListenHost:   bridgeServerHost,
 		ListenPort:   bridgeServerPortStart,
 		Queues:       defaultAdvancedProxyQueuesConfig(),
-		UserAgentMappings: nil,
+		UserAgentMappings: defaultAdvancedProxyUserAgentMappings(),
 		Claude: ClaudeProxyCompatConfig{
 			Enabled:      false,
 			BasePath:     advancedProxyClaudeBasePath,
@@ -375,6 +405,9 @@ func sanitizeAdvancedProxyConfig(config AdvancedProxyConfig) AdvancedProxyConfig
 		config.ListenPort = defaults.ListenPort
 	}
 	config.UserAgentMappings = sanitizeAdvancedProxyUserAgentMappings(config.UserAgentMappings)
+	if len(config.UserAgentMappings) == 0 {
+		config.UserAgentMappings = defaultAdvancedProxyUserAgentMappings()
+	}
 
 	config.Queues.Global = sanitizeAdvancedProxyQueueConfig(config.Queues.Global, defaults.Queues.Global, legacyGlobalProviders)
 	config.Queues.Claude = sanitizeAdvancedProxyQueueConfig(config.Queues.Claude, defaults.Queues.Claude, nil)
