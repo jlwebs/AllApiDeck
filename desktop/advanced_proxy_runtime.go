@@ -2136,3 +2136,92 @@ func anthropicRequestToOpenAIResponses(body map[string]any, provider AdvancedPro
 	copyOptionalField(body, request, "top_p")
 	return request
 }
+
+func openAIResponsesToAnthropicMessages(body []byte, provider AdvancedProxyProvider) map[string]any {
+	var requestBody map[string]any
+	if err := json.Unmarshal(body, &requestBody); err != nil {
+		return nil
+	}
+
+	model := firstNonEmpty(strings.TrimSpace(provider.Model), strings.TrimSpace(toStringValue(requestBody["model"])))
+	if model == "" {
+		return nil
+	}
+
+	messages := make([]map[string]any, 0, 4)
+	systemParts := make([]string, 0, 2)
+
+	if instructions := strings.TrimSpace(toStringValue(requestBody["instructions"])); instructions != "" {
+		systemParts = append(systemParts, instructions)
+	}
+
+	switch typedInput := requestBody["input"].(type) {
+	case string:
+		text := strings.TrimSpace(typedInput)
+		if text != "" {
+			messages = append(messages, map[string]any{
+				"role":    "user",
+				"content": text,
+			})
+		}
+	case []any:
+		for _, rawItem := range typedInput {
+			itemMap, ok := rawItem.(map[string]any)
+			if !ok {
+				continue
+			}
+			itemType := strings.ToLower(strings.TrimSpace(toStringValue(itemMap["type"])))
+			role := strings.TrimSpace(toStringValue(itemMap["role"]))
+
+			if role == "system" || role == "developer" {
+				text := strings.TrimSpace(toStringValue(itemMap["content"]))
+				if text != "" {
+					systemParts = append(systemParts, text)
+				}
+				continue
+			}
+
+			if role != "" || itemType == "message" || itemType == "input_text" || itemType == "" {
+				content := itemMap["content"]
+				if content != nil {
+					if role == "" {
+						role = "user"
+					}
+					messages = append(messages, map[string]any{
+						"role":    role,
+						"content": content,
+					})
+				}
+			}
+		}
+	}
+
+	if len(messages) == 0 {
+		messages = append(messages, map[string]any{
+			"role":    "user",
+			"content": "hi",
+		})
+	}
+
+	anthropicBody := map[string]any{
+		"model":      model,
+		"messages":   messages,
+		"max_tokens": 1024,
+		"stream":     truthy(requestBody["stream"]),
+	}
+
+	if len(systemParts) > 0 {
+		anthropicBody["system"] = strings.Join(systemParts, "\n\n")
+	}
+
+	if maxTokens := toIntValue(requestBody["max_output_tokens"]); maxTokens > 0 {
+		anthropicBody["max_tokens"] = maxTokens
+	} else if maxTokens := toIntValue(requestBody["max_completion_tokens"]); maxTokens > 0 {
+		anthropicBody["max_tokens"] = maxTokens
+	}
+
+	copyOptionalField(requestBody, anthropicBody, "temperature")
+	copyOptionalField(requestBody, anthropicBody, "top_p")
+
+	return anthropicBody
+}

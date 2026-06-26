@@ -1,5 +1,5 @@
 import { isProbablyWailsRuntime } from './runtimeApi.js';
-import { loadUserAgentMappings } from './systemSettings.js';
+import { loadUserAgentMappings, normalizeContextAutoCompressionConfig } from './systemSettings.js';
 
 const STORAGE_KEY = 'batch_api_check_advanced_proxy_config_v1';
 const TAKEOVER_MAP_STORAGE_KEY = 'batch_api_check_advanced_proxy_takeover_map_v1';
@@ -133,6 +133,7 @@ export function createDefaultAdvancedProxyConfig() {
     listenHost: '127.0.0.1',
     listenPort: 8888,
     userAgentMappings: [],
+    contextAutoCompression: normalizeContextAutoCompressionConfig({}),
     queues: {
       global: getDefaultQueueSection(false),
       claude: getDefaultQueueSection(true),
@@ -456,6 +457,7 @@ export function normalizeAdvancedProxyConfig(input) {
   next.listenPort = Number(next.listenPort || defaults.listenPort) || defaults.listenPort;
   next.debugLogging = next.debugLogging === true;
   next.userAgentMappings = loadUserAgentMappings();
+  next.contextAutoCompression = normalizeContextAutoCompressionConfig(next.contextAutoCompression);
 
   next.queues.global = normalizeQueueSection(
     next.queues.global,

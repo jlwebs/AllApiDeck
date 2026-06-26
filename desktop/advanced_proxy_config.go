@@ -102,6 +102,11 @@ type OptimizerConfig struct {
 	CacheTTL          string `json:"cacheTtl"`
 }
 
+type ContextAutoCompressionConfig struct {
+	Enabled    bool `json:"enabled"`
+	ThresholdK int  `json:"thresholdK"`
+}
+
 type AntiPoisonRandomizationConfig struct {
 	Enabled                      bool `json:"enabled"`
 	StrategyPoolSize             int  `json:"strategyPoolSize"`
@@ -127,22 +132,23 @@ type AntiPoisonConfig struct {
 }
 
 type AdvancedProxyConfig struct {
-	Enabled           bool                      `json:"enabled"`
-	DebugLogging      bool                      `json:"debugLogging"`
-	ListenHost        string                    `json:"listenHost"`
-	ListenPort        int                       `json:"listenPort"`
-	Queues            AdvancedProxyQueuesConfig `json:"queues"`
-	UserAgentMappings []checkUserAgentMapping   `json:"userAgentMappings"`
-	Claude            ClaudeProxyCompatConfig   `json:"claude"`
-	Codex             AdvancedProxyAppConfig    `json:"codex"`
-	OpenCode          AdvancedProxyAppConfig    `json:"opencode"`
-	OpenClaw          AdvancedProxyAppConfig    `json:"openclaw"`
-	Failover          AppFailoverConfig         `json:"failover"`
-	HighAvailability  HighAvailabilityConfig    `json:"highAvailability"`
-	Rectifier         RectifierConfig           `json:"rectifier"`
-	Optimizer         OptimizerConfig           `json:"optimizer"`
-	AntiPoison        AntiPoisonConfig          `json:"antiPoison"`
-	UpdatedAt         string                    `json:"updatedAt"`
+	Enabled                bool                         `json:"enabled"`
+	DebugLogging           bool                         `json:"debugLogging"`
+	ListenHost             string                       `json:"listenHost"`
+	ListenPort             int                          `json:"listenPort"`
+	Queues                 AdvancedProxyQueuesConfig    `json:"queues"`
+	UserAgentMappings      []checkUserAgentMapping      `json:"userAgentMappings"`
+	ContextAutoCompression ContextAutoCompressionConfig `json:"contextAutoCompression"`
+	Claude                 ClaudeProxyCompatConfig      `json:"claude"`
+	Codex                  AdvancedProxyAppConfig       `json:"codex"`
+	OpenCode               AdvancedProxyAppConfig       `json:"opencode"`
+	OpenClaw               AdvancedProxyAppConfig       `json:"openclaw"`
+	Failover               AppFailoverConfig            `json:"failover"`
+	HighAvailability       HighAvailabilityConfig       `json:"highAvailability"`
+	Rectifier              RectifierConfig              `json:"rectifier"`
+	Optimizer              OptimizerConfig              `json:"optimizer"`
+	AntiPoison             AntiPoisonConfig             `json:"antiPoison"`
+	UpdatedAt              string                       `json:"updatedAt"`
 }
 
 type FailoverQueueItem struct {
@@ -289,14 +295,22 @@ func defaultAdvancedProxyUserAgentMappings() []checkUserAgentMapping {
 	}
 }
 
+func defaultContextAutoCompressionConfig() ContextAutoCompressionConfig {
+	return ContextAutoCompressionConfig{
+		Enabled:    false,
+		ThresholdK: 256,
+	}
+}
+
 func defaultAdvancedProxyConfig() AdvancedProxyConfig {
 	return AdvancedProxyConfig{
-		Enabled:           false,
-		DebugLogging:      false,
-		ListenHost:        bridgeServerHost,
-		ListenPort:        bridgeServerPortStart,
-		Queues:            defaultAdvancedProxyQueuesConfig(),
-		UserAgentMappings: defaultAdvancedProxyUserAgentMappings(),
+		Enabled:                false,
+		DebugLogging:           false,
+		ListenHost:             bridgeServerHost,
+		ListenPort:             bridgeServerPortStart,
+		Queues:                 defaultAdvancedProxyQueuesConfig(),
+		UserAgentMappings:      defaultAdvancedProxyUserAgentMappings(),
+		ContextAutoCompression: defaultContextAutoCompressionConfig(),
 		Claude: ClaudeProxyCompatConfig{
 			Enabled:      false,
 			BasePath:     advancedProxyClaudeBasePath,
@@ -408,6 +422,7 @@ func sanitizeAdvancedProxyConfig(config AdvancedProxyConfig) AdvancedProxyConfig
 	if len(config.UserAgentMappings) == 0 {
 		config.UserAgentMappings = defaultAdvancedProxyUserAgentMappings()
 	}
+	config.ContextAutoCompression = sanitizeContextAutoCompressionConfig(config.ContextAutoCompression)
 
 	config.Queues.Global = sanitizeAdvancedProxyQueueConfig(config.Queues.Global, defaults.Queues.Global, legacyGlobalProviders)
 	config.Queues.Claude = sanitizeAdvancedProxyQueueConfig(config.Queues.Claude, defaults.Queues.Claude, nil)
@@ -472,6 +487,16 @@ func sanitizeAdvancedProxyUserAgentMappings(input []checkUserAgentMapping) []che
 		return nil
 	}
 	return result
+}
+
+func sanitizeContextAutoCompressionConfig(config ContextAutoCompressionConfig) ContextAutoCompressionConfig {
+	defaults := defaultContextAutoCompressionConfig()
+	if config.ThresholdK <= 0 {
+		config.ThresholdK = defaults.ThresholdK
+	} else {
+		config.ThresholdK = clampInt(config.ThresholdK, 1, 4096)
+	}
+	return config
 }
 
 func sanitizeAntiPoisonConfig(config AntiPoisonConfig) AntiPoisonConfig {

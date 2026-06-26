@@ -1095,3 +1095,279 @@ func transformOpenAIChatResultToResponses(result rawProviderAttemptResult, fallb
 	converted.Headers.Set("Content-Type", "application/json; charset=utf-8")
 	return converted, nil
 }
+
+func transformAnthropicMessagesResultToResponses(result rawProviderAttemptResult, fallbackModel string) (rawProviderAttemptResult, error) {
+	converted := result
+	if result.StreamBody != nil {
+		converted.StreamBody = transformAnthropicMessagesStreamToResponsesStream(result.StreamBody, fallbackModel)
+		if converted.Headers == nil {
+			converted.Headers = http.Header{}
+		} else {
+			converted.Headers = converted.Headers.Clone()
+		}
+		converted.Headers.Set("Content-Type", "text/event-stream; charset=utf-8")
+		converted.Body = nil
+		return converted, nil
+	}
+
+	convertedBody, err := convertAnthropicMessagesResponseBodyToResponses(result.Body, fallbackModel)
+	if err != nil {
+		return result, err
+	}
+	converted.Body = convertedBody
+	if converted.Headers == nil {
+		converted.Headers = http.Header{}
+	} else {
+		converted.Headers = converted.Headers.Clone()
+	}
+	converted.Headers.Set("Content-Type", "application/json; charset=utf-8")
+	return converted, nil
+}
+
+func convertAnthropicMessagesResponseBodyToResponses(rawBody []byte, fallbackModel string) ([]byte, error) {
+	var anthropicResp map[string]any
+	if err := json.Unmarshal(rawBody, &anthropicResp); err != nil {
+		return nil, err
+	}
+
+	model := firstNonEmpty(strings.TrimSpace(toStringValue(anthropicResp["model"])), fallbackModel)
+	createdAt := time.Now().Unix()
+
+	output := make([]any, 0, 2)
+
+	contentBlocks, _ := anthropicResp["content"].([]any)
+	for _, rawBlock := range contentBlocks {
+		block, ok := rawBlock.(map[string]any)
+		if !ok {
+			continue
+		}
+		blockType := strings.TrimSpace(toStringValue(block["type"]))
+		if blockType == "text" {
+			text := strings.TrimSpace(toStringValue(block["text"]))
+			if text != "" {
+				output = append(output, map[string]any{
+					"id":     fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+					"type":   "message",
+					"status": "completed",
+					"role":   "assistant",
+					"content": []any{
+						map[string]any{
+							"type": "output_text",
+							"text": text,
+						},
+					},
+				})
+			}
+		}
+	}
+
+	responsesResp := map[string]any{
+		"id":         firstNonEmpty(strings.TrimSpace(toStringValue(anthropicResp["id"])), fmt.Sprintf("resp_%d", time.Now().UnixNano())),
+		"object":     "response",
+		"created_at": createdAt,
+		"model":      model,
+		"status":     "completed",
+		"output":     output,
+	}
+
+	if usageMap, ok := anthropicResp["usage"].(map[string]any); ok && usageMap != nil {
+		responsesResp["usage"] = map[string]any{
+			"input_tokens":  toIntValue(usageMap["input_tokens"]),
+			"output_tokens": toIntValue(usageMap["output_tokens"]),
+			"total_tokens":  toIntValue(usageMap["input_tokens"]) + toIntValue(usageMap["output_tokens"]),
+		}
+	}
+
+	return json.Marshal(responsesResp)
+}
+
+func transformAnthropicMessagesStreamToResponsesStream(streamBody io.ReadCloser, fallbackModel string) io.ReadCloser {
+	reader, writer := io.Pipe()
+	go func() {
+		defer streamBody.Close()
+		defer writer.Close()
+
+		scanner := bufio.NewScanner(streamBody)
+		scanner.Buffer(make([]byte, 0, 64*1024), advancedProxySSEScannerMaxTokenSize)
+
+		responseID := ""
+		model := strings.TrimSpace(fallbackModel)
+		createdAt := time.Now().Unix()
+		sequence := 0
+		responseCreated := false
+		messageItemID := ""
+		messageOutputIndex := 0
+		var messageText strings.Builder
+		outputItems := make([]any, 0, 2)
+
+		writeEvent := func(eventType string, payload map[string]any) error {
+			if payload == nil {
+				payload = map[string]any{}
+			}
+			payload["type"] = eventType
+			payload["sequence_number"] = sequence
+			sequence++
+			raw, err := json.Marshal(payload)
+			if err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(writer, "event: %s\ndata: %s\n\n", eventType, string(raw)); err != nil {
+				return err
+			}
+			return nil
+		}
+
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if payload == "" {
+				continue
+			}
+
+			var event map[string]any
+			if err := json.Unmarshal([]byte(payload), &event); err != nil {
+				continue
+			}
+
+			eventType := strings.TrimSpace(toStringValue(event["type"]))
+
+			switch eventType {
+			case "message_start":
+				if msgMap, ok := event["message"].(map[string]any); ok {
+					responseID = strings.TrimSpace(toStringValue(msgMap["id"]))
+					model = firstNonEmpty(strings.TrimSpace(toStringValue(msgMap["model"])), model)
+				}
+				if !responseCreated {
+					responseCreated = true
+					_ = writeEvent("response.created", map[string]any{
+						"response": map[string]any{
+							"id":         firstNonEmpty(responseID, fmt.Sprintf("resp_%d", time.Now().UnixNano())),
+							"object":     "response",
+							"created_at": createdAt,
+							"model":      model,
+							"status":     "in_progress",
+							"output":     []any{},
+						},
+					})
+				}
+
+			case "content_block_start":
+				if blockMap, ok := event["content_block"].(map[string]any); ok {
+					if strings.TrimSpace(toStringValue(blockMap["type"])) == "text" {
+						messageItemID = fmt.Sprintf("msg_%d", time.Now().UnixNano())
+						messageOutputIndex = len(outputItems)
+						_ = writeEvent("response.output_item.added", map[string]any{
+							"output_index": messageOutputIndex,
+							"item": map[string]any{
+								"id":     messageItemID,
+								"type":   "message",
+								"status": "in_progress",
+								"role":   "assistant",
+								"content": []any{
+									map[string]any{
+										"type": "output_text",
+										"text": "",
+									},
+								},
+							},
+						})
+						_ = writeEvent("response.content_part.added", map[string]any{
+							"item_id":       messageItemID,
+							"output_index":  messageOutputIndex,
+							"content_index": 0,
+							"part": map[string]any{
+								"type": "output_text",
+								"text": "",
+							},
+						})
+					}
+				}
+
+			case "content_block_delta":
+				if deltaMap, ok := event["delta"].(map[string]any); ok {
+					if strings.TrimSpace(toStringValue(deltaMap["type"])) == "text_delta" {
+						text := toStringValue(deltaMap["text"])
+						if text != "" && messageItemID != "" {
+							messageText.WriteString(text)
+							_ = writeEvent("response.output_text.delta", map[string]any{
+								"item_id":       messageItemID,
+								"output_index":  messageOutputIndex,
+								"content_index": 0,
+								"delta":         text,
+							})
+						}
+					}
+				}
+
+			case "content_block_stop":
+				if messageItemID != "" {
+					fullText := messageText.String()
+					_ = writeEvent("response.output_text.done", map[string]any{
+						"item_id":       messageItemID,
+						"output_index":  messageOutputIndex,
+						"content_index": 0,
+						"text":          fullText,
+					})
+					_ = writeEvent("response.content_part.done", map[string]any{
+						"item_id":       messageItemID,
+						"output_index":  messageOutputIndex,
+						"content_index": 0,
+						"part": map[string]any{
+							"type": "output_text",
+							"text": fullText,
+						},
+					})
+					_ = writeEvent("response.output_item.done", map[string]any{
+						"output_index": messageOutputIndex,
+						"item": map[string]any{
+							"id":     messageItemID,
+							"type":   "message",
+							"status": "completed",
+							"role":   "assistant",
+							"content": []any{
+								map[string]any{
+									"type": "output_text",
+									"text": fullText,
+								},
+							},
+						},
+					})
+					outputItems = append(outputItems, map[string]any{
+						"id":     messageItemID,
+						"type":   "message",
+						"status": "completed",
+						"role":   "assistant",
+						"content": []any{
+							map[string]any{
+								"type": "output_text",
+								"text": fullText,
+							},
+						},
+					})
+					messageItemID = ""
+					messageText.Reset()
+				}
+
+			case "message_delta":
+				// Handle usage update if needed
+
+			case "message_stop":
+				_ = writeEvent("response.completed", map[string]any{
+					"response": map[string]any{
+						"id":         firstNonEmpty(responseID, fmt.Sprintf("resp_%d", time.Now().UnixNano())),
+						"object":     "response",
+						"created_at": createdAt,
+						"model":      model,
+						"status":     "completed",
+						"output":     outputItems,
+					},
+				})
+				_, _ = writer.Write([]byte("data: [DONE]\n\n"))
+			}
+		}
+	}()
+	return reader
+}

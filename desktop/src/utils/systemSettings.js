@@ -8,6 +8,9 @@ const DESKTOP_TOKEN_SOURCE_MODE_STORAGE_KEY = 'batch_api_check_desktop_token_sou
 const TREE_EXPANDED_STORAGE_KEY = 'batch_api_check_tree_expanded_v1';
 const OUTBOUND_PROXY_STORAGE_KEY = 'batch_api_check_outbound_proxy_v1';
 const USER_AGENT_MAPPINGS_STORAGE_KEY = 'batch_api_check_user_agent_mappings_v1';
+const CONTEXT_AUTO_COMPRESSION_STORAGE_KEY = 'batch_api_check_context_auto_compression_v1';
+
+export const DEFAULT_CONTEXT_AUTO_COMPRESSION_THRESHOLD_K = 256;
 
 export const OUTBOUND_PROXY_MODE_OPTIONS = [
   { label: '系统代理', value: 'system' },
@@ -121,6 +124,37 @@ export function saveUserAgentMappings(value) {
   const normalized = normalizeUserAgentMappings(value, { fallbackToDefault: false });
   try {
     localStorage.setItem(USER_AGENT_MAPPINGS_STORAGE_KEY, JSON.stringify(normalized));
+  } catch {}
+  return normalized;
+}
+
+export function normalizeContextAutoCompressionConfig(input) {
+  const parsedThresholdK = Number(
+    input?.thresholdK || input?.thresholdKB || input?.threshold || DEFAULT_CONTEXT_AUTO_COMPRESSION_THRESHOLD_K
+  );
+  const thresholdK = Number.isFinite(parsedThresholdK)
+    ? Math.max(1, Math.min(4096, Math.round(parsedThresholdK)))
+    : DEFAULT_CONTEXT_AUTO_COMPRESSION_THRESHOLD_K;
+  return {
+    enabled: input?.enabled === true,
+    thresholdK,
+  };
+}
+
+export function loadContextAutoCompressionConfig() {
+  try {
+    return normalizeContextAutoCompressionConfig(
+      JSON.parse(localStorage.getItem(CONTEXT_AUTO_COMPRESSION_STORAGE_KEY) || 'null')
+    );
+  } catch {
+    return normalizeContextAutoCompressionConfig({});
+  }
+}
+
+export function saveContextAutoCompressionConfig(value) {
+  const normalized = normalizeContextAutoCompressionConfig(value);
+  try {
+    localStorage.setItem(CONTEXT_AUTO_COMPRESSION_STORAGE_KEY, JSON.stringify(normalized));
   } catch {}
   return normalized;
 }

@@ -258,6 +258,20 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class ContextAutoCompressionConfig {
+	    enabled: boolean;
+	    thresholdK: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ContextAutoCompressionConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.thresholdK = source["thresholdK"];
+	    }
+	}
 	export class checkUserAgentMapping {
 	    modelContains: string;
 	    targetUA: string;
@@ -381,6 +395,7 @@ export namespace main {
 	    listenPort: number;
 	    queues: AdvancedProxyQueuesConfig;
 	    userAgentMappings: checkUserAgentMapping[];
+	    contextAutoCompression: ContextAutoCompressionConfig;
 	    claude: ClaudeProxyCompatConfig;
 	    codex: AdvancedProxyAppConfig;
 	    opencode: AdvancedProxyAppConfig;
@@ -404,6 +419,7 @@ export namespace main {
 	        this.listenPort = source["listenPort"];
 	        this.queues = this.convertValues(source["queues"], AdvancedProxyQueuesConfig);
 	        this.userAgentMappings = this.convertValues(source["userAgentMappings"], checkUserAgentMapping);
+	        this.contextAutoCompression = this.convertValues(source["contextAutoCompression"], ContextAutoCompressionConfig);
 	        this.claude = this.convertValues(source["claude"], ClaudeProxyCompatConfig);
 	        this.codex = this.convertValues(source["codex"], AdvancedProxyAppConfig);
 	        this.opencode = this.convertValues(source["opencode"], AdvancedProxyAppConfig);
@@ -1053,6 +1069,7 @@ export namespace main {
 	        this.failedRequests = source["failedRequests"];
 	    }
 	}
+	
 	
 	export class DesktopLogContent {
 	    path: string;

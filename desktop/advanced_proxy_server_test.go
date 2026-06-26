@@ -427,6 +427,110 @@ func TestOpenAIResponsesToAnthropicSynthesizesLifecycleFromTextURLsWithoutCall(t
 	}
 }
 
+func TestEnsureOpenAIResponsesPromptCacheKeyForUpstreamRequest(t *testing.T) {
+	responsesRequest, err := http.NewRequest(http.MethodPost, "https://example.test/v1/responses", nil)
+	if err != nil {
+		t.Fatalf("create responses request: %v", err)
+	}
+	responsesBody := ensureOpenAIResponsesPromptCacheKeyForUpstreamRequest(responsesRequest, []byte(`{"model":"gpt-test","input":[]}`))
+	var decodedResponses map[string]any
+	if err := json.Unmarshal(responsesBody, &decodedResponses); err != nil {
+		t.Fatalf("decode responses body: %v", err)
+	}
+	promptCacheKey := strings.TrimSpace(toStringValue(decodedResponses["prompt_cache_key"]))
+	if !strings.HasPrefix(promptCacheKey, "shared-ctx-bucket-") {
+		t.Fatalf("expected responses path to add prompt_cache_key, got %#v", decodedResponses)
+	}
+
+	existingBody := ensureOpenAIResponsesPromptCacheKeyForUpstreamRequest(responsesRequest, []byte(`{"model":"gpt-test","prompt_cache_key":"pcache-123","input":[]}`))
+	var decodedExisting map[string]any
+	if err := json.Unmarshal(existingBody, &decodedExisting); err != nil {
+		t.Fatalf("decode existing body: %v", err)
+	}
+	if got := strings.TrimSpace(toStringValue(decodedExisting["prompt_cache_key"])); got != "pcache-123" {
+		t.Fatalf("expected existing prompt_cache_key to be preserved, got %q", got)
+	}
+
+	chatRequest, err := http.NewRequest(http.MethodPost, "https://example.test/v1/chat/completions", nil)
+	if err != nil {
+		t.Fatalf("create chat request: %v", err)
+	}
+	chatBody := ensureOpenAIResponsesPromptCacheKeyForUpstreamRequest(chatRequest, []byte(`{"model":"gpt-test","messages":[]}`))
+	var decodedChat map[string]any
+	if err := json.Unmarshal(chatBody, &decodedChat); err != nil {
+		t.Fatalf("decode chat body: %v", err)
+	}
+	if _, exists := decodedChat["prompt_cache_key"]; exists {
+		t.Fatalf("expected chat path not to add prompt_cache_key, got %#v", decodedChat)
+	}
+}
+
+func TestApplyOpenAIContextAutoCompression(t *testing.T) {
+	config := AdvancedProxyConfig{
+		ContextAutoCompression: ContextAutoCompressionConfig{
+			Enabled:    true,
+			ThresholdK: 64,
+		},
+	}
+	payload := map[string]any{
+		"model": "gpt-test",
+		"context_management": []any{
+			map[string]any{"type": "retention", "mode": "keep_recent"},
+		},
+	}
+
+	if !applyOpenAIContextAutoCompression(payload, config) {
+		t.Fatal("expected OpenAI context auto compression to apply")
+	}
+	strategies, ok := payload["context_management"].([]any)
+	if !ok || len(strategies) != 2 {
+		t.Fatalf("expected context_management strategy array, got %#v", payload["context_management"])
+	}
+	compaction, ok := strategies[1].(map[string]any)
+	if !ok || compaction["type"] != "compaction" || toIntValue(compaction["compact_threshold"]) != 64000 {
+		t.Fatalf("expected OpenAI compaction strategy threshold 64000, got %#v", strategies[1])
+	}
+
+	config.ContextAutoCompression.Enabled = false
+	if applyOpenAIContextAutoCompression(payload, config) {
+		t.Fatal("expected disabled context auto compression not to apply")
+	}
+}
+
+func TestApplyClaudeContextAutoCompression(t *testing.T) {
+	config := AdvancedProxyConfig{
+		ContextAutoCompression: ContextAutoCompressionConfig{
+			Enabled:    true,
+			ThresholdK: 64,
+		},
+	}
+	payload := map[string]any{
+		"model": "claude-test",
+		"context_management": map[string]any{
+			"strategies": []any{
+				map[string]any{"type": "compaction", "compact_threshold": 32000},
+				map[string]any{"type": "retention", "mode": "keep_recent"},
+			},
+		},
+	}
+
+	if !applyClaudeContextAutoCompression(payload, config) {
+		t.Fatal("expected Claude context auto compression to apply")
+	}
+	contextManagement, ok := payload["context_management"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected Claude context_management object, got %#v", payload["context_management"])
+	}
+	strategies, ok := contextManagement["strategies"].([]any)
+	if !ok || len(strategies) != 2 {
+		t.Fatalf("expected Claude context_management.strategies array, got %#v", contextManagement["strategies"])
+	}
+	compaction, ok := strategies[0].(map[string]any)
+	if !ok || compaction["type"] != "compaction" || toIntValue(compaction["compact_threshold"]) != 64000 {
+		t.Fatalf("expected Claude compaction strategy threshold 64000, got %#v", strategies[0])
+	}
+}
+
 func TestBuildClaudeProviderHeadersPreservesAnthropicHeaders(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 	if _, err := saveAdvancedProxyConfig(AdvancedProxyConfig{
@@ -868,10 +972,14 @@ func TestForwardClaudeRequestViaProviderUsesOpenAIResponsesFirstForOpenAIRespons
 	resetAdvancedProxyRuntimeForTest(t)
 
 	requestCount := 0
+	var capturedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requestCount++
 		switch request.URL.Path {
 		case "/v1/responses", "/responses":
+			if err := json.NewDecoder(request.Body).Decode(&capturedBody); err != nil {
+				t.Fatalf("decode responses request: %v", err)
+			}
 			writer.Header().Set("Content-Type", "application/json")
 			_, _ = writer.Write([]byte(`{"id":"resp_test","object":"response","status":"completed","output":[{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`))
 		default:
@@ -920,6 +1028,14 @@ func TestForwardClaudeRequestViaProviderUsesOpenAIResponsesFirstForOpenAIRespons
 	}
 	if requestCount != 1 {
 		t.Fatalf("expected one direct responses attempt, got %d", requestCount)
+	}
+	promptCacheKey := strings.TrimSpace(toStringValue(capturedBody["prompt_cache_key"]))
+	if !strings.HasPrefix(promptCacheKey, "shared-ctx-bucket-") {
+		t.Fatalf("expected responses request to include root prompt_cache_key, got %#v", capturedBody)
+	}
+	var bucketID int
+	if _, err := fmt.Sscanf(promptCacheKey, "shared-ctx-bucket-%d", &bucketID); err != nil || bucketID < 0 || bucketID >= 15 {
+		t.Fatalf("expected responses prompt_cache_key bucket 0..14, got %q", promptCacheKey)
 	}
 
 	saved, err := loadAdvancedProxyConfig()
@@ -2735,10 +2851,21 @@ func TestForwardOpenAIRequestViaProviderFallbacksResponsesToChat(t *testing.T) {
 		if requests[index].Path != "/v1/responses" && requests[index].Path != "/responses" {
 			t.Fatalf("unexpected pre-fallback request path: %#v", requests)
 		}
+		promptCacheKey := strings.TrimSpace(toStringValue(requests[index].Body["prompt_cache_key"]))
+		if !strings.HasPrefix(promptCacheKey, "shared-ctx-bucket-") {
+			t.Fatalf("expected responses request to include shared prompt_cache_key, got %#v", requests[index].Body)
+		}
+		var bucketID int
+		if _, err := fmt.Sscanf(promptCacheKey, "shared-ctx-bucket-%d", &bucketID); err != nil || bucketID < 0 || bucketID >= 15 {
+			t.Fatalf("expected responses prompt_cache_key bucket 0..14, got %q", promptCacheKey)
+		}
 	}
 	lastRequest := requests[len(requests)-1]
 	if lastRequest.Path != "/v1/chat/completions" && lastRequest.Path != "/chat/completions" {
 		t.Fatalf("unexpected request order: %#v", requests)
+	}
+	if _, exists := lastRequest.Body["prompt_cache_key"]; exists {
+		t.Fatalf("expected fallback chat request body not to include prompt_cache_key: %#v", lastRequest.Body)
 	}
 	if _, exists := lastRequest.Body["input"]; exists {
 		t.Fatalf("expected fallback chat request body to remove responses input field: %#v", lastRequest.Body)

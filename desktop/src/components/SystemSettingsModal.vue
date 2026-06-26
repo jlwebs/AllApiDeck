@@ -82,6 +82,37 @@
             </div>
           </a-space>
 
+          <a-divider />
+          <div class="settings-version-text">
+            {{ appLabel }}
+          </div>
+        </div>
+      </a-tab-pane>
+      <a-tab-pane key="gateway" tab="网关配置">
+        <div class="settings-tab-content">
+          <a-space direction="vertical" style="width: 100%; margin-bottom: 16px;">
+            <div class="context-compression-row">
+              <div class="context-compression-copy">
+                <span>上下文自动压缩：{{ contextAutoCompressionDraft.thresholdK }}（K）</span>
+                <small>强制要求多少上下文即触发压缩</small>
+              </div>
+              <a-switch
+                :checked="contextAutoCompressionDraft.enabled"
+                @update:checked="handleContextAutoCompressionEnabledChange"
+              />
+            </div>
+            <a-input-number
+              v-model:value="contextAutoCompressionDraft.thresholdK"
+              :disabled="!contextAutoCompressionDraft.enabled"
+              :min="1"
+              :max="4096"
+              :step="1"
+              addon-after="K"
+              style="width: 180px;"
+              @change="handleContextAutoCompressionThresholdChange"
+            />
+          </a-space>
+
           <p class="settings-section-title settings-section-title-spaced"><b>User-Agent 映射</b></p>
           <div class="ua-mapping-card">
             <div class="ua-mapping-head">
@@ -123,10 +154,6 @@
               <div>支持纯 UA 文本，也支持多行或分号分隔的 `Header: Value`。</div>
               <div>默认规则：`gpt` 会注入 Codex Desktop 的 `Originator` 和 `User-Agent`；`claude` 会注入 `claude-cli`、`X-App`、`anthropic-*` 与 `X-Stainless-*` 头。</div>
             </div>
-          </div>
-          <a-divider />
-          <div class="settings-version-text">
-            {{ appLabel }}
           </div>
         </div>
       </a-tab-pane>
@@ -219,9 +246,12 @@ import { isChromeProfileAuthBridgeAvailable } from '../utils/profileAuthBridge.j
 import { getAdvancedProxyConfig, setAdvancedProxyConfig } from '../utils/advancedProxyBridge.js';
 import {
   getOutboundProxyConfig,
+  loadContextAutoCompressionConfig,
   loadUserAgentMappings,
+  normalizeContextAutoCompressionConfig,
   normalizeDesktopTokenSourceMode,
   normalizeOutboundProxyConfig,
+  saveContextAutoCompressionConfig,
   saveDesktopTokenSourceMode,
   saveTreeExpandedSetting,
   saveUserAgentMappings,
@@ -282,6 +312,7 @@ const selectedDesktopLogGroup = ref('');
 const selectedDesktopLogPath = ref('');
 const selectedDesktopLogContent = ref('');
 const userAgentMappings = ref(loadUserAgentMappings());
+const contextAutoCompressionDraft = reactive(loadContextAutoCompressionConfig());
 const themeMode = ref(getStoredThemeMode());
 const themeModeOptions = THEME_MODE_OPTIONS;
 const ERROR_SUMMARY_GROUP_KEY = '__error_summary__';
@@ -337,6 +368,7 @@ watch(() => props.open, open => {
   if (!open) return;
   themeMode.value = getStoredThemeMode();
   userAgentMappings.value = loadUserAgentMappings();
+  Object.assign(contextAutoCompressionDraft, loadContextAutoCompressionConfig());
   void loadProxyDraft();
   if (isWailsRuntime) {
     void loadDesktopLogs();
@@ -427,6 +459,31 @@ async function saveUserAgentMappingsDraft() {
     const config = await getAdvancedProxyConfig();
     await setAdvancedProxyConfig(config);
   } catch {}
+}
+
+async function saveContextAutoCompressionDraft() {
+  const normalized = saveContextAutoCompressionConfig(contextAutoCompressionDraft);
+  Object.assign(contextAutoCompressionDraft, normalized);
+  try {
+    const config = await getAdvancedProxyConfig();
+    await setAdvancedProxyConfig({
+      ...config,
+      contextAutoCompression: normalized,
+    });
+  } catch {}
+}
+
+function handleContextAutoCompressionEnabledChange(checked) {
+  contextAutoCompressionDraft.enabled = Boolean(checked);
+  if (!Number(contextAutoCompressionDraft.thresholdK)) {
+    Object.assign(contextAutoCompressionDraft, normalizeContextAutoCompressionConfig(contextAutoCompressionDraft));
+  }
+  void saveContextAutoCompressionDraft();
+}
+
+function handleContextAutoCompressionThresholdChange(value) {
+  contextAutoCompressionDraft.thresholdK = value;
+  void saveContextAutoCompressionDraft();
 }
 
 function addUserAgentMappingRow() {
@@ -651,6 +708,31 @@ async function loadDesktopLogs() {
   display: flex;
   justify-content: space-between;
   gap: 12px;
+}
+
+.context-compression-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+}
+
+.context-compression-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.context-compression-copy span {
+  font-weight: 600;
+  color: #243229;
+}
+
+.context-compression-copy small {
+  color: #8c8c8c;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .settings-log-head {
@@ -880,6 +962,14 @@ async function loadDesktopLogs() {
   color: #b7c7b1;
 }
 
+:deep(body.dark-mode) .context-compression-copy span {
+  color: #ebf5e5;
+}
+
+:deep(body.dark-mode) .context-compression-copy small {
+  color: #b7c7b1;
+}
+
 :deep(body.gaia-dark) .theme-mode-card {
   border-color: rgba(101, 129, 138, 0.18);
   background:
@@ -934,6 +1024,14 @@ async function loadDesktopLogs() {
   color: #9eb2b3;
 }
 
+:deep(body.gaia-dark) .context-compression-copy span {
+  color: #e6f1ef;
+}
+
+:deep(body.gaia-dark) .context-compression-copy small {
+  color: #9eb2b3;
+}
+
 @media (max-width: 720px) {
   .proxy-custom-row {
     grid-template-columns: 1fr;
@@ -945,6 +1043,10 @@ async function loadDesktopLogs() {
 
   .ua-mapping-grid {
     grid-template-columns: 1fr;
+  }
+
+  .context-compression-row {
+    align-items: center;
   }
 
   .portable-settings-actions {
