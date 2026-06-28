@@ -673,6 +673,12 @@ export async function listAdvancedProxyRequestRecords(limit = 120) {
   return app.GetAdvancedProxyRequestRecords(Math.max(1, Number(limit || 120)));
 }
 
+export async function getAdvancedProxyRequestRecord(recordId) {
+  const app = getAppBridge();
+  if (!app?.GetAdvancedProxyRequestRecord) return null;
+  return app.GetAdvancedProxyRequestRecord(String(recordId || '').trim());
+}
+
 export async function clearAdvancedProxyRequestRecords() {
   const app = getAppBridge();
   if (!app?.ClearAdvancedProxyRequestRecords) return true;

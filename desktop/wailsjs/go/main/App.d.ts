@@ -28,6 +28,8 @@ export function GetAdvancedProxyConfig():Promise<main.AdvancedProxyConfig>;
 
 export function GetAdvancedProxyConfigFilePath():Promise<string>;
 
+export function GetAdvancedProxyRequestRecord(arg1:string):Promise<main.AdvancedProxyRequestRecord>;
+
 export function GetAdvancedProxyRequestRecords(arg1:number):Promise<Array<main.AdvancedProxyRequestRecord>>;
 
 export function GetAdvancedProxyRoutingSnapshot():Promise<main.AdvancedProxyRoutingSnapshot>;

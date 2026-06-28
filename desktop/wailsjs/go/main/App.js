@@ -54,6 +54,10 @@ export function GetAdvancedProxyConfigFilePath() {
   return window['go']['main']['App']['GetAdvancedProxyConfigFilePath']();
 }
 
+export function GetAdvancedProxyRequestRecord(arg1) {
+  return window['go']['main']['App']['GetAdvancedProxyRequestRecord'](arg1);
+}
+
 export function GetAdvancedProxyRequestRecords(arg1) {
   return window['go']['main']['App']['GetAdvancedProxyRequestRecords'](arg1);
 }

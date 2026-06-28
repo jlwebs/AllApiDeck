@@ -51,6 +51,12 @@ type AdvancedProxyRequestRecord struct {
 	AntiPoisonOps            []antiPoisonOperationRecord     `json:"antiPoisonOps,omitempty"`
 }
 
+func (r AdvancedProxyRequestRecord) withoutHeavyPayloads() AdvancedProxyRequestRecord {
+	r.RequestBody = ""
+	r.UpstreamResponseRaw = ""
+	return r
+}
+
 type advancedProxyObservedItem struct {
 	Type             string `json:"type"`
 	Name             string `json:"name,omitempty"`
@@ -127,6 +133,31 @@ func (s *advancedProxyRequestRecordStore) list(limit int) []AdvancedProxyRequest
 	return result
 }
 
+func (s *advancedProxyRequestRecordStore) listSummaries(limit int) []AdvancedProxyRequestRecord {
+	records := s.list(limit)
+	for index := range records {
+		records[index] = records[index].withoutHeavyPayloads()
+	}
+	return records
+}
+
+func (s *advancedProxyRequestRecordStore) get(recordID string) (AdvancedProxyRequestRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	recordID = strings.TrimSpace(recordID)
+	if recordID == "" {
+		return AdvancedProxyRequestRecord{}, false
+	}
+	for index := len(s.records) - 1; index >= 0; index-- {
+		record := s.records[index]
+		if record.ID == recordID {
+			return record, true
+		}
+	}
+	return AdvancedProxyRequestRecord{}, false
+}
+
 func (s *advancedProxyRequestRecordStore) clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -135,12 +166,20 @@ func (s *advancedProxyRequestRecordStore) clear() {
 }
 
 func (a *App) GetAdvancedProxyRequestRecords(limit int) ([]AdvancedProxyRequestRecord, error) {
-	return advancedProxyRequestRecords.list(limit), nil
+	return advancedProxyRequestRecords.listSummaries(limit), nil
 }
 
 func (a *App) ClearAdvancedProxyRequestRecords() (bool, error) {
 	advancedProxyRequestRecords.clear()
 	return true, nil
+}
+
+func (a *App) GetAdvancedProxyRequestRecord(recordID string) (*AdvancedProxyRequestRecord, error) {
+	record, ok := advancedProxyRequestRecords.get(recordID)
+	if !ok {
+		return nil, nil
+	}
+	return &record, nil
 }
 
 func appendAdvancedProxyRequestRecord(record AdvancedProxyRequestRecord) {

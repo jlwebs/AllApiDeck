@@ -275,6 +275,47 @@ func TestAdvancedProxyRequestRecordsKeepOnlyLastFiftyRequestBodies(t *testing.T)
 	}
 }
 
+func TestAdvancedProxyRequestRecordListOmitsHeavyPayloadsButDetailKeepsThem(t *testing.T) {
+	resetAdvancedProxyRequestRecordsForTest(t)
+
+	appendAdvancedProxyRequestRecord(AdvancedProxyRequestRecord{
+		RecordedAt:              time.Now().Format(time.RFC3339Nano),
+		AppType:                 "codex",
+		ProviderID:              "provider-test",
+		ProviderName:            "Provider Test",
+		RequestBody:             `{"model":"gpt-test","stream":true}`,
+		UpstreamResponsePreview: "data: preview",
+		UpstreamResponseRaw:     "data: full-stream-payload",
+		ResponsePreview:         "delivered preview",
+	})
+
+	app := &App{}
+	summaries, err := app.GetAdvancedProxyRequestRecords(10)
+	if err != nil {
+		t.Fatalf("list request records failed: %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("expected one request record summary, got %#v", summaries)
+	}
+	if summaries[0].RequestBody != "" || summaries[0].UpstreamResponseRaw != "" {
+		t.Fatalf("expected heavy payload fields omitted from list summary, got %#v", summaries[0])
+	}
+	if summaries[0].UpstreamResponsePreview == "" || summaries[0].ResponsePreview == "" {
+		t.Fatalf("expected lightweight previews retained in list summary, got %#v", summaries[0])
+	}
+
+	detail, err := app.GetAdvancedProxyRequestRecord(summaries[0].ID)
+	if err != nil {
+		t.Fatalf("get request record detail failed: %v", err)
+	}
+	if detail == nil {
+		t.Fatalf("expected request record detail")
+	}
+	if detail.RequestBody == "" || detail.UpstreamResponseRaw == "" {
+		t.Fatalf("expected detail to keep full payload fields, got %#v", detail)
+	}
+}
+
 func TestAdvancedProxyRecordExtractsAntiPoisonPromptPreview(t *testing.T) {
 	resetAdvancedProxyRequestRecordsForTest(t)
 

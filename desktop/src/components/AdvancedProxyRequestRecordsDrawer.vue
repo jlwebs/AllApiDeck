@@ -301,9 +301,12 @@
       placement="right"
       title="请求详情"
       :class="['advanced-proxy-records-detail-drawer', { 'advanced-proxy-records-detail-drawer-dark': isDarkMode }]"
-      @close="detailOpen = false"
+      @close="closeRecordDetail"
     >
-      <div v-if="selectedRecord" class="request-record-detail-shell" :class="{ 'request-record-detail-shell-dark': isDarkMode }">
+      <div v-if="recordDetailLoading" class="request-records-empty">
+        正在加载详情...
+      </div>
+      <div v-else-if="selectedRecord" class="request-record-detail-shell" :class="{ 'request-record-detail-shell-dark': isDarkMode }">
         <header class="request-record-detail-hero">
           <div class="request-record-detail-hero-main">
             <span class="request-records-app-pill">{{ formatAppName(selectedRecord.appType) }}</span>
@@ -438,6 +441,7 @@ import {
   clearAdvancedProxyRequestRecords,
   getAdvancedProxyConfig,
   getAdvancedProxyEffectiveProviders,
+  getAdvancedProxyRequestRecord,
   isAdvancedProxyRequestRecordBridgeAvailable,
   listAdvancedProxyRequestRecords,
 } from '../utils/advancedProxyBridge.js';
@@ -465,6 +469,7 @@ const selectedRecord = ref(null);
 const requestDebugBody = ref('');
 const requestDebugState = ref('idle');
 const requestDebugResponse = ref('');
+const recordDetailLoading = ref(false);
 const tableScrollRef = ref(null);
 const tableElementRef = ref(null);
 const tableHorizontalScrollRef = ref(null);
@@ -479,6 +484,7 @@ let tableMetricsFrame = 0;
 let tableResizeObserver = null;
 let tableDragSession = null;
 let tableSuppressClickUntil = 0;
+let recordDetailRequestToken = 0;
 const REQUEST_RECORD_PAGE_SIZE = 50;
 
 const isCompactWindow = computed(() => viewportWidth.value <= 860);
@@ -1296,7 +1302,7 @@ async function refreshRecords() {
   if (!bridgeAvailable) return;
   loading.value = true;
   try {
-    records.value = await listAdvancedProxyRequestRecords(400);
+    records.value = await listAdvancedProxyRequestRecords(120);
     await nextTick();
     queueTableMetricsSync();
   } catch (error) {
@@ -1310,10 +1316,33 @@ function handleClose() {
   emit('update:open', false);
 }
 
+function closeRecordDetail() {
+  recordDetailRequestToken += 1;
+  detailOpen.value = false;
+  recordDetailLoading.value = false;
+}
+
 function openRecordDetail(record) {
+  const requestToken = recordDetailRequestToken + 1;
+  recordDetailRequestToken = requestToken;
   selectedRecord.value = record || null;
-  void syncRequestDebugEditor(record);
   detailOpen.value = true;
+  recordDetailLoading.value = true;
+  void (async () => {
+    try {
+      const detail = await getAdvancedProxyRequestRecord(record?.id || record?.recordedAt);
+      if (recordDetailRequestToken !== requestToken) return;
+      selectedRecord.value = detail || record || null;
+      await syncRequestDebugEditor(detail || record);
+    } catch {
+      if (recordDetailRequestToken !== requestToken) return;
+      await syncRequestDebugEditor(record);
+    } finally {
+      if (recordDetailRequestToken === requestToken) {
+        recordDetailLoading.value = false;
+      }
+    }
+  })();
 }
 
 function handleClear() {
@@ -1351,7 +1380,7 @@ watch(
       queueTableMetricsSync();
       return;
     }
-    detailOpen.value = false;
+    closeRecordDetail();
     selectedRecord.value = null;
     void syncRequestDebugEditor(null);
     clearTableDragSession();
