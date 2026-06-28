@@ -11,7 +11,18 @@
     <a-tabs>
       <a-tab-pane key="general" tab="常规设置">
         <div class="settings-tab-content">
-          <p><b>界面主题</b></p>
+          <p class="settings-section-title-row">
+            <b>界面主题</b>
+            <a-tooltip placement="topLeft" overlayClassName="settings-info-tooltip">
+              <template #title>
+                <div class="settings-info-tooltip-copy">
+                  <div>同一套主题会同步应用到批量检测、站点管理、密钥管理。</div>
+                  <div>`盖亚暗黑` 在现有深色底座上进一步压低明度，并把高光收敛到岩层青苔色系。</div>
+                </div>
+              </template>
+              <button type="button" class="settings-info-icon" aria-label="界面主题说明">i</button>
+            </a-tooltip>
+          </p>
           <div class="theme-mode-grid">
             <button
               v-for="option in themeModeOptions"
@@ -32,12 +43,19 @@
               </span>
             </button>
           </div>
-          <div class="settings-muted-text theme-mode-hint">
-            <div>同一套主题会同步应用到批量检测、站点管理、密钥管理。</div>
-            <div>`盖亚暗黑` 在现有深色底座上进一步压低明度，并把高光收敛到岩层青苔色系。</div>
-          </div>
-
-          <p><b>代理模式</b></p>
+          <p class="settings-section-title-row">
+            <b>代理模式</b>
+            <a-tooltip placement="topLeft" overlayClassName="settings-info-tooltip">
+              <template #title>
+                <div class="settings-info-tooltip-copy">
+                  <div>默认使用系统代理，显式集成到桌面端 Go 后端请求链路。</div>
+                  <div>自定义格式兼容：`socks5://`、`socks5h://`、`http://`、`https://`，也支持 `user:pass@host:port`。</div>
+                  <div>浏览器模式下仅保存配置，不会接管浏览器自身网络栈；桌面端 EXE / Wails 才会真正作用于后端请求。</div>
+                </div>
+              </template>
+              <button type="button" class="settings-info-icon" aria-label="代理模式说明">i</button>
+            </a-tooltip>
+          </p>
           <a-space direction="vertical" style="width: 100%; margin-bottom: 16px;">
             <a-radio-group :value="proxyDraft.mode" @change="handleProxyModeChange">
               <a-radio value="system">系统代理</a-radio>
@@ -51,11 +69,6 @@
                 @pressEnter="applyProxySettings"
               />
               <a-button type="primary" :loading="proxySaving" @click="applyProxySettings">应用代理</a-button>
-            </div>
-            <div class="settings-muted-text">
-              <div>默认使用系统代理，显式集成到桌面端 Go 后端请求链路。</div>
-              <div>自定义格式兼容：`socks5://`、`socks5h://`、`http://`、`https://`，也支持 `user:pass@host:port`。</div>
-              <div>浏览器模式下仅保存配置，不会接管浏览器自身网络栈；桌面端 EXE / Wails 才会真正作用于后端请求。</div>
             </div>
           </a-space>
 
@@ -700,8 +713,46 @@ async function loadDesktopLogs() {
   margin: 0 0 12px;
 }
 
+.settings-section-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+
 .settings-section-title-spaced {
   margin-top: 24px;
+}
+
+.settings-info-icon {
+  appearance: none;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 1px solid rgba(54, 126, 224, 0.32);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(54, 126, 224, 0.1);
+  color: #2f72d9;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+}
+
+.settings-info-icon:hover {
+  border-color: rgba(54, 126, 224, 0.52);
+  background: rgba(54, 126, 224, 0.16);
+  color: #1f5fc1;
+}
+
+:global(.settings-info-tooltip-copy) {
+  display: grid;
+  gap: 6px;
+  max-width: 420px;
+  line-height: 1.55;
 }
 
 .settings-switch-row {
@@ -841,10 +892,6 @@ async function loadDesktopLogs() {
   color: #627064;
 }
 
-.theme-mode-hint {
-  margin-bottom: 16px;
-}
-
 .ua-mapping-card {
   display: grid;
   gap: 10px;
@@ -957,6 +1004,12 @@ async function loadDesktopLogs() {
   color: #b7c7b1;
 }
 
+:deep(body.dark-mode) .settings-info-icon {
+  border-color: rgba(96, 165, 250, 0.34);
+  background: rgba(96, 165, 250, 0.14);
+  color: #93c5fd;
+}
+
 :deep(body.dark-mode) .ua-mapping-caption,
 :deep(body.dark-mode) .ua-mapping-grid-head {
   color: #b7c7b1;
@@ -993,9 +1046,14 @@ async function loadDesktopLogs() {
   color: #e6f1ef;
 }
 
-:deep(body.gaia-dark) .theme-mode-copy small,
-:deep(body.gaia-dark) .theme-mode-hint {
+:deep(body.gaia-dark) .theme-mode-copy small {
   color: #9eb2b3;
+}
+
+:deep(body.gaia-dark) .settings-info-icon {
+  border-color: rgba(109, 172, 190, 0.34);
+  background: rgba(109, 172, 190, 0.14);
+  color: #8bc6d4;
 }
 
 :deep(body.gaia-dark) .portable-settings-card {
