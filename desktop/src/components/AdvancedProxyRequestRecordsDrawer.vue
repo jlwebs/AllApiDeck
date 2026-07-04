@@ -9,6 +9,283 @@
   >
     <div class="request-records-scroll-shell">
       <div class="request-records-shell" :class="{ 'request-records-shell-dark': isDarkMode }">
+        <div class="request-records-mode-tabs" role="tablist" aria-label="会话和统计">
+          <button
+            type="button"
+            class="request-records-mode-tab"
+            :class="{ 'is-active': activePanel === 'sessions' }"
+            @click="setActivePanel('sessions')"
+          >
+            <ProfileOutlined />
+            <span>会话</span>
+          </button>
+          <button
+            type="button"
+            class="request-records-mode-tab"
+            :class="{ 'is-active': activePanel === 'records' }"
+            @click="setActivePanel('records')"
+          >
+            <BarChartOutlined />
+            <span>统计</span>
+          </button>
+          <button
+            type="button"
+            class="request-records-mode-tab"
+            :class="{ 'is-active': activePanel === 'mcp' }"
+            @click="setActivePanel('mcp')"
+          >
+            <InboxOutlined />
+            <span>MCP</span>
+          </button>
+          <button
+            type="button"
+            class="request-records-mode-tab"
+            :class="{ 'is-active': activePanel === 'skills' }"
+            @click="setActivePanel('skills')"
+          >
+            <FireOutlined />
+            <span>Skill</span>
+          </button>
+        </div>
+
+        <template v-if="activePanel === 'sessions'">
+          <section v-if="!terminalBridgeAvailable" class="request-records-empty">
+            当前环境无法读取终端会话。
+          </section>
+
+          <section v-else class="terminal-sessions-board">
+            <aside class="terminal-session-list-pane">
+              <div class="terminal-provider-tabs" role="tablist" aria-label="终端记录集">
+                <a-tooltip
+                  v-for="provider in terminalProviderItems"
+                  :key="provider.id"
+                  :title="provider.total > 0 ? `${provider.label} · ${provider.total} 条` : provider.label"
+                >
+                  <button
+                    type="button"
+                    class="terminal-provider-tab"
+                    :class="{ 'is-active': terminalProviderId === provider.id }"
+                    :aria-label="provider.label"
+                    @click="switchTerminalProvider(provider.id)"
+                  >
+                    <img :src="getTerminalProviderIcon(provider.id)" :alt="provider.label" />
+                    <small v-if="provider.total > 0">{{ provider.total }}</small>
+                  </button>
+                </a-tooltip>
+              </div>
+
+              <div class="terminal-session-list-controls">
+                <span class="request-records-toolbar-pill" :class="{ 'is-loading': sessionsLoading }">
+                  <span class="request-records-toolbar-dot"></span>
+                  <span>{{ sessionsLoading ? '扫描中' : `${terminalSessionTotal} 条` }}</span>
+                </span>
+                <a-button
+                  size="small"
+                  class="request-records-action-button request-records-action-button-refresh terminal-session-refresh-button"
+                  :loading="sessionsLoading"
+                  @click="refreshTerminalSessions"
+                >
+                  <ReloadOutlined />
+                  刷新
+                </a-button>
+              </div>
+
+              <a-spin :spinning="sessionsLoading">
+                <div class="terminal-session-list">
+                  <article
+                    v-for="session in terminalSessions"
+                    :key="getTerminalSessionKey(session)"
+                    class="terminal-session-item"
+                    :class="{ 'is-active': selectedTerminalSessionKey === getTerminalSessionKey(session) }"
+                    role="button"
+                    tabindex="0"
+                    @click="selectTerminalSession(session)"
+                    @keydown.enter.prevent="selectTerminalSession(session)"
+                  >
+                    <div class="terminal-session-main">
+                      <strong>{{ formatTerminalSessionTitle(session) }}</strong>
+                      <span>{{ session.summary || session.projectDir || session.sessionId }}</span>
+                      <small>{{ formatTerminalSessionTime(session) }} · {{ compactTerminalSessionPath(session.projectDir || session.sourcePath) }}</small>
+                    </div>
+                    <a-tooltip :title="session.resumeCommand ? `打开终端：${session.resumeCommand}` : '该会话没有可恢复命令'">
+                      <button
+                        type="button"
+                        class="terminal-session-open-button"
+                        :disabled="!session.resumeCommand || launchingSessionKey === getTerminalSessionKey(session)"
+                        @click.stop="launchSessionTerminal(session)"
+                      >
+                        <LoadingOutlined v-if="launchingSessionKey === getTerminalSessionKey(session)" />
+                        <CodeOutlined v-else />
+                      </button>
+                    </a-tooltip>
+                  </article>
+                  <div v-if="!terminalSessions.length && !sessionsLoading" class="request-records-empty terminal-sessions-empty">
+                    暂无会话记录
+                  </div>
+                </div>
+              </a-spin>
+
+              <div v-if="terminalSessionTotal > TERMINAL_SESSION_PAGE_SIZE" class="request-records-pagination terminal-sessions-pagination">
+                <a-pagination
+                  size="small"
+                  simple
+                  :current="terminalSessionPage"
+                  :page-size="TERMINAL_SESSION_PAGE_SIZE"
+                  :total="terminalSessionTotal"
+                  @change="handleTerminalSessionPageChange"
+                />
+              </div>
+            </aside>
+
+            <section class="terminal-session-chat-pane">
+              <template v-if="selectedTerminalSession">
+                <header class="terminal-session-chat-head">
+                  <div>
+                    <strong>{{ formatTerminalSessionTitle(selectedTerminalSession) }}</strong>
+                    <span>{{ compactTerminalSessionPath(selectedTerminalSession.projectDir || selectedTerminalSession.sourcePath) }}</span>
+                  </div>
+                  <small>{{ terminalSessionMessages.length }} 条消息</small>
+                </header>
+                <a-spin :spinning="terminalSessionMessagesLoading">
+                  <div v-if="terminalSessionMessages.length" class="terminal-session-message-list">
+                    <article
+                      v-for="(item, index) in terminalSessionMessages"
+                      :key="`${selectedTerminalSessionKey}::${index}`"
+                      class="terminal-session-message"
+                      :class="`is-${getTerminalMessageRoleClass(item.role)}`"
+                    >
+                      <div class="terminal-session-message-meta">
+                        <span>{{ formatTerminalMessageRole(item.role) }}</span>
+                        <small>{{ formatTerminalMessageTime(item.ts) }}</small>
+                      </div>
+                      <p :class="{ 'is-collapsed': isTerminalMessageCollapsed(item, index) }">{{ item.content }}</p>
+                      <button
+                        v-if="isTerminalMessageCollapsible(item)"
+                        type="button"
+                        class="terminal-session-message-toggle"
+                        @click="toggleTerminalMessageExpanded(index)"
+                      >
+                        {{ isTerminalMessageExpanded(index) ? '收起' : '展开' }}
+                      </button>
+                    </article>
+                  </div>
+                  <div v-else-if="!terminalSessionMessagesLoading" class="request-records-empty terminal-session-chat-empty">
+                    该会话没有可展示的聊天记录
+                  </div>
+                </a-spin>
+              </template>
+              <div v-else class="request-records-empty terminal-session-chat-empty">
+                选择左侧会话查看聊天记录
+              </div>
+            </section>
+          </section>
+        </template>
+
+        <template v-else-if="activePanel === 'mcp' || activePanel === 'skills'">
+          <section class="request-records-toolbar mcp-skill-toolbar">
+            <div class="request-records-toolbar-meta">
+              <span class="request-records-toolbar-pill" :class="{ 'is-loading': mcpSkillLoading }">
+                <span class="request-records-toolbar-dot"></span>
+                <span>{{ mcpSkillCountLabel }}</span>
+              </span>
+              <span v-if="mcpSkillConfigPath" class="request-records-toolbar-pill request-records-toolbar-pill-muted">
+                {{ compactTerminalSessionPath(mcpSkillConfigPath) }}
+              </span>
+            </div>
+            <div class="mcp-skill-app-tabs" role="tablist" aria-label="MCP Skill app browser">
+              <a-tooltip v-for="app in managedAppItems" :key="app.id" :title="app.label">
+                <button
+                  type="button"
+                  class="mcp-skill-app-tab"
+                  :class="{ 'is-active': selectedManagedAppId === app.id }"
+                  :aria-label="app.label"
+                  @click="setSelectedManagedApp(app.id)"
+                >
+                  <img :src="getManagedAppIcon(app.id)" :alt="app.label" />
+                </button>
+              </a-tooltip>
+            </div>
+            <div class="request-records-toolbar-actions">
+              <a-button size="small" class="request-records-action-button request-records-action-button-refresh" :loading="mcpSkillLoading" @click="refreshMCPSkillConfig">
+                <ReloadOutlined />
+                刷新
+              </a-button>
+              <a-button size="small" class="request-records-action-button request-records-action-button-refresh" :loading="mcpSkillSaving" :disabled="!mcpSkillBridgeAvailable" @click="saveMCPSkillConfig">
+                保存
+              </a-button>
+            </div>
+          </section>
+
+          <section v-if="!mcpSkillBridgeAvailable" class="request-records-empty">
+            当前环境无法读取 MCP / Skill 配置。
+          </section>
+
+          <section v-else class="mcp-skill-board">
+            <template v-if="activePanel === 'mcp'">
+              <article v-if="!managedMCPServers.length && !mcpSkillLoading" class="request-records-empty mcp-skill-empty">
+                暂无 MCP 配置。会自动扫描 Claude、Codex、Gemini、OpenCode、OpenClaw 的常见配置文件。
+              </article>
+              <article v-if="managedMCPServers.length && !visibleManagedMCPServers.length && !mcpSkillLoading" class="request-records-empty mcp-skill-empty">
+                当前类目下暂无已启用 MCP。
+              </article>
+              <article v-for="server in visibleManagedMCPServers" :key="server.id" class="mcp-skill-card">
+                <div class="mcp-skill-card-main">
+                  <strong>{{ server.name || server.id }}</strong>
+                  <span>{{ formatMCPServerSummary(server) }}</span>
+                  <small>{{ server.source || 'managed' }}</small>
+                </div>
+                <div class="mcp-skill-card-actions">
+                  <span class="mcp-skill-state-pill is-on">{{ selectedManagedAppLabel }}</span>
+                  <a-button size="small" class="mcp-skill-card-button mcp-skill-card-button-import" @click="applyManagedMCPToSelectedApp(server.id)">
+                    <CheckCircleFilled />
+                    应用
+                  </a-button>
+                  <a-button size="small" class="mcp-skill-card-button mcp-skill-card-button-disable" @click="disableManagedMCPForSelectedApp(server.id)">
+                    <StopOutlined />
+                    禁用
+                  </a-button>
+                  <a-button size="small" danger class="mcp-skill-card-button" @click="removeManagedMCPFromSelectedApp(server.id)">
+                    <DeleteOutlined />
+                    删除
+                  </a-button>
+                </div>
+              </article>
+            </template>
+
+            <template v-else>
+              <article v-if="!managedSkills.length && !mcpSkillLoading" class="request-records-empty mcp-skill-empty">
+                暂无 Skill。会扫描 ~/.agents/skills、~/.codex/skills、~/.claude/skills 等常见目录。
+              </article>
+              <article v-if="managedSkills.length && !visibleManagedSkills.length && !mcpSkillLoading" class="request-records-empty mcp-skill-empty">
+                当前类目下暂无已启用 Skill。
+              </article>
+              <article v-for="skill in visibleManagedSkills" :key="skill.id" class="mcp-skill-card">
+                <div class="mcp-skill-card-main">
+                  <strong>{{ skill.name || skill.id }}</strong>
+                  <span>{{ skill.description || '未填写描述' }}</span>
+                  <small>{{ skill.directory || skill.source || 'managed' }}</small>
+                </div>
+                <div class="mcp-skill-card-actions">
+                  <span class="mcp-skill-state-pill is-on">{{ selectedManagedAppLabel }}</span>
+                  <a-button size="small" class="mcp-skill-card-button mcp-skill-card-button-import" @click="applyManagedSkillToSelectedApp(skill.id)">
+                    <CheckCircleFilled />
+                    应用
+                  </a-button>
+                  <a-button size="small" class="mcp-skill-card-button mcp-skill-card-button-disable" @click="disableManagedSkillForSelectedApp(skill.id)">
+                    <StopOutlined />
+                    禁用
+                  </a-button>
+                  <a-button size="small" danger class="mcp-skill-card-button" @click="removeManagedSkillFromSelectedApp(skill.id)">
+                    <DeleteOutlined />
+                    删除
+                  </a-button>
+                </div>
+              </article>
+            </template>
+          </section>
+        </template>
+
+        <template v-else>
         <header class="request-records-toolbar">
           <div class="request-records-toolbar-meta">
             <span class="request-records-toolbar-pill" :class="{ 'is-loading': loading }">
@@ -292,6 +569,7 @@
             </div>
           </div>
         </section>
+        </template>
       </div>
     </div>
 
@@ -436,15 +714,39 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { message, Modal } from 'ant-design-vue';
-import { CheckCircleFilled, CloseCircleFilled, DeleteOutlined, LoadingOutlined, ReloadOutlined } from '@ant-design/icons-vue';
+import {
+  BarChartOutlined,
+  CheckCircleFilled,
+  CloseCircleFilled,
+  CodeOutlined,
+  DeleteOutlined,
+  FireOutlined,
+  StopOutlined,
+  InboxOutlined,
+  ProfileOutlined,
+  LoadingOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons-vue';
 import {
   clearAdvancedProxyRequestRecords,
+  getMCPSkillConfigSnapshot,
+  getTerminalSessionMessages,
   getAdvancedProxyConfig,
   getAdvancedProxyEffectiveProviders,
   getAdvancedProxyRequestRecord,
   isAdvancedProxyRequestRecordBridgeAvailable,
+  isMCPSkillConfigBridgeAvailable,
+  isTerminalSessionBridgeAvailable,
+  launchTerminalSession,
   listAdvancedProxyRequestRecords,
+  listTerminalSessions,
+  saveMCPSkillConfigSnapshot,
 } from '../utils/advancedProxyBridge.js';
+import claudeAppIcon from '../assets/app-icons/claude.svg';
+import codexAppIcon from '../assets/app-icons/codex.svg';
+import geminiAppIcon from '../assets/app-icons/gemini.svg';
+import opencodeAppIcon from '../assets/app-icons/opencode.svg';
+import openclawAppIcon from '../assets/app-icons/openclaw-fallback.svg';
 
 const props = defineProps({
   open: {
@@ -455,14 +757,42 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  focusRecordId: {
+    type: String,
+    default: '',
+  },
+  initialPanel: {
+    type: String,
+    default: 'records',
+  },
 });
 
 const emit = defineEmits(['update:open']);
 
 const bridgeAvailable = isAdvancedProxyRequestRecordBridgeAvailable();
+const terminalBridgeAvailable = isTerminalSessionBridgeAvailable();
+const mcpSkillBridgeAvailable = isMCPSkillConfigBridgeAvailable();
 const loading = ref(false);
+const sessionsLoading = ref(false);
+const mcpSkillLoading = ref(false);
+const mcpSkillSaving = ref(false);
 const records = ref([]);
 const hiddenAppIds = ref([]);
+const activePanel = ref('records');
+const mcpSkillConfigPath = ref('');
+const managedMCPServers = ref([]);
+const managedSkills = ref([]);
+const selectedManagedAppId = ref('codex');
+const terminalProviderId = ref('codex');
+const terminalSessionPage = ref(1);
+const terminalSessionTotal = ref(0);
+const terminalSessions = ref([]);
+const terminalProviders = ref([]);
+const selectedTerminalSession = ref(null);
+const terminalSessionMessages = ref([]);
+const terminalSessionMessagesLoading = ref(false);
+const expandedTerminalMessageIndexes = ref([]);
+const launchingSessionKey = ref('');
 const currentPage = ref(1);
 const detailOpen = ref(false);
 const selectedRecord = ref(null);
@@ -485,10 +815,35 @@ let tableResizeObserver = null;
 let tableDragSession = null;
 let tableSuppressClickUntil = 0;
 let recordDetailRequestToken = 0;
+let terminalSessionMessageRequestToken = 0;
 const REQUEST_RECORD_PAGE_SIZE = 50;
+const TERMINAL_SESSION_PAGE_SIZE = 15;
+const TERMINAL_SESSION_MESSAGE_LIMIT = 80;
+const TERMINAL_SESSION_COLLAPSE_LINE_LIMIT = 10;
+const DEFAULT_TERMINAL_PROVIDERS = [
+  { id: 'codex', label: 'Codex', total: 0 },
+  { id: 'claude', label: 'Claude', total: 0 },
+  { id: 'opencode', label: 'OpenCode', total: 0 },
+  { id: 'openclaw', label: 'OpenClaw', total: 0 },
+  { id: 'gemini', label: 'Gemini', total: 0 },
+];
+const managedAppItems = [
+  { id: 'codex', short: 'X', label: 'Codex' },
+  { id: 'claude', short: 'C', label: 'Claude' },
+  { id: 'opencode', short: 'O', label: 'OpenCode' },
+  { id: 'openclaw', short: 'L', label: 'OpenClaw' },
+  { id: 'gemini', short: 'G', label: 'Gemini' },
+];
+const TERMINAL_PROVIDER_ICONS = {
+  codex: codexAppIcon,
+  claude: claudeAppIcon,
+  opencode: opencodeAppIcon,
+  openclaw: openclawAppIcon,
+  gemini: geminiAppIcon,
+};
 
 const isCompactWindow = computed(() => viewportWidth.value <= 860);
-const drawerWidth = computed(() => Math.min(Math.max(viewportWidth.value - 18, 380), 860));
+const drawerWidth = computed(() => Math.min(Math.max(viewportWidth.value - 18, 380), 1080));
 const detailDrawerWidth = computed(() => Math.min(Math.max(Math.floor(viewportWidth.value * 0.42), 320), 420));
 const tableScrollY = computed(() => {
   const reservedHeight = isCompactWindow.value ? 360 : 332;
@@ -507,6 +862,31 @@ const showTableHorizontalScroll = computed(() => tableLayoutWidth.value - tableV
 const tableHorizontalMaxScroll = computed(() => Math.max(0, tableContentWidth.value - tableViewportWidth.value));
 const tableDragEnabled = computed(() => tableHorizontalMaxScroll.value > 0 || tableVerticalMaxScroll.value > 0);
 const requestDebugTesting = computed(() => requestDebugState.value === 'loading');
+const terminalProviderItems = computed(() => {
+  const providerMap = new Map(DEFAULT_TERMINAL_PROVIDERS.map(item => [item.id, { ...item }]));
+  (Array.isArray(terminalProviders.value) ? terminalProviders.value : []).forEach((item) => {
+    const id = String(item?.id || '').trim().toLowerCase();
+    if (!id) return;
+    providerMap.set(id, {
+      id,
+      label: String(item?.label || providerMap.get(id)?.label || id).trim(),
+      total: Number(item?.total || providerMap.get(id)?.total || 0),
+    });
+  });
+  return DEFAULT_TERMINAL_PROVIDERS.map(item => providerMap.get(item.id) || item);
+});
+const selectedTerminalSessionKey = computed(() => (selectedTerminalSession.value ? getTerminalSessionKey(selectedTerminalSession.value) : ''));
+const selectedManagedApp = computed(() => managedAppItems.find(item => item.id === selectedManagedAppId.value) || managedAppItems[0]);
+const selectedManagedAppLabel = computed(() => selectedManagedApp.value?.label || 'Codex');
+const visibleManagedMCPServers = computed(() => managedMCPServers.value.filter(server => isManagedAppEnabled(server.apps, selectedManagedAppId.value)));
+const visibleManagedSkills = computed(() => managedSkills.value.filter(skill => isManagedAppEnabled(skill.apps, selectedManagedAppId.value)));
+const mcpSkillCountLabel = computed(() => {
+  if (mcpSkillLoading.value) return '扫描中';
+  if (activePanel.value === 'mcp') {
+    return `MCP ${visibleManagedMCPServers.value.length} / ${managedMCPServers.value.length} 个`;
+  }
+  return `Skill ${visibleManagedSkills.value.length} / ${managedSkills.value.length} 个`;
+});
 
 const columns = computed(() => {
   const compact = isCompactWindow.value;
@@ -1298,11 +1678,419 @@ function extractHost(value) {
   }
 }
 
+function normalizePanel(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['sessions', 'mcp', 'skills'].includes(normalized)) return normalized;
+  return 'records';
+}
+
+function setActivePanel(panel) {
+  const nextPanel = normalizePanel(panel);
+  if (activePanel.value === nextPanel) return;
+  activePanel.value = nextPanel;
+  if (!props.open) return;
+  if (nextPanel === 'sessions') {
+    void refreshTerminalSessions();
+  } else if (nextPanel === 'records') {
+    void refreshRecords();
+  } else {
+    void refreshMCPSkillConfig();
+  }
+}
+
+function normalizeManagedApps(apps = {}) {
+  return {
+    claude: Boolean(apps?.claude || apps?.claudeDesktop),
+    claudeDesktop: Boolean(apps?.claudeDesktop),
+    codex: Boolean(apps?.codex),
+    gemini: Boolean(apps?.gemini),
+    opencode: Boolean(apps?.opencode),
+    openclaw: Boolean(apps?.openclaw),
+  };
+}
+
+function normalizeManagedMCPServer(server = {}) {
+  const id = normalizeText(server?.id);
+  return {
+    ...server,
+    id,
+    name: normalizeText(server?.name) || id,
+    type: normalizeText(server?.type) || 'stdio',
+    command: normalizeText(server?.command),
+    url: normalizeText(server?.url),
+    source: normalizeText(server?.source),
+    args: Array.isArray(server?.args) ? server.args : [],
+    env: server?.env && typeof server.env === 'object' ? server.env : {},
+    raw: server?.raw && typeof server.raw === 'object' ? server.raw : {},
+    apps: normalizeManagedApps(server?.apps),
+  };
+}
+
+function normalizeManagedSkill(skill = {}) {
+  const id = normalizeText(skill?.id);
+  return {
+    ...skill,
+    id,
+    name: normalizeText(skill?.name) || id,
+    description: normalizeText(skill?.description),
+    directory: normalizeText(skill?.directory),
+    readmePath: normalizeText(skill?.readmePath),
+    source: normalizeText(skill?.source),
+    apps: normalizeManagedApps(skill?.apps),
+  };
+}
+
+async function refreshMCPSkillConfig() {
+  if (!mcpSkillBridgeAvailable) return;
+  mcpSkillLoading.value = true;
+  try {
+    const snapshot = await getMCPSkillConfigSnapshot();
+    mcpSkillConfigPath.value = normalizeText(snapshot?.configPath);
+    managedMCPServers.value = (Array.isArray(snapshot?.mcp) ? snapshot.mcp : [])
+      .map(normalizeManagedMCPServer)
+      .filter(item => item.id);
+    managedSkills.value = (Array.isArray(snapshot?.skills) ? snapshot.skills : [])
+      .map(normalizeManagedSkill)
+      .filter(item => item.id);
+  } catch (error) {
+    message.error(error?.message || '读取 MCP / Skill 配置失败');
+  } finally {
+    mcpSkillLoading.value = false;
+  }
+}
+
+async function saveMCPSkillConfig(options = {}) {
+  if (!mcpSkillBridgeAvailable) return;
+  mcpSkillSaving.value = true;
+  try {
+    await saveMCPSkillConfigSnapshot({
+      configPath: mcpSkillConfigPath.value,
+      mcp: managedMCPServers.value.map(normalizeManagedMCPServer),
+      skills: managedSkills.value.map(normalizeManagedSkill),
+    });
+    if (!options?.silent) {
+      message.success('MCP / Skill 配置已保存');
+    }
+  } catch (error) {
+    message.error(error?.message || '保存 MCP / Skill 配置失败');
+  } finally {
+    mcpSkillSaving.value = false;
+  }
+}
+
+function formatMCPServerSummary(server) {
+  const type = normalizeText(server?.type) || 'stdio';
+  const target = normalizeText(server?.url) || normalizeText(server?.command);
+  if (target) return `${type} · ${target}`;
+  const argText = Array.isArray(server?.args) && server.args.length ? server.args.join(' ') : '';
+  return argText ? `${type} · ${argText}` : type;
+}
+
+function isManagedAppEnabled(apps, appId) {
+  return Boolean(normalizeManagedApps(apps)[appId]);
+}
+
+function setManagedAppEnabled(apps, appId, enabled) {
+  return {
+    ...normalizeManagedApps(apps),
+    [appId]: Boolean(enabled),
+  };
+}
+
+function setSelectedManagedApp(appId) {
+  const normalized = String(appId || '').trim();
+  if (!managedAppItems.some(item => item.id === normalized)) return;
+  selectedManagedAppId.value = normalized;
+}
+
+function getManagedAppIcon(appId) {
+  const id = String(appId || '').trim();
+  if (id === 'claude' || id === 'claudeDesktop') return claudeAppIcon;
+  if (id === 'gemini') return geminiAppIcon;
+  if (id === 'opencode') return opencodeAppIcon;
+  if (id === 'openclaw') return openclawAppIcon;
+  return codexAppIcon;
+}
+
+async function persistMCPSkillConfigChange(successText) {
+  await saveMCPSkillConfig({ silent: true });
+  if (successText) message.success(successText);
+  await refreshMCPSkillConfig();
+}
+
+async function setManagedMCPApp(serverId, appId, enabled) {
+  const id = normalizeText(serverId);
+  managedMCPServers.value = managedMCPServers.value.map((server) => {
+    if (normalizeText(server?.id) !== id) return server;
+    return normalizeManagedMCPServer({
+      ...server,
+      apps: setManagedAppEnabled(server.apps, appId, enabled),
+    });
+  });
+  await persistMCPSkillConfigChange(enabled ? '已应用 MCP' : '已禁用 MCP');
+}
+
+async function setManagedSkillApp(skillId, appId, enabled) {
+  const id = normalizeText(skillId);
+  managedSkills.value = managedSkills.value.map((skill) => {
+    if (normalizeText(skill?.id) !== id) return skill;
+    return normalizeManagedSkill({
+      ...skill,
+      apps: setManagedAppEnabled(skill.apps, appId, enabled),
+    });
+  });
+  await persistMCPSkillConfigChange(enabled ? '已应用 Skill' : '已禁用 Skill');
+}
+
+function applyManagedMCPToSelectedApp(serverId) {
+  void setManagedMCPApp(serverId, selectedManagedAppId.value, true);
+}
+
+function disableManagedMCPForSelectedApp(serverId) {
+  void setManagedMCPApp(serverId, selectedManagedAppId.value, false);
+}
+
+function removeManagedMCPFromSelectedApp(serverId) {
+  const id = normalizeText(serverId);
+  managedMCPServers.value = managedMCPServers.value.filter(server => normalizeText(server?.id) !== id);
+  void persistMCPSkillConfigChange('已删除 MCP');
+}
+
+function applyManagedSkillToSelectedApp(skillId) {
+  void setManagedSkillApp(skillId, selectedManagedAppId.value, true);
+}
+
+function disableManagedSkillForSelectedApp(skillId) {
+  void setManagedSkillApp(skillId, selectedManagedAppId.value, false);
+}
+
+function removeManagedSkillFromSelectedApp(skillId) {
+  const id = normalizeText(skillId);
+  managedSkills.value = managedSkills.value.filter(skill => normalizeText(skill?.id) !== id);
+  void persistMCPSkillConfigChange('已删除 Skill');
+}
+
+function getTerminalSessionKey(session) {
+  return [
+    String(session?.providerId || terminalProviderId.value || '').trim(),
+    String(session?.sessionId || '').trim(),
+    String(session?.sourcePath || '').trim(),
+  ].join('::');
+}
+
+function formatTerminalSessionTitle(session) {
+  return normalizeText(session?.title) || normalizeText(session?.sessionId) || '未命名会话';
+}
+
+function formatTerminalSessionTime(session) {
+  const timestamp = Number(session?.lastActiveAt || session?.createdAt || 0);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return '时间未知';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '时间未知';
+  return date.toLocaleString('zh-CN', {
+    hour12: false,
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function compactTerminalSessionPath(value) {
+  const text = normalizeText(value);
+  if (!text) return '路径未知';
+  const normalized = text.replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.length <= 2) return text;
+  return `.../${parts.slice(-2).join('/')}`;
+}
+
+function getTerminalProviderIcon(providerId) {
+  const id = String(providerId || '').trim().toLowerCase();
+  return TERMINAL_PROVIDER_ICONS[id] || codexAppIcon;
+}
+
+function clearSelectedTerminalSession() {
+  terminalSessionMessageRequestToken += 1;
+  selectedTerminalSession.value = null;
+  terminalSessionMessages.value = [];
+  expandedTerminalMessageIndexes.value = [];
+  terminalSessionMessagesLoading.value = false;
+}
+
+async function refreshTerminalSessions() {
+  if (!terminalBridgeAvailable) return;
+  sessionsLoading.value = true;
+  try {
+    const page = await listTerminalSessions(terminalProviderId.value, terminalSessionPage.value, TERMINAL_SESSION_PAGE_SIZE);
+    const normalizedProvider = String(page?.providerId || terminalProviderId.value || 'codex').trim().toLowerCase();
+    terminalProviderId.value = normalizedProvider || 'codex';
+    terminalSessionPage.value = Math.max(1, Number(page?.page || terminalSessionPage.value || 1));
+    terminalSessionTotal.value = Math.max(0, Number(page?.total || 0));
+    terminalSessions.value = Array.isArray(page?.sessions) ? page.sessions : [];
+    terminalProviders.value = Array.isArray(page?.providers) ? page.providers : [];
+    if (selectedTerminalSession.value) {
+      const currentKey = selectedTerminalSessionKey.value;
+      const matched = terminalSessions.value.find(session => getTerminalSessionKey(session) === currentKey);
+      if (matched) {
+        selectedTerminalSession.value = matched;
+      } else {
+        clearSelectedTerminalSession();
+      }
+    }
+  } catch (error) {
+    message.error(error?.message || '读取终端会话失败');
+  } finally {
+    sessionsLoading.value = false;
+  }
+}
+
+function switchTerminalProvider(providerId) {
+  const normalized = String(providerId || '').trim().toLowerCase();
+  if (!normalized || normalized === terminalProviderId.value) return;
+  terminalProviderId.value = normalized;
+  terminalSessionPage.value = 1;
+  clearSelectedTerminalSession();
+  void refreshTerminalSessions();
+}
+
+function handleTerminalSessionPageChange(page) {
+  const numeric = Number(page || 1);
+  terminalSessionPage.value = Number.isFinite(numeric) && numeric > 0 ? numeric : 1;
+  clearSelectedTerminalSession();
+  void refreshTerminalSessions();
+}
+
+async function selectTerminalSession(session) {
+  if (!session) return;
+  const nextKey = getTerminalSessionKey(session);
+  if (selectedTerminalSessionKey.value === nextKey && terminalSessionMessages.value.length > 0) {
+    return;
+  }
+  selectedTerminalSession.value = session;
+  terminalSessionMessages.value = [];
+  expandedTerminalMessageIndexes.value = [];
+  await loadSelectedTerminalSessionMessages(session, nextKey);
+}
+
+async function loadSelectedTerminalSessionMessages(session, expectedKey) {
+  const sourcePath = normalizeText(session?.sourcePath);
+  if (!sourcePath) {
+    terminalSessionMessages.value = [];
+    return;
+  }
+  const requestToken = terminalSessionMessageRequestToken + 1;
+  terminalSessionMessageRequestToken = requestToken;
+  terminalSessionMessagesLoading.value = true;
+  try {
+    const list = await getTerminalSessionMessages(
+      normalizeText(session?.providerId) || terminalProviderId.value,
+      sourcePath,
+      TERMINAL_SESSION_MESSAGE_LIMIT,
+    );
+    if (requestToken !== terminalSessionMessageRequestToken || selectedTerminalSessionKey.value !== expectedKey) {
+      return;
+    }
+    terminalSessionMessages.value = Array.isArray(list) ? list : [];
+    expandedTerminalMessageIndexes.value = [];
+  } catch (error) {
+    if (requestToken === terminalSessionMessageRequestToken) {
+      terminalSessionMessages.value = [];
+      message.error(error?.message || '读取会话聊天记录失败');
+    }
+  } finally {
+    if (requestToken === terminalSessionMessageRequestToken) {
+      terminalSessionMessagesLoading.value = false;
+    }
+  }
+}
+
+function formatTerminalMessageRole(role) {
+  const normalized = String(role || '').trim().toLowerCase();
+  if (normalized === 'assistant') return 'Assistant';
+  if (normalized === 'user') return 'User';
+  if (normalized === 'tool') return 'Tool';
+  if (normalized === 'system') return 'System';
+  return normalized || 'Message';
+}
+
+function getTerminalMessageRoleClass(role) {
+  const normalized = String(role || '').trim().toLowerCase();
+  if (['assistant', 'user', 'tool', 'system'].includes(normalized)) return normalized;
+  return 'unknown';
+}
+
+function formatTerminalMessageTime(timestamp) {
+  const numeric = Number(timestamp || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '';
+  const date = new Date(numeric);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('zh-CN', {
+    hour12: false,
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function getTerminalMessageLineCount(message) {
+  const text = String(message?.content || '');
+  if (!text) return 0;
+  return text.split(/\r\n|\r|\n/).reduce((sum, line) => {
+    const visualLines = Math.max(1, Math.ceil(Array.from(line || '').length / 88));
+    return sum + visualLines;
+  }, 0);
+}
+
+function isTerminalMessageCollapsible(message) {
+  return getTerminalMessageLineCount(message) > TERMINAL_SESSION_COLLAPSE_LINE_LIMIT;
+}
+
+function isTerminalMessageExpanded(index) {
+  return expandedTerminalMessageIndexes.value.includes(index);
+}
+
+function isTerminalMessageCollapsed(message, index) {
+  return isTerminalMessageCollapsible(message) && !isTerminalMessageExpanded(index);
+}
+
+function toggleTerminalMessageExpanded(index) {
+  const current = new Set(expandedTerminalMessageIndexes.value);
+  if (current.has(index)) {
+    current.delete(index);
+  } else {
+    current.add(index);
+  }
+  expandedTerminalMessageIndexes.value = Array.from(current).sort((left, right) => left - right);
+}
+
+async function launchSessionTerminal(session) {
+  const command = normalizeText(session?.resumeCommand);
+  if (!command) {
+    message.warning('该会话没有可恢复命令');
+    return;
+  }
+  const sessionKey = getTerminalSessionKey(session);
+  launchingSessionKey.value = sessionKey;
+  try {
+    await launchTerminalSession(command, normalizeText(session?.projectDir));
+    message.success('终端已打开');
+  } catch (error) {
+    message.error(error?.message || '打开终端失败');
+  } finally {
+    if (launchingSessionKey.value === sessionKey) {
+      launchingSessionKey.value = '';
+    }
+  }
+}
+
 async function refreshRecords() {
   if (!bridgeAvailable) return;
   loading.value = true;
   try {
     records.value = await listAdvancedProxyRequestRecords(120);
+    await focusRequestedRecord();
     await nextTick();
     queueTableMetricsSync();
   } catch (error) {
@@ -1345,6 +2133,24 @@ function openRecordDetail(record) {
   })();
 }
 
+async function focusRequestedRecord() {
+  const focusId = String(props.focusRecordId || '').trim();
+  if (!focusId) return;
+  const record = records.value.find(item => String(item?.id || '') === focusId);
+  if (record) {
+    openRecordDetail(record);
+    return;
+  }
+  try {
+    const detail = await getAdvancedProxyRequestRecord(focusId);
+    if (detail) {
+      openRecordDetail(detail);
+    }
+  } catch {
+    // The parent already owns the user-facing "not found" path.
+  }
+}
+
 function handleClear() {
   Modal.confirm({
     title: '清空请求记录？',
@@ -1374,7 +2180,14 @@ watch(
   async (nextOpen) => {
     if (nextOpen) {
       syncViewport();
-      await refreshRecords();
+      activePanel.value = props.focusRecordId ? 'records' : normalizePanel(props.initialPanel);
+      if (activePanel.value === 'sessions') {
+        await refreshTerminalSessions();
+      } else if (activePanel.value === 'records') {
+        await refreshRecords();
+      } else {
+        await refreshMCPSkillConfig();
+      }
       await nextTick();
       attachTableResizeObserver();
       queueTableMetricsSync();
@@ -1387,6 +2200,33 @@ watch(
     detachTableResizeObserver();
   },
   { immediate: true },
+);
+
+watch(
+  () => props.focusRecordId,
+  async () => {
+    if (!props.open) return;
+    if (props.focusRecordId) {
+      activePanel.value = 'records';
+    }
+    await focusRequestedRecord();
+  },
+);
+
+watch(
+  () => props.initialPanel,
+  async (panel) => {
+    if (!props.open || props.focusRecordId) return;
+    const normalized = normalizePanel(panel);
+    activePanel.value = normalized;
+    if (normalized === 'sessions') {
+      await refreshTerminalSessions();
+    } else if (normalized === 'records') {
+      await refreshRecords();
+    } else {
+      await refreshMCPSkillConfig();
+    }
+  },
 );
 
 watch(selectedRecord, (record) => {
@@ -1546,6 +2386,42 @@ onBeforeUnmount(() => {
   padding-bottom: 6px;
 }
 
+.request-records-mode-tabs {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid rgba(100, 124, 92, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.request-records-mode-tab {
+  height: 28px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #66745f;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.request-records-mode-tab.is-active {
+  color: #273b29;
+  background: linear-gradient(180deg, rgba(245, 251, 238, 0.98), rgba(225, 239, 207, 0.9));
+  box-shadow: 0 8px 18px rgba(83, 112, 63, 0.12);
+}
+
 .request-records-toolbar {
   display: flex;
   align-items: center;
@@ -1644,6 +2520,192 @@ onBeforeUnmount(() => {
   border-color: rgba(191, 106, 98, 0.2);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(251, 241, 238, 0.94));
   color: #a15147;
+}
+
+.mcp-skill-toolbar {
+  align-items: flex-start;
+}
+
+.mcp-skill-app-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid rgba(100, 124, 92, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.mcp-skill-app-tab {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.16s ease, box-shadow 0.16s ease, opacity 0.16s ease;
+}
+
+.mcp-skill-app-tab img {
+  width: 17px;
+  height: 17px;
+  object-fit: contain;
+  opacity: 0.68;
+}
+
+.mcp-skill-app-tab.is-active {
+  background: linear-gradient(180deg, rgba(236, 249, 228, 0.98), rgba(211, 232, 195, 0.94));
+  box-shadow: 0 8px 16px rgba(77, 116, 62, 0.12);
+}
+
+.mcp-skill-app-tab.is-active img {
+  opacity: 1;
+}
+
+.mcp-skill-board {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.mcp-skill-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 11px;
+  border-radius: 14px;
+  border: 1px solid rgba(103, 126, 111, 0.12);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 250, 245, 0.94)),
+    rgba(255, 255, 255, 0.92);
+  box-shadow: 0 12px 24px rgba(87, 105, 92, 0.05);
+}
+
+.mcp-skill-card.is-disabled-source {
+  opacity: 0.82;
+}
+
+.mcp-skill-subsection-title {
+  margin: 4px 2px 0;
+  color: #65756a;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.mcp-skill-card-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.mcp-skill-card-main strong,
+.mcp-skill-card-main span,
+.mcp-skill-card-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-skill-card-main strong {
+  color: #223128;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.mcp-skill-card-main span {
+  color: #516258;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.mcp-skill-card-main small {
+  color: #7b897f;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.mcp-skill-card-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.mcp-skill-state-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  min-width: 48px;
+  padding: 0 9px;
+  border: 1px solid rgba(111, 143, 121, 0.16);
+  border-radius: 999px;
+  background: rgba(246, 248, 244, 0.86);
+  color: #7a887f;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.mcp-skill-state-pill.is-on {
+  border-color: rgba(72, 122, 67, 0.22);
+  background: rgba(230, 244, 218, 0.9);
+  color: #294c2d;
+}
+
+.mcp-skill-card-button {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.mcp-skill-card-button-import {
+  border-color: rgba(72, 122, 67, 0.22);
+  background: linear-gradient(180deg, rgba(250, 253, 247, 0.98), rgba(232, 244, 222, 0.94));
+  color: #294c2d;
+}
+
+.mcp-skill-card-button-disable {
+  border-color: rgba(132, 142, 128, 0.2);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 246, 242, 0.94));
+  color: #59695f;
+}
+
+.mcp-skill-app-toggle {
+  width: 30px;
+  height: 26px;
+  border: 1px solid rgba(111, 143, 121, 0.16);
+  border-radius: 9px;
+  background: rgba(246, 248, 244, 0.86);
+  color: #7a887f;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.mcp-skill-app-toggle.is-on {
+  border-color: rgba(72, 122, 67, 0.28);
+  background: linear-gradient(180deg, rgba(236, 249, 228, 0.98), rgba(211, 232, 195, 0.94));
+  color: #294c2d;
+  box-shadow: 0 8px 16px rgba(77, 116, 62, 0.12);
+}
+
+.mcp-skill-empty {
+  min-height: 140px;
 }
 
 .request-records-overview {
@@ -2215,6 +3277,341 @@ onBeforeUnmount(() => {
   gap: 10px;
 }
 
+.terminal-sessions-board {
+  display: grid;
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(102, 122, 108, 0.12);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(246, 250, 244, 0.72)),
+    rgba(255, 255, 255, 0.76);
+  box-shadow: 0 18px 34px rgba(78, 103, 72, 0.08);
+}
+
+.terminal-session-list-pane,
+.terminal-session-chat-pane {
+  min-width: 0;
+  min-height: 520px;
+}
+
+.terminal-session-list-pane {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.terminal-session-chat-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid rgba(102, 122, 108, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.54);
+  padding: 10px;
+  overflow: hidden;
+}
+
+.terminal-provider-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 2px 2px 4px;
+}
+
+.terminal-provider-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.terminal-provider-tab {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid rgba(102, 122, 108, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.56);
+  color: #53634f;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.terminal-provider-tab img {
+  width: 20px;
+  height: 20px;
+  display: block;
+  object-fit: contain;
+}
+
+.terminal-provider-tab small {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  min-width: 15px;
+  max-width: 24px;
+  padding: 1px 4px;
+  border-radius: 999px;
+  background: #385a32;
+  color: #fff;
+  font-size: 9px;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.terminal-provider-tab.is-active {
+  border-color: rgba(96, 134, 72, 0.34);
+  background: linear-gradient(180deg, rgba(250, 255, 244, 0.98), rgba(232, 243, 218, 0.92));
+  color: #263c27;
+  box-shadow: 0 10px 22px rgba(83, 112, 63, 0.1);
+}
+
+.terminal-session-list-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.terminal-session-refresh-button {
+  flex: 0 0 auto;
+}
+
+.terminal-session-list {
+  display: grid;
+  gap: 7px;
+  align-content: start;
+  min-height: 0;
+  max-height: 456px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.terminal-session-list::-webkit-scrollbar,
+.terminal-session-message-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.terminal-session-list::-webkit-scrollbar-thumb,
+.terminal-session-message-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(118, 139, 119, 0.32);
+}
+
+.terminal-session-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 8px;
+  min-height: 54px;
+  padding: 8px 9px 8px 11px;
+  border: 1px solid rgba(102, 122, 108, 0.12);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(247, 250, 243, 0.66));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.terminal-session-item:hover,
+.terminal-session-item.is-active {
+  border-color: rgba(96, 134, 72, 0.34);
+  box-shadow: 0 12px 24px rgba(83, 112, 63, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.terminal-session-item.is-active {
+  background: linear-gradient(180deg, rgba(252, 255, 247, 0.98), rgba(235, 244, 226, 0.9));
+}
+
+.terminal-session-main {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  display: grid;
+  gap: 3px;
+  text-align: left;
+}
+
+.terminal-session-main strong,
+.terminal-session-main span,
+.terminal-session-main small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-session-main strong {
+  color: #263628;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.terminal-session-main span {
+  display: none;
+  color: #586858;
+  font-size: 12px;
+}
+
+.terminal-session-main small {
+  color: #7a8974;
+  font-size: 11px;
+}
+
+.terminal-session-open-button {
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(91, 122, 72, 0.18);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #355431;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.terminal-session-open-button:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.terminal-sessions-empty {
+  min-height: 220px;
+}
+
+.terminal-session-chat-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding-bottom: 9px;
+  border-bottom: 1px solid rgba(102, 122, 108, 0.1);
+}
+
+.terminal-session-chat-head div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.terminal-session-chat-head strong,
+.terminal-session-chat-head span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-session-chat-head strong {
+  color: #263628;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.terminal-session-chat-head span,
+.terminal-session-chat-head small {
+  color: #748170;
+  font-size: 11px;
+}
+
+.terminal-session-message-list {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  min-height: 0;
+  max-height: 462px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.terminal-session-message {
+  display: grid;
+  gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid rgba(102, 122, 108, 0.11);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.terminal-session-message.is-user {
+  border-color: rgba(72, 114, 151, 0.18);
+  background: rgba(244, 249, 255, 0.78);
+}
+
+.terminal-session-message.is-assistant {
+  border-color: rgba(99, 136, 83, 0.16);
+  background: rgba(250, 253, 247, 0.78);
+}
+
+.terminal-session-message.is-tool {
+  border-color: rgba(146, 115, 76, 0.18);
+  background: rgba(255, 250, 241, 0.78);
+}
+
+.terminal-session-message-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #7a8974;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.terminal-session-message p {
+  margin: 0;
+  color: #334037;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.terminal-session-message p.is-collapsed {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.terminal-session-message-toggle {
+  justify-self: start;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(102, 122, 108, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.62);
+  color: #466045;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.terminal-session-message-toggle:hover {
+  border-color: rgba(96, 134, 72, 0.32);
+  background: rgba(242, 249, 238, 0.9);
+}
+
+.terminal-session-chat-empty {
+  flex: 1;
+  min-height: 320px;
+}
+
 .request-record-detail-hero {
   display: flex;
   align-items: flex-start;
@@ -2324,8 +3721,15 @@ onBeforeUnmount(() => {
   border-color: rgba(107, 127, 114, 0.12);
 }
 
+.request-records-shell-dark .request-records-mode-tabs,
 .request-records-shell-dark .request-records-toolbar-pill,
 .request-records-shell-dark .request-records-board-chip,
+.request-records-shell-dark .mcp-skill-app-tabs,
+.request-records-shell-dark .mcp-skill-card,
+.request-records-shell-dark .terminal-provider-tab,
+.request-records-shell-dark .terminal-session-item,
+.request-records-shell-dark .terminal-session-chat-pane,
+.request-records-shell-dark .terminal-session-message,
 .request-records-shell-dark .request-record-detail-item,
 .request-records-shell-dark .request-record-detail-hero {
   border-color: rgba(133, 162, 145, 0.16);
@@ -2333,6 +3737,18 @@ onBeforeUnmount(() => {
     linear-gradient(180deg, rgba(28, 37, 32, 0.96), rgba(22, 30, 26, 0.94)),
     rgba(17, 24, 20, 0.92);
   box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
+}
+
+.request-records-shell-dark .request-records-mode-tab {
+  color: #a9b9af;
+}
+
+.request-records-shell-dark .request-records-mode-tab.is-active,
+.request-records-shell-dark .terminal-provider-tab.is-active {
+  color: #eef6ef;
+  background: linear-gradient(180deg, rgba(66, 88, 58, 0.92), rgba(42, 60, 38, 0.88));
+  border-color: rgba(154, 194, 132, 0.24);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.24);
 }
 
 .request-records-shell-dark .request-records-toolbar-pill-muted,
@@ -2348,6 +3764,63 @@ onBeforeUnmount(() => {
   opacity: 0.72;
 }
 
+.request-records-shell-dark .mcp-skill-card-main strong {
+  color: #eef6ef;
+}
+
+.request-records-shell-dark .mcp-skill-card-main span {
+  color: #c7d6cb;
+}
+
+.request-records-shell-dark .mcp-skill-card-main small {
+  color: #93a69a;
+}
+
+.request-records-shell-dark .mcp-skill-app-tab.is-active {
+  background: linear-gradient(180deg, rgba(66, 88, 58, 0.92), rgba(42, 60, 38, 0.88));
+}
+
+.request-records-shell-dark .mcp-skill-state-pill {
+  border-color: rgba(133, 162, 145, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: #9bac9f;
+}
+
+.request-records-shell-dark .mcp-skill-state-pill.is-on {
+  border-color: rgba(154, 194, 132, 0.24);
+  background: rgba(66, 88, 58, 0.52);
+  color: #edf6ee;
+}
+
+.request-records-shell-dark .mcp-skill-card-button-import {
+  border-color: rgba(154, 194, 132, 0.24);
+  background: rgba(255, 255, 255, 0.06);
+  color: #edf6ee;
+}
+
+.request-records-shell-dark .mcp-skill-card-button-disable {
+  border-color: rgba(133, 162, 145, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  color: #c7d6cb;
+}
+
+.request-records-shell-dark .mcp-skill-subsection-title {
+  color: #93a69a;
+}
+
+.request-records-shell-dark .mcp-skill-app-toggle {
+  border-color: rgba(133, 162, 145, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: #9bac9f;
+}
+
+.request-records-shell-dark .mcp-skill-app-toggle.is-on {
+  border-color: rgba(154, 194, 132, 0.28);
+  background: linear-gradient(180deg, rgba(66, 88, 58, 0.92), rgba(42, 60, 38, 0.88));
+  color: #edf6ee;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+}
+
 .request-records-shell-dark .request-records-toolbar-dot {
   background: #7fb486;
   box-shadow: 0 0 0 4px rgba(127, 180, 134, 0.12);
@@ -2355,12 +3828,89 @@ onBeforeUnmount(() => {
 
 .request-records-shell-dark .request-records-overview .request-records-metric,
 .request-records-shell-dark .request-records-board,
+.request-records-shell-dark .terminal-sessions-board,
 .request-records-shell-dark .request-records-empty {
   border-color: rgba(133, 162, 145, 0.16);
   background:
     linear-gradient(180deg, rgba(24, 33, 28, 0.96), rgba(18, 25, 21, 0.94)),
     rgba(17, 24, 20, 0.92);
   box-shadow: 0 18px 34px rgba(0, 0, 0, 0.22);
+}
+
+.request-records-shell-dark .terminal-provider-tab {
+  color: #a9b9af;
+}
+
+.request-records-shell-dark .terminal-provider-tab small {
+  background: rgba(172, 218, 145, 0.88);
+  color: #142017;
+}
+
+.request-records-shell-dark .terminal-session-item.is-active {
+  border-color: rgba(154, 194, 132, 0.24);
+  background: linear-gradient(180deg, rgba(51, 68, 47, 0.96), rgba(36, 51, 34, 0.92));
+}
+
+.request-records-shell-dark .terminal-session-main strong {
+  color: #eef6ef;
+}
+
+.request-records-shell-dark .terminal-session-main span {
+  color: #c7d6cb;
+}
+
+.request-records-shell-dark .terminal-session-main small {
+  color: #93a69a;
+}
+
+.request-records-shell-dark .terminal-session-open-button {
+  border-color: rgba(133, 162, 145, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: #d9eadb;
+}
+
+.request-records-shell-dark .terminal-session-chat-head {
+  border-bottom-color: rgba(133, 162, 145, 0.14);
+}
+
+.request-records-shell-dark .terminal-session-chat-head strong {
+  color: #eef6ef;
+}
+
+.request-records-shell-dark .terminal-session-chat-head span,
+.request-records-shell-dark .terminal-session-chat-head small,
+.request-records-shell-dark .terminal-session-message-meta {
+  color: #93a69a;
+}
+
+.request-records-shell-dark .terminal-session-message.is-user {
+  border-color: rgba(104, 151, 189, 0.22);
+  background: rgba(24, 36, 45, 0.88);
+}
+
+.request-records-shell-dark .terminal-session-message.is-assistant {
+  border-color: rgba(133, 162, 145, 0.18);
+  background: rgba(23, 34, 28, 0.88);
+}
+
+.request-records-shell-dark .terminal-session-message.is-tool {
+  border-color: rgba(176, 148, 101, 0.22);
+  background: rgba(42, 34, 23, 0.86);
+}
+
+.request-records-shell-dark .terminal-session-message p {
+  color: #d9eadb;
+}
+
+.request-records-shell-dark .terminal-session-message-toggle {
+  border-color: rgba(133, 162, 145, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: #d9eadb;
+}
+
+.request-records-shell-dark .terminal-session-message-toggle:hover {
+  border-color: rgba(154, 194, 132, 0.26);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .request-records-shell-dark .request-records-table-head {
@@ -2599,7 +4149,7 @@ onBeforeUnmount(() => {
   }
 }
 
-@media (max-width: 780px) {
+@media (max-width: 560px) {
   .request-records-overview,
   .request-record-detail-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2623,6 +4173,33 @@ onBeforeUnmount(() => {
   .request-records-toolbar-actions {
     width: 100%;
     justify-content: flex-end;
+  }
+
+  .mcp-skill-app-tabs {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .mcp-skill-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mcp-skill-card-actions {
+    justify-content: flex-start;
+  }
+
+  .terminal-sessions-board {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .terminal-session-list-pane,
+  .terminal-session-chat-pane {
+    min-height: auto;
+  }
+
+  .terminal-session-list,
+  .terminal-session-message-list {
+    max-height: 360px;
   }
 }
 </style>

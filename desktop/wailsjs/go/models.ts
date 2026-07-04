@@ -1,5 +1,59 @@
 export namespace main {
 	
+	export class AdvancedProxyActiveConnection {
+	    id: string;
+	    startedAt: string;
+	    updatedAt: string;
+	    sessionId: string;
+	    sessionOrdinal: number;
+	    appType: string;
+	    clientRoute: string;
+	    inboundEndpoint: string;
+	    outboundRoute: string;
+	    providerId: string;
+	    providerName: string;
+	    model: string;
+	    stream: boolean;
+	    status: string;
+	    stage: string;
+	    statusCode?: number;
+	    errorCode?: string;
+	    errorDetail?: string;
+	    upstreamUrl: string;
+	    upstreamEndpoint: string;
+	    remoteAddr: string;
+	    userAgent: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AdvancedProxyActiveConnection(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.startedAt = source["startedAt"];
+	        this.updatedAt = source["updatedAt"];
+	        this.sessionId = source["sessionId"];
+	        this.sessionOrdinal = source["sessionOrdinal"];
+	        this.appType = source["appType"];
+	        this.clientRoute = source["clientRoute"];
+	        this.inboundEndpoint = source["inboundEndpoint"];
+	        this.outboundRoute = source["outboundRoute"];
+	        this.providerId = source["providerId"];
+	        this.providerName = source["providerName"];
+	        this.model = source["model"];
+	        this.stream = source["stream"];
+	        this.status = source["status"];
+	        this.stage = source["stage"];
+	        this.statusCode = source["statusCode"];
+	        this.errorCode = source["errorCode"];
+	        this.errorDetail = source["errorDetail"];
+	        this.upstreamUrl = source["upstreamUrl"];
+	        this.upstreamEndpoint = source["upstreamEndpoint"];
+	        this.remoteAddr = source["remoteAddr"];
+	        this.userAgent = source["userAgent"];
+	    }
+	}
 	export class AdvancedProxyAppConfig {
 	    enabled: boolean;
 	    basePath: string;
@@ -1185,6 +1239,158 @@ export namespace main {
 	}
 	
 	
+	export class ManagedSkill {
+	    id: string;
+	    name: string;
+	    description: string;
+	    directory: string;
+	    readmePath: string;
+	    apps: ManagedAppToggles;
+	    source: string;
+	    updatedAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ManagedSkill(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.directory = source["directory"];
+	        this.readmePath = source["readmePath"];
+	        this.apps = this.convertValues(source["apps"], ManagedAppToggles);
+	        this.source = source["source"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ManagedAppToggles {
+	    claude: boolean;
+	    claudeDesktop: boolean;
+	    codex: boolean;
+	    gemini: boolean;
+	    opencode: boolean;
+	    openclaw: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ManagedAppToggles(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.claude = source["claude"];
+	        this.claudeDesktop = source["claudeDesktop"];
+	        this.codex = source["codex"];
+	        this.gemini = source["gemini"];
+	        this.opencode = source["opencode"];
+	        this.openclaw = source["openclaw"];
+	    }
+	}
+	export class ManagedMCPServer {
+	    id: string;
+	    name: string;
+	    description: string;
+	    type: string;
+	    command: string;
+	    args: string[];
+	    url: string;
+	    env: Record<string, string>;
+	    raw: Record<string, any>;
+	    apps: ManagedAppToggles;
+	    source: string;
+	    updatedAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ManagedMCPServer(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.type = source["type"];
+	        this.command = source["command"];
+	        this.args = source["args"];
+	        this.url = source["url"];
+	        this.env = source["env"];
+	        this.raw = source["raw"];
+	        this.apps = this.convertValues(source["apps"], ManagedAppToggles);
+	        this.source = source["source"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MCPSkillConfigSnapshot {
+	    configPath: string;
+	    mcp: ManagedMCPServer[];
+	    skills: ManagedSkill[];
+	
+	    static createFrom(source: any = {}) {
+	        return new MCPSkillConfigSnapshot(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.configPath = source["configPath"];
+	        this.mcp = this.convertValues(source["mcp"], ManagedMCPServer);
+	        this.skills = this.convertValues(source["skills"], ManagedSkill);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ManagedAppConfigAppliedFile {
 	    appId: string;
 	    fileId: string;
@@ -1335,6 +1541,9 @@ export namespace main {
 	}
 	
 	
+	
+	
+	
 	export class OutboundProxyConfig {
 	    mode: string;
 	    customUrl: string;
@@ -1390,6 +1599,109 @@ export namespace main {
 	        this.localStorageJson = source["localStorageJson"];
 	        this.localStorageKeyCount = source["localStorageKeyCount"];
 	    }
+	}
+	
+	export class TerminalSessionMessage {
+	    role: string;
+	    content: string;
+	    ts: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TerminalSessionMessage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role = source["role"];
+	        this.content = source["content"];
+	        this.ts = source["ts"];
+	    }
+	}
+	export class TerminalSessionMeta {
+	    providerId: string;
+	    sessionId: string;
+	    title: string;
+	    summary: string;
+	    projectDir: string;
+	    createdAt: number;
+	    lastActiveAt: number;
+	    sourcePath: string;
+	    resumeCommand: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TerminalSessionMeta(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.providerId = source["providerId"];
+	        this.sessionId = source["sessionId"];
+	        this.title = source["title"];
+	        this.summary = source["summary"];
+	        this.projectDir = source["projectDir"];
+	        this.createdAt = source["createdAt"];
+	        this.lastActiveAt = source["lastActiveAt"];
+	        this.sourcePath = source["sourcePath"];
+	        this.resumeCommand = source["resumeCommand"];
+	    }
+	}
+	export class TerminalSessionProviderSummary {
+	    id: string;
+	    label: string;
+	    total: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TerminalSessionProviderSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.label = source["label"];
+	        this.total = source["total"];
+	    }
+	}
+	export class TerminalSessionPage {
+	    providerId: string;
+	    page: number;
+	    pageSize: number;
+	    total: number;
+	    hasMore: boolean;
+	    providers: TerminalSessionProviderSummary[];
+	    sessions: TerminalSessionMeta[];
+	
+	    static createFrom(source: any = {}) {
+	        return new TerminalSessionPage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.providerId = source["providerId"];
+	        this.page = source["page"];
+	        this.pageSize = source["pageSize"];
+	        this.total = source["total"];
+	        this.hasMore = source["hasMore"];
+	        this.providers = this.convertValues(source["providers"], TerminalSessionProviderSummary);
+	        this.sessions = this.convertValues(source["sessions"], TerminalSessionMeta);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	
 	

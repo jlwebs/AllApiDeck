@@ -667,10 +667,34 @@ export function isAdvancedProxyRequestRecordBridgeAvailable() {
   return typeof app?.GetAdvancedProxyRequestRecords === 'function';
 }
 
+export function isAdvancedProxyActiveConnectionBridgeAvailable() {
+  const app = getAppBridge();
+  return typeof app?.GetAdvancedProxyActiveConnections === 'function';
+}
+
+export function isTerminalSessionBridgeAvailable() {
+  const app = getAppBridge();
+  return typeof app?.GetTerminalSessions === 'function'
+    && typeof app?.GetTerminalSessionMessages === 'function'
+    && typeof app?.LaunchTerminalSession === 'function';
+}
+
+export function isMCPSkillConfigBridgeAvailable() {
+  const app = getAppBridge();
+  return typeof app?.GetMCPSkillConfigSnapshot === 'function'
+    && typeof app?.SaveMCPSkillConfigSnapshot === 'function';
+}
+
 export async function listAdvancedProxyRequestRecords(limit = 120) {
   const app = getAppBridge();
   if (!app?.GetAdvancedProxyRequestRecords) return [];
   return app.GetAdvancedProxyRequestRecords(Math.max(1, Number(limit || 120)));
+}
+
+export async function listAdvancedProxyActiveConnections() {
+  const app = getAppBridge();
+  if (!app?.GetAdvancedProxyActiveConnections) return [];
+  return app.GetAdvancedProxyActiveConnections();
 }
 
 export async function getAdvancedProxyRequestRecord(recordId) {
@@ -683,6 +707,56 @@ export async function clearAdvancedProxyRequestRecords() {
   const app = getAppBridge();
   if (!app?.ClearAdvancedProxyRequestRecords) return true;
   return app.ClearAdvancedProxyRequestRecords();
+}
+
+export async function listTerminalSessions(providerId = 'codex', page = 1, pageSize = 15) {
+  const app = getAppBridge();
+  if (!app?.GetTerminalSessions) {
+    return {
+      providerId: String(providerId || 'codex').trim() || 'codex',
+      page: Number(page || 1) || 1,
+      pageSize: Number(pageSize || 15) || 15,
+      total: 0,
+      hasMore: false,
+      providers: [],
+      sessions: [],
+    };
+  }
+  return app.GetTerminalSessions(
+    String(providerId || 'codex').trim() || 'codex',
+    Math.max(1, Number(page || 1)),
+    Math.max(1, Number(pageSize || 15)),
+  );
+}
+
+export async function getTerminalSessionMessages(providerId = 'codex', sourcePath = '', limit = 80) {
+  const app = getAppBridge();
+  if (!app?.GetTerminalSessionMessages) return [];
+  return app.GetTerminalSessionMessages(
+    String(providerId || 'codex').trim() || 'codex',
+    String(sourcePath || '').trim(),
+    Math.max(1, Number(limit || 80)),
+  );
+}
+
+export async function launchTerminalSession(command, cwd = '') {
+  const app = getAppBridge();
+  if (!app?.LaunchTerminalSession) return false;
+  return app.LaunchTerminalSession(String(command || '').trim(), String(cwd || '').trim());
+}
+
+export async function getMCPSkillConfigSnapshot() {
+  const app = getAppBridge();
+  if (!app?.GetMCPSkillConfigSnapshot) {
+    return { configPath: '', mcp: [], skills: [] };
+  }
+  return app.GetMCPSkillConfigSnapshot();
+}
+
+export async function saveMCPSkillConfigSnapshot(snapshot) {
+  const app = getAppBridge();
+  if (!app?.SaveMCPSkillConfigSnapshot) return false;
+  return app.SaveMCPSkillConfigSnapshot(snapshot || { mcp: [], skills: [] });
 }
 
 export function getAdvancedProxyQueueProviders(config = null, scope = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, options = {}) {

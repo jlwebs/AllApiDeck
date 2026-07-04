@@ -46,6 +46,10 @@ export function ExtractChromeProfileTokens(arg1) {
   return window['go']['main']['App']['ExtractChromeProfileTokens'](arg1);
 }
 
+export function GetAdvancedProxyActiveConnections() {
+  return window['go']['main']['App']['GetAdvancedProxyActiveConnections']();
+}
+
 export function GetAdvancedProxyConfig() {
   return window['go']['main']['App']['GetAdvancedProxyConfig']();
 }
@@ -98,6 +102,10 @@ export function GetLaunchRecordKey() {
   return window['go']['main']['App']['GetLaunchRecordKey']();
 }
 
+export function GetMCPSkillConfigSnapshot() {
+  return window['go']['main']['App']['GetMCPSkillConfigSnapshot']();
+}
+
 export function GetOutboundProxyConfig() {
   return window['go']['main']['App']['GetOutboundProxyConfig']();
 }
@@ -112,6 +120,14 @@ export function GetPanelWindowBounds() {
 
 export function GetSidebarMode() {
   return window['go']['main']['App']['GetSidebarMode']();
+}
+
+export function GetTerminalSessionMessages(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetTerminalSessionMessages'](arg1, arg2, arg3);
+}
+
+export function GetTerminalSessions(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetTerminalSessions'](arg1, arg2, arg3);
 }
 
 export function HideToTray() {
@@ -132,6 +148,10 @@ export function ImportExtensionAccountsFromDir(arg1) {
 
 export function InitPanelWindow(arg1, arg2) {
   return window['go']['main']['App']['InitPanelWindow'](arg1, arg2);
+}
+
+export function LaunchTerminalSession(arg1, arg2) {
+  return window['go']['main']['App']['LaunchTerminalSession'](arg1, arg2);
 }
 
 export function ListDesktopLogFiles() {
@@ -212,6 +232,10 @@ export function ResetCircuitBreaker(arg1, arg2) {
 
 export function ResetPanelExpandedWidth() {
   return window['go']['main']['App']['ResetPanelExpandedWidth']();
+}
+
+export function SaveMCPSkillConfigSnapshot(arg1) {
+  return window['go']['main']['App']['SaveMCPSkillConfigSnapshot'](arg1);
 }
 
 export function SetAdvancedProxyConfig(arg1) {

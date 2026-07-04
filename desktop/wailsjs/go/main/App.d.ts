@@ -24,6 +24,8 @@ export function ExportTextFile(arg1:string,arg2:string):Promise<string>;
 
 export function ExtractChromeProfileTokens(arg1:main.ChromeProfileTokenRequest):Promise<main.ChromeProfileTokenResponse>;
 
+export function GetAdvancedProxyActiveConnections():Promise<Array<main.AdvancedProxyActiveConnection>>;
+
 export function GetAdvancedProxyConfig():Promise<main.AdvancedProxyConfig>;
 
 export function GetAdvancedProxyConfigFilePath():Promise<string>;
@@ -50,6 +52,8 @@ export function GetLaunchMode():Promise<string>;
 
 export function GetLaunchRecordKey():Promise<string>;
 
+export function GetMCPSkillConfigSnapshot():Promise<main.MCPSkillConfigSnapshot>;
+
 export function GetOutboundProxyConfig():Promise<main.OutboundProxyConfig>;
 
 export function GetPanelDockState():Promise<string>;
@@ -57,6 +61,10 @@ export function GetPanelDockState():Promise<string>;
 export function GetPanelWindowBounds():Promise<main.sidebarWindowBounds>;
 
 export function GetSidebarMode():Promise<boolean>;
+
+export function GetTerminalSessionMessages(arg1:string,arg2:string,arg3:number):Promise<Array<main.TerminalSessionMessage>>;
+
+export function GetTerminalSessions(arg1:string,arg2:number,arg3:number):Promise<main.TerminalSessionPage>;
 
 export function HideToTray():Promise<void>;
 
@@ -67,6 +75,8 @@ export function ImportExtensionAccounts():Promise<main.ExtensionImportResult>;
 export function ImportExtensionAccountsFromDir(arg1:string):Promise<main.ExtensionImportResult>;
 
 export function InitPanelWindow(arg1:number,arg2:number):Promise<void>;
+
+export function LaunchTerminalSession(arg1:string,arg2:string):Promise<boolean>;
 
 export function ListDesktopLogFiles():Promise<main.DesktopLogSnapshot>;
 
@@ -107,6 +117,8 @@ export function ResetBridgeImportSession():Promise<main.BridgeImportSnapshot>;
 export function ResetCircuitBreaker(arg1:string,arg2:string):Promise<boolean>;
 
 export function ResetPanelExpandedWidth():Promise<void>;
+
+export function SaveMCPSkillConfigSnapshot(arg1:main.MCPSkillConfigSnapshot):Promise<boolean>;
 
 export function SetAdvancedProxyConfig(arg1:main.AdvancedProxyConfig):Promise<main.AdvancedProxyConfig>;
 
