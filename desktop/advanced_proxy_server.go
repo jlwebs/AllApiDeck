@@ -4773,7 +4773,7 @@ func normalizeOpenAIResponsesToolCallOutputOrderForProvider(rawBody []byte) ([]b
 	return normalizedBody, true, nil
 }
 
-func shouldFlattenOpenAIResponsesToolHistoryForProvider(provider AdvancedProxyProvider) bool {
+func shouldBackfillOpenAIChatToolReasoningForProvider(provider AdvancedProxyProvider) bool {
 	baseURL := strings.ToLower(strings.TrimSpace(provider.BaseURL))
 	name := strings.ToLower(strings.TrimSpace(provider.Name))
 	model := strings.ToLower(strings.TrimSpace(provider.Model))
@@ -4781,98 +4781,8 @@ func shouldFlattenOpenAIResponsesToolHistoryForProvider(provider AdvancedProxyPr
 }
 
 func shouldUseOpenAIChatOnlyForResponsesProvider(provider AdvancedProxyProvider) bool {
-	return shouldFlattenOpenAIResponsesToolHistoryForProvider(provider) ||
+	return shouldBackfillOpenAIChatToolReasoningForProvider(provider) ||
 		normalizeOpenAIProviderDispatchRoute(provider.APIFormat) == "chat"
-}
-
-func flattenOpenAIResponsesToolHistoryForProvider(rawBody []byte) ([]byte, bool, error) {
-	requestBody := map[string]any{}
-	if err := json.Unmarshal(rawBody, &requestBody); err != nil {
-		return nil, false, err
-	}
-	inputItems, ok := requestBody["input"].([]any)
-	if !ok || len(inputItems) == 0 {
-		return rawBody, false, nil
-	}
-
-	flattenedItems := make([]any, 0, len(inputItems))
-	changed := false
-	for index, rawItem := range inputItems {
-		itemMap, _ := rawItem.(map[string]any)
-		switch {
-		case isOpenAIResponsesToolCallItem(itemMap):
-			flattenedItems = append(flattenedItems, buildOpenAIResponsesToolCallHistoryMessage(itemMap, index+1))
-			changed = true
-		case isOpenAIResponsesToolOutputItem(itemMap):
-			flattenedItems = append(flattenedItems, buildOpenAIResponsesToolOutputHistoryMessage(itemMap, index+1))
-			changed = true
-		default:
-			flattenedItems = append(flattenedItems, rawItem)
-		}
-	}
-	if !changed {
-		return rawBody, false, nil
-	}
-	requestBody["input"] = flattenedItems
-	flattenedBody, err := json.Marshal(requestBody)
-	if err != nil {
-		return nil, false, err
-	}
-	return flattenedBody, true, nil
-}
-
-func buildOpenAIResponsesToolCallHistoryMessage(itemMap map[string]any, fallbackIndex int) map[string]any {
-	callID := firstNonEmpty(
-		strings.TrimSpace(toStringValue(itemMap["call_id"])),
-		strings.TrimSpace(toStringValue(itemMap["id"])),
-	)
-	return map[string]any{
-		"id":      buildOpenAIResponsesInputItemID("msg", "tool_call_"+callID, fallbackIndex),
-		"type":    "message",
-		"role":    "user",
-		"content": []any{map[string]any{"type": "input_text", "text": openAIResponsesToolCallHistoryText(itemMap)}},
-	}
-}
-
-func buildOpenAIResponsesToolOutputHistoryMessage(itemMap map[string]any, fallbackIndex int) map[string]any {
-	callID := strings.TrimSpace(toStringValue(itemMap["call_id"]))
-	return map[string]any{
-		"id":      buildOpenAIResponsesInputItemID("msg", "tool_output_"+callID, fallbackIndex),
-		"type":    "message",
-		"role":    "user",
-		"content": []any{map[string]any{"type": "input_text", "text": openAIResponsesToolOutputHistoryText(itemMap)}},
-	}
-}
-
-func openAIResponsesToolCallHistoryText(itemMap map[string]any) string {
-	callID := firstNonEmpty(
-		strings.TrimSpace(toStringValue(itemMap["call_id"])),
-		strings.TrimSpace(toStringValue(itemMap["id"])),
-	)
-	name := strings.TrimSpace(toStringValue(itemMap["name"]))
-	arguments := firstNonEmptyExact(
-		stringifyJSON(itemMap["arguments"]),
-		stringifyJSON(itemMap["input"]),
-	)
-	text := strings.TrimSpace(fmt.Sprintf("Tool call recorded for context.\nName: %s\nCall ID: %s\nArguments: %s", name, callID, arguments))
-	if text == "" {
-		return "Tool call recorded for context."
-	}
-	return text
-}
-
-func openAIResponsesToolOutputHistoryText(itemMap map[string]any) string {
-	callID := strings.TrimSpace(toStringValue(itemMap["call_id"]))
-	output := firstNonEmptyExact(
-		openAIMessageContentToText(itemMap["output"]),
-		openAIMessageContentToText(itemMap["content"]),
-		toStringValue(itemMap["text"]),
-	)
-	text := strings.TrimSpace(fmt.Sprintf("Tool output recorded for context.\nCall ID: %s\nOutput: %s", callID, output))
-	if text == "" {
-		return "Tool output recorded for context."
-	}
-	return text
 }
 
 func isOpenAIResponsesToolCallItem(itemMap map[string]any) bool {
@@ -5455,26 +5365,6 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 						appType,
 						providerLabel,
 					)
-				}
-			}
-			if shouldFlattenOpenAIResponsesToolHistoryForProvider(provider) {
-				responsesBodyWithFlatHistory, flattenedToolHistory, flattenErr := flattenOpenAIResponsesToolHistoryForProvider(responsesBody)
-				if flattenErr != nil {
-					appendAdvancedProxyLogf(
-						"[OPENAI_PROXY_RESPONSES_TOOL_FLATTEN_FAIL] app=%s route=responses provider=%s detail=%s",
-						appType,
-						providerLabel,
-						previewAdvancedProxyText(flattenErr.Error(), 260),
-					)
-				} else {
-					responsesBody = responsesBodyWithFlatHistory
-					if flattenedToolHistory {
-						appendAdvancedProxyLogf(
-							"[OPENAI_PROXY_RESPONSES_TOOL_FLATTEN] app=%s route=responses provider=%s flattened=1",
-							appType,
-							providerLabel,
-						)
-					}
 				}
 			}
 			responsesBodyWithPromptCacheKey, promptCacheKey, promptCacheErr := ensureOpenAIResponsesPromptCacheKey(responsesBody)

@@ -2781,58 +2781,6 @@ func TestNormalizeOpenAIResponsesToolCallOutputOrderUsesCapturedCodexPayload(t *
 	}
 }
 
-func TestFlattenOpenAIResponsesToolHistoryForProviderUsesCapturedCodexPayload(t *testing.T) {
-	rawBody, err := os.ReadFile(filepath.Join("testdata", "advanced_proxy", "request_content.json"))
-	if err != nil {
-		t.Fatalf("read captured request fixture: %v", err)
-	}
-
-	flattenedBody, changed, err := flattenOpenAIResponsesToolHistoryForProvider(rawBody)
-	if err != nil {
-		t.Fatalf("flatten captured tool history: %v", err)
-	}
-	if !changed {
-		t.Fatalf("expected captured tool history to be flattened")
-	}
-
-	var body map[string]any
-	if err := json.Unmarshal(flattenedBody, &body); err != nil {
-		t.Fatalf("decode flattened captured request: %v", err)
-	}
-	inputItems, _ := body["input"].([]any)
-	if len(inputItems) != 58 {
-		t.Fatalf("expected captured input length 58, got %d", len(inputItems))
-	}
-	for index, rawItem := range inputItems {
-		itemMap, _ := rawItem.(map[string]any)
-		itemType := strings.TrimSpace(toStringValue(itemMap["type"]))
-		if itemType == "function_call" || itemType == "function_call_output" {
-			t.Fatalf("expected flattened input[%d] to remove tool history item, got %#v", index, itemMap)
-		}
-		if strings.TrimSpace(toStringValue(itemMap["role"])) == "assistant" {
-			contentItems, _ := itemMap["content"].([]any)
-			if len(contentItems) == 0 {
-				t.Fatalf("expected flattened assistant input[%d] to keep non-empty content, got %#v", index, itemMap)
-			}
-			for _, rawContent := range contentItems {
-				contentMap, _ := rawContent.(map[string]any)
-				if strings.TrimSpace(toStringValue(contentMap["text"])) == "" {
-					t.Fatalf("expected flattened assistant input[%d] to keep text content, got %#v", index, itemMap)
-				}
-			}
-		}
-	}
-	firstFlattenedToolCall, _ := inputItems[5].(map[string]any)
-	if got := strings.TrimSpace(toStringValue(firstFlattenedToolCall["role"])); got != "user" {
-		t.Fatalf("expected flattened tool call to become user context, got %#v", firstFlattenedToolCall)
-	}
-	firstContent, _ := firstFlattenedToolCall["content"].([]any)
-	firstBlock, _ := firstContent[0].(map[string]any)
-	if got := strings.TrimSpace(toStringValue(firstBlock["type"])); got != "input_text" {
-		t.Fatalf("expected flattened tool call content to use input_text, got %#v", firstFlattenedToolCall)
-	}
-}
-
 func TestForwardOpenAIRequestViaProviderOpencodeDeepSeekCapturedPayloadUsesChatOnly(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 
@@ -2883,26 +2831,33 @@ func TestForwardOpenAIRequestViaProviderOpencodeDeepSeekCapturedPayloadUsesChatO
 	if !ok || len(messages) == 0 {
 		t.Fatalf("expected captured Opencode request to include chat messages, got %#v", capturedBody)
 	}
-	flattenedToolContext := 0
+	assistantToolCalls := 0
+	toolMessages := 0
 	for index, rawMessage := range messages {
 		message, _ := rawMessage.(map[string]any)
-		if _, exists := message["tool_calls"]; exists {
-			t.Fatalf("expected captured Opencode request to flatten tool_calls at message[%d], got %#v", index, message)
-		}
-		if strings.TrimSpace(toStringValue(message["role"])) == "tool" {
-			t.Fatalf("expected captured Opencode request to avoid tool role at message[%d], got %#v", index, message)
-		}
-		if strings.TrimSpace(toStringValue(message["role"])) == "assistant" {
-			if strings.TrimSpace(toStringValue(message["content"])) == "" {
-				t.Fatalf("expected captured Opencode assistant message[%d] to include content, got %#v", index, message)
+		role := strings.TrimSpace(toStringValue(message["role"]))
+		switch role {
+		case "assistant":
+			toolCalls, _ := message["tool_calls"].([]any)
+			if len(toolCalls) == 0 {
+				continue
+			}
+			assistantToolCalls++
+			if strings.TrimSpace(toStringValue(message["reasoning_content"])) == "" {
+				t.Fatalf("expected captured Opencode assistant tool_call message[%d] to include reasoning_content, got %#v", index, message)
+			}
+		case "tool":
+			toolMessages++
+			if strings.TrimSpace(toStringValue(message["tool_call_id"])) == "" {
+				t.Fatalf("expected captured Opencode tool message[%d] to include tool_call_id, got %#v", index, message)
 			}
 		}
-		if strings.Contains(toStringValue(message["content"]), "Tool call recorded for context.") {
-			flattenedToolContext++
-		}
 	}
-	if flattenedToolContext == 0 {
-		t.Fatalf("expected captured Opencode tool history to become text context, got %#v", messages)
+	if assistantToolCalls == 0 {
+		t.Fatalf("expected captured Opencode tool history to preserve assistant tool_calls, got %#v", messages)
+	}
+	if toolMessages == 0 {
+		t.Fatalf("expected captured Opencode tool history to preserve tool output messages, got %#v", messages)
 	}
 	tools, ok := capturedBody["tools"].([]any)
 	if !ok || len(tools) == 0 {

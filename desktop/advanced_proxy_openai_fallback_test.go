@@ -189,7 +189,7 @@ func TestBuildOpenAIChatFallbackPlanDropsToolCallsWithoutOutputs(t *testing.T) {
 	}
 }
 
-func TestBuildOpenAIChatFallbackPlanFlattensCapturedOpencodeToolHistory(t *testing.T) {
+func TestBuildOpenAIChatFallbackPlanPreservesCapturedOpencodeToolHistory(t *testing.T) {
 	rawBody, err := os.ReadFile(filepath.Join("testdata", "advanced_proxy", "request_content.json"))
 	if err != nil {
 		t.Fatalf("read captured request fixture: %v", err)
@@ -221,21 +221,81 @@ func TestBuildOpenAIChatFallbackPlanFlattensCapturedOpencodeToolHistory(t *testi
 	if !ok || len(messages) == 0 {
 		t.Fatalf("messages missing: %#v", body["messages"])
 	}
-	flattenedToolContext := 0
-	for index, rawMessage := range messages {
+	toolCallMessages := 0
+	toolOutputMessages := 0
+	for _, rawMessage := range messages {
 		message, _ := rawMessage.(map[string]any)
-		if _, exists := message["tool_calls"]; exists {
-			t.Fatalf("expected Opencode/DeepSeek fallback to flatten tool_calls at message[%d], got %#v", index, message)
-		}
-		if strings.TrimSpace(toStringValue(message["role"])) == "tool" {
-			t.Fatalf("expected Opencode/DeepSeek fallback to avoid tool role at message[%d], got %#v", index, message)
-		}
-		if strings.Contains(toStringValue(message["content"]), "Tool call recorded for context.") {
-			flattenedToolContext++
+		switch strings.TrimSpace(toStringValue(message["role"])) {
+		case "assistant":
+			if toolCalls, ok := message["tool_calls"].([]any); ok && len(toolCalls) > 0 {
+				toolCallMessages++
+				if got := strings.TrimSpace(toStringValue(message["reasoning_content"])); got == "" {
+					t.Fatalf("expected Opencode/DeepSeek tool_call assistant to carry reasoning_content: %#v", message)
+				}
+			}
+		case "tool":
+			toolOutputMessages++
+			if strings.TrimSpace(toStringValue(message["tool_call_id"])) == "" {
+				t.Fatalf("expected tool output to retain tool_call_id: %#v", message)
+			}
 		}
 	}
-	if flattenedToolContext == 0 {
-		t.Fatalf("expected captured tool calls to become text context, got %#v", messages)
+	if toolCallMessages == 0 || toolOutputMessages == 0 {
+		t.Fatalf("expected captured tool history to stay structured, got %#v", messages)
+	}
+}
+
+func TestBuildOpenAIChatFallbackPlanKeepsFailedToolOutputStructuredForRetry(t *testing.T) {
+	raw := []byte(`{
+		"model":"deepseek-v4-flash-free",
+		"stream":true,
+		"input":[
+			{"type":"function_call","call_id":"call_00_wQPCP5MRh91PpU4zdKjO8653","name":"shell_command","arguments":"{\"command\":\"python \\\"$env:USERPROFILE\\\\gen_ggbond.py\\\"\",\"timeout_ms\":30000}"},
+			{"type":"function_call_output","call_id":"call_00_wQPCP5MRh91PpU4zdKjO8653","output":"Exit code: 1\nGenerated 93768 voxels\nUnicodeEncodeError: 'gbk' codec can't encode character '\\u2705' in position 0"},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"继续"}]}
+		],
+		"tools":[{"type":"function","name":"shell_command","description":"Run shell","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}],
+		"tool_choice":"auto"
+	}`)
+
+	plan, err := buildOpenAIChatFallbackPlanFromResponses(raw, AdvancedProxyProvider{
+		Name:      "Opencode",
+		BaseURL:   "https://opencode.ai/zen/v1",
+		APIKey:    "public",
+		Model:     "deepseek-v4-flash-free",
+		Enabled:   true,
+		APIFormat: "openai_responses",
+	})
+	if err != nil {
+		t.Fatalf("build fallback plan failed: %v", err)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(plan.ChatBody, &body); err != nil {
+		t.Fatalf("decode chat body failed: %v", err)
+	}
+	messages, _ := body["messages"].([]any)
+	if len(messages) < 3 {
+		t.Fatalf("expected structured tool history before retry prompt: %#v", messages)
+	}
+	assistant, _ := messages[0].(map[string]any)
+	if assistant["role"] != "assistant" {
+		t.Fatalf("expected assistant tool_call first, got %#v", messages)
+	}
+	toolCalls, ok := assistant["tool_calls"].([]any)
+	if !ok || len(toolCalls) != 1 {
+		t.Fatalf("expected one preserved tool_call, got %#v", assistant)
+	}
+	if got := strings.TrimSpace(toStringValue(assistant["reasoning_content"])); got == "" {
+		t.Fatalf("expected DeepSeek reasoning_content backfill: %#v", assistant)
+	}
+	toolMessage, _ := messages[1].(map[string]any)
+	if toolMessage["role"] != "tool" || toolMessage["tool_call_id"] != "call_00_wQPCP5MRh91PpU4zdKjO8653" {
+		t.Fatalf("expected matching tool output, got %#v", toolMessage)
+	}
+	userMessage, _ := messages[2].(map[string]any)
+	if userMessage["role"] != "user" || !strings.Contains(toStringValue(userMessage["content"]), "继续") {
+		t.Fatalf("expected retry prompt after tool output, got %#v", userMessage)
 	}
 }
 

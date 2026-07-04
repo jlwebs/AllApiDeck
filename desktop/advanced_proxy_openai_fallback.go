@@ -303,7 +303,7 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 	model := firstNonEmpty(strings.TrimSpace(provider.Model), strings.TrimSpace(toStringValue(requestBody["model"])))
 	plan.Model = model
 	plan.ScopeKey = resolveAdvancedProxyOpenAIProtocolPreferenceScopeKey(provider, model)
-	flattenToolHistory := shouldFlattenOpenAIResponsesToolHistoryForProvider(provider)
+	backfillToolReasoning := shouldBackfillOpenAIChatToolReasoningForProvider(provider)
 
 	blockers := make([]string, 0, 4)
 	if previousResponseID := strings.TrimSpace(toStringValue(requestBody["previous_response_id"])); previousResponseID != "" {
@@ -425,18 +425,6 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 				"content":      outputText,
 			})
 		}
-		appendFlattenedToolHistory := func(role string, text string) {
-			text = strings.TrimSpace(text)
-			if text == "" {
-				text = "Tool interaction recorded for context."
-			}
-			if pendingReasoning != "" {
-				text = joinNonEmptyLines("Reasoning recorded for context.\n"+pendingReasoning, text)
-				pendingReasoning = ""
-			}
-			flushPendingToolCalls()
-			appendMessage(role, text, nil, nil)
-		}
 		for _, rawItem := range typed {
 			itemMap, ok := rawItem.(map[string]any)
 			if !ok {
@@ -485,10 +473,6 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 					blockers = append(blockers, "function_call_missing_identity")
 					continue
 				}
-				if flattenToolHistory {
-					appendFlattenedToolHistory("user", openAIResponsesToolCallHistoryText(itemMap))
-					continue
-				}
 				queueToolCall(map[string]any{
 					"id":   toolCallID,
 					"type": "function",
@@ -508,10 +492,6 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 					openAIMessageContentToText(itemMap["content"]),
 					toStringValue(itemMap["text"]),
 				)
-				if flattenToolHistory {
-					appendFlattenedToolHistory("user", openAIResponsesToolOutputHistoryText(itemMap))
-					continue
-				}
 				appendToolOutput(toolCallID, outputText)
 			case "web_search_call":
 				continue
@@ -520,10 +500,6 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 				name := strings.TrimSpace(toStringValue(itemMap["name"]))
 				if toolCallID == "" || name == "" {
 					blockers = append(blockers, "custom_tool_call_missing_identity")
-					continue
-				}
-				if flattenToolHistory {
-					appendFlattenedToolHistory("user", openAIResponsesToolCallHistoryText(itemMap))
 					continue
 				}
 				arguments := firstNonEmptyExact(
@@ -549,10 +525,6 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 					openAIMessageContentToText(itemMap["content"]),
 					toStringValue(itemMap["text"]),
 				)
-				if flattenToolHistory {
-					appendFlattenedToolHistory("user", openAIResponsesToolOutputHistoryText(itemMap))
-					continue
-				}
 				appendToolOutput(toolCallID, outputText)
 			default:
 				flushPendingToolCalls()
@@ -561,12 +533,21 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 		}
 		flushPendingToolCalls()
 		if pendingReasoning != "" {
-			if flattenToolHistory {
-				appendMessage("user", "Reasoning recorded for context.\n"+pendingReasoning, nil, nil)
-			} else {
-				appendMessage("assistant", pendingReasoning, nil, map[string]any{
-					"reasoning_content": pendingReasoning,
-				})
+			appendMessage("assistant", pendingReasoning, nil, map[string]any{
+				"reasoning_content": pendingReasoning,
+			})
+		}
+		if backfillToolReasoning {
+			for _, message := range messages {
+				if strings.TrimSpace(toStringValue(message["role"])) != "assistant" {
+					continue
+				}
+				if _, ok := message["tool_calls"]; !ok {
+					continue
+				}
+				if strings.TrimSpace(toStringValue(message["reasoning_content"])) == "" {
+					message["reasoning_content"] = "tool call"
+				}
 			}
 		}
 	}
@@ -603,7 +584,7 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 	}
 
 	tools, toolBlockers, hostedWebSearch := convertResponsesRequestToolsToChat(requestBody["tools"])
-	if shouldFlattenOpenAIResponsesToolHistoryForProvider(provider) {
+	if shouldUseOpenAIChatOnlyForResponsesProvider(provider) {
 		hostedWebSearch = false
 	}
 	blockers = append(blockers, toolBlockers...)
