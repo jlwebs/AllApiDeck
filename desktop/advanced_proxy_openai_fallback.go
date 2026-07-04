@@ -1096,6 +1096,9 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 			if responseCreated {
 				return nil
 			}
+			if strings.TrimSpace(responseID) == "" {
+				responseID = fmt.Sprintf("resp_%d", time.Now().UnixNano())
+			}
 			responseCreated = true
 			response := map[string]any{
 				"id":         responseID,
@@ -1251,6 +1254,56 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 			}
 			if len(usage) > 0 {
 				response["usage"] = usage
+			}
+			if err := writeEvent("response.completed", map[string]any{"response": response}); err != nil {
+				return err
+			}
+			_, err := writer.Write([]byte("data: [DONE]\n\n"))
+			return err
+		}
+
+		emitIncomplete := func(reason string) error {
+			if responseCompleted {
+				return nil
+			}
+			responseCompleted = true
+			if strings.TrimSpace(reason) == "" {
+				reason = "stream_interrupted"
+			}
+			if !responseCreated {
+				if err := emitResponseCreated(); err != nil {
+					return err
+				}
+			}
+			if err := closeMessage(); err != nil {
+				return err
+			}
+			if err := closeTools(); err != nil {
+				return err
+			}
+			response := map[string]any{
+				"id":         firstNonEmpty(strings.TrimSpace(responseID), fmt.Sprintf("resp_%d", time.Now().UnixNano())),
+				"object":     "response",
+				"created_at": createdAt,
+				"model":      model,
+				"status":     "incomplete",
+				"output":     outputItems,
+				"incomplete_details": map[string]any{
+					"reason": reason,
+				},
+			}
+			if len(usage) > 0 {
+				response["usage"] = usage
+			}
+			appendAdvancedProxyLogf(
+				"[OPENAI_CHAT_TO_RESPONSES_STREAM_INCOMPLETE] response_id=%s model=%s reason=%s output_items=%d",
+				firstNonEmpty(strings.TrimSpace(responseID), "unknown"),
+				previewAdvancedProxyText(model, 120),
+				previewAdvancedProxyText(reason, 120),
+				len(outputItems),
+			)
+			if err := writeEvent("response.incomplete", map[string]any{"response": response}); err != nil {
+				return err
 			}
 			if err := writeEvent("response.completed", map[string]any{"response": response}); err != nil {
 				return err
@@ -1433,11 +1486,25 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 		}
 
 		if err := scanner.Err(); err != nil {
-			_ = writer.CloseWithError(err)
+			appendAdvancedProxyLogf(
+				"[OPENAI_CHAT_TO_RESPONSES_STREAM_ERROR] response_id=%s model=%s detail=%s",
+				firstNonEmpty(strings.TrimSpace(responseID), "unknown"),
+				previewAdvancedProxyText(model, 120),
+				previewAdvancedProxyText(err.Error(), 220),
+			)
+			if incompleteErr := emitIncomplete("stream_read_error"); incompleteErr != nil {
+				_ = writer.CloseWithError(incompleteErr)
+			}
 			return
 		}
-		if finished || responseCreated {
+		if finished {
 			if err := emitCompleted(); err != nil {
+				_ = writer.CloseWithError(err)
+			}
+			return
+		}
+		if responseCreated {
+			if err := emitIncomplete("stream_ended_without_done"); err != nil {
 				_ = writer.CloseWithError(err)
 			}
 		}

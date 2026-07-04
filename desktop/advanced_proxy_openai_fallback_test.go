@@ -257,3 +257,53 @@ func TestTransformOpenAIChatStreamToResponsesPreservesReasoningContent(t *testin
 		t.Fatalf("reasoning_content missing from transformed stream:\n%s", payload)
 	}
 }
+
+func TestTransformOpenAIChatStreamToResponsesMarksUnexpectedEOFIncomplete(t *testing.T) {
+	stream := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`data: {"id":"chatcmpl_cut","model":"deepseek-v4-flash-free","created":123,"choices":[{"delta":{"role":"assistant","content":"partial text"}}]}`,
+		`data: {"id":"chatcmpl_cut","model":"deepseek-v4-flash-free","created":123,"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"shell_command","arguments":"{\"command\":\"pwd\"}"}}]}}]}`,
+		``,
+	}, "\n\n")))
+
+	body, err := io.ReadAll(transformOpenAIChatStreamToResponsesStream(stream, "deepseek-v4-flash-free"))
+	if err != nil {
+		t.Fatalf("read transformed stream failed: %v", err)
+	}
+	payload := string(body)
+	if !strings.Contains(payload, `event: response.incomplete`) {
+		t.Fatalf("expected incomplete event for truncated chat stream:\n%s", payload)
+	}
+	if !strings.Contains(payload, `"status":"incomplete"`) {
+		t.Fatalf("expected completed envelope to carry incomplete status:\n%s", payload)
+	}
+	if !strings.Contains(payload, `"reason":"stream_ended_without_done"`) {
+		t.Fatalf("expected stream_ended_without_done reason:\n%s", payload)
+	}
+	if !strings.Contains(payload, `event: response.completed`) || !strings.Contains(payload, `data: [DONE]`) {
+		t.Fatalf("expected stream to close with completed envelope and DONE marker:\n%s", payload)
+	}
+}
+
+func TestTransformOpenAIChatStreamToResponsesConvertsReadErrorToIncomplete(t *testing.T) {
+	stream := &failingReadCloser{
+		chunks: [][]byte{
+			[]byte("data: {\"id\":\"chatcmpl_err\",\"model\":\"deepseek-v4-flash-free\",\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"),
+		},
+		err: io.ErrUnexpectedEOF,
+	}
+
+	body, err := io.ReadAll(transformOpenAIChatStreamToResponsesStream(stream, "deepseek-v4-flash-free"))
+	if err != nil {
+		t.Fatalf("read transformed stream should not surface upstream read error: %v", err)
+	}
+	payload := string(body)
+	if !strings.Contains(payload, `event: response.incomplete`) {
+		t.Fatalf("expected incomplete event for read error:\n%s", payload)
+	}
+	if !strings.Contains(payload, `"reason":"stream_read_error"`) {
+		t.Fatalf("expected stream_read_error reason:\n%s", payload)
+	}
+	if !strings.Contains(payload, `data: [DONE]`) {
+		t.Fatalf("expected DONE marker after read error conversion:\n%s", payload)
+	}
+}

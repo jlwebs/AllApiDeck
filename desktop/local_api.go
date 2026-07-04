@@ -889,6 +889,16 @@ func buildOpenAIChatCheckEndpointCandidates(raw string) []string {
 		}
 	}
 
+	inputLower := strings.ToLower(input)
+	if strings.HasSuffix(inputLower, "/chat/completions") ||
+		regexp.MustCompile(`/api/v\d+$`).MatchString(inputLower) ||
+		regexp.MustCompile(`/v\d+$`).MatchString(inputLower) {
+		seen := map[string]struct{}{}
+		candidates := make([]string, 0, 1)
+		addOpenAIChatEndpointCandidates(&candidates, seen, input)
+		return candidates
+	}
+
 	bases := []string{input}
 	stripped := stripKnownCheckEndpointSuffix(input)
 	if stripped != "" && stripped != input {
@@ -899,23 +909,27 @@ func buildOpenAIChatCheckEndpointCandidates(raw string) []string {
 	candidates := make([]string, 0, 6)
 
 	for _, base := range bases {
-		lowerBase := strings.ToLower(base)
-		switch {
-		case strings.HasSuffix(lowerBase, "/chat/completions"):
-			addCheckEndpointCandidate(&candidates, seen, base)
-		case regexp.MustCompile(`/api/v\d+$`).MatchString(lowerBase) || regexp.MustCompile(`/v\d+$`).MatchString(lowerBase):
-			addCheckEndpointCandidate(&candidates, seen, base+"/chat/completions")
-		case strings.HasSuffix(lowerBase, "/api"):
-			addCheckEndpointCandidate(&candidates, seen, base+"/v1/chat/completions")
-			addCheckEndpointCandidate(&candidates, seen, base+"/chat/completions")
-		default:
-			addCheckEndpointCandidate(&candidates, seen, base+"/v1/chat/completions")
-			addCheckEndpointCandidate(&candidates, seen, base+"/chat/completions")
-			addCheckEndpointCandidate(&candidates, seen, base+"/api/v1/chat/completions")
-		}
+		addOpenAIChatEndpointCandidates(&candidates, seen, base)
 	}
 
 	return candidates
+}
+
+func addOpenAIChatEndpointCandidates(candidates *[]string, seen map[string]struct{}, base string) {
+	lowerBase := strings.ToLower(base)
+	switch {
+	case strings.HasSuffix(lowerBase, "/chat/completions"):
+		addCheckEndpointCandidate(candidates, seen, base)
+	case regexp.MustCompile(`/api/v\d+$`).MatchString(lowerBase) || regexp.MustCompile(`/v\d+$`).MatchString(lowerBase):
+		addCheckEndpointCandidate(candidates, seen, base+"/chat/completions")
+	case strings.HasSuffix(lowerBase, "/api"):
+		addCheckEndpointCandidate(candidates, seen, base+"/v1/chat/completions")
+		addCheckEndpointCandidate(candidates, seen, base+"/chat/completions")
+	default:
+		addCheckEndpointCandidate(candidates, seen, base+"/v1/chat/completions")
+		addCheckEndpointCandidate(candidates, seen, base+"/chat/completions")
+		addCheckEndpointCandidate(candidates, seen, base+"/api/v1/chat/completions")
+	}
 }
 
 func buildResponsesCheckCandidates(payload normalizedCheckKeyPayload) []string {

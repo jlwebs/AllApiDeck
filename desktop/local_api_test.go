@@ -76,19 +76,19 @@ func TestBuildCheckRequestHeadersAppliesExpandedClaudeMappedHeaders(t *testing.T
 		t.Fatalf("unexpected mapping match: %q", match)
 	}
 	for key, want := range map[string]string{
-		"User-Agent":                                 "claude-cli/2.1.129 (external, cli)",
-		"X-App":                                      "cli",
-		"Anthropic-Version":                          "2023-06-01",
-		"Anthropic-Beta":                             "claude-code-20250219,interleaved-thinking-2025-05-14",
+		"User-Agent":        "claude-cli/2.1.129 (external, cli)",
+		"X-App":             "cli",
+		"Anthropic-Version": "2023-06-01",
+		"Anthropic-Beta":    "claude-code-20250219,interleaved-thinking-2025-05-14",
 		"Anthropic-Dangerous-Direct-Browser-Access": "true",
-		"X-Stainless-Arch":                           "x64",
-		"X-Stainless-Lang":                           "js",
-		"X-Stainless-Os":                             "Windows",
-		"X-Stainless-Package-Version":                "0.93.0",
-		"X-Stainless-Retry-Count":                    "0",
-		"X-Stainless-Runtime":                        "node",
-		"X-Stainless-Runtime-Version":                "v24.3.0",
-		"X-Stainless-Timeout":                        "600",
+		"X-Stainless-Arch":                          "x64",
+		"X-Stainless-Lang":                          "js",
+		"X-Stainless-Os":                            "Windows",
+		"X-Stainless-Package-Version":               "0.93.0",
+		"X-Stainless-Retry-Count":                   "0",
+		"X-Stainless-Runtime":                       "node",
+		"X-Stainless-Runtime-Version":               "v24.3.0",
+		"X-Stainless-Timeout":                       "600",
 	} {
 		if headers[key] != want {
 			t.Fatalf("expected header %s=%q, got %#v", key, want, headers)
@@ -121,14 +121,14 @@ func TestHandleLocalProxyGetForwardsCompatUidHeaders(t *testing.T) {
 		t.Fatalf("unexpected status: %d body=%s", resp.Status, resp.Body)
 	}
 	for key, want := range map[string]string{
-		"Authorization":  "Bearer sk-test",
-		"One-Api-User":   "5004",
-		"New-Api-User":   "5004",
-		"Veloera-User":   "5004",
-		"Voapi-User":     "5004",
-		"User-Id":        "5004",
-		"Rix-Api-User":   "5004",
-		"Neo-Api-User":   "5004",
+		"Authorization": "Bearer sk-test",
+		"One-Api-User":  "5004",
+		"New-Api-User":  "5004",
+		"Veloera-User":  "5004",
+		"Voapi-User":    "5004",
+		"User-Id":       "5004",
+		"Rix-Api-User":  "5004",
+		"Neo-Api-User":  "5004",
 	} {
 		if got := capturedHeaders.Get(key); got != want {
 			t.Fatalf("expected header %s=%q, got %q", key, want, got)
@@ -167,6 +167,19 @@ func TestBuildCheckEndpointCandidatesAnyrouterOrder(t *testing.T) {
 	}
 	if !hasResponses {
 		t.Fatalf("expected responses candidate in %#v", got)
+	}
+}
+
+func TestBuildOpenAIChatCheckEndpointCandidatesKeepsVersionedPathPinned(t *testing.T) {
+	got := buildOpenAIChatCheckEndpointCandidates("https://opencode.ai/zen/v1")
+	want := []string{"https://opencode.ai/zen/v1/chat/completions"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected candidates:\n got=%#v\nwant=%#v", got, want)
+	}
+	for _, candidate := range got {
+		if strings.Contains(candidate, "/zen/chat/completions") || strings.Contains(candidate, "/zen/api/v1/chat/completions") {
+			t.Fatalf("unexpected stripped Opencode candidate: %s", candidate)
+		}
 	}
 }
 
