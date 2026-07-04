@@ -46,4 +46,33 @@ await api.fetchModelList('https://jiuuij.de5.net', 'sk-test', { uid: 'not-a-numb
 assert.equal(requests.length > 0, true);
 assert.doesNotMatch(requests[0].input, /[?&]uid=/);
 
+requests.length = 0;
+globalThis.fetch = async (input, init = {}) => {
+  requests.push({
+    input: String(input),
+    headers: init?.headers || {},
+  });
+  return {
+    ok: false,
+    status: 401,
+    async text() {
+      return JSON.stringify({ error: 'unauthorized' });
+    },
+  };
+};
+globalThis.window.fetch = globalThis.fetch;
+
+await assert.rejects(
+  api.fetchModelList('https://jiuuij.de5.net', 'sk-test', { uid: '5004' }),
+  error => {
+    assert.match(error.message, /unauthorized|401/);
+    assert.equal(Array.isArray(error.modelListDiagnostics?.attempts), true);
+    assert.equal(error.modelListDiagnostics.attempts.some(attempt => attempt.status === 401), true);
+    assert.match(error.modelListDiagnostics.replayRequest.proxyUrl, /\/api\/proxy-get\?url=/);
+    assert.equal(error.modelListDiagnostics.replayRequest.headers.Authorization, 'Bearer sk-test');
+    assert.equal(error.modelListDiagnostics.traceLines.some(line => line.includes('HTTP_401')), true);
+    return true;
+  }
+);
+
 console.log('PASS tests/fetchModelList.test.mjs');

@@ -13,7 +13,7 @@
         <div class="settings-tab-content">
           <p class="settings-section-title-row">
             <b>界面主题</b>
-            <a-tooltip placement="topLeft" overlayClassName="settings-info-tooltip">
+            <a-tooltip trigger="hover" placement="topLeft" overlayClassName="settings-info-tooltip">
               <template #title>
                 <div class="settings-info-tooltip-copy">
                   <div>同一套主题会同步应用到批量检测、站点管理、密钥管理。</div>
@@ -45,7 +45,7 @@
           </div>
           <p class="settings-section-title-row">
             <b>代理模式</b>
-            <a-tooltip placement="topLeft" overlayClassName="settings-info-tooltip">
+            <a-tooltip trigger="hover" placement="topLeft" overlayClassName="settings-info-tooltip">
               <template #title>
                 <div class="settings-info-tooltip-copy">
                   <div>默认使用系统代理，显式集成到桌面端 Go 后端请求链路。</div>
@@ -72,19 +72,26 @@
             </div>
           </a-space>
 
-          <p><b>桌面端提取方式</b></p>
+          <p class="settings-section-title-row">
+            <b>桌面端提取方式</b>
+            <a-tooltip trigger="hover" placement="topLeft" overlayClassName="settings-info-tooltip">
+              <template #title>
+                <div class="settings-info-tooltip-copy">
+                  <div>Profile 文件模式：从本机 Chrome 默认 Profile 的本地存储文件读取登录态，例如 auth_token、auth_user、refresh_token，再直接请求站点 Token 列表。不主动拉起受控浏览器。</div>
+                  <div>CDP 重开模式：检测失败站点后，打开或重启 Chrome/Edge 受控浏览器，附着到 CDP 会话，在真实浏览器上下文里读取登录态并轮询抓取 Token。会使用 shadow / remote debugging 这套流程。</div>
+                  <div>桌面端会严格按所选模式执行，不自动切换到另一种模式。</div>
+                </div>
+              </template>
+              <button type="button" class="settings-info-icon" aria-label="桌面端提取方式说明">i</button>
+            </a-tooltip>
+          </p>
           <a-space direction="vertical" style="width: 100%; margin-bottom: 16px;">
             <a-radio-group :value="desktopTokenSourceMode" :disabled="!isWailsRuntime" @change="handleDesktopTokenSourceModeChange">
               <a-radio value="profile_file">Profile 文件</a-radio>
               <a-radio value="cdp_restart">CDP 重开模式</a-radio>
             </a-radio-group>
-            <div class="settings-muted-text">
-              <div>Profile 文件模式：从本机 Chrome 默认 Profile 的本地存储文件读取登录态，例如 auth_token、auth_user、refresh_token，再直接请求站点 Token 列表。不主动拉起受控浏览器。</div>
-              <div>CDP 重开模式：检测失败站点后，打开或重启 Chrome/Edge 受控浏览器，附着到 CDP 会话，在真实浏览器上下文里读取登录态并轮询抓取 Token。会使用 shadow / remote debugging 这套流程。</div>
-              <div>桌面端会严格按所选模式执行，不自动切换到另一种模式。</div>
-              <div v-if="!isWailsRuntime">该设置仅在桌面端 EXE 生效，浏览器模式仍走前端直连。</div>
-              <div v-else-if="desktopTokenSourceMode === 'profile_file' && !effectiveChromeProfileAuthAvailable">当前桌面端尚未暴露 Profile 文件提取接口，无法使用该模式。</div>
-            </div>
+            <div v-if="!isWailsRuntime" class="settings-muted-text">该设置仅在桌面端 EXE 生效，浏览器模式仍走前端直连。</div>
+            <div v-else-if="desktopTokenSourceMode === 'profile_file' && !effectiveChromeProfileAuthAvailable" class="settings-muted-text">当前桌面端尚未暴露 Profile 文件提取接口，无法使用该模式。</div>
           </a-space>
 
           <p><b>界面选项</b></p>
@@ -126,7 +133,18 @@
             />
           </a-space>
 
-          <p class="settings-section-title settings-section-title-spaced"><b>User-Agent 映射</b></p>
+          <p class="settings-section-title settings-section-title-spaced settings-section-title-row">
+            <b>User-Agent 映射</b>
+            <a-tooltip trigger="hover" placement="topLeft" overlayClassName="settings-info-tooltip">
+              <template #title>
+                <div class="settings-info-tooltip-copy">
+                  <div>支持纯 UA 文本，也支持多行或分号分隔的 `Header: Value`。</div>
+                  <div>默认规则：`gpt` 会注入 Codex Desktop 的 `Originator` 和 `User-Agent`；`claude` 会注入 `claude-cli`、`X-App`、`anthropic-*` 与 `X-Stainless-*` 头。</div>
+                </div>
+              </template>
+              <button type="button" class="settings-info-icon" aria-label="User-Agent 映射说明">i</button>
+            </a-tooltip>
+          </p>
           <div class="ua-mapping-card">
             <div class="ua-mapping-head">
               <div class="ua-mapping-caption">按模型名包含匹配，命中后把右侧内容作为请求头块应用到快测请求。</div>
@@ -162,10 +180,6 @@
               >
                 删除
               </a-button>
-            </div>
-            <div class="settings-muted-text">
-              <div>支持纯 UA 文本，也支持多行或分号分隔的 `Header: Value`。</div>
-              <div>默认规则：`gpt` 会注入 Codex Desktop 的 `Originator` 和 `User-Agent`；`claude` 会注入 `claude-cli`、`X-App`、`anthropic-*` 与 `X-Stainless-*` 头。</div>
             </div>
           </div>
         </div>

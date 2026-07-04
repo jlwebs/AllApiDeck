@@ -19,7 +19,7 @@
               v-if="!isModelProbeWindow"
               current-page="batch":is-dark-mode="isDarkMode"
               @experimental="showExperimentalFeatures = true"
-              @request-records="showRequestRecordsDrawer = true"
+              @request-records="openRequestRecordsDrawer"
               @settings="openSettingsModal"
             />
 
@@ -680,6 +680,7 @@
             <AdvancedProxyRequestRecordsDrawer
               v-model:open="showRequestRecordsDrawer"
               :is-dark-mode="isDarkMode"
+              :initial-panel="requestRecordsInitialPanel"
             />
           </div>
         </div>
@@ -805,6 +806,7 @@ const bridgeImportLastClientPing = ref('');
 let bridgeImportPollTimer = null;
 const showAppSettingsModal = ref(false);
 const showRequestRecordsDrawer = ref(false);
+const requestRecordsInitialPanel = ref('records');
 const settingsApiUrl = ref('');
 const settingsApiKey = ref('');
 const localCacheList = ref([]);
@@ -861,6 +863,16 @@ const appDescription = ref(['支持 OpenAI / Claude / Gemini / NewAPI 等多种�
 const openSettingsModal = () => {
   showAppSettingsModal.value = true;
 };
+
+function openRequestRecordsDrawer(panel = 'records') {
+  requestRecordsInitialPanel.value = normalizeRequestRecordsPanel(panel);
+  showRequestRecordsDrawer.value = true;
+}
+
+function normalizeRequestRecordsPanel(panel) {
+  const normalized = String(panel || 'records').trim().toLowerCase();
+  return ['sessions', 'records', 'mcp', 'skills'].includes(normalized) ? normalized : 'records';
+}
 
 const closeSettingsModal = () => {
   showAppSettingsModal.value = false;

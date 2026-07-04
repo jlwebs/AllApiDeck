@@ -20,7 +20,7 @@
               current-page="sites"
               :is-dark-mode="isDarkMode"
               @experimental="handleExperimental"
-              @request-records="showRequestRecordsDrawer = true"
+              @request-records="openRequestRecordsDrawer"
               @settings="handleSettings"
             />
 
@@ -82,6 +82,18 @@
                       </button>
                     </a-tooltip>
                     <div class="site-group-site-filter site-group-site-filter-header">
+                      <a-tooltip :title="hideDisabled ? '显示灰色无效站点' : '隐藏灰色无效站点'">
+                        <button
+                          type="button"
+                          class="site-group-site-filter-toggle"
+                          :class="{ 'site-group-site-filter-toggle-active': hideDisabled }"
+                          :aria-pressed="hideDisabled ? 'true' : 'false'"
+                          @click="toggleHideDisabledSites"
+                        >
+                          <EyeInvisibleOutlined v-if="hideDisabled" />
+                          <EyeOutlined v-else />
+                        </button>
+                      </a-tooltip>
                       <a-input
                         v-model:value="siteGroupSiteFilterDisplayValue"
                         size="small"
@@ -200,25 +212,29 @@
                   @check="handleTreeCheck"
                 >
                   <template #title="node">
-                    <div class="custom-tree-node-wrapper tree-provider-node-wrapper" style="display: flex; align-items: center;">
+                    <div
+                      class="custom-tree-node-wrapper tree-provider-node-wrapper"
+                      :class="{ 'site-tree-model-missing': node.siteNeedsModelDebug }"
+                      style="display: flex; align-items: center;"
+                    >
                       <div class="provider-tree-label">
                         <button
                           v-if="node.isSiteRoot && node.providerSiteUrl"
                           type="button"
-                          :class="['provider-tree-link', { 'is-grey': node.siteDisabled }]"
+                          :class="['provider-tree-link', { 'is-grey': node.siteDisabled || node.siteNeedsModelDebug }]"
                           @click.stop="openSiteUrl(node.providerSiteUrl)"
                         >
                           {{ node.providerTitleText }}
                         </button>
                         <span
                           v-if="node.isSiteRoot"
-                          :class="['custom-tree-node', node.titleClass]"
+                          :class="['custom-tree-node', node.titleClass, { 'tree-site-model-missing': node.siteNeedsModelDebug }]"
                         >
                           {{ node.providerStatusText }}
                         </span>
                         <span
                           v-else
-                          :class="['custom-tree-node', node.titleClass]"
+                          :class="['custom-tree-node', node.titleClass, { 'tree-site-model-missing': node.siteNeedsModelDebug }]"
                         >
                           {{ node.title }}
                         </span>
@@ -234,6 +250,9 @@
                         </a-popconfirm>
                         <span v-if="node.isSiteRoot && node.siteNote" class="site-tree-note-badge">
                           {{ node.siteNote }}
+                        </span>
+                        <span v-if="getProviderDiagnosticSummary(node)" class="provider-tree-diagnostic-line">
+                          {{ getProviderDiagnosticSummary(node) }}
                         </span>
                       </div>
                       <span v-if="node.isModelDiscovering || node.isBrowserPending" class="tree-node-pending-hint">
@@ -283,7 +302,7 @@
                           </button>
                         </a-popconfirm>
                       </div>
-                      <div v-if="isProviderDiagnosticTreeNode(node)" class="provider-tree-actions">
+                      <div v-if="isProviderDiagnosticTreeNode(node) || node.siteNeedsModelDebug" class="provider-tree-actions">
                         <a-popover trigger="hover" placement="rightTop" overlayClassName="provider-diagnostic-popover">
                           <template #content>
                             <div class="provider-diagnostic-menu">
@@ -343,6 +362,7 @@
     <AdvancedProxyRequestRecordsDrawer
       v-model:open="showRequestRecordsDrawer"
       :is-dark-mode="isDarkMode"
+      :initial-panel="requestRecordsInitialPanel"
     />
     <AdvancedProxyModal v-model:open="showExperimentalFeatures" />
   </ConfigProvider>
@@ -360,13 +380,15 @@ import {
   CheckCircleOutlined,
   MessageOutlined,
   DeleteOutlined,
+  EyeInvisibleOutlined,
+  EyeOutlined,
 } from '@ant-design/icons-vue';
 import AppHeader from './AppHeader.vue';
 import AdvancedProxyModal from './AdvancedProxyModal.vue';
 import AdvancedProxyRequestRecordsDrawer from './AdvancedProxyRequestRecordsDrawer.vue';
 import TextPromptModal from './TextPromptModal.vue';
 import SystemSettingsModal from './SystemSettingsModal.vue';
-import { fetchModelList } from '../utils/api.js';
+import { buildModelEndpointCandidates, fetchModelList } from '../utils/api.js';
 import { openUrlInSystemBrowser } from '../utils/runtimeApi.js';
 import { loadDesktopTokenSourceMode, loadTreeExpandedSetting } from '../utils/systemSettings.js';
 import { refreshCachedSiteTokens } from '../utils/siteTokenRefresh.js';
@@ -410,6 +432,7 @@ const textPromptValue = ref('');
 const textPromptSiteCacheKey = ref('');
 const showAppSettingsModal = ref(false);
 const showRequestRecordsDrawer = ref(false);
+const requestRecordsInitialPanel = ref('records');
 const globalTreeExpanded = ref(loadTreeExpandedSetting(true));
 const desktopTokenSourceMode = ref(loadDesktopTokenSourceMode());
 const isDarkMode = ref(false);
@@ -465,6 +488,34 @@ const syncThemeState = () => {
 
 const disabledCount = computed(() => records.value.filter(item => item.disabled).length);
 const customTokenCount = computed(() => records.value.reduce((sum, item) => sum + (item.customTokens?.length || 0), 0));
+const greyTreeNodeTitleClassPattern = /\b(?:tree-site-disabled|tree-site-model-missing|tree-node-grey)\b/;
+const getManagedSiteTokens = record => ([
+  ...(Array.isArray(record?.tokens) ? record.tokens : []),
+  ...(Array.isArray(record?.customTokens) ? record.customTokens : []),
+]);
+const isTreeNodeVisuallyInvalid = node => {
+  if (!node || typeof node !== 'object') return false;
+  const key = String(node?.key || '').trim();
+  if (siteBridgeImportGuideFailureNodeKeyPattern.test(key)) return true;
+  if (node?.siteDisabled === true || node?.siteNeedsModelDebug === true) return true;
+  if (greyTreeNodeTitleClassPattern.test(String(node?.titleClass || '').trim())) return true;
+  if (key.startsWith('token|') && collectLeafModelNames([node]).length === 0) return true;
+  const children = Array.isArray(node?.children) ? node.children : [];
+  return children.some(isTreeNodeVisuallyInvalid);
+};
+const isSiteRecordVisuallyInvalid = record => {
+  if (!record) return false;
+  if (record.disabled === true) return true;
+  const cachedNodes = Array.isArray(record?.cachedTreeNodes) ? record.cachedTreeNodes : [];
+  if (cachedNodes.some(isTreeNodeVisuallyInvalid)) return true;
+  const managedTokens = getManagedSiteTokens(record);
+  const usableTokens = managedTokens.filter(token => (
+    String(token?.key || token?.access_token || '').trim() &&
+    Number(token?.status ?? 1) === 1
+  ));
+  if (usableTokens.length <= 0) return false;
+  return buildSiteModelPool(record, managedTokens, cachedNodes).length === 0;
+};
 const siteGroupSiteFilterDisplayValue = computed({
   get() {
     return siteGroupSiteFilterQuery.value;
@@ -713,7 +764,7 @@ const filteredRecords = computed(() => {
     } else if (probeSiteCacheKey && currentSiteCacheKey !== probeSiteCacheKey) {
       return false;
     }
-    if (hideDisabled.value && record.disabled) return false;
+    if (hideDisabled.value && isSiteRecordVisuallyInvalid(record)) return false;
     const keywordMatched = !text || [
       record.siteName,
       record.siteUrl,
@@ -746,6 +797,10 @@ function handleSiteGroupSiteFilterBlur() {
   if (!String(siteGroupSiteFilterQuery.value || '').trim()) {
     siteGroupSiteFilterQuery.value = '';
   }
+}
+
+function toggleHideDisabledSites() {
+  hideDisabled.value = !hideDisabled.value;
 }
 
 const selectedModelKeys = computed(() => checkedKeys.value
@@ -901,7 +956,148 @@ const buildSiteModelPool = (record, tokens = [], cachedNodes = []) => normalizeS
   ]) : []),
 ]);
 
-const buildSiteTokenNodes = (record, mergedTokens = [], tokenModelsByKey = new Map(), fallbackCachedNodes = []) => {
+const buildModelReplayDiagnostics = (record, tokenKey) => {
+  const apiBaseUrl = resolveSiteModelApiBaseUrl(record);
+  const uid = getBridgeComparableUserId(record);
+  const headers = {
+    Authorization: `Bearer ${tokenKey}`,
+    'Content-Type': 'application/json',
+  };
+  let endpoints = [];
+  try {
+    endpoints = apiBaseUrl ? buildModelEndpointCandidates(apiBaseUrl) : [];
+  } catch {
+    endpoints = [];
+  }
+  const replayCandidates = endpoints.map(endpoint => ({
+    url: endpoint,
+    proxyUrl: `/api/proxy-get?url=${encodeURIComponent(endpoint)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`,
+    headers,
+  }));
+  return {
+    replayRequest: replayCandidates[0] || null,
+    replayCandidates,
+    modelAttempts: [],
+    traceLines: [
+      `[MODEL_ENDPOINT_BASE] ${apiBaseUrl || '-'}`,
+      `[MODEL_ENDPOINT_UID] ${uid || '-'}`,
+      ...replayCandidates.map(item => `[MODEL_ENDPOINT_CANDIDATE] ${item.url} proxy=${item.proxyUrl}`),
+      '[NO_MODEL_ATTEMPT_RECORDED] refresh this site to capture HTTP status and response payload',
+    ],
+  };
+};
+
+const buildSiteModelMissingDiagnostic = (record, usableKeyCount = 0) => ({
+  siteName: record?.siteName || record?.site_name || 'provider',
+  siteUrl: record?.siteUrl || record?.site_url || '',
+  stage: 'model_discovery_missing',
+  extractionMode: record?.lastImportSource || record?.importSource || 'site-cache',
+  uid: record?.userId || record?.uid || record?.accountInfo?.id || '',
+  totalTokens: (Array.isArray(record?.tokens) ? record.tokens.length : 0) + (Array.isArray(record?.customTokens) ? record.customTokens.length : 0),
+  usableTokens: usableKeyCount,
+  tokenEndpoint: resolveSiteModelApiBaseUrl(record) || record?.siteUrl || '',
+  storageOrigin: 'site-management-cache',
+  storageFields: ['tokens', 'customTokens', 'cachedTreeNodes'],
+  rawError: 'model list is empty',
+  userFacingError: '模型列表未加载出来，需要刷新或调试该站点 token/model 接口',
+  traceLines: [
+    `siteCacheKey=${record?.siteCacheKey || '-'}`,
+    `siteName=${record?.siteName || '-'}`,
+    `usableKeys=${usableKeyCount}`,
+    'models=0',
+  ],
+});
+
+const buildTokenModelMissingDiagnostic = (record, token, tokenKey, tokenModels = []) => ({
+  siteName: record?.siteName || record?.site_name || 'provider',
+  siteUrl: record?.siteUrl || record?.site_url || '',
+  stage: 'token_model_discovery_missing',
+  extractionMode: token?._origin || record?.lastImportSource || record?.importSource || 'site-cache',
+  uid: record?.userId || record?.uid || record?.accountInfo?.id || '',
+  totalTokens: 1,
+  usableTokens: Number(token?.status ?? 1) === 1 ? 1 : 0,
+  tokenEndpoint: resolveSiteModelApiBaseUrl(record) || record?.siteUrl || '',
+  storageOrigin: token?._origin === 'manual' ? 'manual-token' : 'built-in-token',
+  storageFields: ['token.key', 'token.models', 'cachedTreeNodes'],
+  ...buildModelReplayDiagnostics(record, tokenKey),
+  rawError: 'token model list is empty',
+  userFacingError: '该 key 没有刷出模型列表，需要对这个 key 调试 model 接口',
+  traceLines: [
+    `siteCacheKey=${record?.siteCacheKey || '-'}`,
+    `siteName=${record?.siteName || '-'}`,
+    `token=${maskValue(tokenKey)}`,
+    `source=${token?._origin || 'built-in'}`,
+    `status=${Number(token?.status ?? 1) === 1 ? 'ready' : 'error'}`,
+    `models=${normalizeSiteModelList(tokenModels).length}`,
+    ...((buildModelReplayDiagnostics(record, tokenKey).traceLines) || []),
+  ],
+});
+
+const mergeModelListDiagnostics = (base, diagnostics) => {
+  const detail = diagnostics && typeof diagnostics === 'object' ? diagnostics : {};
+  const attempts = Array.isArray(detail.attempts) ? detail.attempts : [];
+  const lastAttempt = attempts[attempts.length - 1] || null;
+  const detailTraceLines = Array.isArray(detail.traceLines) ? detail.traceLines : [];
+  const baseTraceLines = Array.isArray(base.traceLines) ? base.traceLines : [];
+  const mergedBaseTraceLines = detailTraceLines.length > 0
+    ? baseTraceLines.filter(line => !String(line || '').includes('NO_MODEL_ATTEMPT_RECORDED'))
+    : baseTraceLines;
+  return {
+    ...base,
+    uid: detail.uid || base.uid,
+    replayRequest: detail.replayRequest || base.replayRequest || (lastAttempt ? {
+      url: lastAttempt.url || lastAttempt.endpoint || '',
+      proxyUrl: lastAttempt.proxyUrl || '',
+      headers: lastAttempt.headers || {},
+    } : null),
+    replayCandidates: Array.isArray(detail.replayCandidates) ? detail.replayCandidates : (base.replayCandidates || []),
+    modelAttempts: attempts,
+    traceLines: [
+      ...mergedBaseTraceLines,
+      ...detailTraceLines,
+    ],
+  };
+};
+
+const buildTokenModelDiagnosticWithFailure = (record, token, tokenKey, tokenModels = [], failure = null) => {
+  const base = buildTokenModelMissingDiagnostic(record, token, tokenKey, tokenModels);
+  if (!failure) return base;
+  return mergeModelListDiagnostics({
+    ...base,
+    rawError: String(failure?.message || base.rawError || 'models fetch failed'),
+    userFacingError: String(failure?.userFacingError || failure?.message || base.userFacingError || 'models fetch failed'),
+  }, failure?.modelListDiagnostics || failure?.diagnostics);
+};
+
+const ensureTokenModelDiagnosticReplay = (record, token, tokenKey, tokenModels = [], diagnostic = null) => {
+  const fallback = buildTokenModelMissingDiagnostic(record, token, tokenKey, tokenModels);
+  if (!diagnostic || typeof diagnostic !== 'object') return fallback;
+  const hasReplayRequest = Boolean(diagnostic?.replayRequest?.url || diagnostic?.replayRequest?.proxyUrl);
+  const hasReplayCandidates = Array.isArray(diagnostic?.replayCandidates) && diagnostic.replayCandidates.length > 0;
+  const hasModelAttempts = Array.isArray(diagnostic?.modelAttempts) && diagnostic.modelAttempts.length > 0;
+  const hasModelTraceLines = (Array.isArray(diagnostic?.traceLines) ? diagnostic.traceLines : [])
+    .some(line => /MODEL_ENDPOINT_|HTTP_\d+|\[OK\]|\[PENDING\]/.test(String(line || '')));
+  if (hasReplayRequest && hasReplayCandidates && hasModelTraceLines) return diagnostic;
+  return {
+    ...fallback,
+    ...diagnostic,
+    replayRequest: hasReplayRequest ? diagnostic.replayRequest : fallback.replayRequest,
+    replayCandidates: hasReplayCandidates ? diagnostic.replayCandidates : fallback.replayCandidates,
+    modelAttempts: hasModelAttempts ? diagnostic.modelAttempts : fallback.modelAttempts,
+    traceLines: [
+      ...(Array.isArray(diagnostic?.traceLines) ? diagnostic.traceLines : []),
+      ...((Array.isArray(fallback.traceLines) ? fallback.traceLines : [])
+        .filter(line => !String(line || '').startsWith('siteCacheKey='))
+        .filter(line => !String(line || '').startsWith('siteName='))
+        .filter(line => !String(line || '').startsWith('token='))
+        .filter(line => !String(line || '').startsWith('source='))
+        .filter(line => !String(line || '').startsWith('status='))
+        .filter(line => !String(line || '').startsWith('models='))),
+    ],
+  };
+};
+
+const buildSiteTokenNodes = (record, mergedTokens = [], tokenModelsByKey = new Map(), fallbackCachedNodes = [], tokenFailuresByKey = new Map()) => {
   const fallbackTokenModels = collectTokenModelMapFromTreeNodes(fallbackCachedNodes);
   const siteModels = buildSiteModelPool(record, mergedTokens, fallbackCachedNodes);
   return mergedTokens.map((token, tokenIndex) => {
@@ -922,6 +1118,8 @@ const buildSiteTokenNodes = (record, mergedTokens = [], tokenModelsByKey = new M
       token?.modelsText,
       siteModels,
     ]);
+    const tokenNeedsModelDebug = Number(token?.status ?? 1) === 1 && tokenModels.length === 0;
+    const tokenFailure = tokenFailuresByKey.get(tokenKey) || null;
     return {
       key: `token|${record.siteCacheKey}|${tokenKey}|${tokenIndex}`,
       siteCacheKey: record.siteCacheKey,
@@ -930,7 +1128,9 @@ const buildSiteTokenNodes = (record, mergedTokens = [], tokenModelsByKey = new M
       disableCheckbox: false,
       selectable: false,
       isManualToken: token?._origin === 'manual',
-      titleClass: '',
+      siteNeedsModelDebug: tokenNeedsModelDebug,
+      providerDiagnostic: tokenNeedsModelDebug ? buildTokenModelDiagnosticWithFailure(record, token, tokenKey, tokenModels, tokenFailure) : null,
+      titleClass: tokenNeedsModelDebug ? 'tree-site-model-missing' : '',
       children: buildTokenModelChildren(record, tokenKey, tokenModels),
     };
   });
@@ -972,6 +1172,8 @@ const buildManualTokenNode = (record, displayOrder, token, tokenIndex, siteModel
   const tokenKey = String(token?.key || token?.access_token || `token-${tokenIndex + 1}`).trim();
   if (!tokenKey) return null;
   const tokenName = String(token?.name || `Manual SK ${tokenIndex + 1}`).trim() || `Manual SK ${tokenIndex + 1}`;
+  const tokenModels = normalizeSiteModelList(siteModels);
+  const tokenNeedsModelDebug = Number(token?.status ?? 1) === 1 && tokenModels.length === 0;
   return {
     title: `${displayOrder}. [${record.siteName}] ${tokenName} (${maskValue(tokenKey)})`,
     key: `token|${record.siteCacheKey}|${tokenKey}`,
@@ -980,7 +1182,10 @@ const buildManualTokenNode = (record, displayOrder, token, tokenIndex, siteModel
     disableCheckbox: false,
     selectable: false,
     isManualToken: true,
-    children: buildTokenModelChildren(record, tokenKey, siteModels),
+    siteNeedsModelDebug: tokenNeedsModelDebug,
+    providerDiagnostic: tokenNeedsModelDebug ? buildTokenModelMissingDiagnostic(record, { ...token, _origin: 'manual' }, tokenKey, tokenModels) : null,
+    titleClass: tokenNeedsModelDebug ? 'tree-site-model-missing' : '',
+    children: buildTokenModelChildren(record, tokenKey, tokenModels),
   };
 };
 
@@ -1021,6 +1226,8 @@ const buildFallbackTree = (record, displayOrder) => {
       const tokenTitle = showProbeTokenMeta
         ? `${tokenName} · ${maskValue(tokenKey)} · ${sourceLabel} · ${statusLabel}`
         : `${tokenName} · ${maskValue(tokenKey)}`;
+      const tokenModels = normalizeSiteModelList(siteModels);
+      const tokenNeedsModelDebug = Number(token?.status ?? 1) === 1 && tokenModels.length === 0;
       return {
         key: `token|${record.siteCacheKey}|${tokenKey}|${tokenIndex}`,
         siteCacheKey: record.siteCacheKey,
@@ -1029,8 +1236,10 @@ const buildFallbackTree = (record, displayOrder) => {
         disableCheckbox: false,
         selectable: false,
         isManualToken: token?._origin === 'manual',
-        titleClass: '',
-        children: buildTokenModelChildren(record, tokenKey, siteModels),
+        siteNeedsModelDebug: tokenNeedsModelDebug,
+        providerDiagnostic: tokenNeedsModelDebug ? buildTokenModelMissingDiagnostic(record, token, tokenKey, tokenModels) : null,
+        titleClass: tokenNeedsModelDebug ? 'tree-site-model-missing' : '',
+        children: buildTokenModelChildren(record, tokenKey, tokenModels),
       };
     }),
   }];
@@ -1050,7 +1259,20 @@ const treeData = computed(() => filteredRecords.value.flatMap(record => {
   const customTokens = Array.isArray(record.customTokens) ? record.customTokens : [];
   return cachedNodes.map(node => {
     if (node?.isSiteRoot) {
-      const existingChildren = Array.isArray(node?.children) ? node.children : [];
+      const existingChildren = (Array.isArray(node?.children) ? node.children : []).map((child, index) => {
+        if (!String(child?.key || '').startsWith('token|')) return child;
+        const tokenKey = extractTokenKeyFromNode(child) || `token-${index + 1}`;
+        const tokenModels = collectLeafModelNames([child]);
+        const tokenNeedsModelDebug = tokenModels.length === 0;
+        return {
+          ...child,
+          siteNeedsModelDebug: tokenNeedsModelDebug,
+          providerDiagnostic: tokenNeedsModelDebug
+            ? ensureTokenModelDiagnosticReplay(record, { _origin: child?.isManualToken ? 'manual' : 'built-in', status: 1 }, tokenKey, tokenModels, child?.providerDiagnostic)
+            : (child?.providerDiagnostic || null),
+          titleClass: tokenNeedsModelDebug ? 'tree-site-model-missing' : (child?.titleClass || ''),
+        };
+      });
       const existingTokenKeys = new Set(existingChildren.map(extractTokenKeyFromNode).filter(Boolean));
       const manualChildren = customTokens
         .filter(token => !existingTokenKeys.has(String(token?.key || token?.access_token || '').trim()))
@@ -1182,6 +1404,7 @@ const refreshSiteTreeModels = async (record, options = {}) => {
     ...customTokens.map(token => ({ ...token, _origin: 'manual' })),
   ];
   const tokenModelsByKey = new Map();
+  const tokenFailuresByKey = new Map();
   const apiBaseUrl = resolveSiteModelApiBaseUrl(record);
 
   if (apiBaseUrl) {
@@ -1200,7 +1423,17 @@ const refreshSiteTreeModels = async (record, options = {}) => {
         if (strict) {
           failedDetails.push(`${maskValue(tokenKey)}: empty models`);
         }
+        tokenFailuresByKey.set(tokenKey, {
+          message: 'empty models',
+          userFacingError: 'empty models',
+          modelListDiagnostics: payload?.modelListDiagnostics || null,
+        });
       } catch (error) {
+        tokenFailuresByKey.set(tokenKey, {
+          message: String(error?.message || error || 'request failed'),
+          userFacingError: String(error?.message || error || 'request failed'),
+          modelListDiagnostics: error?.modelListDiagnostics || null,
+        });
         if (strict) {
           failedDetails.push(`${maskValue(tokenKey)}: ${String(error?.message || error || 'request failed')}`);
         }
@@ -1214,7 +1447,7 @@ const refreshSiteTreeModels = async (record, options = {}) => {
   }
 
   const displayOrder = getStableSiteOrder(record) || getCachedSitePreferredOrder(record) || 0;
-  const nextChildren = buildSiteTokenNodes(record, mergedTokens, tokenModelsByKey, record?.cachedTreeNodes);
+  const nextChildren = buildSiteTokenNodes(record, mergedTokens, tokenModelsByKey, record?.cachedTreeNodes, tokenFailuresByKey);
   updateSiteCacheTreeNodes(siteCacheKey, [buildSiteRootNode(record, displayOrder, nextChildren)]);
 };
 
@@ -1509,21 +1742,39 @@ const activeQuickFilterSummary = computed(() => {
 
 const isProviderDiagnosticTreeNode = node => Boolean(node?.isProviderDiagnostic);
 
+const getProviderDiagnosticSummary = node => {
+  if (!node?.siteNeedsModelDebug && !node?.isProviderDiagnostic) return '';
+  const meta = node?.providerDiagnostic || {};
+  const attempts = Array.isArray(meta?.modelAttempts) ? meta.modelAttempts : [];
+  const lastAttempt = attempts[attempts.length - 1] || null;
+  const replayCandidates = Array.isArray(meta?.replayCandidates) ? meta.replayCandidates : [];
+  const firstReplayCandidate = replayCandidates[0] || null;
+  const status = Number(lastAttempt?.status || 0);
+  const endpoint = String(lastAttempt?.endpoint || lastAttempt?.url || firstReplayCandidate?.url || meta?.tokenEndpoint || '').trim();
+  const reason = String(lastAttempt?.error || meta?.userFacingError || meta?.rawError || 'models unavailable').trim();
+  const statusText = status ? `HTTP ${status}` : '';
+  const endpointText = endpoint ? endpoint.replace(/^https?:\/\//i, '') : '';
+  return ['models fetch failed', statusText, endpointText, reason]
+    .filter(Boolean)
+    .join(' / ')
+    .slice(0, 220);
+};
+
 const buildProviderFetchReplayText = node => {
   const meta = node?.providerDiagnostic || {};
   const request = meta?.replayRequest || null;
   const replayCandidates = Array.isArray(meta?.replayCandidates) ? meta.replayCandidates.filter(Boolean) : [];
   if ((!request?.url || !request?.headers?.Authorization) && replayCandidates.length > 0) {
-    const candidateUrls = replayCandidates.map(item => JSON.stringify(item.url)).join(',\n  ');
+    const candidateUrls = replayCandidates.map(item => JSON.stringify(item.proxyUrl || item.url)).join(',\n  ');
     const headersText = JSON.stringify(replayCandidates[0]?.headers || {}, null, 2);
     return [
-      `// ${meta.siteName || 'provider'} Token 列表抓取复现`,
+      `// ${meta.siteName || 'provider'} 模型接口抓取复现`,
       'const targets = [',
       `  ${candidateUrls}`,
       '];',
       `const headers = ${headersText};`,
       'for (const url of targets) {',
-      "  const res = await fetch(url, { method: 'GET', headers, credentials: 'include' });",
+      "  const res = await fetch(url, { method: 'GET', headers });",
       "  console.log('url=', url, 'status=', res.status);",
       '  console.log(await res.text());',
       '}',
@@ -1537,7 +1788,7 @@ const buildProviderFetchReplayText = node => {
   }
   return [
     `// ${meta.siteName || 'provider'} 模型发现复现`,
-    `const res = await fetch(${JSON.stringify(request.url)}, {`,
+    `const res = await fetch(${JSON.stringify(request.proxyUrl || request.url)}, {`,
     "  method: 'GET',",
     `  headers: ${JSON.stringify(request.headers, null, 2)}`,
     '});',
@@ -2205,6 +2456,16 @@ const handleSettings = () => {
   showAppSettingsModal.value = true;
 };
 
+function openRequestRecordsDrawer(panel = 'records') {
+  requestRecordsInitialPanel.value = normalizeRequestRecordsPanel(panel);
+  showRequestRecordsDrawer.value = true;
+}
+
+function normalizeRequestRecordsPanel(panel) {
+  const normalized = String(panel || 'records').trim().toLowerCase();
+  return ['sessions', 'records', 'mcp', 'skills'].includes(normalized) ? normalized : 'records';
+}
+
 const handleExperimental = () => {
   showExperimentalFeatures.value = true;
   return;
@@ -2637,6 +2898,10 @@ onBeforeUnmount(() => {
   flex: 1 1 220px;
   min-width: 180px;
   max-width: 360px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
 }
 
 .site-group-site-filter-header {
@@ -2644,6 +2909,45 @@ onBeforeUnmount(() => {
   width: 232px;
   min-width: 180px;
   max-width: min(232px, 24vw);
+}
+
+.site-group-site-filter-toggle {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(45, 61, 47, 0.82);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: none;
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.site-group-site-filter-toggle:hover,
+.site-group-site-filter-toggle:focus-visible {
+  background: rgba(255, 255, 255, 0.28);
+  color: #243825;
+  outline: none;
+}
+
+.site-group-site-filter-toggle :deep(svg) {
+  width: 15px;
+  height: 15px;
+}
+
+.site-group-site-filter-toggle-active {
+  color: #203b23;
+}
+
+.site-group-site-filter-input {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .site-group-site-filter-input :deep(.ant-input) {
@@ -3103,6 +3407,18 @@ onBeforeUnmount(() => {
   flex: 1;
 }
 
+.provider-tree-diagnostic-line {
+  flex: 0 0 100%;
+  display: block;
+  min-width: 0;
+  margin-top: 2px;
+  color: #b35c00;
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .provider-tree-link {
   border: none;
   background: transparent;
@@ -3142,6 +3458,22 @@ onBeforeUnmount(() => {
 }
 
 .tree-provider-node-wrapper:hover .site-tree-actions {
+  opacity: 1;
+}
+
+.tree-provider-node-wrapper.site-tree-model-missing {
+  opacity: 0.72;
+}
+
+.tree-provider-node-wrapper.site-tree-model-missing .site-tree-actions {
+  opacity: 1;
+}
+
+.tree-provider-node-wrapper.site-tree-model-missing .provider-tree-label {
+  color: #8c8c8c;
+}
+
+.tree-provider-node-wrapper.site-tree-model-missing .site-tree-action-btn {
   opacity: 1;
 }
 
@@ -3257,6 +3589,11 @@ onBeforeUnmount(() => {
 .tree-site-disabled {
   color: #8c8c8c;
   text-decoration: line-through;
+  opacity: 0.76;
+}
+
+.tree-site-model-missing {
+  color: #8c8c8c;
   opacity: 0.76;
 }
 

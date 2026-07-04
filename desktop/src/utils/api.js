@@ -8,8 +8,10 @@ function normalizeModelListUid(uid) {
 export async function fetchModelList(apiUrl, apiKey, options = {}) {
   const endpoints = buildModelEndpointCandidates(apiUrl);
   const errors = [];
+  const attempts = [];
   const controllers = endpoints.map(() => new AbortController());
   const normalizedUid = normalizeModelListUid(options?.uid);
+  const headers = buildModelListRequestHeaders(apiKey);
 
   try {
     const winner = await Promise.any(
@@ -17,6 +19,7 @@ export async function fetchModelList(apiUrl, apiKey, options = {}) {
         requestModelList(endpoint, apiKey, {
           signal: controllers[index].signal,
           uid: normalizedUid,
+          onAttempt: attempt => attempts.push(attempt),
         })
           .then(result => ({ index, result }))
           .catch(error => {
@@ -35,34 +38,149 @@ export async function fetchModelList(apiUrl, apiKey, options = {}) {
     return winner.result;
   } catch (error) {
     const detail = errors.slice(0, 6).join(' | ');
-    throw new Error(detail || error?.message || '未找到可用的 models 接口');
+    throw createModelListError(detail || error?.message || '未找到可用的 models 接口', {
+      apiUrl,
+      endpoints,
+      uid: normalizedUid,
+      headers,
+      attempts,
+    });
   }
 }
 
 async function requestModelList(endpoint, apiKey, options = {}) {
   const normalizedUid = normalizeModelListUid(options?.uid);
   const target = `/api/proxy-get?url=${encodeURIComponent(endpoint)}${normalizedUid ? `&uid=${encodeURIComponent(normalizedUid)}` : ''}`;
-  const response = await apiFetch(target, {
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    signal: options?.signal,
-  });
+  const headers = buildModelListRequestHeaders(apiKey);
+  const attempt = {
+    endpoint,
+    proxyUrl: target,
+    url: endpoint,
+    headers,
+    status: 0,
+    ok: false,
+    error: '',
+    payloadPreview: '',
+  };
+  const finishAttempt = patch => {
+    Object.assign(attempt, patch || {});
+    if (typeof options?.onAttempt === 'function') {
+      options.onAttempt({ ...attempt });
+    }
+  };
+  let response;
+  try {
+    response = await apiFetch(target, {
+      headers,
+      signal: options?.signal,
+    });
+  } catch (error) {
+    finishAttempt({
+      status: 0,
+      ok: false,
+      error: error?.message || String(error || 'request failed'),
+    });
+    throw error;
+  }
 
   if (!response.ok) {
-    const payload = await response.json().catch(() => null);
-    throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
+    const errorBodyText = await response.text().catch(() => '');
+    const payload = parseJSONLoose(errorBodyText);
+    const errorMessage = payload?.message || payload?.error || `HTTP ${response.status}`;
+    finishAttempt({
+      status: response.status,
+      ok: false,
+      error: errorMessage,
+      payloadPreview: stringifyModelListPreview(payload || errorBodyText),
+    });
+    throw new Error(errorMessage);
   }
 
   const payload = await response.json();
   const normalized = normalizeModelListPayload(payload);
   const candidates = normalized?.data || normalized?.models || [];
   if (!Array.isArray(candidates) || candidates.length === 0) {
+    finishAttempt({
+      status: response.status,
+      ok: true,
+      error: 'empty model list',
+      payloadPreview: stringifyModelListPreview(payload),
+    });
     throw new Error('empty model list');
   }
 
+  finishAttempt({
+    status: response.status,
+    ok: true,
+    modelCount: candidates.length,
+    payloadPreview: stringifyModelListPreview(payload),
+  });
   return normalized;
+}
+
+function buildModelListRequestHeaders(apiKey) {
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+  };
+}
+
+function stringifyModelListPreview(value, limit = 500) {
+  try {
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
+    return String(text || '').slice(0, limit);
+  } catch {
+    return String(value || '').slice(0, limit);
+  }
+}
+
+function parseJSONLoose(text) {
+  try {
+    return JSON.parse(String(text || ''));
+  } catch {
+    return null;
+  }
+}
+
+function createModelListError(message, diagnostics = {}) {
+  const error = new Error(message || '未找到可用的 models 接口');
+  const attempts = Array.isArray(diagnostics?.attempts) ? diagnostics.attempts : [];
+  const endpoints = Array.isArray(diagnostics?.endpoints) ? diagnostics.endpoints : [];
+  const uid = String(diagnostics?.uid || '').trim();
+  const headers = diagnostics?.headers || {};
+  const replayCandidates = endpoints.map(endpoint => ({
+    url: endpoint,
+    proxyUrl: `/api/proxy-get?url=${encodeURIComponent(endpoint)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`,
+    headers,
+  }));
+  const lastAttempt = attempts[attempts.length - 1] || null;
+  error.modelListDiagnostics = {
+    apiUrl: diagnostics?.apiUrl || '',
+    uid,
+    endpoints,
+    replayRequest: lastAttempt
+      ? {
+        url: lastAttempt.url || lastAttempt.endpoint || '',
+        proxyUrl: lastAttempt.proxyUrl || '',
+        headers: lastAttempt.headers || headers,
+      }
+      : (replayCandidates[0] || null),
+    replayCandidates,
+    attempts,
+    traceLines: attempts.length
+      ? attempts.map(attempt => {
+        const status = Number(attempt?.status || 0);
+        const statusText = status ? `HTTP_${status}` : 'EXCEPTION';
+        return [
+          `[${attempt?.ok ? 'OK' : statusText}] ${attempt?.endpoint || attempt?.url || '-'}`,
+          attempt?.modelCount ? `models=${attempt.modelCount}` : '',
+          attempt?.error ? `error=${attempt.error}` : '',
+          attempt?.payloadPreview ? `payload=${attempt.payloadPreview}` : '',
+        ].filter(Boolean).join(' ');
+      })
+      : endpoints.map(endpoint => `[PENDING] ${endpoint}`),
+  };
+  return error;
 }
 
 function normalizeModelListPayload(payload) {
@@ -126,7 +244,7 @@ function normalizeModelListPayload(payload) {
   return payload || { data: [] };
 }
 
-function buildModelEndpointCandidates(apiUrl) {
+export function buildModelEndpointCandidates(apiUrl) {
   const normalizedInput = String(apiUrl || '').trim().replace(/\/+$/, '');
   if (!normalizedInput) {
     throw new Error('API 地址不能为空');
@@ -188,6 +306,7 @@ function buildModelEndpointCandidates(apiUrl) {
 
 export const __modelListTestUtils = {
   normalizeModelListUid,
+  buildModelEndpointCandidates,
 };
 
 function stripKnownApiSuffix(input) {

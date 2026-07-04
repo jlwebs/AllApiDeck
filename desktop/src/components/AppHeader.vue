@@ -1,6 +1,6 @@
 <template>
   <header class="spring-header" :class="{ 'spring-header-gaia': isDarkMode }">
-    <button type="button" class="spring-brand" @click="navigate('/')">
+    <button type="button" class="spring-brand" @click="navigate('/keys')">
       <span class="spring-brand-mark">
         <img :src="appLogo" alt="" class="spring-brand-icon" />
       </span>
@@ -8,38 +8,34 @@
     </button>
 
     <nav class="spring-toolbar">
-      <button
-        type="button"
-        class="spring-pill"
-        :class="{ 'spring-pill-active': currentPage === 'batch' }"
-        @click="navigate('/')"
-      >
-        <span class="spring-pill-icon-svg spring-pill-icon-chrome" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="12" cy="12" r="3.5" />
-            <path d="M12 2.75a9.25 9.25 0 0 1 8.01 4.63H11.2" />
-            <path d="M4.18 7.38A9.25 9.25 0 0 0 12 21.25l4.41-7.64" />
-            <path d="M20.01 6.95A9.25 9.25 0 0 1 12 21.25L7.59 13.6" />
-          </svg>
-        </span>
-        <span>批量检测</span>
-      </button>
+      <div class="spring-nav-pair" aria-label="导入与站点">
+        <button
+          type="button"
+          class="spring-pill spring-pill-paired spring-pill-paired-left"
+          :class="{ 'spring-pill-active': currentPage === 'batch' }"
+          @click="navigate('/batch')"
+        >
+          <span class="spring-pill-icon-svg spring-pill-icon-chrome" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="12" cy="12" r="3.5" />
+              <path d="M12 2.75a9.25 9.25 0 0 1 8.01 4.63H11.2" />
+              <path d="M4.18 7.38A9.25 9.25 0 0 0 12 21.25l4.41-7.64" />
+              <path d="M20.01 6.95A9.25 9.25 0 0 1 12 21.25L7.59 13.6" />
+            </svg>
+          </span>
+          <span>导入</span>
+        </button>
 
-      <span class="spring-flow-arrow" aria-hidden="true">
-        <svg viewBox="0 0 34 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M3 10H24M24 10L17 3M24 10L17 17" />
-        </svg>
-      </span>
-
-      <button
-        type="button"
-        class="spring-pill"
-        :class="{ 'spring-pill-active': currentPage === 'sites' }"
-        @click="navigate('/sites')"
-      >
-        <DatabaseOutlined />
-        <span>站点管理</span>
-      </button>
+        <button
+          type="button"
+          class="spring-pill spring-pill-paired spring-pill-paired-right"
+          :class="{ 'spring-pill-active': currentPage === 'sites' }"
+          @click="navigate('/sites')"
+        >
+          <DatabaseOutlined />
+          <span>站点</span>
+        </button>
+      </div>
 
       <span class="spring-flow-arrow" aria-hidden="true">
         <svg viewBox="0 0 34 20" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -54,19 +50,47 @@
         @click="navigate('/keys')"
       >
         <KeyOutlined />
-        <span>密钥管理</span>
+        <span>密钥库</span>
       </button>
 
-      <button
-        type="button"
-        class="spring-pill"
-        title="请求记录"
-        aria-label="请求记录"
-        @click="$emit('request-records')"
-      >
-        <BarChartOutlined />
-        <span>统计</span>
-      </button>
+      <div class="spring-utility-cluster" aria-label="工具入口">
+        <button
+          type="button"
+          class="spring-utility-button"
+          title="会话"
+          aria-label="会话"
+          @click="$emit('request-records', 'sessions')"
+        >
+          <ProfileOutlined />
+        </button>
+        <button
+          type="button"
+          class="spring-utility-button"
+          title="统计"
+          aria-label="统计"
+          @click="$emit('request-records', 'records')"
+        >
+          <BarChartOutlined />
+        </button>
+        <button
+          type="button"
+          class="spring-utility-button"
+          title="MCP"
+          aria-label="MCP"
+          @click="$emit('request-records', 'mcp')"
+        >
+          <InboxOutlined />
+        </button>
+        <button
+          type="button"
+          class="spring-utility-button"
+          title="Skill"
+          aria-label="Skill"
+          @click="$emit('request-records', 'skills')"
+        >
+          <FireOutlined />
+        </button>
+      </div>
 
       <button
         v-if="showSettings"
@@ -194,8 +218,11 @@ import {
   ApiOutlined,
   BarChartOutlined,
   DatabaseOutlined,
+  FireOutlined,
   GithubOutlined,
+  InboxOutlined,
   KeyOutlined,
+  ProfileOutlined,
   SettingOutlined,
 } from '@ant-design/icons-vue';
 import * as WailsApp from '../../wailsjs/go/main/App.js';
@@ -718,6 +745,51 @@ onBeforeUnmount(() => {
     box-shadow 0.2s ease;
 }
 
+.spring-nav-pair {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  border-radius: 999px;
+  box-shadow: 0 6px 14px rgba(87, 107, 73, 0.05);
+}
+
+.spring-pill-paired {
+  position: relative;
+  min-width: 62px;
+  padding-inline: 11px;
+  box-shadow: none;
+}
+
+.spring-pill-paired-left {
+  border-radius: 999px 13px 13px 999px;
+  border-right-color: transparent;
+}
+
+.spring-pill-paired-right {
+  margin-left: -1px;
+  border-radius: 13px 999px 999px 13px;
+}
+
+.spring-pill-paired-left::after {
+  content: '';
+  position: absolute;
+  top: 7px;
+  right: -1px;
+  bottom: 7px;
+  width: 1px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, transparent, rgba(93, 118, 83, 0.28), transparent);
+  pointer-events: none;
+}
+
+.spring-pill-paired:hover {
+  z-index: 1;
+}
+
+.spring-pill-paired.spring-pill-active {
+  z-index: 2;
+}
+
 .spring-flow-arrow {
   width: 24px;
   height: 32px;
@@ -779,8 +851,62 @@ onBeforeUnmount(() => {
   gap: 0;
 }
 
+.spring-utility-cluster {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 3px;
+  border: 1px solid rgba(77, 104, 73, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: 0 6px 14px rgba(87, 107, 73, 0.05);
+}
+
+.spring-utility-button {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #667260;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease,
+    transform 0.18s ease;
+}
+
+.spring-utility-button:hover {
+  background: rgba(229, 239, 219, 0.86);
+  color: #263f2a;
+}
+
+.spring-utility-button:active {
+  transform: translateY(1px);
+}
+
+.spring-utility-button.is-placeholder {
+  color: #8b9688;
+  opacity: 0.58;
+  cursor: default;
+}
+
+.spring-utility-button:disabled:hover {
+  background: transparent;
+  color: #8b9688;
+}
+
 .spring-pill :deep(.anticon) {
   font-size: 14px;
+}
+
+.spring-utility-button :deep(.anticon) {
+  font-size: 15px;
 }
 
 .spring-pill-icon-svg {
@@ -1024,6 +1150,26 @@ onBeforeUnmount(() => {
   border-color: rgba(168, 201, 147, 0.12);
 }
 
+:deep(body.dark-mode) .spring-utility-cluster {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(168, 201, 147, 0.12);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.12);
+}
+
+:deep(body.dark-mode) .spring-utility-button {
+  color: #c8d8c1;
+}
+
+:deep(body.dark-mode) .spring-utility-button:hover {
+  background: rgba(172, 199, 151, 0.12);
+  color: #f7fcf1;
+}
+
+:deep(body.dark-mode) .spring-utility-button.is-placeholder,
+:deep(body.dark-mode) .spring-utility-button:disabled:hover {
+  color: #9dae96;
+}
+
 :deep(body.dark-mode) .spring-pill-active {
   background: linear-gradient(135deg, rgba(96, 127, 88, 0.5), rgba(71, 97, 66, 0.44));
   color: #f7fcf1;
@@ -1038,6 +1184,14 @@ onBeforeUnmount(() => {
 :deep(body.dark-mode) .spring-pill:hover {
   background: rgba(172, 199, 151, 0.12);
   color: #f7fcf1;
+}
+
+:deep(body.dark-mode) .spring-nav-pair {
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.12);
+}
+
+:deep(body.dark-mode) .spring-pill-paired-left::after {
+  background: linear-gradient(180deg, transparent, rgba(198, 218, 187, 0.22), transparent);
 }
 
 :deep(body.dark-mode) .spring-flow-arrow {
@@ -1118,6 +1272,26 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
+:deep(body.gaia-dark) .spring-utility-cluster {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015));
+  border-color: rgba(101, 129, 138, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 8px 18px rgba(0, 0, 0, 0.16);
+}
+
+:deep(body.gaia-dark) .spring-utility-button {
+  color: #bdd0d1;
+}
+
+:deep(body.gaia-dark) .spring-utility-button:hover {
+  background: rgba(88, 116, 126, 0.18);
+  color: #f4faf8;
+}
+
+:deep(body.gaia-dark) .spring-utility-button.is-placeholder,
+:deep(body.gaia-dark) .spring-utility-button:disabled:hover {
+  color: #91a5a9;
+}
+
 :deep(body.gaia-dark) .spring-pill-active {
   background: linear-gradient(135deg, rgba(58, 83, 93, 0.88), rgba(36, 53, 61, 0.78));
   border-color: rgba(127, 160, 171, 0.28);
@@ -1130,6 +1304,14 @@ onBeforeUnmount(() => {
 :deep(body.gaia-dark) .spring-pill:hover {
   background: rgba(88, 116, 126, 0.18);
   color: #f4faf8;
+}
+
+:deep(body.gaia-dark) .spring-nav-pair {
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16);
+}
+
+:deep(body.gaia-dark) .spring-pill-paired-left::after {
+  background: linear-gradient(180deg, transparent, rgba(137, 159, 168, 0.24), transparent);
 }
 
 :deep(body.gaia-dark) .spring-flow-arrow {
@@ -1247,6 +1429,26 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
+.spring-header-gaia .spring-utility-cluster {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015));
+  border-color: rgba(101, 129, 138, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 8px 18px rgba(0, 0, 0, 0.16);
+}
+
+.spring-header-gaia .spring-utility-button {
+  color: #bdd0d1;
+}
+
+.spring-header-gaia .spring-utility-button:hover {
+  background: rgba(88, 116, 126, 0.18);
+  color: #f4faf8;
+}
+
+.spring-header-gaia .spring-utility-button.is-placeholder,
+.spring-header-gaia .spring-utility-button:disabled:hover {
+  color: #91a5a9;
+}
+
 .spring-header-gaia .spring-pill-active {
   background: linear-gradient(135deg, rgba(58, 83, 93, 0.88), rgba(36, 53, 61, 0.78));
   border-color: rgba(127, 160, 171, 0.28);
@@ -1259,6 +1461,14 @@ onBeforeUnmount(() => {
 .spring-header-gaia .spring-pill:hover {
   background: rgba(88, 116, 126, 0.18);
   color: #f4faf8;
+}
+
+.spring-header-gaia .spring-nav-pair {
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16);
+}
+
+.spring-header-gaia .spring-pill-paired-left::after {
+  background: linear-gradient(180deg, transparent, rgba(137, 159, 168, 0.24), transparent);
 }
 
 .spring-header-gaia .spring-flow-arrow {
