@@ -1824,8 +1824,11 @@ function isAdvancedProxyConnectionFailed(connection) {
 function isAdvancedProxyConnectionCompleted(connection) {
   const status = normalizeConsoleText(connection?.status);
   const stage = normalizeConsoleText(connection?.stage);
-  if (isAdvancedProxyConnectionFailed(connection)) return false;
-  return status === 'completed' || stage === 'completed' || status === 'done' || stage === 'done';
+  return isAdvancedProxyConnectionFailed(connection)
+    || status === 'completed'
+    || stage === 'completed'
+    || status === 'done'
+    || stage === 'done';
 }
 
 function formatAdvancedProxyConnectionErrorCode(connection) {
@@ -7081,8 +7084,9 @@ function persistMeta() {
 .console-connection-item strong{display:block;color:#22311c;font-size:12px;line-height:1.25}
 .console-connection-item small{display:block;color:#71806a;font-size:10px;line-height:1.25}
 .console-connection-status-cell{gap:7px}
+.console-connection-status-cell small{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .console-connection-status-cell small{font-size:11px;color:#5f6f59}
-.console-connection-status-cell-failed small{white-space:normal;line-height:1.15;color:#8d2f36;font-weight:800}
+.console-connection-status-cell-failed small{white-space:nowrap;line-height:1.15;color:#8d2f36;font-weight:800}
 .console-connection-status-dot{width:10px;height:10px;border-radius:999px;display:inline-flex;flex:0 0 auto;background:#7a8a73;box-shadow:0 0 0 3px rgba(122,138,115,.12)}
 .console-connection-status-active{background:#5d7f42;box-shadow:0 0 0 3px rgba(93,127,66,.14)}
 .console-connection-status-completed{background:#26a269;box-shadow:0 0 0 3px rgba(38,162,105,.14)}
