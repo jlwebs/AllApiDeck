@@ -1,13 +1,22 @@
 <template>
   <a-config-provider :theme="theme">
     <div class="app-shell" :class="launchModeClass">
-      <router-view v-if="appReady" />
+      <router-view v-if="appReady && !routeRenderError" />
+      <div v-else-if="appReady" class="app-render-error-shell">
+        <div class="app-render-error-panel">
+          <div class="app-render-error-title">页面渲染异常</div>
+          <div class="app-render-error-text">
+            {{ routeRenderError?.message || '检测到未捕获错误，已阻断空白页。' }}
+          </div>
+          <a-button type="primary" size="small" @click="retryRouteRender">重试</a-button>
+        </div>
+      </div>
     </div>
   </a-config-provider>
 </template>
 
 <script>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onErrorCaptured, onMounted, ref } from 'vue';
 import { Modal, theme as antTheme } from 'ant-design-vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
@@ -19,7 +28,7 @@ import {
   hasAdvancedProxyVersionedDefaultMismatch,
   setAdvancedProxyConfig,
 } from './utils/advancedProxyBridge.js';
-import { installSidebarRoutingDiagnostics } from './utils/clientDiagnostics.js';
+import { installSidebarRoutingDiagnostics, logClientDiagnostic } from './utils/clientDiagnostics.js';
 import { clearCurrentLaunchMode, setCurrentLaunchMode } from './utils/launchModeState.js';
 import {
   applyThemeMode,
@@ -35,6 +44,7 @@ export default {
     const router = useRouter();
     const appReady = ref(false);
     const launchMode = ref('');
+    const routeRenderError = ref(null);
     const themeMode = ref(getStoredThemeMode());
     const theme = computed(() => ({
       algorithm: isDarkThemeMode(themeMode.value) ? antTheme.darkAlgorithm : antTheme.defaultAlgorithm,
@@ -75,6 +85,19 @@ export default {
       const normalizedMode = String(launchMode.value || '').trim();
       return normalizedMode ? `launch-mode-${normalizedMode}-window` : '';
     });
+
+    onErrorCaptured((error, instance, info) => {
+      const message = error?.message || String(error || 'unknown error');
+      routeRenderError.value = { message, info: String(info || 'render') };
+      logClientDiagnostic('vue.error', `${String(info || 'render')} | ${message}`);
+      console.error(error);
+      return false;
+    });
+
+    const retryRouteRender = () => {
+      routeRenderError.value = null;
+      window.location.reload();
+    };
 
     const markAdvancedProxyDefaultPromptSeen = (version) => {
       try {
@@ -170,6 +193,8 @@ export default {
     return {
       appReady,
       launchModeClass,
+      routeRenderError,
+      retryRouteRender,
       theme,
       t,
     };
@@ -215,5 +240,36 @@ body.launch-mode-panel-window .app-shell::before,
 body.launch-mode-editor-window .app-shell::before,
 body.launch-mode-ai-image-window .app-shell::before {
   display: none !important;
+}
+
+.app-render-error-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.app-render-error-panel {
+  width: min(560px, 100%);
+  display: grid;
+  gap: 10px;
+  padding: 20px 18px;
+  border: 1px solid rgba(92, 101, 96, 0.16);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #263b2a;
+}
+
+.app-render-error-title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.app-render-error-text {
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-word;
+  color: #5f6f59;
 }
 </style>

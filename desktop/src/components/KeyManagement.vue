@@ -20,7 +20,7 @@
                 current-page="keys"
                 :is-dark-mode="isDarkMode"
                 @experimental="showExperimentalFeatures = true"
-                @request-records="showRequestRecordsDrawer = true"
+                @request-records="openRequestRecordsDrawer"
                 @settings="openSettingsModal"
               />
 
@@ -74,8 +74,40 @@
         <a-alert type="info" show-icon class="compact-sidebar-alert" :message="syncSummary" />
       </div>
 
-      <a-card title="本地密钥管理" class="inventory-card">
-        <template #extra>
+      <a-card ref="inventoryCardRef" class="inventory-card">
+        <div class="inventory-panel-toolbar">
+          <div class="inventory-card-title-row">
+            <div class="inventory-panel-switcher" aria-label="密钥与调度切换">
+              <div class="inventory-panel-tabs" role="tablist" aria-label="密钥管理子面板切换">
+                <button
+                  type="button"
+                  class="inventory-panel-tab"
+                  :class="{ 'inventory-panel-tab-active': activeInventoryPanel === 'local' }"
+                  :aria-selected="activeInventoryPanel === 'local' ? 'true' : 'false'"
+                  aria-label="本地密钥管理"
+                  title="本地密钥管理"
+                @click.stop="setActiveInventoryPanel('local')"
+              >
+                <KeyOutlined class="inventory-panel-tab-icon inventory-panel-tab-icon-key" />
+                <span class="inventory-panel-tab-label">KEY</span>
+              </button>
+              <span class="inventory-panel-tab-divider" aria-hidden="true"></span>
+              <button
+                type="button"
+                class="inventory-panel-tab"
+                  :class="{ 'inventory-panel-tab-active': activeInventoryPanel === 'console' }"
+                  :aria-selected="activeInventoryPanel === 'console' ? 'true' : 'false'"
+                  aria-label="调度台"
+                  title="调度台"
+                @click.stop="setActiveInventoryPanel('console')"
+              >
+                <QueueOrbitIcon class="inventory-panel-tab-icon inventory-panel-tab-icon-console" />
+                <span class="inventory-panel-tab-label">Dispatch</span>
+              </button>
+            </div>
+            </div>
+          </div>
+          <div v-if="activeInventoryPanel === 'local'" class="inventory-panel-actions">
           <a-space wrap>
             <a-popover
               trigger="hover"
@@ -219,8 +251,10 @@
               </button>
             </a-popconfirm>
           </a-space>
-        </template>
+          </div>
+        </div>
 
+        <div v-show="activeInventoryPanel === 'local'" class="inventory-local-panel">
         <div class="key-group-strip">
           <div class="key-group-tabs" role="tablist" aria-label="密钥分组">
             <button
@@ -603,7 +637,185 @@
             </template>
           </template>
         </a-table>
+        </div>
+        <div v-if="activeInventoryPanel === 'console'" class="inventory-console-panel" aria-label="调度台面板">
+          <div class="console-dispatch-control-rack">
+            <div class="console-dispatch-summary console-dispatch-summary-top">
+              <div v-for="block in consoleDispatchSummaryBlocks" :key="block.id" class="console-dispatch-summary-block">
+                <div v-for="item in block.items" :key="item.label" class="console-dispatch-summary-line">
+                  <span>{{ item.label }}</span>
+                  <strong>{{ item.value }}</strong>
+                </div>
+              </div>
+            </div>
+            <div class="console-dispatch-control-panel">
+              <a-tooltip :title="consoleProxyMasterTitle">
+                <a-switch
+                  size="small"
+                  class="console-dispatch-master-switch"
+                  :class="{ 'console-dispatch-control-pending': consoleProxyMasterPending }"
+                  :checked="consoleProxyMasterEnabled"
+                  @change="toggleConsoleProxyMaster"
+                />
+              </a-tooltip>
+              <a-tooltip :title="consoleAntiPoisonTitle">
+                <button
+                  type="button"
+                  class="console-dispatch-icon-button console-dispatch-anti-poison-button"
+                  :class="{ 'console-dispatch-icon-button-active': consoleAntiPoisonEnabled, 'console-dispatch-control-pending': consoleAntiPoisonPending }"
+                  :aria-pressed="consoleAntiPoisonEnabled ? 'true' : 'false'"
+                  :aria-label="consoleAntiPoisonEnabled ? '关闭防投毒' : '开启防投毒'"
+                  @click="toggleConsoleAntiPoison"
+                >
+                  <SafetyCertificateOutlined />
+                </button>
+              </a-tooltip>
+              <div class="console-dispatch-app-buttons" aria-label="客户端高级代理配置">
+                <a-tooltip v-for="app in consoleProxyAppCards" :key="app.id" :title="app.tooltip">
+                  <button
+                    type="button"
+                    class="console-dispatch-app-button"
+                    :class="{ 'console-dispatch-app-button-active': app.enabled, 'console-dispatch-control-pending': app.pending }"
+                    :aria-pressed="app.enabled ? 'true' : 'false'"
+                    :aria-label="`${app.enabled ? '关闭' : '开启'} ${app.label} 高级代理`"
+                    @click="toggleConsoleProxyApp(app.id)"
+                  >
+                    <img :src="app.icon" :alt="app.label" />
+                  </button>
+                </a-tooltip>
+              </div>
+            </div>
+          </div>
+          <div class="console-dispatch-top-grid">
+            <section class="console-queue-section">
+              <div class="console-section-head">
+                <div>
+                  <h4>Provider 队列</h4>
+                  <p>全局队列和可调度密钥统一展示。</p>
+                </div>
+                <span class="console-section-count">{{ consoleQueueCards.length }} 条</span>
+              </div>
+              <div v-if="consoleQueueCards.length" class="console-provider-grid">
+                <button
+                  v-for="item in consoleQueueCards"
+                  :key="item.id"
+                  type="button"
+                  class="console-provider-card"
+                  :class="{ 'console-provider-card-primary': item.queueOrder === 1, 'console-provider-card-pending': !item.inQueue }"
+                  @click="toggleConsoleProviderQueue(item)"
+                >
+                  <div class="console-provider-card-top">
+                    <strong>{{ item.siteName }}</strong>
+                    <span class="console-provider-order">{{ item.queueOrder ? `P${item.queueOrder}` : '待入队' }}</span>
+                  </div>
+                  <div class="console-provider-model">{{ item.modelLabel }}</div>
+                  <div class="console-provider-meta">
+                    <span v-if="item.skLabel" class="console-provider-chip">{{ item.skLabel }}</span>
+                    <span v-if="!item.inQueue" class="console-provider-chip console-provider-chip-muted">未入队</span>
+                    <span v-if="!item.enabled" class="console-provider-chip console-provider-chip-muted">已停用</span>
+                  </div>
+                </button>
+              </div>
+              <div v-else class="console-empty-panel">暂无可调度 Provider，请先在本地密钥管理写入密钥。</div>
+            </section>
+
+            <section class="console-dispatch-section">
+              <div class="console-section-head">
+                <div>
+                  <h4>日志</h4>
+                  <p>按接收、路由、Provider 切换和结果持续追加。</p>
+                </div>
+              </div>
+              <div ref="advancedProxyConsoleLogScroller" class="console-dispatch-log-panel">
+                <pre class="console-dispatch-log-view">{{ consoleDispatchLogText }}</pre>
+              </div>
+            </section>
+          </div>
+
+          <section class="console-connections-section">
+            <div class="console-section-head">
+              <div>
+                <h4>连接信息</h4>
+                <p>保留最近 50 条连接，已完成记录固定排在下方。</p>
+              </div>
+              <span class="console-section-count">{{ sortedAdvancedProxyActiveConnections.length }} 条</span>
+            </div>
+            <div class="console-connections-panel">
+              <div class="console-connection-table" role="table" aria-label="当前高级代理连接">
+                <div class="console-connection-row console-connection-head" role="row">
+                  <span role="columnheader">状态</span>
+                  <span role="columnheader">会话序号</span>
+                  <span role="columnheader">已用时间</span>
+                  <span role="columnheader">出站</span>
+                  <span role="columnheader">Provider</span>
+                  <span role="columnheader">入口</span>
+                  <span role="columnheader">模型</span>
+                  <span role="columnheader">目标地址</span>
+                </div>
+                <div v-if="advancedProxyActiveConnectionsLoading && !sortedAdvancedProxyActiveConnections.length" class="console-connection-empty-row" role="row">
+                  正在加载当前连接...
+                </div>
+                <div v-else-if="!sortedAdvancedProxyActiveConnections.length" class="console-connection-empty-row" role="row">
+                  暂无高级代理连接。
+                </div>
+                <template v-else>
+                  <button
+                    v-for="connection in sortedAdvancedProxyActiveConnections"
+                    :key="connection.id"
+                    type="button"
+                    class="console-connection-row console-connection-item"
+                    :class="{ 'console-connection-item-selected': selectedAdvancedProxyConnectionId === connection.id }"
+                    role="row"
+                    @click="selectAdvancedProxyConnection(connection)"
+                    @contextmenu="openAdvancedProxyConnectionContextMenu(connection, $event)"
+                  >
+                    <span
+                      role="cell"
+                      class="console-connection-status-cell"
+                      :class="{ 'console-connection-status-cell-failed': isAdvancedProxyConnectionFailed(connection) }"
+                      :title="formatAdvancedProxyConnectionErrorTitle(connection)"
+                    >
+                      <span class="console-connection-status-dot" :class="getAdvancedProxyConnectionStatusClass(connection)" aria-hidden="true"></span>
+                      <small>{{ formatAdvancedProxyConnectionStage(connection) }}</small>
+                    </span>
+                    <span role="cell">{{ formatAdvancedProxyConnectionSessionOrdinal(connection) }}</span>
+                    <span role="cell">
+                      <strong>{{ formatAdvancedProxyConnectionWaitMs(connection) }}</strong>
+                      <small>{{ formatAdvancedProxyConnectionTime(connection.startedAt) }}</small>
+                    </span>
+                    <span role="cell">{{ connection.outboundRoute || '-' }}</span>
+                    <span role="cell">{{ formatAdvancedProxyConnectionProvider(connection) }}</span>
+                    <span role="cell">{{ formatAdvancedProxyConnectionRoute(connection) }}</span>
+                    <span role="cell">{{ connection.model || '-' }}</span>
+                    <span role="cell">{{ connection.upstreamEndpoint || connection.upstreamUrl || '等待上游' }}</span>
+                  </button>
+                </template>
+              </div>
+            </div>
+          </section>
+        </div>
       </a-card>
+
+      <div
+        v-if="advancedProxyConnectionContextMenu.open && advancedProxyConnectionContextMenu.connection"
+        class="key-row-context-menu advanced-proxy-connection-context-menu"
+        :class="{ 'key-row-context-menu-dark': isDarkMode }"
+        :style="{ left: `${advancedProxyConnectionContextMenu.x}px`, top: `${advancedProxyConnectionContextMenu.y}px` }"
+      >
+        <button
+          type="button"
+          class="import-export-menu-item key-row-context-action"
+          @click="openAdvancedProxyConnectionDetailFromContext"
+        >
+          详情
+        </button>
+        <div class="key-row-action-info">
+          <span class="key-row-action-label">连接</span>
+          <span class="key-row-action-value">
+            {{ formatAdvancedProxyConnectionProvider(advancedProxyConnectionContextMenu.connection) }} / {{ advancedProxyConnectionContextMenu.connection?.model || '-' }}
+          </span>
+        </div>
+      </div>
 
       <div
         v-if="rowContextMenu.open && (rowContextMenu.record || rowContextMenu.records.length)"
@@ -909,6 +1121,9 @@
               <AdvancedProxyRequestRecordsDrawer
                 v-model:open="showRequestRecordsDrawer"
                 :is-dark-mode="isDarkMode"
+                :initial-panel="requestRecordsInitialPanel"
+                :focus-record-id="advancedProxyFocusedRequestRecordId"
+                @update:open="handleRequestRecordsDrawerOpenChange"
               />
               <AdvancedProxyModal
                 v-model:open="showExperimentalFeatures"
@@ -925,7 +1140,7 @@
 
 <script setup>
 import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { ClockCircleOutlined, DeleteOutlined, DownloadOutlined, EyeInvisibleOutlined, EyeOutlined, FileTextOutlined, ImportOutlined, MenuFoldOutlined, PlusOutlined, ReloadOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
+import { ClockCircleOutlined, DeleteOutlined, DownloadOutlined, EyeInvisibleOutlined, EyeOutlined, FileTextOutlined, ImportOutlined, KeyOutlined, MenuFoldOutlined, PlusOutlined, ReloadOutlined, SafetyCertificateOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import { ConfigProvider, message, Modal, theme } from 'ant-design-vue';
 import { useRoute } from 'vue-router';
 import AppHeader from './AppHeader.vue';
@@ -935,12 +1150,22 @@ import AdvancedProxyRequestRecordsDrawer from './AdvancedProxyRequestRecordsDraw
 import DesktopConfigDiffModal from './DesktopConfigDiffModal.vue';
 import SystemSettingsModal from './SystemSettingsModal.vue';
 import { fetchModelList } from '../utils/api.js';
+import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
 import { maskApiKey } from '../utils/normal.js';
 import { apiFetch, isProbablyWailsRuntime, openUrlInSystemBrowser } from '../utils/runtimeApi.js';
 import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManagedAppConfigFiles } from '../utils/desktopConfigBridge.js';
 import {
+  ADVANCED_PROXY_SYNC_EVENT,
+  ADVANCED_PROXY_APPS,
   ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
+  getAdvancedProxyAppBaseUrl,
   getAdvancedProxyConfig,
+  getAdvancedProxyEffectiveProviders,
+  getAdvancedProxyQueueProviders,
+  isAdvancedProxyActiveConnectionBridgeAvailable,
+  isAdvancedProxyRequestRecordBridgeAvailable,
+  listAdvancedProxyActiveConnections,
+  listAdvancedProxyRequestRecords,
   normalizeAdvancedProxyConfig,
   setAdvancedProxyConfig,
   syncAdvancedProxyProvidersFromRecords,
@@ -979,11 +1204,77 @@ const STORAGE_KEY = 'api_check_key_management_records_v1';
 const MANUAL_STORAGE_KEY = 'api_check_key_management_manual_records_v1';
 const META_STORAGE_KEY = 'api_check_key_management_meta_v1';
 const KEY_GROUPS_STORAGE_KEY = 'api_check_key_management_groups_v1';
+const DEFAULT_PUBLIC_KEY_SEED_STORAGE_KEY = 'api_check_key_management_default_public_seed_checked_v1';
 const LAST_RESULTS_STORAGE_KEY = HISTORY_SNAPSHOT_INDEX_KEY;
 const KEY_MANAGEMENT_SYNC_EVENT = 'batch-api-check:key-management-sync';
 const DEFAULT_TEST_TIMEOUT_MS = 20000;
 const CC_SWITCH_TARGET_APPS = ['claude', 'codex', 'gemini', 'opencode', 'openclaw'];
 const ALL_KEYS_GROUP_ID = '__all_keys__';
+const DEFAULT_PUBLIC_KEY_MODELS = [
+  'claude-fable-5',
+  'claude-opus-4-8',
+  'claude-opus-4-7',
+  'claude-opus-4-6',
+  'claude-opus-4-5',
+  'claude-opus-4-1',
+  'claude-sonnet-4-6',
+  'claude-sonnet-4-5',
+  'claude-sonnet-4',
+  'claude-haiku-4-5',
+  'gemini-3.5-flash',
+  'gemini-3.1-pro',
+  'gemini-3-flash',
+  'gpt-5.5',
+  'gpt-5.5-pro',
+  'gpt-5.4',
+  'gpt-5.4-pro',
+  'gpt-5.4-mini',
+  'gpt-5.4-nano',
+  'gpt-5.3-codex-spark',
+  'gpt-5.3-codex',
+  'gpt-5.2',
+  'gpt-5.2-codex',
+  'gpt-5.1',
+  'gpt-5.1-codex-max',
+  'gpt-5.1-codex',
+  'gpt-5.1-codex-mini',
+  'gpt-5',
+  'gpt-5-codex',
+  'gpt-5-nano',
+  'grok-build-0.1',
+  'deepseek-v4-pro',
+  'deepseek-v4-flash',
+  'glm-5.2',
+  'glm-5.1',
+  'glm-5',
+  'minimax-m2.7',
+  'minimax-m2.5',
+  'kimi-k2.6',
+  'kimi-k2.5',
+  'qwen3.6-plus',
+  'qwen3.5-plus',
+  'big-pickle',
+  'deepseek-v4-flash-free',
+  'mimo-v2.5-free',
+  'qwen3.6-plus-free',
+  'minimax-m3-free',
+  'nemotron-3-ultra-free',
+  'north-mini-code-free',
+  'glm-4.6',
+];
+const DEFAULT_PUBLIC_KEY_RECORD = {
+  rowKey: 'manual::default-public-opencode',
+  sourceType: 'manual',
+  siteName: 'Opencode',
+  tokenName: 'public',
+  siteUrl: 'https://opencode.ai/zen/v1',
+  apiKey: 'public',
+  modelsList: DEFAULT_PUBLIC_KEY_MODELS,
+  modelsText: DEFAULT_PUBLIC_KEY_MODELS.join(', '),
+  selectedModel: 'deepseek-v4-flash-free',
+  groupSelectedModels: {},
+  status: 1,
+};
 const DESKTOP_APP_ICONS = {
   claude: claudeAppIcon,
   codex: codexAppIcon,
@@ -991,6 +1282,15 @@ const DESKTOP_APP_ICONS = {
   opencode: opencodeAppIcon,
   openclaw: openclawAppIcon,
 };
+const CONSOLE_PROXY_APP_IDS = ['claude', 'codex', 'opencode', 'openclaw'];
+const CONSOLE_PROXY_APP_LABELS = {
+  claude: 'Claude',
+  codex: 'Codex',
+  opencode: 'OpenCode',
+  openclaw: 'OpenClaw',
+};
+const PROXY_MANAGED_TOKEN = 'PROXY_MANAGED';
+const ADVANCED_PROXY_PROVIDER_NAME = 'AllApiDeck Advanced Proxy';
 const route = useRoute();
 const isWailsRuntime = isProbablyWailsRuntime();
 
@@ -1035,6 +1335,34 @@ const manualRecordDraft = reactive(createManualRecordDraft());
 const manualModelOptions = ref([]);
 const manualModelLoading = ref(false);
 const manualModelFetchKey = ref('');
+const activeInventoryPanel = ref('local');
+const advancedProxyConfigSnapshot = ref(normalizeAdvancedProxyConfig({}));
+const advancedProxyConsoleRecords = ref([]);
+const advancedProxyConsoleRecordsLoading = ref(false);
+const advancedProxyConsoleLogLines = ref([]);
+const advancedProxyConsoleRecordIds = ref(new Set());
+const advancedProxyActiveConnections = ref([]);
+const advancedProxyActiveConnectionsLoading = ref(false);
+const consoleProxyConfigApplying = ref(false);
+const consoleProxyPendingAppIds = ref([]);
+const consoleProxyOptimisticApps = reactive({});
+const consoleProxyMasterOptimistic = ref(null);
+const consoleProxyMasterPending = ref(false);
+const consoleAntiPoisonOptimistic = ref(null);
+const consoleAntiPoisonPending = ref(false);
+const consoleTakeoverReconcileCooldownUntil = reactive({});
+const advancedProxyConsoleLogScroller = ref(null);
+const inventoryCardRef = ref(null);
+const selectedAdvancedProxyConnectionId = ref('');
+const advancedProxyConnectionClockTick = ref(Date.now());
+const advancedProxyFocusedRequestRecordId = ref('');
+const requestRecordsInitialPanel = ref('records');
+const advancedProxyConnectionContextMenu = reactive({
+  open: false,
+  x: 0,
+  y: 0,
+  connection: null,
+});
 const hideInvalidKeys = ref(true);
 const BATCH_QUICK_TEST_CONCURRENCY = 10;
 const QUICK_GROUP_MODEL_REFRESH_CONCURRENCY = 6;
@@ -1060,6 +1388,10 @@ const portableSettingsMeta = ref('');
 const openingManualSidebar = ref(false);
 const manualSidebarBridgeReady = ref(false);
 let manualSidebarBridgeProbeTimer = null;
+let advancedProxyConsolePollingTimer = null;
+let advancedProxyConnectionClockTimer = null;
+let advancedProxyTakeoverReconciling = false;
+const CONSOLE_TAKEOVER_RECONCILE_COOLDOWN_MS = 8000;
 const isCompactMode = computed(() => route.query?.compact === '1');
 const keyGroups = ref(loadStoredKeyGroups());
 const activeKeyGroupId = ref(ALL_KEYS_GROUP_ID);
@@ -1100,6 +1432,1064 @@ const recordRenderMetaCache = new Map();
 const configProviderTheme = computed(() => ({
   algorithm: isDarkMode.value ? theme.darkAlgorithm : theme.defaultAlgorithm,
 }));
+
+function maskProviderApiKey(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '';
+  if (normalized.length <= 8) return normalized;
+  return `${normalized.slice(0, 4)}****${normalized.slice(-4)}`;
+}
+
+function formatProviderSkLabel(index, apiKey) {
+  const maskedKey = maskProviderApiKey(apiKey);
+  if (!Number(index)) {
+    return maskedKey ? `SK | ${maskedKey}` : '';
+  }
+  return maskedKey ? `SK ${index} | ${maskedKey}` : `SK ${index}`;
+}
+
+function normalizeConsoleText(value) {
+  return String(value || '').trim();
+}
+
+function firstNonEmpty(...values) {
+  return values.map(value => normalizeConsoleText(value)).find(Boolean) || '';
+}
+
+function cloneConsoleFallback(value) {
+  return JSON.parse(JSON.stringify(value ?? {}));
+}
+
+function isConsolePlainObject(value) {
+  return Boolean(value) && Object.prototype.toString.call(value) === '[object Object]';
+}
+
+function parseConsoleStrictJsonObjectSafe(text, fallback = {}) {
+  if (!String(text || '').trim()) return cloneConsoleFallback(fallback);
+  try {
+    const parsed = JSON.parse(text);
+    return isConsolePlainObject(parsed) ? parsed : cloneConsoleFallback(fallback);
+  } catch {
+    return cloneConsoleFallback(fallback);
+  }
+}
+
+function stripConsoleJsonComments(input) {
+  let result = '';
+  let inSingle = false;
+  let inDouble = false;
+  let escaping = false;
+  for (let index = 0; index < input.length; index += 1) {
+    const current = input[index];
+    const next = input[index + 1];
+    if (!inSingle && !inDouble && current === '/' && next === '/') {
+      while (index < input.length && input[index] !== '\n') index += 1;
+      if (index < input.length) result += '\n';
+      continue;
+    }
+    if (!inSingle && !inDouble && current === '/' && next === '*') {
+      index += 2;
+      while (index < input.length && !(input[index] === '*' && input[index + 1] === '/')) index += 1;
+      index += 1;
+      continue;
+    }
+    result += current;
+    if (escaping) {
+      escaping = false;
+      continue;
+    }
+    if ((inSingle || inDouble) && current === '\\') {
+      escaping = true;
+      continue;
+    }
+    if (!inDouble && current === '\'') {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (!inSingle && current === '"') inDouble = !inDouble;
+  }
+  return result;
+}
+
+function convertConsoleSingleQuotedStrings(input) {
+  let result = '';
+  let inDouble = false;
+  let escaping = false;
+  for (let index = 0; index < input.length; index += 1) {
+    const current = input[index];
+    if (inDouble) {
+      result += current;
+      if (escaping) escaping = false;
+      else if (current === '\\') escaping = true;
+      else if (current === '"') inDouble = false;
+      continue;
+    }
+    if (current === '"') {
+      inDouble = true;
+      result += current;
+      continue;
+    }
+    if (current !== '\'') {
+      result += current;
+      continue;
+    }
+    let buffer = '';
+    let innerEscaping = false;
+    let closed = false;
+    for (index += 1; index < input.length; index += 1) {
+      const inner = input[index];
+      if (innerEscaping) {
+        buffer += inner;
+        innerEscaping = false;
+        continue;
+      }
+      if (inner === '\\') {
+        innerEscaping = true;
+        buffer += inner;
+        continue;
+      }
+      if (inner === '\'') {
+        closed = true;
+        break;
+      }
+      buffer += inner;
+    }
+    if (!closed) throw new Error('Single-quoted string is not closed');
+    result += JSON.stringify(buffer.replace(/\\'/g, '\'').replace(/\\"/g, '"'));
+  }
+  return result;
+}
+
+function parseConsoleLooseJsonObjectSafe(text, fallback = {}) {
+  if (!String(text || '').trim()) return cloneConsoleFallback(fallback);
+  try {
+    const withoutComments = stripConsoleJsonComments(String(text || ''));
+    const withDoubleQuotes = convertConsoleSingleQuotedStrings(withoutComments);
+    const quotedKeys = withDoubleQuotes.replace(/([{,]\s*)([A-Za-z_$][\w$-]*)(\s*:)/g, '$1"$2"$3');
+    const normalized = quotedKeys.replace(/,(\s*[}\]])/g, '$1');
+    const parsed = JSON.parse(normalized);
+    return isConsolePlainObject(parsed) ? parsed : cloneConsoleFallback(fallback);
+  } catch {
+    return cloneConsoleFallback(fallback);
+  }
+}
+
+function normalizeConsoleComparableUrl(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '';
+  try {
+    const url = new URL(normalized);
+    const pathname = (url.pathname || '/').replace(/\/+$/, '') || '/';
+    return `${url.protocol}//${url.host}${pathname}`.toLowerCase();
+  } catch {
+    return normalized.replace(/\/+$/, '').toLowerCase();
+  }
+}
+
+function findConsoleManagedSnapshotFile(snapshotFiles, appId, fileId) {
+  return (Array.isArray(snapshotFiles) ? snapshotFiles : []).find(file =>
+    String(file?.appId || '').trim() === String(appId || '').trim()
+    && String(file?.fileId || '').trim() === String(fileId || '').trim()
+  ) || null;
+}
+
+function isConsoleManagedProxyToken(value) {
+  return String(value || '').trim() === PROXY_MANAGED_TOKEN;
+}
+
+function extractConsoleCodexActiveProviderKey(text) {
+  const match = String(text || '').match(/^\s*model_provider\s*=\s*(?:"([^"\n]+)"|'([^'\n]+)'|([^\s#]+))/m);
+  return String(match?.[1] || match?.[2] || match?.[3] || '').trim();
+}
+
+function extractConsoleCodexProviderSectionKey(header) {
+  const match = String(header || '').trim().match(/^model_providers\.(?:"([^"]+)"|'([^']+)'|([^\s]+))$/);
+  return String(match?.[1] || match?.[2] || match?.[3] || '').trim();
+}
+
+function extractConsoleCodexProviderBaseUrl(text, providerKey) {
+  const normalizedProviderKey = String(providerKey || '').trim();
+  if (!normalizedProviderKey) return '';
+  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+  let inTargetSection = false;
+  const sectionLines = [];
+  for (const line of lines) {
+    const sectionHeader = line.match(/^\s*\[([^\]]+)\]\s*$/);
+    if (sectionHeader) {
+      if (inTargetSection) break;
+      inTargetSection = extractConsoleCodexProviderSectionKey(sectionHeader[1]) === normalizedProviderKey;
+      continue;
+    }
+    if (inTargetSection) sectionLines.push(line);
+  }
+  const baseUrlMatch = sectionLines.join('\n').match(/^\s*base_url\s*=\s*["']([^"'\n]+)["']/m);
+  return String(baseUrlMatch?.[1] || '').trim();
+}
+
+function hasMatchingConsoleOpenCodeProxyProvider(config, expectedBaseUrl) {
+  const providers = isConsolePlainObject(config?.provider) ? config.provider : {};
+  return Object.values(providers).some(provider =>
+    normalizeConsoleComparableUrl(provider?.options?.baseURL) === expectedBaseUrl
+    && isConsoleManagedProxyToken(provider?.options?.apiKey)
+  );
+}
+
+function hasMatchingConsoleOpenClawProxyProvider(config, expectedBaseUrl) {
+  const providers = isConsolePlainObject(config?.models?.providers) ? config.models.providers : {};
+  const primary = String(config?.agents?.defaults?.model?.primary || '').trim();
+  if (primary.includes('/')) {
+    const activeProvider = providers[primary.split('/')[0]];
+    if (activeProvider) {
+      return normalizeConsoleComparableUrl(activeProvider?.baseUrl) === expectedBaseUrl
+        && isConsoleManagedProxyToken(activeProvider?.apiKey)
+        && String(activeProvider?.api || '').trim() === 'openai-completions';
+    }
+  }
+  return Object.values(providers).some(provider =>
+    normalizeConsoleComparableUrl(provider?.baseUrl) === expectedBaseUrl
+    && isConsoleManagedProxyToken(provider?.apiKey)
+    && String(provider?.api || '').trim() === 'openai-completions'
+  );
+}
+
+function formatConsoleRecordTime(value) {
+  const text = normalizeConsoleText(value);
+  if (!text) return '-';
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return text;
+  return date.toLocaleString('zh-CN', {
+    hour12: false,
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function summarizeConsoleEndpoint(value) {
+  const text = normalizeConsoleText(value);
+  if (!text) return '-';
+  return text
+    .replace(/^https?:\/\/[^/]+/i, '')
+    .replace(/^\/+/, '')
+    .replace(/^advanced-proxy\//i, '') || text;
+}
+
+function formatConsoleRouteLabel(value) {
+  const normalized = normalizeConsoleText(value).toLowerCase();
+  switch (normalized) {
+    case 'responses':
+      return 'responses';
+    case 'responses_compact':
+      return 'responses/compact';
+    case 'chat':
+      return 'chat';
+    case 'messages':
+      return 'messages';
+    default:
+      return summarizeConsoleEndpoint(value);
+  }
+}
+
+function formatConsoleRouteSource(value) {
+  const normalized = normalizeConsoleText(value).toLowerCase();
+  switch (normalized) {
+    case 'fallback':
+      return 'fallback 切换';
+    case 'fallback_restore':
+      return 'fallback 恢复';
+    case 'preference':
+      return '偏好路由';
+    case 'upgrade':
+      return '升级路由';
+    case 'rectified':
+      return '请求修正';
+    default:
+      return normalized || '-';
+  }
+}
+
+function formatConsoleRouteStatus(value) {
+  const normalized = normalizeConsoleText(value).toLowerCase();
+  switch (normalized) {
+    case 'success':
+      return '成功';
+    case 'failed':
+    case 'fail':
+    case 'error':
+      return '失败';
+    case 'skipped':
+      return '跳过';
+    default:
+      return normalized || '-';
+  }
+}
+
+function resolveConsoleRouteTrace(record) {
+  const steps = Array.isArray(record?.routeTrace) ? record.routeTrace : [];
+  const normalized = steps
+    .map(step => ({
+      route: normalizeConsoleText(step?.route),
+      source: normalizeConsoleText(step?.source),
+      status: normalizeConsoleText(step?.status),
+    }))
+    .filter(step => step.route);
+  if (normalized.length) return normalized;
+  const route = normalizeConsoleText(record?.outboundRoute);
+  if (!route) return [];
+  return [{
+    route,
+    source: normalizeConsoleText(record?.source),
+    status: Number(record?.statusCode || 0) >= 200 && Number(record?.statusCode || 0) < 400 ? 'success' : 'failed',
+  }];
+}
+
+function formatAdvancedProxyConsoleRecordLog(record) {
+  const time = formatConsoleRecordTime(record?.recordedAt);
+  const appType = normalizeConsoleText(record?.appType).toUpperCase() || 'APP';
+  const inbound = summarizeConsoleEndpoint(record?.inboundEndpoint || record?.clientRoute);
+  const provider = normalizeConsoleText(record?.providerName) || normalizeConsoleText(record?.providerId) || '未命名 Provider';
+  const model = normalizeConsoleText(record?.model) || '未记录模型';
+  const upstream = summarizeConsoleEndpoint(record?.upstreamEndpoint || record?.upstreamUrl);
+  const statusCode = Number(record?.statusCode || 0);
+  const ok = statusCode >= 200 && statusCode < 400 && !normalizeConsoleText(record?.errorDetail);
+  const duration = Number(record?.durationMs || 0);
+  const metrics = [
+    duration > 0 ? `耗时 ${duration}ms` : '',
+    Number(record?.ttftMs || 0) > 0 ? `TTFT ${record.ttftMs}ms` : '',
+    Number(record?.latencyMs || 0) > 0 ? `延迟 ${record.latencyMs}ms` : '',
+  ].filter(Boolean).join(' / ');
+  const lines = [
+    `[${time}] ${appType} 接收请求: ${inbound}`,
+    `  调度 Provider: ${provider} | 模型: ${model} | 出口: ${upstream}`,
+  ];
+  const routeTrace = resolveConsoleRouteTrace(record);
+  if (routeTrace.length) {
+    lines.push('  路由轨迹:');
+    routeTrace.forEach((step, index) => {
+      lines.push(`    ${index + 1}. ${formatConsoleRouteLabel(step.route)} | ${formatConsoleRouteSource(step.source)} | ${formatConsoleRouteStatus(step.status)}`);
+    });
+  }
+  lines.push(`  结果: ${ok ? '成功' : '失败'} | HTTP ${statusCode || '-'}${metrics ? ` | ${metrics}` : ''}`);
+  const errorDetail = normalizeConsoleText(record?.errorDetail);
+  if (errorDetail) {
+    lines.push(`  错误: ${errorDetail}`);
+  }
+  return lines.join('\n');
+}
+
+function formatAdvancedProxyConnectionTime(value) {
+  const date = new Date(value || '');
+  if (Number.isNaN(date.getTime())) return '--';
+  return date.toLocaleTimeString('zh-CN', { hour12: false });
+}
+
+function formatAdvancedProxyConnectionSessionOrdinal(connection) {
+  const ordinal = Number(connection?.sessionOrdinal || 0);
+  return Number.isFinite(ordinal) && ordinal > 0 ? `S${ordinal}` : '-';
+}
+
+function formatAdvancedProxyConnectionWaitMs(connection) {
+  void advancedProxyConnectionClockTick.value;
+  const startedAt = new Date(connection?.startedAt || '').getTime();
+  if (!Number.isFinite(startedAt)) return '--';
+  const finishedAt = isAdvancedProxyConnectionCompleted(connection)
+    ? new Date(connection?.updatedAt || '').getTime()
+    : Number.NaN;
+  const endAt = Number.isFinite(finishedAt) && finishedAt >= startedAt ? finishedAt : Date.now();
+  const elapsed = Math.max(0, endAt - startedAt);
+  if (elapsed < 1000) return `${elapsed}ms`;
+  if (elapsed < 60000) return `${Math.floor(elapsed / 1000)}s`;
+  const minutes = Math.floor(elapsed / 60000);
+  const seconds = Math.floor((elapsed % 60000) / 1000);
+  return `${minutes}m ${seconds}s`;
+}
+
+function getAdvancedProxyConnectionStatusClass(connection) {
+  if (isAdvancedProxyConnectionFailed(connection)) return 'console-connection-status-failed';
+  const stage = normalizeConsoleText(connection?.stage);
+  if (isAdvancedProxyConnectionCompleted(connection)) return 'console-connection-status-completed';
+  if (stage === 'waiting_upstream') return 'console-connection-status-waiting';
+  if (stage === 'force_probe') return 'console-connection-status-probe';
+  return 'console-connection-status-active';
+}
+
+function isAdvancedProxyConnectionFailed(connection) {
+  const status = normalizeConsoleText(connection?.status);
+  const statusCode = Number(connection?.statusCode || 0);
+  return status === 'failed' || statusCode >= 400;
+}
+
+function isAdvancedProxyConnectionCompleted(connection) {
+  const status = normalizeConsoleText(connection?.status);
+  const stage = normalizeConsoleText(connection?.stage);
+  if (isAdvancedProxyConnectionFailed(connection)) return false;
+  return status === 'completed' || stage === 'completed' || status === 'done' || stage === 'done';
+}
+
+function formatAdvancedProxyConnectionErrorCode(connection) {
+  const statusCode = Number(connection?.statusCode || 0);
+  const errorCode = normalizeConsoleText(connection?.errorCode);
+  const parts = [
+    statusCode > 0 ? `HTTP ${statusCode}` : '',
+    errorCode ? errorCode.toUpperCase() : '',
+  ].filter(Boolean);
+  return parts.join(' / ') || 'FAILED';
+}
+
+function formatAdvancedProxyConnectionErrorTitle(connection) {
+  const code = formatAdvancedProxyConnectionErrorCode(connection);
+  const detail = normalizeConsoleText(connection?.errorDetail);
+  if (!detail) return code;
+  return `${code}\n${detail}`;
+}
+
+function formatAdvancedProxyConnectionRoute(connection) {
+  const app = normalizeConsoleText(connection?.appType).toUpperCase() || 'APP';
+  const route = normalizeConsoleText(connection?.clientRoute) || summarizeConsoleEndpoint(connection?.inboundEndpoint) || '-';
+  return `${app} / ${route}`;
+}
+
+function formatAdvancedProxyConnectionProvider(connection) {
+  return normalizeConsoleText(connection?.providerName) || normalizeConsoleText(connection?.providerId) || '等待调度';
+}
+
+function formatAdvancedProxyConnectionStage(connection) {
+  if (isAdvancedProxyConnectionFailed(connection)) {
+    return formatAdvancedProxyConnectionErrorCode(connection);
+  }
+  if (isAdvancedProxyConnectionCompleted(connection)) return '已完成';
+  const stage = normalizeConsoleText(connection?.stage);
+  const status = normalizeConsoleText(connection?.status);
+  const stageLabels = {
+    received: '已接收',
+    dispatching: '调度中',
+    waiting_upstream: '等待上游',
+    force_probe: '强制探测',
+  };
+  return stageLabels[stage] || status || stage || '进行中';
+}
+
+function scrollAdvancedProxyConsoleLogToBottom() {
+  if (typeof window === 'undefined') return;
+  nextTick(() => {
+    const scroller = advancedProxyConsoleLogScroller.value;
+    if (!scroller) return;
+    scroller.scrollTop = scroller.scrollHeight;
+  });
+}
+
+function selectAdvancedProxyConnection(connection) {
+  selectedAdvancedProxyConnectionId.value = String(connection?.id || '').trim();
+}
+
+function closeAdvancedProxyConnectionContextMenu() {
+  advancedProxyConnectionContextMenu.open = false;
+  advancedProxyConnectionContextMenu.connection = null;
+}
+
+async function openAdvancedProxyConnectionContextMenu(connection, event) {
+  if (!connection || !event) return;
+  event.preventDefault();
+  event.stopPropagation();
+  closeRowContextMenu();
+  closeKeyGroupContextMenu();
+  selectedAdvancedProxyConnectionId.value = String(connection?.id || '').trim();
+  advancedProxyConnectionContextMenu.connection = connection;
+  const anchorX = Number(event.clientX) || 0;
+  const anchorY = Number(event.clientY) || 0;
+  const position = resolveContextMenuPosition(anchorX, anchorY, 224, 112);
+  advancedProxyConnectionContextMenu.x = position.x;
+  advancedProxyConnectionContextMenu.y = position.y;
+  advancedProxyConnectionContextMenu.open = true;
+}
+
+function normalizeAdvancedProxyMatchText(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function scoreAdvancedProxyConnectionRecordMatch(connection, record) {
+  if (!connection || !record) return -1;
+  let score = 0;
+  const connectionStartedAt = new Date(connection?.startedAt || '').getTime();
+  const recordAt = new Date(record?.recordedAt || '').getTime();
+  if (Number.isFinite(connectionStartedAt) && Number.isFinite(recordAt)) {
+    const diff = Math.abs(recordAt - connectionStartedAt);
+    if (diff <= 180000) score += 24;
+    else if (diff <= 600000) score += 10;
+  }
+  const pairs = [
+    [connection?.appType, record?.appType, 12],
+    [connection?.clientRoute, record?.clientRoute, 12],
+    [connection?.inboundEndpoint, record?.inboundEndpoint, 10],
+    [connection?.outboundRoute, record?.outboundRoute, 10],
+    [connection?.providerId, record?.providerId || record?.providerRowKey, 18],
+    [connection?.providerName, record?.providerName, 18],
+    [connection?.model, record?.model, 16],
+    [connection?.upstreamEndpoint || connection?.upstreamUrl, record?.upstreamEndpoint || record?.upstreamUrl, 10],
+  ];
+  pairs.forEach(([left, right, weight]) => {
+    const leftText = normalizeAdvancedProxyMatchText(left);
+    const rightText = normalizeAdvancedProxyMatchText(right);
+    if (!leftText || !rightText) return;
+    if (leftText === rightText || leftText.includes(rightText) || rightText.includes(leftText)) {
+      score += weight;
+    }
+  });
+  return score;
+}
+
+async function findAdvancedProxyConnectionRequestRecord(connection) {
+  const cachedRecords = Array.isArray(advancedProxyConsoleRecords.value) ? advancedProxyConsoleRecords.value : [];
+  let bestRecord = null;
+  let bestScore = -1;
+  cachedRecords.forEach(record => {
+    const score = scoreAdvancedProxyConnectionRecordMatch(connection, record);
+    if (score > bestScore) {
+      bestScore = score;
+      bestRecord = record;
+    }
+  });
+  if (bestRecord && bestScore >= 28) return bestRecord;
+  try {
+    const records = await listAdvancedProxyRequestRecords(120);
+    const normalizedRecords = Array.isArray(records) ? records : [];
+    advancedProxyConsoleRecords.value = normalizedRecords;
+    normalizedRecords.forEach(record => {
+      const score = scoreAdvancedProxyConnectionRecordMatch(connection, record);
+      if (score > bestScore) {
+        bestScore = score;
+        bestRecord = record;
+      }
+    });
+  } catch (error) {
+    console.warn('[KeyManagement] find advanced proxy connection request record failed:', error);
+  }
+  return bestScore >= 28 ? bestRecord : null;
+}
+
+async function openAdvancedProxyConnectionDetailFromContext() {
+  const connection = advancedProxyConnectionContextMenu.connection;
+  closeAdvancedProxyConnectionContextMenu();
+  const record = await findAdvancedProxyConnectionRequestRecord(connection);
+  if (!record?.id) {
+    message.warning('未找到这条连接对应的请求详情');
+    return;
+  }
+  advancedProxyFocusedRequestRecordId.value = String(record.id || '').trim();
+  requestRecordsInitialPanel.value = 'records';
+  showRequestRecordsDrawer.value = true;
+}
+
+function openRequestRecordsDrawer(panel = 'records') {
+  advancedProxyFocusedRequestRecordId.value = '';
+  requestRecordsInitialPanel.value = normalizeRequestRecordsPanel(panel);
+  showRequestRecordsDrawer.value = true;
+}
+
+function normalizeRequestRecordsPanel(panel) {
+  const normalized = String(panel || 'records').trim().toLowerCase();
+  return ['sessions', 'records', 'mcp', 'skills'].includes(normalized) ? normalized : 'records';
+}
+
+function handleRequestRecordsDrawerOpenChange(open) {
+  showRequestRecordsDrawer.value = open === true;
+  if (!open) {
+    advancedProxyFocusedRequestRecordId.value = '';
+  }
+}
+
+async function toggleConsoleProviderQueue(item) {
+  const providerId = String(item?.rowKey || item?.id || '').trim();
+  if (!providerId) return;
+  try {
+    const savedConfig = await getAdvancedProxyConfig();
+    const nextConfig = normalizeAdvancedProxyConfig(savedConfig || {});
+    const queue = ensureAdvancedProxyQueueSection(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
+    const currentProviders = Array.isArray(queue.providers) ? queue.providers.map(provider => ({ ...provider })) : [];
+    const existingIndex = currentProviders.findIndex(provider => {
+      const id = String(provider?.id || provider?.rowKey || '').trim();
+      const apiKey = String(provider?.apiKey || '').trim();
+      return id === providerId || (item?.apiKey && apiKey === item.apiKey);
+    });
+    if (existingIndex >= 0) {
+      currentProviders.splice(existingIndex, 1);
+    } else {
+      const sourceRecord = item?.sourceRecord || tableData.value.find(record => String(record?.rowKey || '').trim() === providerId);
+      if (!sourceRecord) {
+        message.warning('这条 Provider 已不在本地密钥管理中，无法重新加入队列');
+        return;
+      }
+      currentProviders.push(buildProviderFromManagedRecord(sourceRecord, currentProviders.length + 1));
+    }
+    replaceAdvancedProxyQueueProviders(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, currentProviders);
+    nextConfig.claude.providers = [...(nextConfig.queues?.[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE]?.providers || [])];
+    const syncedConfig = syncAdvancedProxyConfigSnapshotFromCurrentRecords(nextConfig);
+    await setAdvancedProxyConfig(syncedConfig);
+    advancedProxyConfigSnapshot.value = normalizeAdvancedProxyConfig(syncedConfig);
+    message.success(existingIndex >= 0 ? '已从全局 Provider 队列移出' : '已加入全局 Provider 队列');
+  } catch (error) {
+    message.error(error?.message || '更新 Provider 队列失败');
+  }
+}
+
+async function refreshAdvancedProxyConsoleSnapshot() {
+  try {
+    const config = await getAdvancedProxyConfig();
+    advancedProxyConfigSnapshot.value = await reconcileConsoleLocalAppTakeoverState(config || {});
+  } catch (error) {
+    console.warn('[KeyManagement] refresh advanced proxy console failed:', error);
+    advancedProxyConfigSnapshot.value = normalizeAdvancedProxyConfig({});
+  }
+}
+
+async function updateConsoleAdvancedProxyConfig(mutator, successMessage) {
+  try {
+    const savedConfig = await getAdvancedProxyConfig();
+    const nextConfig = normalizeAdvancedProxyConfig(savedConfig || {});
+    mutator(nextConfig);
+    const syncedConfig = syncAdvancedProxyConfigSnapshotFromCurrentRecords(nextConfig);
+    await setAdvancedProxyConfig(syncedConfig);
+    advancedProxyConfigSnapshot.value = normalizeAdvancedProxyConfig(syncedConfig);
+    if (successMessage) message.success(successMessage);
+  } catch (error) {
+    message.error(error?.message || '更新高级代理配置失败');
+    throw error;
+  }
+}
+
+function setConsoleProxyAppEnabled(config, appId, enabled) {
+  if (!CONSOLE_PROXY_APP_IDS.includes(appId)) return;
+  if (!config[appId] || typeof config[appId] !== 'object') {
+    config[appId] = {};
+  }
+  config[appId].enabled = enabled === true;
+}
+
+function syncConsoleProxyMasterEnabled(config) {
+  config.enabled = CONSOLE_PROXY_APP_IDS.some(appId => config?.[appId]?.enabled === true);
+}
+
+function hasConsolePendingApp(appId) {
+  return consoleProxyPendingAppIds.value.includes(appId);
+}
+
+function setConsolePendingApp(appId, pending) {
+  const normalized = String(appId || '').trim();
+  if (!normalized) return;
+  const next = new Set(consoleProxyPendingAppIds.value);
+  if (pending) next.add(normalized);
+  else next.delete(normalized);
+  consoleProxyPendingAppIds.value = Array.from(next);
+}
+
+function getConsoleAppEnabled(appId) {
+  if (Object.prototype.hasOwnProperty.call(consoleProxyOptimisticApps, appId)) {
+    return consoleProxyOptimisticApps[appId] === true;
+  }
+  return advancedProxyConfigSnapshot.value?.[appId]?.enabled === true;
+}
+
+function resetConsoleOptimisticState() {
+  Object.keys(consoleProxyOptimisticApps).forEach(key => delete consoleProxyOptimisticApps[key]);
+  consoleProxyMasterOptimistic.value = null;
+  consoleAntiPoisonOptimistic.value = null;
+}
+
+function markConsoleTakeoverReconcileCooldown(appIds, durationMs = CONSOLE_TAKEOVER_RECONCILE_COOLDOWN_MS) {
+  const ids = Array.isArray(appIds) ? appIds : [appIds];
+  const until = Date.now() + durationMs;
+  ids.forEach(appId => {
+    const normalized = String(appId || '').trim();
+    if (CONSOLE_PROXY_APP_IDS.includes(normalized)) {
+      consoleTakeoverReconcileCooldownUntil[normalized] = until;
+    }
+  });
+}
+
+function isConsoleTakeoverReconcileCoolingDown(appId) {
+  const normalized = String(appId || '').trim();
+  const until = Number(consoleTakeoverReconcileCooldownUntil[normalized] || 0);
+  if (!until) return false;
+  if (Date.now() <= until) return true;
+  delete consoleTakeoverReconcileCooldownUntil[normalized];
+  return false;
+}
+
+function waitForConsolePaint() {
+  return new Promise(resolve => {
+    if (typeof window === 'undefined') {
+      resolve();
+      return;
+    }
+    window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
+  });
+}
+
+function detectConsoleLocalAdvancedProxyTakeoverState(snapshot, config) {
+  const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
+  const claudeBaseUrl = normalizeConsoleComparableUrl(getAdvancedProxyAppBaseUrl('claude', config));
+  const codexBaseUrl = normalizeConsoleComparableUrl(getAdvancedProxyAppBaseUrl('codex', config));
+  const opencodeBaseUrl = normalizeConsoleComparableUrl(getAdvancedProxyAppBaseUrl('opencode', config));
+  const openclawBaseUrl = normalizeConsoleComparableUrl(getAdvancedProxyAppBaseUrl('openclaw', config));
+
+  const claudeSettings = parseConsoleStrictJsonObjectSafe(
+    findConsoleManagedSnapshotFile(files, 'claude', 'settings')?.content || '',
+    {}
+  );
+  const claudeEnv = isConsolePlainObject(claudeSettings?.env) ? claudeSettings.env : {};
+
+  const codexAuth = parseConsoleStrictJsonObjectSafe(
+    findConsoleManagedSnapshotFile(files, 'codex', 'auth')?.content || '',
+    {}
+  );
+  const codexConfigText = String(findConsoleManagedSnapshotFile(files, 'codex', 'config')?.content || '');
+  const codexProviderKey = extractConsoleCodexActiveProviderKey(codexConfigText);
+  const codexProviderBaseUrl = normalizeConsoleComparableUrl(extractConsoleCodexProviderBaseUrl(codexConfigText, codexProviderKey));
+
+  const opencodeConfig = parseConsoleStrictJsonObjectSafe(
+    findConsoleManagedSnapshotFile(files, 'opencode', 'config')?.content || '',
+    { $schema: 'https://opencode.ai/config.json' }
+  );
+  const openclawConfig = parseConsoleLooseJsonObjectSafe(
+    findConsoleManagedSnapshotFile(files, 'openclaw', 'config')?.content || '',
+    { models: { mode: 'merge', providers: {} } }
+  );
+
+  return {
+    claude: normalizeConsoleComparableUrl(claudeEnv.ANTHROPIC_BASE_URL) === claudeBaseUrl
+      && (isConsoleManagedProxyToken(claudeEnv.ANTHROPIC_AUTH_TOKEN) || isConsoleManagedProxyToken(claudeEnv.ANTHROPIC_API_KEY)),
+    codex: isConsoleManagedProxyToken(codexAuth.OPENAI_API_KEY)
+      && codexProviderBaseUrl === codexBaseUrl,
+    opencode: hasMatchingConsoleOpenCodeProxyProvider(opencodeConfig, opencodeBaseUrl),
+    openclaw: hasMatchingConsoleOpenClawProxyProvider(openclawConfig, openclawBaseUrl),
+  };
+}
+
+async function reconcileConsoleLocalAppTakeoverState(config) {
+  if (advancedProxyTakeoverReconciling || !isDesktopConfigBridgeAvailable()) {
+    return normalizeAdvancedProxyConfig(config || {});
+  }
+  advancedProxyTakeoverReconciling = true;
+  try {
+    const normalizedConfig = normalizeAdvancedProxyConfig(config || {});
+    const snapshot = await readManagedAppConfigFiles(CONSOLE_PROXY_APP_IDS);
+    const takeoverState = detectConsoleLocalAdvancedProxyTakeoverState(snapshot, normalizedConfig);
+    const mismatchedApps = CONSOLE_PROXY_APP_IDS.filter(appId =>
+      normalizedConfig?.[appId]?.enabled === true && takeoverState[appId] !== true
+      && !isConsoleTakeoverReconcileCoolingDown(appId)
+    );
+    if (!mismatchedApps.length) return normalizedConfig;
+
+    const nextConfig = normalizeAdvancedProxyConfig(normalizedConfig);
+    mismatchedApps.forEach(appId => {
+      setConsoleProxyAppEnabled(nextConfig, appId, false);
+    });
+    syncConsoleProxyMasterEnabled(nextConfig);
+    const syncedConfig = syncAdvancedProxyConfigSnapshotFromCurrentRecords(nextConfig);
+    const savedConfig = await setAdvancedProxyConfig(syncedConfig);
+    const labels = mismatchedApps.map(appId => CONSOLE_PROXY_APP_LABELS[appId] || appId).join(' / ');
+    message.warning(`检测到 ${labels} 当前已不处于高级代理接管状态，已自动清空图标开启状态`);
+    return normalizeAdvancedProxyConfig(savedConfig || syncedConfig);
+  } finally {
+    advancedProxyTakeoverReconciling = false;
+  }
+}
+
+function getConsoleCompatibleProviderForApp(config, appId, enabledOnly = true) {
+  const providers = getAdvancedProxyEffectiveProviders(config, appId, { enabledOnly });
+  return providers[0] || null;
+}
+
+function getConsolePreferredModelForApp(config, appId, provider = null) {
+  const directModel = String(provider?.model || '').trim();
+  if (directModel) return directModel;
+  const defaultModel = String(config?.claude?.defaultModel || '').trim();
+  if (defaultModel) return defaultModel;
+  const effectiveProviders = getAdvancedProxyEffectiveProviders(config, appId, { enabledOnly: false });
+  const providerWithModel = effectiveProviders.find(item => String(item?.model || '').trim());
+  if (providerWithModel) return String(providerWithModel.model || '').trim();
+  const globalProviders = getAdvancedProxyQueueProviders(config, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, { effective: false });
+  return String(globalProviders.find(item => String(item?.model || '').trim())?.model || '').trim();
+}
+
+function createConsoleTakeoverDesktopDraft(appId, enabled, config) {
+  const sourceProvider = getConsoleCompatibleProviderForApp(config, appId, true);
+  const model = getConsolePreferredModelForApp(config, appId, sourceProvider);
+  if (!model) {
+    throw new Error('请先给 Provider 补一个模型，再启用该应用接管');
+  }
+
+  if (!enabled && !sourceProvider) {
+    throw new Error(appId === 'claude'
+      ? '当前没有可回退的 Claude 上游 Provider'
+      : '当前没有可回退的 OpenAI 兼容上游 Provider');
+  }
+
+  const endpoint = enabled ? getAdvancedProxyAppBaseUrl(appId, config) : String(sourceProvider?.baseUrl || '').trim();
+  const apiKey = enabled ? PROXY_MANAGED_TOKEN : String(sourceProvider?.apiKey || '').trim();
+  const providerName = enabled ? ADVANCED_PROXY_PROVIDER_NAME : String(sourceProvider?.name || 'Custom Provider').trim();
+
+  if (!endpoint) throw new Error('缺少可写入的目标地址');
+  if (!apiKey) throw new Error('缺少可写入的 API Key');
+
+  const nextDraft = createDesktopConfigDraft({
+    siteName: providerName,
+    siteUrl: endpoint,
+    apiKey,
+    selectedModel: model,
+    quickTestModel: model,
+  });
+
+  nextDraft.selectedApps = [appId];
+  nextDraft.providerName = providerName;
+  nextDraft.providerKey = 'custom';
+  nextDraft.forceCustomProviderKey = true;
+  nextDraft.endpoint = endpoint;
+  nextDraft.apiKey = apiKey;
+  nextDraft.model = model;
+  nextDraft.claudeBaseUrl = appId === 'claude' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
+  nextDraft.claudeApiKeyField = enabled ? 'ANTHROPIC_AUTH_TOKEN' : String(sourceProvider?.apiKeyField || 'ANTHROPIC_AUTH_TOKEN').trim();
+  nextDraft.codexBaseUrl = appId === 'codex' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
+  nextDraft.opencodeBaseUrl = appId === 'opencode' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
+  nextDraft.openclawBaseUrl = appId === 'openclaw' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
+  nextDraft.claudeUseAdvancedProxy = false;
+  nextDraft.codexUseAdvancedProxy = false;
+  nextDraft.opencodeUseAdvancedProxy = false;
+  nextDraft.openclawUseAdvancedProxy = false;
+  return nextDraft;
+}
+
+async function applyConsoleTakeoverConfig(appId, enabled, savedConfig, nextConfig, preview) {
+  const writes = Array.isArray(preview?.writes) ? preview.writes : [];
+  const syncedConfig = syncAdvancedProxyConfigSnapshotFromCurrentRecords(nextConfig);
+
+  if (!writes.length) {
+    const saved = await setAdvancedProxyConfig(syncedConfig);
+    advancedProxyConfigSnapshot.value = normalizeAdvancedProxyConfig(saved);
+    return 0;
+  }
+
+  if (!enabled) {
+    await applyManagedAppConfigFiles(writes);
+    const saved = await setAdvancedProxyConfig(syncedConfig);
+    advancedProxyConfigSnapshot.value = normalizeAdvancedProxyConfig(saved);
+    return writes.length;
+  }
+
+  const saved = await setAdvancedProxyConfig(syncedConfig);
+  advancedProxyConfigSnapshot.value = normalizeAdvancedProxyConfig(saved);
+  try {
+    await applyManagedAppConfigFiles(writes);
+    return writes.length;
+  } catch (error) {
+    await setAdvancedProxyConfig(savedConfig);
+    advancedProxyConfigSnapshot.value = normalizeAdvancedProxyConfig(savedConfig);
+    throw error;
+  }
+}
+
+async function toggleConsoleProxyMaster(value) {
+  const enabled = value === true;
+  if (consoleProxyMasterPending.value) return;
+  if (!enabled) {
+    markConsoleTakeoverReconcileCooldown(CONSOLE_PROXY_APP_IDS);
+  }
+  consoleProxyMasterPending.value = true;
+  consoleProxyMasterOptimistic.value = enabled;
+  CONSOLE_PROXY_APP_IDS.forEach(appId => {
+    consoleProxyOptimisticApps[appId] = enabled;
+    setConsolePendingApp(appId, true);
+  });
+  await waitForConsolePaint();
+  try {
+    await updateConsoleAdvancedProxyConfig(nextConfig => {
+      CONSOLE_PROXY_APP_IDS.forEach(appId => {
+        setConsoleProxyAppEnabled(nextConfig, appId, enabled);
+      });
+      nextConfig.enabled = enabled;
+    }, enabled ? '已开启四个客户端高级代理' : '已关闭全部客户端高级代理');
+  } catch {
+    await refreshAdvancedProxyConsoleSnapshot();
+  } finally {
+    consoleProxyMasterOptimistic.value = null;
+    CONSOLE_PROXY_APP_IDS.forEach(appId => {
+      delete consoleProxyOptimisticApps[appId];
+      setConsolePendingApp(appId, false);
+    });
+    consoleProxyMasterPending.value = false;
+  }
+}
+
+async function toggleConsoleProxyApp(appId) {
+  if (hasConsolePendingApp(appId)) return;
+  if (!isDesktopConfigBridgeAvailable()) {
+    message.warning('客户端高级代理接管仅支持桌面版 EXE 运行环境');
+    return;
+  }
+  const appLabel = CONSOLE_PROXY_APP_LABELS[appId] || appId;
+  const beforeEnabled = getConsoleAppEnabled(appId);
+  const enabled = !beforeEnabled;
+  if (!enabled) {
+    markConsoleTakeoverReconcileCooldown(appId);
+  }
+  consoleProxyOptimisticApps[appId] = enabled;
+  setConsolePendingApp(appId, true);
+  consoleProxyConfigApplying.value = true;
+  await waitForConsolePaint();
+  try {
+    const savedConfigRaw = await getAdvancedProxyConfig();
+    const savedConfig = normalizeAdvancedProxyConfig(savedConfigRaw || {});
+    const nextConfig = normalizeAdvancedProxyConfig(savedConfig);
+    setConsoleProxyAppEnabled(nextConfig, appId, enabled);
+    syncConsoleProxyMasterEnabled(nextConfig);
+
+    const app = ADVANCED_PROXY_APPS.find(item => item.id === appId);
+    const desktopDraft = createConsoleTakeoverDesktopDraft(appId, enabled, nextConfig);
+    const snapshot = await readManagedAppConfigFiles([appId]);
+    const preview = buildDesktopConfigPreview(desktopDraft, snapshot);
+    if (!preview.appGroups.length && preview.errors.length) {
+      throw new Error(preview.errors.join('；'));
+    }
+
+    const writeCount = await applyConsoleTakeoverConfig(appId, enabled, savedConfig, nextConfig, preview);
+    const writeText = writeCount ? `，已写入 ${writeCount} 个本地配置文件` : '';
+    if (preview.errors.length) {
+      message.warning(`部分配置预览失败：${preview.errors.join('；')}`);
+    }
+    message.success(`${app?.label || appLabel} 高级代理已${enabled ? '开启' : '关闭'}${writeText}`);
+  } catch (error) {
+    consoleProxyOptimisticApps[appId] = beforeEnabled;
+    await refreshAdvancedProxyConsoleSnapshot();
+    message.error(error?.message || `${appLabel} 接管配置写入失败`);
+  } finally {
+    delete consoleProxyOptimisticApps[appId];
+    setConsolePendingApp(appId, false);
+    consoleProxyConfigApplying.value = false;
+  }
+}
+
+async function toggleConsoleAntiPoison() {
+  if (consoleAntiPoisonPending.value) return;
+  const beforeEnabled = consoleAntiPoisonEnabled.value;
+  const enabled = !beforeEnabled;
+  consoleAntiPoisonOptimistic.value = enabled;
+  consoleAntiPoisonPending.value = true;
+  await waitForConsolePaint();
+  try {
+    await updateConsoleAdvancedProxyConfig(nextConfig => {
+      if (!nextConfig.antiPoison || typeof nextConfig.antiPoison !== 'object') {
+        nextConfig.antiPoison = normalizeAdvancedProxyConfig({}).antiPoison;
+      }
+      nextConfig.antiPoison.enabled = enabled;
+    }, enabled ? '防投毒已开启' : '防投毒已关闭');
+  } catch {
+    consoleAntiPoisonOptimistic.value = beforeEnabled;
+    await refreshAdvancedProxyConsoleSnapshot();
+  } finally {
+    consoleAntiPoisonOptimistic.value = null;
+    consoleAntiPoisonPending.value = false;
+  }
+}
+
+async function refreshAdvancedProxyConsoleRecords() {
+  if (!isAdvancedProxyRequestRecordBridgeAvailable()) {
+    advancedProxyConsoleRecords.value = [];
+    return;
+  }
+  advancedProxyConsoleRecordsLoading.value = true;
+  try {
+    const records = await listAdvancedProxyRequestRecords(80);
+    const normalizedRecords = Array.isArray(records) ? records : [];
+    advancedProxyConsoleRecords.value = normalizedRecords;
+    const nextLines = [];
+    [...normalizedRecords].reverse().forEach(record => {
+      const recordId = String(record?.id || '').trim();
+      if (!recordId || advancedProxyConsoleRecordIds.value.has(recordId)) return;
+      advancedProxyConsoleRecordIds.value.add(recordId);
+      nextLines.push(formatAdvancedProxyConsoleRecordLog(record));
+    });
+    if (nextLines.length) {
+      advancedProxyConsoleLogLines.value = [
+        ...advancedProxyConsoleLogLines.value,
+        ...nextLines,
+      ].slice(-240);
+      scrollAdvancedProxyConsoleLogToBottom();
+    }
+  } catch (error) {
+    console.warn('[KeyManagement] refresh advanced proxy console records failed:', error);
+  } finally {
+    advancedProxyConsoleRecordsLoading.value = false;
+  }
+}
+
+async function refreshAdvancedProxyActiveConnections() {
+  if (!isAdvancedProxyActiveConnectionBridgeAvailable()) {
+    advancedProxyActiveConnections.value = [];
+    selectedAdvancedProxyConnectionId.value = '';
+    return;
+  }
+  advancedProxyActiveConnectionsLoading.value = true;
+  try {
+    const connections = await listAdvancedProxyActiveConnections();
+    advancedProxyActiveConnections.value = Array.isArray(connections) ? connections : [];
+    if (
+      selectedAdvancedProxyConnectionId.value &&
+      !advancedProxyActiveConnections.value.some(connection => String(connection?.id || '') === selectedAdvancedProxyConnectionId.value)
+    ) {
+      selectedAdvancedProxyConnectionId.value = '';
+    }
+  } catch (error) {
+    console.warn('[KeyManagement] refresh advanced proxy active connections failed:', error);
+    advancedProxyActiveConnections.value = [];
+    selectedAdvancedProxyConnectionId.value = '';
+  } finally {
+    advancedProxyActiveConnectionsLoading.value = false;
+  }
+}
+
+function startAdvancedProxyConsolePolling() {
+  if (advancedProxyConsolePollingTimer || typeof window === 'undefined') return;
+  advancedProxyConsolePollingTimer = window.setInterval(() => {
+    if (activeInventoryPanel.value !== 'console') return;
+    void refreshAdvancedProxyConsoleRecords();
+    void refreshAdvancedProxyActiveConnections();
+  }, 2000);
+}
+
+function startAdvancedProxyConnectionClock() {
+  if (advancedProxyConnectionClockTimer || typeof window === 'undefined') return;
+  advancedProxyConnectionClockTimer = window.setInterval(() => {
+    advancedProxyConnectionClockTick.value = Date.now();
+  }, 1000);
+}
+
+function stopAdvancedProxyConsolePolling() {
+  if (!advancedProxyConsolePollingTimer) return;
+  clearInterval(advancedProxyConsolePollingTimer);
+  advancedProxyConsolePollingTimer = null;
+}
+
+function stopAdvancedProxyConnectionClock() {
+  if (!advancedProxyConnectionClockTimer) return;
+  clearInterval(advancedProxyConnectionClockTimer);
+  advancedProxyConnectionClockTimer = null;
+}
+
+function setActiveInventoryPanel(panel) {
+  activeInventoryPanel.value = panel === 'console' ? 'console' : 'local';
+  if (activeInventoryPanel.value === 'console') {
+    void refreshAdvancedProxyConsoleSnapshot();
+    void refreshAdvancedProxyConsoleRecords();
+    void refreshAdvancedProxyActiveConnections();
+    startAdvancedProxyConsolePolling();
+    startAdvancedProxyConnectionClock();
+  } else {
+    stopAdvancedProxyConsolePolling();
+    stopAdvancedProxyConnectionClock();
+  }
+}
 
 function syncThemeState() {
   isDarkMode.value = isDarkThemeMode(getAppliedThemeMode());
@@ -1300,6 +2690,7 @@ function closeKeyGroupContextMenu() {
 function closeAllContextMenus() {
   closeRowContextMenu();
   closeKeyGroupContextMenu();
+  closeAdvancedProxyConnectionContextMenu();
 }
 
 function openKeyGroupContextMenu(group, event) {
@@ -1870,7 +3261,8 @@ function isTargetWithinKeyManagementContextMenu(target) {
     target?.closest?.('.key-row-context-menu') ||
     target?.closest?.('.key-row-context-submenu') ||
     target?.closest?.('.key-group-context-menu') ||
-    target?.closest?.('.key-group-context-submenu')
+    target?.closest?.('.key-group-context-submenu') ||
+    target?.closest?.('.advanced-proxy-connection-context-menu')
   );
 }
 
@@ -1919,10 +3311,14 @@ function handleGlobalRowContextMenuDismiss(event) {
     if (isTargetWithinKeyManagementContextMenu(target)) return;
     closeKeyGroupContextMenu();
   }
+  if (advancedProxyConnectionContextMenu.open) {
+    if (isTargetWithinKeyManagementContextMenu(target)) return;
+    closeAdvancedProxyConnectionContextMenu();
+  }
 }
 
 function handleGlobalContextMenuScroll(event) {
-  if (!rowContextMenu.open && !keyGroupContextMenu.open) return;
+  if (!rowContextMenu.open && !keyGroupContextMenu.open && !advancedProxyConnectionContextMenu.open) return;
   if (isTargetWithinKeyManagementContextMenu(event?.target)) return;
   closeAllContextMenus();
 }
@@ -2280,8 +3676,9 @@ const desktopConfigModelOptions = computed(() => {
     ? options
     : [{ label: currentValue, value: currentValue }, ...options];
 });
-const sortManagedRecords = rows => [...rows].sort(
-  (a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0) || String(a.siteName || '').localeCompare(String(b.siteName || ''))
+const safeRecordList = rows => (Array.isArray(rows) ? rows : []).filter(Boolean);
+const sortManagedRecords = rows => safeRecordList(rows).sort(
+  (a, b) => Number(b?.updatedAt || 0) - Number(a?.updatedAt || 0) || String(a?.siteName || '').localeCompare(String(b?.siteName || ''))
 );
 const columns = [
   { title: '网站', dataIndex: 'siteName', key: 'siteName', width: 142, sorter: (a, b) => String(a.siteName || '').localeCompare(String(b.siteName || '')) },
@@ -2462,14 +3859,160 @@ const quickTestFailedKeyCount = computed(() => displayedRows.value.filter(record
 const quickGroupModelRefreshTargetCount = computed(() => tableData.value.filter(record => normalizeSiteUrl(record?.siteUrl) && normalizeApiKey(record?.apiKey)).length);
 const quickGroupModelRefreshDisabled = computed(() => quickGroupModelRefreshRunning.value || quickGroupModelRefreshTargetCount.value === 0);
 const syncSummary = computed(() => !syncMeta.value.lastBatchSyncAt ? '导入并批量检测后，会自动把获取到的 sk key 更新到本页。' : `最近一次批量同步写入 ${syncMeta.value.lastBatchSyncCount} 条记录，失败站点 ${syncMeta.value.lastBatchFailedCount} 个。`);
-const currentVisiblePageRows = computed(() => {
-  if (isCompactMode.value) return displayedRows.value;
-  const start = Math.max(0, (currentTablePage.value - 1) * currentTablePageSize.value);
-  return displayedRows.value.slice(start, start + currentTablePageSize.value);
+const consoleQueueCards = computed(() => {
+  const queueProviders = getAdvancedProxyQueueProviders(
+    advancedProxyConfigSnapshot.value,
+    ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
+    { enabledOnly: false }
+  );
+  const queuedKeys = new Set();
+  const queuedCards = queueProviders.map((provider, index) => {
+    const providerId = String(provider?.id || provider?.rowKey || provider?.baseUrl || `provider-${index + 1}`).trim();
+    const rowKey = String(provider?.rowKey || provider?.id || '').trim();
+    const apiKey = String(provider?.apiKey || '').trim();
+    [providerId, rowKey, apiKey].filter(Boolean).forEach(value => queuedKeys.add(value));
+    return {
+      id: providerId,
+      rowKey,
+      siteName: String(provider?.name || provider?.baseUrl || `Provider ${index + 1}`).trim() || `Provider ${index + 1}`,
+      modelLabel: String(provider?.model || '未设置模型').trim() || '未设置模型',
+      skLabel: formatProviderSkLabel(index + 1, provider?.apiKey),
+      queueOrder: index + 1,
+      enabled: provider?.enabled !== false,
+      inQueue: true,
+    };
+  });
+  const pendingCards = allSortedRows.value
+    .filter(record => isValidProviderQueueSourceRecord(record))
+    .filter(record => {
+      const rowKey = String(record?.rowKey || '').trim();
+      const apiKey = String(record?.apiKey || '').trim();
+      return rowKey && !queuedKeys.has(rowKey) && !queuedKeys.has(apiKey);
+    })
+    .map((record, index) => ({
+      id: `pending-${String(record?.rowKey || index).trim() || index}`,
+      rowKey: String(record?.rowKey || '').trim(),
+      siteName: String(record?.siteName || record?.siteUrl || `Provider ${index + 1}`).trim() || `Provider ${index + 1}`,
+      modelLabel: String(getRecordSelectedModelValue(record) || record?.quickTestModel || '未设置模型').trim() || '未设置模型',
+      skLabel: formatProviderSkLabel(queuedCards.length + index + 1, record?.apiKey),
+      queueOrder: 0,
+      enabled: true,
+      inQueue: false,
+    }));
+  return [...queuedCards, ...pendingCards].slice(0, 80);
 });
-const batchQuickTestDisabled = computed(() => batchQuickTestRunning.value || displayedRows.value.length === 0);
+const sortedAdvancedProxyActiveConnections = computed(() => {
+  return [...advancedProxyActiveConnections.value].sort((left, right) => {
+    const leftCompleted = isAdvancedProxyConnectionCompleted(left);
+    const rightCompleted = isAdvancedProxyConnectionCompleted(right);
+    if (leftCompleted !== rightCompleted) return leftCompleted ? 1 : -1;
+    const leftTime = new Date(left?.startedAt || '').getTime() || 0;
+    const rightTime = new Date(right?.startedAt || '').getTime() || 0;
+    return rightTime - leftTime;
+  });
+});
+const consoleDispatchModeLabel = computed(() => {
+  const dispatchMode = String(advancedProxyConfigSnapshot.value?.highAvailability?.dispatchMode || 'fixed').trim();
+  if (dispatchMode === 'random') return '随机调度';
+  if (dispatchMode === 'ordered') return '顺序轮询';
+  return '固定顺序';
+});
+const consoleDispatchSummaryBlocks = computed(() => {
+  const queueHead = consoleQueueCards.value[0];
+  const queuedCount = consoleQueueCards.value.filter(item => item.inQueue).length;
+  return [
+    {
+      id: 'dispatch',
+      items: [
+        { label: '调度模式', value: consoleDispatchModeLabel.value },
+        { label: '全局队列', value: `${queuedCount} 条` },
+      ],
+    },
+    {
+      id: 'runtime',
+      items: [
+        { label: '队列头部', value: queueHead?.inQueue ? `P${queueHead.queueOrder} ${queueHead.siteName} / ${queueHead.modelLabel}` : '空' },
+        { label: '连接记录', value: `${sortedAdvancedProxyActiveConnections.value.length} 条` },
+      ],
+    },
+  ];
+});
+const consoleProxyAppCards = computed(() =>
+  CONSOLE_PROXY_APP_IDS.map(id => {
+    const label = CONSOLE_PROXY_APP_LABELS[id] || id;
+    const enabled = getConsoleAppEnabled(id);
+    const pending = hasConsolePendingApp(id);
+    return {
+      id,
+      label,
+      enabled,
+      pending,
+      icon: DESKTOP_APP_ICONS[id],
+      tooltip: pending
+        ? `${label} 高级代理配置中`
+        : `${label} 高级代理${enabled ? '已开启' : '未开启'}`,
+    };
+  }),
+);
+const consoleProxyMasterEnabled = computed(() => {
+  if (consoleProxyMasterOptimistic.value !== null) return consoleProxyMasterOptimistic.value === true;
+  return consoleProxyAppCards.value.some(app => app.enabled);
+});
+const consoleAntiPoisonEnabled = computed(() => {
+  if (consoleAntiPoisonOptimistic.value !== null) return consoleAntiPoisonOptimistic.value === true;
+  return advancedProxyConfigSnapshot.value?.antiPoison?.enabled === true;
+});
+const consoleProxyMasterTitle = computed(() => {
+  const enabledLabels = consoleProxyAppCards.value.filter(app => app.enabled).map(app => app.label);
+  return enabledLabels.length
+    ? `高级代理已开启：${enabledLabels.join(' / ')}`
+    : '开启四个客户端高级代理入口';
+});
+const consoleAntiPoisonTitle = computed(() => consoleAntiPoisonEnabled.value ? '防投毒已开启，点击关闭' : '防投毒未开启，点击开启');
+const consoleDispatchLogText = computed(() => {
+  return advancedProxyConsoleLogLines.value.join('\n\n');
+});
+
+function resolveElementFromVueRef(value) {
+  return value?.$el || value || null;
+}
+
+function logInventoryLayoutSnapshot(reason = 'check') {
+  try {
+    const element = resolveElementFromVueRef(inventoryCardRef.value);
+    const rect = element?.getBoundingClientRect?.();
+    const body = element?.querySelector?.('.ant-card-body');
+    const bodyRect = body?.getBoundingClientRect?.();
+    const height = Math.round(Number(rect?.height || 0));
+    const bodyHeight = Math.round(Number(bodyRect?.height || 0));
+    if (height > 80 && bodyHeight > 80 && reason !== 'mounted') return;
+    logClientDiagnostic('key_management.layout', JSON.stringify({
+      reason,
+      panel: activeInventoryPanel.value,
+      cardHeight: height,
+      bodyHeight,
+      rows: safeRecordList(displayedRows.value).length,
+      viewportHeight: typeof window !== 'undefined' ? window.innerHeight : 0,
+    }));
+  } catch (error) {
+    logClientDiagnostic('key_management.layout.error', error?.stack || error?.message || String(error || 'unknown error'));
+  }
+}
+
+watch(consoleDispatchLogText, () => {
+  scrollAdvancedProxyConsoleLogToBottom();
+});
+watch(activeInventoryPanel, panel => {
+  if (panel === 'console') scrollAdvancedProxyConsoleLogToBottom();
+});
+const currentVisiblePageRows = computed(() => {
+  if (isCompactMode.value) return safeRecordList(displayedRows.value);
+  const start = Math.max(0, (currentTablePage.value - 1) * currentTablePageSize.value);
+  return safeRecordList(displayedRows.value).slice(start, start + currentTablePageSize.value);
+});
+const batchQuickTestDisabled = computed(() => batchQuickTestRunning.value || safeRecordList(displayedRows.value).length === 0);
 const batchDeleteAbnormalDisabled = computed(() => batchQuickTestRunning.value || abnormalKeyCount.value === 0);
-const batchDeleteQuickTestFailedDisabled = computed(() => batchQuickTestRunning.value || displayedRows.value.length === 0);
+const batchDeleteQuickTestFailedDisabled = computed(() => batchQuickTestRunning.value || safeRecordList(displayedRows.value).length === 0);
 const activeKeyGroupLabel = computed(() => {
   if (activeKeyGroupId.value === ALL_KEYS_GROUP_ID) return '全部密钥';
   return keyGroups.value.find(group => group.id === activeKeyGroupId.value)?.name || '当前分组';
@@ -2479,7 +4022,7 @@ const mergeTargetKeyGroups = computed(() => {
   return keyGroups.value.filter(group => String(group?.id || '').trim() && String(group.id).trim() !== currentGroupId);
 });
 const providerQueueSourceRecords = computed(() => {
-  const source = displayedRows.value;
+  const source = safeRecordList(displayedRows.value);
   const seen = new Set();
   return source.filter(record => {
     const rowKey = String(record?.rowKey || '').trim();
@@ -2517,7 +4060,7 @@ const batchActionButtonTitle = computed(() => {
       ? `批量操作：可从当前分组移除 ${quickTestFailedKeyCount.value} 条快测失败密钥`
       : `批量操作：可删除 ${quickTestFailedKeyCount.value} 条快测失败密钥`;
   }
-  if (displayedRows.value.length > 0 && currentGroupQuickTestRecordCount.value === 0) {
+  if (safeRecordList(displayedRows.value).length > 0 && currentGroupQuickTestRecordCount.value === 0) {
     return '批量操作：当前分组暂无快测记录，可先整组批量快测';
   }
   if (abnormalKeyCount.value > 0) {
@@ -2532,7 +4075,7 @@ const tablePagination = computed(() => {
     pageSize: currentTablePageSize.value,
     showSizeChanger: true,
     pageSizeOptions: ['20', '50', '100'],
-    total: displayedRows.value.length,
+    total: safeRecordList(displayedRows.value).length,
   };
 });
 
@@ -2552,8 +4095,15 @@ onMounted(() => {
       manualSidebarBridgeProbeTimer = window.setInterval(refreshManualSidebarBridgeReady, 250);
     }
     refreshManagedRecordsFromStorage();
+    ensureDefaultPublicKeySeededOnce();
+    await refreshAdvancedProxyConsoleSnapshot();
+    await refreshAdvancedProxyConsoleRecords();
+    await nextTick();
+    logInventoryLayoutSnapshot('mounted');
     if (typeof window !== 'undefined') {
       window.addEventListener(THEME_MODE_CHANGE_EVENT, syncThemeState);
+      window.addEventListener(ADVANCED_PROXY_SYNC_EVENT, refreshAdvancedProxyConsoleSnapshot);
+      window.addEventListener(ADVANCED_PROXY_SYNC_EVENT, refreshAdvancedProxyConsoleRecords);
       window.addEventListener(KEY_MANAGEMENT_SYNC_EVENT, handleManagedRecordSyncEvent);
       window.addEventListener(HISTORY_SNAPSHOT_SYNC_EVENT, handleManagedRecordSyncEvent);
       window.addEventListener('storage', handleManagedRecordStorageEvent);
@@ -2575,12 +4125,29 @@ onBeforeUnmount(() => {
     clearInterval(manualSidebarBridgeProbeTimer);
     manualSidebarBridgeProbeTimer = null;
   }
+  stopAdvancedProxyConsolePolling();
+  stopAdvancedProxyConnectionClock();
   if (typeof window !== 'undefined') {
     window.removeEventListener(THEME_MODE_CHANGE_EVENT, syncThemeState);
+    window.removeEventListener(ADVANCED_PROXY_SYNC_EVENT, refreshAdvancedProxyConsoleSnapshot);
+    window.removeEventListener(ADVANCED_PROXY_SYNC_EVENT, refreshAdvancedProxyConsoleRecords);
     window.removeEventListener(KEY_MANAGEMENT_SYNC_EVENT, handleManagedRecordSyncEvent);
     window.removeEventListener(HISTORY_SNAPSHOT_SYNC_EVENT, handleManagedRecordSyncEvent);
     window.removeEventListener('storage', handleManagedRecordStorageEvent);
   }
+});
+
+watch(activeInventoryPanel, (panel) => {
+  if (panel === 'console') {
+    void refreshAdvancedProxyConsoleSnapshot();
+    void refreshAdvancedProxyConsoleRecords();
+    void refreshAdvancedProxyActiveConnections();
+    startAdvancedProxyConsolePolling();
+    startAdvancedProxyConnectionClock();
+    return;
+  }
+  stopAdvancedProxyConsolePolling();
+  stopAdvancedProxyConnectionClock();
 });
 
 watch([displayedRows, currentTablePageSize, isCompactMode], () => {
@@ -2737,6 +4304,45 @@ function refreshManagedRecordsFromStorage() {
   tableData.value = loadStoredRecords();
   syncMeta.value = loadStoredMeta();
   void autoRefreshKeyBalancesOnce();
+}
+
+function ensureDefaultPublicKeySeededOnce() {
+  if (typeof window === 'undefined') return;
+  try {
+    if (localStorage.getItem(DEFAULT_PUBLIC_KEY_SEED_STORAGE_KEY)) return;
+    localStorage.setItem(DEFAULT_PUBLIC_KEY_SEED_STORAGE_KEY, String(Date.now()));
+    if (loadStoredRecords().length > 0 || tableData.value.length > 0) return;
+
+    const now = Date.now();
+    const record = hydrateRecordModelSelection({
+      ...DEFAULT_PUBLIC_KEY_RECORD,
+      modelsList: [...DEFAULT_PUBLIC_KEY_MODELS],
+      modelsText: DEFAULT_PUBLIC_KEY_MODELS.join(', '),
+      groupIds: [],
+      quickTestStatus: '',
+      quickTestLabel: '',
+      quickTestModel: '',
+      quickTestRemark: '',
+      quickTestAt: null,
+      quickTestResponseTime: '',
+      quickTestTtftMs: '',
+      quickTestTps: '',
+      quickTestResponseContent: '',
+      quickTestResolvedEndpoint: '',
+      balanceLabel: '',
+      balanceUpdatedAt: null,
+      balanceError: '',
+      balanceLoading: false,
+      quickTestLoading: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+    tableData.value = [record];
+    persistRecords();
+    flushPersistRecords();
+  } catch (error) {
+    console.warn('[KeyManagement] seed default public key failed:', error);
+  }
 }
 
 function handleManagedRecordSyncEvent() {
@@ -3685,7 +5291,9 @@ async function syncCurrentGroupToAdvancedProxyQueue() {
     const providers = validRecords.map((record, index) => buildProviderFromManagedRecord(record, index + 1));
     replaceAdvancedProxyQueueProviders(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, providers);
     nextConfig.claude.providers = [...(nextConfig.queues?.[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE]?.providers || [])];
-    await setAdvancedProxyConfig(syncAdvancedProxyConfigSnapshotFromCurrentRecords(nextConfig));
+    const syncedConfig = syncAdvancedProxyConfigSnapshotFromCurrentRecords(nextConfig);
+    await setAdvancedProxyConfig(syncedConfig);
+    advancedProxyConfigSnapshot.value = normalizeAdvancedProxyConfig(syncedConfig);
     advancedProxyFocusQueueScope.value = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
     advancedProxyFocusQueueToken.value = Date.now();
     showExperimentalFeatures.value = true;
@@ -3708,7 +5316,9 @@ async function appendCurrentGroupToAdvancedProxyQueue() {
     const providers = validRecords.map((record, index) => buildProviderFromManagedRecord(record, index + 1));
     appendAdvancedProxyQueueProviders(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, providers);
     nextConfig.claude.providers = [...(nextConfig.queues?.[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE]?.providers || [])];
-    await setAdvancedProxyConfig(syncAdvancedProxyConfigSnapshotFromCurrentRecords(nextConfig));
+    const syncedConfig = syncAdvancedProxyConfigSnapshotFromCurrentRecords(nextConfig);
+    await setAdvancedProxyConfig(syncedConfig);
+    advancedProxyConfigSnapshot.value = normalizeAdvancedProxyConfig(syncedConfig);
     advancedProxyFocusQueueScope.value = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
     advancedProxyFocusQueueToken.value = Date.now();
     showExperimentalFeatures.value = true;
@@ -3724,7 +5334,9 @@ async function clearAdvancedProxyQueue() {
     const nextConfig = normalizeAdvancedProxyConfig(savedConfig || {});
     clearAdvancedProxyQueueProviders(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
     nextConfig.claude.providers = [...(nextConfig.queues?.[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE]?.providers || [])];
-    await setAdvancedProxyConfig(syncAdvancedProxyConfigSnapshotFromCurrentRecords(nextConfig));
+    const syncedConfig = syncAdvancedProxyConfigSnapshotFromCurrentRecords(nextConfig);
+    await setAdvancedProxyConfig(syncedConfig);
+    advancedProxyConfigSnapshot.value = normalizeAdvancedProxyConfig(syncedConfig);
     advancedProxyFocusQueueScope.value = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
     advancedProxyFocusQueueToken.value = Date.now();
     showExperimentalFeatures.value = true;
@@ -4921,7 +6533,7 @@ function persistMeta() {
 <style scoped>
 .batch-wrapper.key-management-wrapper{min-height:calc(var(--vh,1vh) * 100);padding:0;overflow:hidden}
 .batch-shell.key-management-shell{width:100%;min-height:calc(var(--vh,1vh) * 100);position:relative;isolation:isolate;overflow:hidden}
-.batch-page-content.key-management-page-content{background:transparent;border-radius:24px;box-shadow:none;padding:2px;min-height:calc(var(--vh,1vh) * 100);position:relative;z-index:1;overflow:hidden}
+.batch-page-content.key-management-page-content{background:transparent;border-radius:24px;box-shadow:none;padding:2px;min-height:calc(var(--vh,1vh) * 100);position:relative;z-index:1;overflow:auto}
 .batch-page-container.key-management-page-container{max-width:100% !important;padding:8px 8px 0 !important;margin:0 auto !important;min-height:calc(var(--vh,1vh) * 100 - 4px);display:flex}
 .batch-forest-scene{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0;background:radial-gradient(circle at 16% 18%,rgba(164,213,120,.14),transparent 24%),radial-gradient(circle at 84% 14%,rgba(255,213,116,.14),transparent 22%),linear-gradient(180deg,rgba(8,18,12,.14) 0%,rgba(8,20,13,.34) 42%,rgba(6,16,10,.62) 100%),url('/forest-batch-bg-v2.png') center center/cover no-repeat;opacity:.92}
 .forest-mist,.forest-path-glow,.forest-firegrass,.forest-slime{position:absolute}
@@ -4943,12 +6555,13 @@ function persistMeta() {
 .compact-sidebar-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .compact-sidebar-alert{margin:0}
 .sync-card,.inventory-card{width:100%}
-.inventory-card{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;overflow:hidden;border:0 !important;border-radius:24px !important;background:linear-gradient(180deg,rgba(228,233,226,.96),rgba(214,220,212,.92)) !important;box-shadow:none !important}
+.inventory-card{flex:1 0 auto;display:flex;flex-direction:column;min-height:max(360px,calc(var(--vh,1vh) * 100 - 176px));overflow:hidden;border:0 !important;border-radius:24px !important;background:linear-gradient(180deg,rgba(228,233,226,.96),rgba(214,220,212,.92)) !important;box-shadow:none !important;position:relative;z-index:2}
 .inventory-card :deep(.ant-card-head),.inventory-card :deep(.ant-card-body){background:transparent}
-.inventory-card :deep(.ant-card-head){border-bottom-color:rgba(114,132,103,.08);min-height:54px;padding:0 14px 0 18px}
-.inventory-card :deep(.ant-card-head-title){padding:11px 0 9px}
-.inventory-card :deep(.ant-card-extra){padding:8px 0 8px}
-.inventory-card :deep(.ant-card-body){display:flex;flex:1 1 auto;flex-direction:column;min-height:0;padding:6px 14px 6px}
+.inventory-card :deep(.ant-card-head){border-bottom-color:rgba(114,132,103,.08);min-height:54px;padding:0 14px 0 12px}
+.inventory-card :deep(.ant-card-head-wrapper){position:relative;z-index:2}
+.inventory-card :deep(.ant-card-head-title){padding:11px 0 9px;position:relative;z-index:3;flex:0 0 auto;overflow:visible}
+.inventory-card :deep(.ant-card-extra){padding:8px 0 8px;position:relative;z-index:2;min-width:0}
+.inventory-card :deep(.ant-card-body){display:flex;flex:1 1 auto;flex-direction:column;min-height:320px;padding:0 14px 6px;overflow:auto}
 .inventory-card :deep(.ant-empty){margin-block:auto}
 .key-group-strip{margin:0 0 1px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;min-width:0}
 .key-group-tabs{display:flex;align-items:flex-start;align-content:flex-start;flex:0 1 80%;max-width:80%;flex-wrap:wrap;gap:6px 4px;min-width:0;overflow:visible;padding-bottom:0}
@@ -5391,11 +7004,137 @@ function persistMeta() {
 .key-management .quick-test-button{border-radius:999px;background:linear-gradient(135deg,#476847,#6f8f55);border:0;box-shadow:0 8px 16px rgba(87,118,76,.18)}
 .key-management :deep(.ant-btn-default),.key-management :deep(.ant-btn-primary),.key-management :deep(.ant-select-selector),.key-management :deep(.ant-input),.key-management :deep(.ant-input-password),.key-management :deep(.ant-input-affix-wrapper){border-radius:12px}
 .key-management .inventory-card{width:100%;margin:0;flex:1 1 auto;border:0 !important;border-radius:24px !important;background:linear-gradient(180deg,rgba(228,233,226,.96),rgba(214,220,212,.92)) !important;box-shadow:none !important;backdrop-filter:none !important}
+.inventory-panel-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:54px;padding:0 0 0 0;border-bottom:1px solid rgba(114,132,103,.08);position:relative;z-index:10}
+.inventory-card-title-row{display:flex;align-items:center;gap:14px;min-width:0;flex:0 0 auto;flex-wrap:wrap;position:relative;z-index:11;pointer-events:auto}
+.inventory-panel-switcher{display:inline-flex;align-items:center;min-width:0}
+.inventory-panel-tabs{height:38px;display:inline-flex;align-items:center;gap:6px;min-width:0;position:relative;z-index:5;pointer-events:auto;padding:3px;border:1px solid rgba(124,142,112,.2);border-radius:16px;background:linear-gradient(180deg,rgba(255,255,255,.62),rgba(238,244,235,.46));box-shadow:inset 0 1px 0 rgba(255,255,255,.72),0 8px 18px rgba(72,102,70,.08)}
+.inventory-panel-tab{height:30px;padding:0 10px;border:0;border-radius:12px;background:transparent;color:#818b7a;font:700 12px/1.1 Georgia,'Times New Roman',serif;white-space:nowrap;cursor:pointer;position:relative;z-index:6;display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:color .18s ease,background .18s ease;pointer-events:auto}
+.inventory-panel-tab:first-child{padding-left:10px}
+.inventory-panel-tab-icon{width:18px;height:18px;display:block}
+.inventory-panel-tab-label{display:inline-block;font-size:11px;font-weight:800;line-height:1;letter-spacing:.04em;text-transform:uppercase}
+.inventory-panel-tab-icon-key{transform:translateY(1px)}
+.inventory-panel-tab-icon-console{transform:translateY(1px)}
+.inventory-panel-tab::after{content:'';position:absolute;left:0;right:0;bottom:0;height:2px;border-radius:999px;background:transparent;opacity:0;transition:background .18s ease,opacity .18s ease}
+.inventory-panel-tab:hover{color:#3d563f}
+.inventory-panel-tab-active{color:#2d432f;background:linear-gradient(180deg,rgba(255,255,255,.58),rgba(255,255,255,.12))}
+.inventory-panel-tab-active::after{background:linear-gradient(90deg,rgba(75,108,62,.82),rgba(150,185,92,.54));opacity:1}
+.inventory-panel-tab-divider{width:1px;height:18px;background:rgba(104,124,94,.18);display:inline-flex;flex:0 0 auto}
+.inventory-panel-actions{display:flex;align-items:center;justify-content:flex-end;min-width:0;position:relative;z-index:10}
+.inventory-local-panel{display:flex;flex:1 1 auto;min-height:0;flex-direction:column}
+.inventory-console-panel{flex:1 1 auto;min-height:360px;padding:18px 0 12px;display:flex;flex-direction:column;gap:14px}
+.console-dispatch-top-grid{display:grid;grid-template-columns:minmax(0,65fr) minmax(300px,35fr);gap:14px;align-items:stretch}
+.console-queue-section,.console-dispatch-section,.console-connections-section{min-width:0;display:flex;flex-direction:column;gap:10px}
+.console-section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px}
+.console-section-head h4{margin:0;font:800 16px/1.1 Georgia,'Times New Roman',serif;color:#233923}
+.console-section-head p{margin:5px 0 0;color:#60725f;font-size:12px;line-height:1.35}
+.console-section-count{border-radius:999px;padding:4px 10px;background:rgba(73,103,62,.1);color:#314a31;font-size:12px;font-weight:700}
+.console-provider-grid{height:408px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-auto-rows:minmax(72px,max-content);align-content:start;gap:8px;overflow:auto;padding-right:2px}
+.console-provider-grid{scrollbar-width:none;-ms-overflow-style:none}
+.console-provider-grid::-webkit-scrollbar{width:0;height:0}
+.console-provider-card{width:100%;min-width:0;min-height:72px;padding:8px 9px;border-radius:10px;background:linear-gradient(180deg,rgba(255,255,255,.94),rgba(248,250,246,.92));border:1px solid rgba(90,117,79,.15);box-shadow:inset 0 1px 0 rgba(255,255,255,.7);display:grid;align-content:start;gap:4px;overflow:hidden;text-align:left;cursor:pointer;appearance:none;-webkit-appearance:none;transition:border-color .18s ease,box-shadow .18s ease,transform .18s ease}
+.console-provider-card:hover{border-color:rgba(88,125,66,.24);box-shadow:0 12px 24px rgba(74,104,58,.08);transform:translateY(-1px)}
+.console-provider-card:focus-visible{outline:2px solid rgba(107,146,88,.55);outline-offset:2px}
+.console-provider-card-primary{background:linear-gradient(180deg,rgba(252,255,249,.98),rgba(242,248,236,.96));border-color:rgba(75,128,50,.34);box-shadow:0 0 0 1px rgba(102,168,68,.12),0 0 0 4px rgba(147,210,109,.12),0 14px 28px rgba(74,104,58,.12)}
+.console-provider-card-pending{background:rgba(255,255,255,.42);border-style:dashed;box-shadow:none;opacity:.84}
+.console-provider-card-top{display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap}
+.console-provider-card-top strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:8.4px;font-weight:700;line-height:1.2;color:#22311c}
+.console-provider-order{min-width:22px;height:16px;padding:0 5px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:rgba(60,103,39,.12);color:#2c4a1f;font-size:7px;font-weight:700;flex:0 0 auto}
+.console-provider-model{min-width:0;color:#5f6e5a;font-size:7px;line-height:1.25;word-break:break-word;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.console-provider-meta{min-height:14px;display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.console-provider-chip{max-width:100%;min-height:14px;padding:0 5px;border-radius:999px;background:rgba(79,108,62,.08);color:#355029;font-size:6.3px;font-weight:600;display:inline-flex;align-items:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.console-provider-chip-muted{background:rgba(128,119,102,.1);color:#7a705f}
+.console-empty-panel{min-height:160px;border-radius:20px;background:rgba(255,255,255,.28);display:flex;align-items:center;justify-content:center;color:#70806d;font-size:13px}
+.console-dispatch-control-rack{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:stretch}
+.console-dispatch-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.console-dispatch-summary-top{min-width:0;order:2}
+.console-dispatch-summary-block{min-width:0;min-height:38px;padding:5px 8px;border-radius:10px;border:1px solid rgba(90,117,79,.12);background:rgba(255,255,255,.34);display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-content:center;box-shadow:inset 0 1px 0 rgba(255,255,255,.46)}
+.console-dispatch-summary-line{min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:baseline;gap:6px}
+.console-dispatch-summary-line span{color:#6a7865;font-size:9px;font-weight:700;line-height:1.1;white-space:nowrap}
+.console-dispatch-summary-line strong{min-width:0;color:#263b2a;font-size:11px;line-height:1.18;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.console-dispatch-control-panel{order:1;min-height:38px;padding:5px 8px;border-radius:10px;border:1px solid rgba(90,117,79,.12);background:rgba(255,255,255,.34);display:flex;align-items:center;justify-content:flex-start;gap:7px;box-shadow:inset 0 1px 0 rgba(255,255,255,.46)}
+.console-dispatch-icon-button,.console-dispatch-app-button{position:relative;isolation:isolate;overflow:hidden;width:28px;height:28px;border-radius:8px;border:1px solid rgba(90,117,79,.16);background:rgba(255,255,255,.56);color:#354d33;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;appearance:none;-webkit-appearance:none;transition:border-color .18s ease,background .18s ease,box-shadow .18s ease,transform .18s ease}
+.console-dispatch-icon-button:hover,.console-dispatch-app-button:hover{border-color:rgba(88,125,66,.3);background:rgba(249,252,245,.9);transform:translateY(-1px)}
+.console-dispatch-icon-button:focus-visible,.console-dispatch-app-button:focus-visible{outline:2px solid rgba(107,146,88,.55);outline-offset:2px}
+.console-dispatch-icon-button-active,.console-dispatch-app-button-active{border-color:rgba(75,128,50,.36);background:linear-gradient(180deg,rgba(248,255,241,.98),rgba(232,244,220,.92));box-shadow:0 0 0 3px rgba(147,210,109,.13)}
+.console-dispatch-icon-button>*,.console-dispatch-app-button>*{position:relative;z-index:1}
+.console-dispatch-control-pending{pointer-events:none}
+.console-dispatch-icon-button.console-dispatch-control-pending::before,.console-dispatch-app-button.console-dispatch-control-pending::before{content:"";position:absolute;inset:0;border-radius:inherit;padding:2px;background:conic-gradient(from 0deg,transparent 0deg 42deg,rgba(74,130,56,.95) 72deg 118deg,transparent 150deg 208deg,rgba(238,122,86,.95) 238deg 288deg,transparent 318deg 360deg);animation:console-control-border-orbit .82s linear infinite;-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;z-index:2;pointer-events:none}
+.console-dispatch-icon-button.console-dispatch-control-pending::after,.console-dispatch-app-button.console-dispatch-control-pending::after{content:"";position:absolute;inset:3px;border-radius:6px;background:rgba(255,255,255,.18);z-index:0;pointer-events:none}
+.console-dispatch-master-switch.console-dispatch-control-pending{position:relative;overflow:hidden}
+.console-dispatch-master-switch.console-dispatch-control-pending::before{content:"";position:absolute;inset:0;border-radius:999px;padding:2px;background:conic-gradient(from 0deg,transparent 0deg 42deg,rgba(74,130,56,.95) 72deg 118deg,transparent 150deg 208deg,rgba(238,122,86,.95) 238deg 288deg,transparent 318deg 360deg);animation:console-control-border-orbit .82s linear infinite;-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;z-index:2;pointer-events:none}
+@keyframes console-control-border-orbit{to{transform:rotate(360deg)}}
+.console-dispatch-anti-poison-button{font-size:16px}
+.console-dispatch-app-buttons{display:flex;align-items:center;gap:5px}
+.console-dispatch-app-button img{width:17px;height:17px;object-fit:contain;display:block}
+.console-dispatch-log-panel{flex:1 1 auto;min-height:408px;height:408px;border-radius:10px;border:1px solid rgba(90,117,79,.16);background:rgba(255,255,255,.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.46);overflow:auto}
+.console-dispatch-log-view{min-height:100%;margin:0;padding:10px 12px;color:#263b2a;font:11px/1.38 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+.console-connections-panel{min-height:260px}
+.console-connection-table{width:100%;height:300px;border-radius:4px;border:1px solid rgba(92,101,96,.34);background:rgba(255,255,255,.58);overflow:auto}
+.console-connection-row{width:100%;display:grid;grid-template-columns:164px 78px 104px 92px minmax(130px,1fr) minmax(130px,1fr) minmax(120px,.9fr) minmax(180px,1.4fr);gap:0;align-items:center;padding:0;border:0;border-bottom:1px solid rgba(92,101,96,.16);background:transparent;text-align:left;color:#263b2a}
+.console-connection-row:last-child{border-bottom:0}
+.console-connection-head{height:34px;background:rgba(239,246,226,.64);color:#334634;font-size:12px;font-weight:800}
+.console-connection-row > span{min-width:0;height:100%;padding:0 10px;display:flex;align-items:center;border-right:1px solid rgba(92,101,96,.13);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.console-connection-row > span:last-child{border-right:0}
+.console-connection-item{cursor:pointer;font-size:12px;transition:background .18s ease,color .18s ease}
+.console-connection-item:hover{background:rgba(245,250,238,.72)}
+.console-connection-item-selected{background:rgba(226,240,210,.82)}
+.console-connection-item strong{display:block;color:#22311c;font-size:12px;line-height:1.25}
+.console-connection-item small{display:block;color:#71806a;font-size:10px;line-height:1.25}
+.console-connection-status-cell{gap:7px}
+.console-connection-status-cell small{font-size:11px;color:#5f6f59}
+.console-connection-status-cell-failed small{white-space:normal;line-height:1.15;color:#8d2f36;font-weight:800}
+.console-connection-status-dot{width:10px;height:10px;border-radius:999px;display:inline-flex;flex:0 0 auto;background:#7a8a73;box-shadow:0 0 0 3px rgba(122,138,115,.12)}
+.console-connection-status-active{background:#5d7f42;box-shadow:0 0 0 3px rgba(93,127,66,.14)}
+.console-connection-status-completed{background:#26a269;box-shadow:0 0 0 3px rgba(38,162,105,.14)}
+.console-connection-status-failed{background:#d84f57;box-shadow:0 0 0 3px rgba(216,79,87,.15)}
+.console-connection-status-waiting{background:#b07c2b;box-shadow:0 0 0 3px rgba(176,124,43,.16)}
+.console-connection-status-probe{background:#4f7c94;box-shadow:0 0 0 3px rgba(79,124,148,.16)}
+.console-connection-empty-row{height:264px;display:flex;align-items:center;justify-content:center;color:#70806d;font-size:13px}
 .key-management .inventory-card :deep(.ant-card-head){background:linear-gradient(180deg,rgba(228,233,226,.96),rgba(221,227,218,.94)) !important}
 .key-management .inventory-card :deep(.ant-card-body){background:transparent}
 .key-management .inventory-card :deep(.ant-card-head){border-bottom-color:rgba(114,132,103,.08)}
 .key-management-gaia .inventory-card,.key-management-wrapper-gaia .inventory-card{background:linear-gradient(180deg,rgba(10,18,22,.96),rgba(8,14,18,.92)) !important;box-shadow:none !important}
 .key-management-gaia .inventory-card :deep(.ant-card-head),.key-management-wrapper-gaia .inventory-card :deep(.ant-card-head){background:linear-gradient(180deg,rgba(14,24,29,.98),rgba(10,18,22,.96)) !important;border-bottom-color:rgba(101,129,138,.16)}
+.key-management-gaia .inventory-panel-tabs{border-color:rgba(122,151,125,.22);background:linear-gradient(180deg,rgba(34,40,34,.78),rgba(25,31,27,.62));box-shadow:inset 0 1px 0 rgba(220,242,194,.08),0 10px 24px rgba(0,0,0,.22)}
+.key-management-gaia .inventory-panel-tab{color:#879a8d}
+.key-management-gaia .inventory-panel-tab:hover{color:#e8f3ef}
+.key-management-gaia .inventory-panel-tab-active{color:#e8f3ef;background:linear-gradient(180deg,rgba(180,214,225,.08),rgba(180,214,225,0));text-shadow:none}
+.key-management-gaia .inventory-panel-tab-active::after{background:linear-gradient(90deg,rgba(186,228,149,.72),rgba(105,154,145,.52))}
+.key-management-gaia .inventory-panel-tab-divider{background:rgba(122,151,125,.22)}
+.key-management-gaia .console-section-head h4{color:#e8f3ef}
+.key-management-gaia .console-section-head p{color:#9fb3ad}
+.key-management-gaia .console-provider-card{background:linear-gradient(180deg,rgba(18,31,36,.92),rgba(11,21,26,.86));border-color:rgba(101,129,138,.18);box-shadow:inset 0 1px 0 rgba(180,214,225,.05)}
+.key-management-gaia .console-provider-card:hover{border-color:rgba(156,203,134,.28);box-shadow:0 12px 24px rgba(0,0,0,.22),inset 0 1px 0 rgba(180,214,225,.06)}
+.key-management-gaia .console-provider-card-primary{border-color:rgba(156,203,134,.34);box-shadow:0 0 0 4px rgba(91,134,86,.12),inset 0 1px 0 rgba(180,214,225,.06)}
+.key-management-gaia .console-provider-card-pending{background:rgba(8,14,18,.24);border-color:rgba(101,129,138,.22);box-shadow:none}
+.key-management-gaia .console-provider-card-top strong{color:#e8f3ef}
+.key-management-gaia .console-provider-model{color:#aebfba}
+.key-management-gaia .console-provider-order,.key-management-gaia .console-section-count,.key-management-gaia .console-provider-chip{background:rgba(180,214,225,.08);color:#dcece8}
+.key-management-gaia .console-empty-panel{background:rgba(8,14,18,.28);box-shadow:inset 0 1px 0 rgba(180,214,225,.05);color:#9fb3ad}
+.key-management-gaia .console-dispatch-summary-block,.key-management-gaia .console-dispatch-control-panel{border-color:rgba(101,129,138,.18);background:rgba(8,14,18,.28);box-shadow:inset 0 1px 0 rgba(180,214,225,.05)}
+.key-management-gaia .console-dispatch-summary-line span{color:#9fb3ad}
+.key-management-gaia .console-dispatch-summary-line strong{color:#e8f3ef}
+.key-management-gaia .console-dispatch-icon-button,.key-management-gaia .console-dispatch-app-button{border-color:rgba(101,129,138,.2);background:rgba(12,22,27,.72);color:#dcece8}
+.key-management-gaia .console-dispatch-icon-button:hover,.key-management-gaia .console-dispatch-app-button:hover{border-color:rgba(156,203,134,.3);background:rgba(20,34,39,.86)}
+.key-management-gaia .console-dispatch-icon-button-active,.key-management-gaia .console-dispatch-app-button-active{border-color:rgba(156,203,134,.4);background:linear-gradient(180deg,rgba(41,63,44,.92),rgba(22,42,38,.88));box-shadow:0 0 0 3px rgba(91,134,86,.16)}
+.key-management-gaia .console-dispatch-icon-button.console-dispatch-control-pending::after,.key-management-gaia .console-dispatch-app-button.console-dispatch-control-pending::after{background:rgba(8,18,18,.22)}
+.key-management-gaia .console-dispatch-log-panel{border-color:rgba(101,129,138,.2);background:rgba(8,14,18,.34);box-shadow:inset 0 1px 0 rgba(180,214,225,.05)}
+.key-management-gaia .console-dispatch-log-view{color:#dcece8}
+.key-management-gaia .console-connection-table{border-color:rgba(101,129,138,.18);background:rgba(8,14,18,.28)}
+.key-management-gaia .console-connection-row{border-bottom-color:rgba(101,129,138,.14);color:#dcece8}
+.key-management-gaia .console-connection-row > span{border-right-color:rgba(101,129,138,.14)}
+.key-management-gaia .console-connection-head{background:rgba(180,214,225,.06);color:#9fb3ad}
+.key-management-gaia .console-connection-item:hover{background:rgba(180,214,225,.06)}
+.key-management-gaia .console-connection-item-selected{background:rgba(105,154,145,.14)}
+.key-management-gaia .console-connection-item strong{color:#e8f3ef}
+.key-management-gaia .console-connection-item small{color:#9fb3ad}
+.key-management-gaia .console-connection-status-cell small{color:#9fb3ad}
+.key-management-gaia .console-connection-status-active{background:#9cc680;box-shadow:0 0 0 3px rgba(156,198,128,.14)}
+.key-management-gaia .console-connection-status-completed{background:#48c78e;box-shadow:0 0 0 3px rgba(72,199,142,.14)}
+.key-management-gaia .console-connection-status-failed{background:#ff7b86;box-shadow:0 0 0 3px rgba(255,123,134,.16)}
+.key-management-gaia .console-connection-status-waiting{background:#d09b56;box-shadow:0 0 0 3px rgba(208,155,86,.16)}
+.key-management-gaia .console-connection-status-probe{background:#75b4c2;box-shadow:0 0 0 3px rgba(117,180,194,.16)}
+.key-management-gaia .console-connection-empty-row{color:#9fb3ad}
 .key-management .sync-card :deep(.ant-card-head){display:none}
 .key-management .sync-card{border-radius:18px;border:1px solid rgba(90,117,79,.1);background:radial-gradient(circle at 84% 14%,rgba(255,214,126,.18),transparent 26%),radial-gradient(circle at 18% 18%,rgba(196,226,163,.16),transparent 24%),linear-gradient(180deg,rgba(255,251,242,.94),rgba(243,246,235,.9));box-shadow:0 22px 52px rgba(87,107,73,.1),inset 0 1px 0 rgba(255,255,255,.78)}
 .key-management .sync-card :deep(.ant-card-body){padding:10px 12px}
@@ -5480,6 +7219,8 @@ function persistMeta() {
 .key-management-gaia .sync-panel-trigger-button{border-color:rgba(101,129,138,.2);background:rgba(255,255,255,.05);color:#dce8e7}
 .key-management-gaia .sync-panel-trigger-button:hover:not(:disabled){background:rgba(88,116,126,.18);border-color:rgba(122,155,166,.3);color:#f4faf8;box-shadow:0 10px 24px rgba(0,0,0,.24)}
 .key-management-gaia.key-management-compact{background:linear-gradient(180deg,#0a1116,#111c22)}
+@media (max-width:700px){.console-dispatch-control-rack{grid-template-columns:1fr}.console-dispatch-summary-top{order:1}.console-dispatch-control-panel{order:2;justify-content:flex-start;flex-wrap:wrap}}
+@media (max-width:520px){.console-dispatch-top-grid{grid-template-columns:1fr}.console-provider-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.console-dispatch-summary{grid-template-columns:1fr}.console-dispatch-summary-block{grid-template-columns:1fr}.console-connection-table{overflow:auto}.console-connection-row{min-width:860px}}
 @keyframes sync-trigger-orbit{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 @keyframes sync-trigger-pulse{0%{transform:scale(.98);filter:saturate(1)}100%{transform:scale(1.05);filter:saturate(1.16)}}
 </style>
