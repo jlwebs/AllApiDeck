@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/run-wails.mjs dev",
-    "dev:desktop": "node scripts/run-wails.mjs dev",
+    "dev:desktop": "node scripts/run-wails.mjs dev --local-data --prod-webview",
+    "dev:desktop:vite": "node scripts/run-wails.mjs dev --local-data --prod-webview --vite",
+    "dev:desktop:prod-webview": "node scripts/run-wails.mjs dev --local-data --prod-webview",
+    "dev:desktop:isolated": "node scripts/run-wails.mjs dev",
     "dev:browser": "node scripts/run-wails.mjs dev --browser",
     "dev:web": "node scripts/run-vite.mjs",
     "build": "node scripts/run-vite.mjs build",

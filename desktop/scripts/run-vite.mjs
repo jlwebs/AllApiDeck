@@ -94,7 +94,7 @@ async function run() {
     clearScreen: options.clearScreen,
     optimizeDeps: {
       ...(userConfig.optimizeDeps || {}),
-      force: true,
+      force: options.force === true,
       include: Array.from(new Set([
         ...((userConfig.optimizeDeps && Array.isArray(userConfig.optimizeDeps.include))
           ? userConfig.optimizeDeps.include

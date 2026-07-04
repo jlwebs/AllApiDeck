@@ -273,6 +273,9 @@ func resolveWebviewUserDataPath(appMode launchMode) string {
 	if strings.Contains(exeName, "-dev") {
 		mode = "dev"
 	}
+	if overrideMode := strings.ToLower(strings.TrimSpace(os.Getenv("BATCH_API_CHECK_WEBVIEW_MODE"))); overrideMode == "prod" || overrideMode == "dev" {
+		mode = overrideMode
+	}
 
 	webviewRoot := filepath.Join(root, "BatchApiCheck", "runtime", "webview2", mode)
 	if mode == "dev" {

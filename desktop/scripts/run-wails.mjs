@@ -10,6 +10,10 @@ const projectRoot = path.resolve(__dirname, '..');
 const rawArgs = process.argv.slice(2);
 const command = rawArgs[0] || 'dev';
 const isWindows = process.platform === 'win32';
+const useLocalData = rawArgs.includes('--local-data');
+const useProdWebview = rawArgs.includes('--prod-webview');
+const useViteDevServer = rawArgs.includes('--vite');
+const forceStableRebuild = rawArgs.includes('--force');
 const logDir = path.join(projectRoot, 'logs');
 const runnerLogPath = path.join(logDir, 'wails-dev-runner.log');
 const sidecarLogPath = path.join(logDir, 'wails-dev-sidecar.log');
@@ -160,6 +164,17 @@ function buildEnv() {
   });
 
   env.GOPROXY = env.GOPROXY || 'https://goproxy.cn,direct';
+  if (useLocalData && isWindows) {
+    const localAppData = env.LOCALAPPDATA || path.join(env.USERPROFILE || '', 'AppData', 'Local');
+    if (localAppData) {
+      env.BATCH_API_CHECK_RUNTIME_DIR = path.join(localAppData, 'BatchApiCheck', 'runtime');
+      if (useProdWebview) {
+        env.BATCH_API_CHECK_WEBVIEW_MODE = 'prod';
+      } else {
+        delete env.BATCH_API_CHECK_WEBVIEW_MODE;
+      }
+    }
+  }
 
   const npmrcPath = path.join(projectRoot, '.npmrc.wails');
   if (!fs.existsSync(npmrcPath)) {
@@ -240,7 +255,7 @@ function listProjectDevProcesses() {
   const escapedRoot = projectRoot.replace(/'/g, "''");
   const script = [
     `$project = '${escapedRoot}'`,
-    "$names = @('node.exe','wails.exe','batch-api-check-dev.exe','batch-api-check.exe','cmd.exe')",
+    "$names = @('node.exe','wails.exe','batch-api-check-dev.exe','batch-api-check.exe','all-api-deck-dev.exe','all-api-deck.exe','cmd.exe')",
     'Get-CimInstance Win32_Process |',
     '  Where-Object {',
     '    $cmd = [string]$_.CommandLine',
@@ -304,6 +319,111 @@ function attachExit(child, cleanup = () => {}) {
   });
 }
 
+function runChild(commandPath, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(commandPath, args, {
+      cwd: projectRoot,
+      stdio: ['ignore', 'inherit', 'inherit'],
+      env: buildEnv(),
+      ...options,
+    });
+
+    child.on('error', reject);
+    child.on('exit', (code, signal) => {
+      if (signal) {
+        reject(new Error(`${commandPath} ${args.join(' ')} terminated by signal ${signal}`));
+        return;
+      }
+      if ((code ?? 0) !== 0) {
+        reject(new Error(`${commandPath} ${args.join(' ')} failed with code ${code}`));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function buildFrontendForDesktopDev(env) {
+  logRunner('[dev] Building frontend assets for stable desktop dev...');
+  await runChild(process.execPath, [path.join(projectRoot, 'scripts', 'run-vite.mjs'), 'build'], {
+    env,
+  });
+}
+
+async function buildDesktopDevExecutable(wailsExecutable, env) {
+  const buildArgs = [
+    'build',
+    '-debug',
+    '-devtools',
+    '-nopackage',
+    '-m',
+    '-s',
+    '-nocolour',
+    '-tags', 'native_webview2loader',
+    '-o', 'all-api-deck-dev.exe',
+  ];
+  logRunner(`[dev] Building desktop executable: ${buildArgs.join(' ')}`);
+  await runChild(wailsExecutable, buildArgs, { env });
+}
+
+async function ensureStableDesktopBuild(wailsExecutable, env, exePath) {
+  const distPath = path.join(projectRoot, 'dist', 'index.html');
+  const needsFrontendBuild = forceStableRebuild || !fs.existsSync(distPath);
+  if (needsFrontendBuild) {
+    await buildFrontendForDesktopDev(env);
+  } else {
+    logRunner('[dev] Reusing existing frontend assets; pass --force to rebuild.');
+  }
+
+  const needsDesktopBuild = forceStableRebuild || !fs.existsSync(exePath);
+  if (needsDesktopBuild) {
+    if (!fs.existsSync(distPath)) {
+      await buildFrontendForDesktopDev(env);
+    }
+    await buildDesktopDevExecutable(wailsExecutable, env);
+  } else {
+    logRunner('[dev] Reusing existing desktop executable; pass --force to rebuild.');
+  }
+}
+
+async function runStableDesktopDevMode() {
+  ensureLogDir();
+  fs.writeFileSync(runnerLogPath, '', 'utf8');
+  fs.writeFileSync(sidecarLogPath, '', 'utf8');
+  fs.writeFileSync(viteLogPath, '', 'utf8');
+  fs.writeFileSync(wailsLogPath, '', 'utf8');
+
+  logRunner('[dev] Preparing stable desktop runtime...');
+  const env = buildEnv();
+  logRunner('[dev] Resolving Wails executable...');
+  const wailsExecutable = resolveWailsExecutable();
+  logRunner(`[dev] Wails executable: ${wailsExecutable}`);
+  logRunner('[dev] Cleaning stale dev processes...');
+  await cleanupStaleDevProcesses();
+  const exePath = path.join(projectRoot, 'build', 'bin', 'all-api-deck-dev.exe');
+  await ensureStableDesktopBuild(wailsExecutable, env, exePath);
+
+  if (!fs.existsSync(exePath)) {
+    throw new Error(`Desktop executable was not created: ${exePath}`);
+  }
+
+  logRunner(`[dev] Starting Wails stable desktop executable: ${exePath}`);
+  if (useLocalData) {
+    logRunner(`[dev] Using local data: ${env.BATCH_API_CHECK_RUNTIME_DIR || 'default runtime dir'}`);
+  }
+
+  const wailsChild = spawn(exePath, [], {
+    cwd: projectRoot,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...env,
+      ALLAPIDECK_SKIP_DEV_SIDECAR: '1',
+    },
+  });
+  attachChildLogging(wailsChild, 'wails', wailsLogPath);
+  attachExit(wailsChild);
+}
+
 async function runDevMode() {
   ensureLogDir();
   fs.writeFileSync(runnerLogPath, '', 'utf8');
@@ -319,7 +439,7 @@ async function runDevMode() {
   logRunner('[dev] Cleaning stale dev processes...');
   await cleanupStaleDevProcesses();
 
-  const loopbackHost = '127.0.0.1';
+  const loopbackHost = process.env.ALLAPIDECK_DEV_HOST || 'localhost';
   const sidecarPort = await findAvailablePort(13000, 20);
   const vitePort = await findAvailablePort(3000, 20);
   const wailsDevServerPort = await findAvailablePort(34115, 50);
@@ -392,12 +512,18 @@ async function runDevMode() {
     `-frontenddevserverurl=${frontendUrl}`,
   ];
   for (const extraArg of rawArgs.slice(1)) {
+    if (extraArg === '--local-data' || extraArg === '--prod-webview' || extraArg === '--vite' || extraArg === '--force') {
+      continue;
+    }
     if (!wailsArgs.includes(extraArg)) {
       wailsArgs.push(extraArg);
     }
   }
 
   logRunner(`[dev] Starting Wails: ${wailsArgs.join(' ')}`);
+  if (useLocalData) {
+    logRunner(`[dev] Using local data: ${env.BATCH_API_CHECK_RUNTIME_DIR || 'default runtime dir'}`);
+  }
   const wailsChild = spawn(wailsExecutable, wailsArgs, {
     cwd: projectRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -441,7 +567,7 @@ async function runDevMode() {
 }
 
 function buildPassthroughArgs() {
-  const args = rawArgs.length ? [...rawArgs] : [command];
+  const args = rawArgs.length ? rawArgs.filter((arg) => arg !== '--local-data' && arg !== '--prod-webview' && arg !== '--vite' && arg !== '--force') : [command];
   if (args[0] === 'dev' && !args.includes('-m')) args.push('-m');
   if (!args.includes('-nocolour')) args.push('-nocolour');
   if (args[0] === 'build') {
@@ -455,7 +581,11 @@ async function main() {
   ensureBuildAssets();
 
   if (command === 'dev') {
-    await runDevMode();
+    if (useViteDevServer) {
+      await runDevMode();
+    } else {
+      await runStableDesktopDevMode();
+    }
     return;
   }
 
