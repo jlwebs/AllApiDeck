@@ -258,6 +258,42 @@ func TestTransformOpenAIChatStreamToResponsesPreservesReasoningContent(t *testin
 	}
 }
 
+func TestTransformOpenAIChatStreamToResponsesParsesFoldedDataFrames(t *testing.T) {
+	frames := []string{
+		`data: {"id":"chatcmpl_folded","model":"deepseek-v4-flash-free","created":123,"choices":[{"delta":{"role":"assistant","content":"Preparing"}}]}`,
+		`data: {"id":"chatcmpl_folded","model":"deepseek-v4-flash-free","created":123,"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_00_kpHYWsRAIyHBr3rWexOg9288","type":"function","function":{"name":"shell_command","arguments":""}}]}}]}`,
+		`data: {"id":"chatcmpl_folded","model":"deepseek-v4-flash-free","created":123,"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"command\": \"python \\\"$env:USERPROFILE\\\\gen"}}]}}]}`,
+		`data: {"id":"chatcmpl_folded","model":"deepseek-v4-flash-free","created":123,"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"_ggbond.py\\\"\", \"timeout_ms\": 30000}"}}]}}]}`,
+		`data: {"id":"chatcmpl_folded","model":"deepseek-v4-flash-free","created":123,"choices":[{"finish_reason":"tool_calls","delta":{}}],"usage":{"prompt_tokens":9,"completion_tokens":3,"total_tokens":12}}`,
+		`data: [DONE]`,
+		`data: {"choices":[],"cost":"0"}`,
+	}
+	stream := io.NopCloser(strings.NewReader(strings.Join(frames, " ")))
+
+	body, err := io.ReadAll(transformOpenAIChatStreamToResponsesStream(stream, "deepseek-v4-flash-free"))
+	if err != nil {
+		t.Fatalf("read transformed stream failed: %v", err)
+	}
+	payload := string(body)
+	for _, needle := range []string{
+		`event: response.output_item.added`,
+		`"call_id":"call_00_kpHYWsRAIyHBr3rWexOg9288"`,
+		`"name":"shell_command"`,
+		`event: response.function_call_arguments.done`,
+		`gen_ggbond.py`,
+		`timeout_ms`,
+		`event: response.completed`,
+		`data: [DONE]`,
+	} {
+		if !strings.Contains(payload, needle) {
+			t.Fatalf("expected %q in transformed folded stream:\n%s", needle, payload)
+		}
+	}
+	if strings.Contains(payload, `event: response.incomplete`) {
+		t.Fatalf("folded stream should complete instead of becoming incomplete:\n%s", payload)
+	}
+}
+
 func TestTransformOpenAIChatStreamToResponsesMarksUnexpectedEOFIncomplete(t *testing.T) {
 	stream := io.NopCloser(strings.NewReader(strings.Join([]string{
 		`data: {"id":"chatcmpl_cut","model":"deepseek-v4-flash-free","created":123,"choices":[{"delta":{"role":"assistant","content":"partial text"}}]}`,

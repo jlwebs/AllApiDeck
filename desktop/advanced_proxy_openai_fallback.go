@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -48,6 +49,129 @@ type advancedProxyChatToResponsesToolState struct {
 }
 
 var advancedProxyOpenAIProtocolPreferences = advancedProxyOpenAIProtocolPreferenceStore{}
+
+func streamAdvancedProxySSEDataPayloads(reader io.Reader, onPayload func(payload string) (bool, error)) error {
+	buffer := make([]byte, 0, 64*1024)
+	chunk := make([]byte, 32*1024)
+	for {
+		n, readErr := reader.Read(chunk)
+		if n > 0 {
+			buffer = append(buffer, chunk[:n]...)
+			for {
+				payload, consumed, ok := nextAdvancedProxySSEDataPayload(buffer)
+				if consumed > 0 {
+					buffer = buffer[consumed:]
+				}
+				if !ok {
+					break
+				}
+				stop, err := onPayload(payload)
+				if err != nil {
+					return err
+				}
+				if stop {
+					return nil
+				}
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				for {
+					payload, consumed, ok := nextAdvancedProxySSEDataPayload(buffer)
+					if consumed > 0 {
+						buffer = buffer[consumed:]
+					}
+					if !ok {
+						break
+					}
+					stop, err := onPayload(payload)
+					if err != nil {
+						return err
+					}
+					if stop {
+						return nil
+					}
+				}
+				return nil
+			}
+			return readErr
+		}
+	}
+}
+
+func nextAdvancedProxySSEDataPayload(buffer []byte) (string, int, bool) {
+	dataIndex := bytes.Index(buffer, []byte("data:"))
+	if dataIndex < 0 {
+		if len(buffer) > len("data:") {
+			return "", len(buffer) - len("data:"), false
+		}
+		return "", 0, false
+	}
+	cursor := dataIndex + len("data:")
+	for cursor < len(buffer) && (buffer[cursor] == ' ' || buffer[cursor] == '\t') {
+		cursor++
+	}
+	if cursor >= len(buffer) {
+		return "", dataIndex, false
+	}
+	if bytes.HasPrefix(buffer[cursor:], []byte("[DONE]")) {
+		return "[DONE]", cursor + len("[DONE]"), true
+	}
+	if buffer[cursor] == '{' || buffer[cursor] == '[' {
+		end, ok := findAdvancedProxyJSONPayloadEnd(buffer, cursor)
+		if !ok {
+			return "", dataIndex, false
+		}
+		return strings.TrimSpace(string(buffer[cursor:end])), end, true
+	}
+	if lineEnd := bytes.IndexByte(buffer[cursor:], '\n'); lineEnd >= 0 {
+		end := cursor + lineEnd
+		payload := strings.TrimSpace(strings.TrimRight(string(buffer[cursor:end]), "\r"))
+		return payload, end + 1, true
+	}
+	return "", dataIndex, false
+}
+
+func findAdvancedProxyJSONPayloadEnd(buffer []byte, start int) (int, bool) {
+	if start < 0 || start >= len(buffer) {
+		return 0, false
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for index := start; index < len(buffer); index++ {
+		char := buffer[index]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if char == '\\' {
+				escaped = true
+				continue
+			}
+			if char == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch char {
+		case '"':
+			inString = true
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+			if depth == 0 {
+				return index + 1, true
+			}
+			if depth < 0 {
+				return 0, false
+			}
+		}
+	}
+	return 0, false
+}
 
 func resolveAdvancedProxyOpenAIProtocolPreferencePath() string {
 	return filepath.Join(resolveRuntimeRootDir(), "advanced-proxy", "openai-protocol-preferences.json")
@@ -1053,9 +1177,6 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 		defer streamBody.Close()
 		defer writer.Close()
 
-		scanner := bufio.NewScanner(streamBody)
-		scanner.Buffer(make([]byte, 0, 64*1024), advancedProxySSEScannerMaxTokenSize)
-
 		responseID := ""
 		model := strings.TrimSpace(fallbackModel)
 		createdAt := time.Now().Unix()
@@ -1312,27 +1433,22 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 			return err
 		}
 
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == "" || !strings.HasPrefix(line, "data:") {
-				continue
-			}
-			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		streamErr := streamAdvancedProxySSEDataPayloads(streamBody, func(payload string) (bool, error) {
+			payload = strings.TrimSpace(payload)
 			if payload == "" {
-				continue
+				return false, nil
 			}
 			if payload == "[DONE]" {
 				finished = true
 				if err := emitCompleted(); err != nil {
-					_ = writer.CloseWithError(err)
-					return
+					return true, err
 				}
-				return
+				return true, nil
 			}
 
 			chunk := map[string]any{}
 			if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-				continue
+				return false, nil
 			}
 			if chunkID := strings.TrimSpace(toStringValue(chunk["id"])); chunkID != "" && responseID == "" {
 				responseID = chunkID
@@ -1351,17 +1467,16 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 				}
 			}
 			if err := emitResponseCreated(); err != nil {
-				_ = writer.CloseWithError(err)
-				return
+				return true, err
 			}
 
 			choices, _ := chunk["choices"].([]any)
 			if len(choices) == 0 {
-				continue
+				return false, nil
 			}
 			choiceMap, _ := choices[0].(map[string]any)
 			if choiceMap == nil {
-				continue
+				return false, nil
 			}
 			delta, _ := choiceMap["delta"].(map[string]any)
 			if reasoning := firstNonEmptyExact(
@@ -1370,15 +1485,13 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 				openAIMessageContentToText(delta["thinking"]),
 			); reasoning != "" {
 				if err := ensureMessage(); err != nil {
-					_ = writer.CloseWithError(err)
-					return
+					return true, err
 				}
 				reasoningText.WriteString(reasoning)
 			}
 			if text := toStringValue(delta["content"]); text != "" {
 				if err := ensureMessage(); err != nil {
-					_ = writer.CloseWithError(err)
-					return
+					return true, err
 				}
 				if !contentPartStarted {
 					contentPartStarted = true
@@ -1391,8 +1504,7 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 							"text": "",
 						},
 					}); err != nil {
-						_ = writer.CloseWithError(err)
-						return
+						return true, err
 					}
 				}
 				messageText.WriteString(text)
@@ -1402,15 +1514,13 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 					"content_index": 0,
 					"delta":         text,
 				}); err != nil {
-					_ = writer.CloseWithError(err)
-					return
+					return true, err
 				}
 			}
 
 			if toolCalls, ok := delta["tool_calls"].([]any); ok && len(toolCalls) > 0 {
 				if err := closeMessage(); err != nil {
-					_ = writer.CloseWithError(err)
-					return
+					return true, err
 				}
 				for _, rawToolCall := range toolCalls {
 					toolCallMap, ok := rawToolCall.(map[string]any)
@@ -1450,8 +1560,7 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 								"name":    state.Name,
 							},
 						}); err != nil {
-							_ = writer.CloseWithError(err)
-							return
+							return true, err
 						}
 						state.Added = true
 					}
@@ -1464,8 +1573,7 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 								"output_index": state.OutputIndex,
 								"delta":        arguments,
 							}); err != nil {
-								_ = writer.CloseWithError(err)
-								return
+								return true, err
 							}
 						}
 					}
@@ -1475,22 +1583,21 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 			if finishReason := strings.TrimSpace(toStringValue(choiceMap["finish_reason"])); finishReason != "" {
 				finished = true
 				if err := closeMessage(); err != nil {
-					_ = writer.CloseWithError(err)
-					return
+					return true, err
 				}
 				if err := closeTools(); err != nil {
-					_ = writer.CloseWithError(err)
-					return
+					return true, err
 				}
 			}
-		}
+			return false, nil
+		})
 
-		if err := scanner.Err(); err != nil {
+		if streamErr != nil {
 			appendAdvancedProxyLogf(
 				"[OPENAI_CHAT_TO_RESPONSES_STREAM_ERROR] response_id=%s model=%s detail=%s",
 				firstNonEmpty(strings.TrimSpace(responseID), "unknown"),
 				previewAdvancedProxyText(model, 120),
-				previewAdvancedProxyText(err.Error(), 220),
+				previewAdvancedProxyText(streamErr.Error(), 220),
 			)
 			if incompleteErr := emitIncomplete("stream_read_error"); incompleteErr != nil {
 				_ = writer.CloseWithError(incompleteErr)
