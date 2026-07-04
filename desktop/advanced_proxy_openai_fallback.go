@@ -28,12 +28,13 @@ type advancedProxyOpenAIProtocolPreferenceStore struct {
 }
 
 type advancedProxyResponsesChatFallbackPlan struct {
-	ChatBody      []byte
-	ScopeKey      string
-	Model         string
-	Blockers      []string
-	SupportsChat  bool
-	BlockedReason string
+	ChatBody        []byte
+	ScopeKey        string
+	Model           string
+	Blockers        []string
+	SupportsChat    bool
+	BlockedReason   string
+	HostedWebSearch bool
 }
 
 type advancedProxyChatToResponsesToolState struct {
@@ -178,6 +179,7 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 	model := firstNonEmpty(strings.TrimSpace(provider.Model), strings.TrimSpace(toStringValue(requestBody["model"])))
 	plan.Model = model
 	plan.ScopeKey = resolveAdvancedProxyOpenAIProtocolPreferenceScopeKey(provider, model)
+	flattenToolHistory := shouldFlattenOpenAIResponsesToolHistoryForProvider(provider)
 
 	blockers := make([]string, 0, 4)
 	if previousResponseID := strings.TrimSpace(toStringValue(requestBody["previous_response_id"])); previousResponseID != "" {
@@ -189,7 +191,22 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 
 	systemParts := make([]string, 0, 2)
 	messages := make([]map[string]any, 0, 8)
-	appendMessage := func(role string, content any, toolCalls []map[string]any) {
+	appendMessage := func(role string, content any, toolCalls []map[string]any, extra map[string]any) {
+		role = strings.TrimSpace(role)
+		if role == "" {
+			return
+		}
+		if content == nil && len(toolCalls) == 0 {
+			if role == "assistant" && len(extra) > 0 {
+				reasoningText := strings.TrimSpace(toStringValue(extra["reasoning_content"]))
+				if reasoningText != "" {
+					content = "Reasoning recorded for context.\n" + reasoningText
+				}
+			}
+			if content == nil {
+				return
+			}
+		}
 		payload := map[string]any{
 			"role": role,
 		}
@@ -199,7 +216,12 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 		if len(toolCalls) > 0 {
 			payload["tool_calls"] = toolCalls
 		}
-		if content == nil && len(toolCalls) == 0 {
+		for key, value := range extra {
+			if strings.TrimSpace(key) != "" && value != nil {
+				payload[key] = value
+			}
+		}
+		if content == nil && len(toolCalls) == 0 && len(extra) == 0 {
 			return
 		}
 		messages = append(messages, payload)
@@ -209,9 +231,88 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 	case string:
 		text := strings.TrimSpace(typed)
 		if text != "" {
-			appendMessage("user", text, nil)
+			appendMessage("user", text, nil, nil)
 		}
 	case []any:
+		pendingReasoning := ""
+		pendingToolCalls := make([]map[string]any, 0, 2)
+		pendingToolOutputs := make([]map[string]any, 0, 2)
+		var pendingToolExtra map[string]any
+		attachPendingReasoningToToolCall := func() {
+			if pendingReasoning == "" {
+				return
+			}
+			if pendingToolExtra == nil {
+				pendingToolExtra = map[string]any{}
+			}
+			pendingToolExtra["reasoning_content"] = joinNonEmptyLines(toStringValue(pendingToolExtra["reasoning_content"]), pendingReasoning)
+			pendingReasoning = ""
+		}
+		flushPendingToolCalls := func() {
+			if len(pendingToolCalls) == 0 {
+				return
+			}
+			attachPendingReasoningToToolCall()
+			outputIDs := make(map[string]struct{}, len(pendingToolOutputs))
+			for _, output := range pendingToolOutputs {
+				if toolCallID := strings.TrimSpace(toStringValue(output["tool_call_id"])); toolCallID != "" {
+					outputIDs[toolCallID] = struct{}{}
+				}
+			}
+			validCalls := make([]map[string]any, 0, len(pendingToolCalls))
+			validCallIDs := make(map[string]struct{}, len(pendingToolCalls))
+			for _, toolCall := range pendingToolCalls {
+				toolCallID := strings.TrimSpace(toStringValue(toolCall["id"]))
+				if toolCallID == "" {
+					continue
+				}
+				if _, exists := outputIDs[toolCallID]; !exists {
+					blockers = append(blockers, "tool_call_missing_output")
+					continue
+				}
+				validCalls = append(validCalls, toolCall)
+				validCallIDs[toolCallID] = struct{}{}
+			}
+			if len(validCalls) > 0 {
+				appendMessage("assistant", nil, validCalls, pendingToolExtra)
+				for _, output := range pendingToolOutputs {
+					toolCallID := strings.TrimSpace(toStringValue(output["tool_call_id"]))
+					if _, exists := validCallIDs[toolCallID]; !exists {
+						blockers = append(blockers, "tool_output_without_call")
+						continue
+					}
+					appendMessage("tool", output["content"], nil, nil)
+					if len(messages) > 0 {
+						messages[len(messages)-1]["tool_call_id"] = toolCallID
+					}
+				}
+			}
+			pendingToolCalls = nil
+			pendingToolOutputs = nil
+			pendingToolExtra = nil
+		}
+		queueToolCall := func(toolCall map[string]any) {
+			attachPendingReasoningToToolCall()
+			pendingToolCalls = append(pendingToolCalls, toolCall)
+		}
+		appendToolOutput := func(toolCallID string, outputText string) {
+			pendingToolOutputs = append(pendingToolOutputs, map[string]any{
+				"tool_call_id": toolCallID,
+				"content":      outputText,
+			})
+		}
+		appendFlattenedToolHistory := func(role string, text string) {
+			text = strings.TrimSpace(text)
+			if text == "" {
+				text = "Tool interaction recorded for context."
+			}
+			if pendingReasoning != "" {
+				text = joinNonEmptyLines("Reasoning recorded for context.\n"+pendingReasoning, text)
+				pendingReasoning = ""
+			}
+			flushPendingToolCalls()
+			appendMessage(role, text, nil, nil)
+		}
 		for _, rawItem := range typed {
 			itemMap, ok := rawItem.(map[string]any)
 			if !ok {
@@ -220,6 +321,7 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 			itemType := strings.ToLower(strings.TrimSpace(toStringValue(itemMap["type"])))
 			role := strings.TrimSpace(toStringValue(itemMap["role"]))
 			if role != "" || itemType == "message" || itemType == "input_text" || itemType == "input_image" || itemType == "text" || itemType == "output_text" || itemType == "" {
+				flushPendingToolCalls()
 				if role == "system" || role == "developer" {
 					text := openAIMessageContentToText(itemMap["content"])
 					if text != "" {
@@ -232,13 +334,26 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 				if role == "" {
 					role = "user"
 				}
-				appendMessage(role, content, nil)
+				extra := extractResponsesReasoningForChatMessage(itemMap)
+				if role == "assistant" && pendingReasoning != "" {
+					if _, exists := extra["reasoning_content"]; !exists {
+						if extra == nil {
+							extra = map[string]any{}
+						}
+						extra["reasoning_content"] = pendingReasoning
+					}
+					pendingReasoning = ""
+				}
+				appendMessage(role, content, nil, extra)
 				continue
 			}
 
 			switch itemType {
 			case "reasoning":
-				continue
+				reasoningText := extractResponsesReasoningText(itemMap)
+				if reasoningText != "" {
+					pendingReasoning = joinNonEmptyLines(pendingReasoning, reasoningText)
+				}
 			case "function_call":
 				toolCallID := firstNonEmpty(strings.TrimSpace(toStringValue(itemMap["call_id"])), strings.TrimSpace(toStringValue(itemMap["id"])))
 				name := strings.TrimSpace(toStringValue(itemMap["name"]))
@@ -246,14 +361,18 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 					blockers = append(blockers, "function_call_missing_identity")
 					continue
 				}
-				appendMessage("assistant", nil, []map[string]any{{
+				if flattenToolHistory {
+					appendFlattenedToolHistory("user", openAIResponsesToolCallHistoryText(itemMap))
+					continue
+				}
+				queueToolCall(map[string]any{
 					"id":   toolCallID,
 					"type": "function",
 					"function": map[string]any{
 						"name":      name,
 						"arguments": stringifyJSON(itemMap["arguments"]),
 					},
-				}})
+				})
 			case "function_call_output":
 				toolCallID := strings.TrimSpace(toStringValue(itemMap["call_id"]))
 				if toolCallID == "" {
@@ -265,16 +384,65 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 					openAIMessageContentToText(itemMap["content"]),
 					toStringValue(itemMap["text"]),
 				)
-				appendMessage("tool", outputText, nil)
-				if len(messages) > 0 {
-					messages[len(messages)-1]["tool_call_id"] = toolCallID
+				if flattenToolHistory {
+					appendFlattenedToolHistory("user", openAIResponsesToolOutputHistoryText(itemMap))
+					continue
 				}
+				appendToolOutput(toolCallID, outputText)
 			case "web_search_call":
-				blockers = append(blockers, "web_search_call")
-			case "custom_tool_call", "custom_tool_call_output":
-				blockers = append(blockers, itemType)
+				continue
+			case "custom_tool_call":
+				toolCallID := firstNonEmpty(strings.TrimSpace(toStringValue(itemMap["call_id"])), strings.TrimSpace(toStringValue(itemMap["id"])))
+				name := strings.TrimSpace(toStringValue(itemMap["name"]))
+				if toolCallID == "" || name == "" {
+					blockers = append(blockers, "custom_tool_call_missing_identity")
+					continue
+				}
+				if flattenToolHistory {
+					appendFlattenedToolHistory("user", openAIResponsesToolCallHistoryText(itemMap))
+					continue
+				}
+				arguments := firstNonEmptyExact(
+					stringifyJSON(itemMap["input"]),
+					stringifyJSON(itemMap["arguments"]),
+				)
+				queueToolCall(map[string]any{
+					"id":   toolCallID,
+					"type": "function",
+					"function": map[string]any{
+						"name":      name,
+						"arguments": arguments,
+					},
+				})
+			case "custom_tool_call_output":
+				toolCallID := strings.TrimSpace(toStringValue(itemMap["call_id"]))
+				if toolCallID == "" {
+					blockers = append(blockers, "custom_tool_call_output_missing_call_id")
+					continue
+				}
+				outputText := firstNonEmptyExact(
+					openAIMessageContentToText(itemMap["output"]),
+					openAIMessageContentToText(itemMap["content"]),
+					toStringValue(itemMap["text"]),
+				)
+				if flattenToolHistory {
+					appendFlattenedToolHistory("user", openAIResponsesToolOutputHistoryText(itemMap))
+					continue
+				}
+				appendToolOutput(toolCallID, outputText)
 			default:
+				flushPendingToolCalls()
 				blockers = append(blockers, "unsupported_input_type:"+itemType)
+			}
+		}
+		flushPendingToolCalls()
+		if pendingReasoning != "" {
+			if flattenToolHistory {
+				appendMessage("user", "Reasoning recorded for context.\n"+pendingReasoning, nil, nil)
+			} else {
+				appendMessage("assistant", pendingReasoning, nil, map[string]any{
+					"reasoning_content": pendingReasoning,
+				})
 			}
 		}
 	}
@@ -310,7 +478,10 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 		chatBody["parallel_tool_calls"] = parallelToolCalls
 	}
 
-	tools, toolBlockers := convertResponsesRequestToolsToChat(requestBody["tools"])
+	tools, toolBlockers, hostedWebSearch := convertResponsesRequestToolsToChat(requestBody["tools"])
+	if shouldFlattenOpenAIResponsesToolHistoryForProvider(provider) {
+		hostedWebSearch = false
+	}
 	blockers = append(blockers, toolBlockers...)
 	if len(tools) > 0 {
 		chatBody["tools"] = tools
@@ -326,7 +497,8 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 
 	plan.ChatBody = chatRaw
 	plan.Blockers = compactStringList(blockers)
-	plan.SupportsChat = len(plan.Blockers) == 0
+	plan.SupportsChat = len(plan.ChatBody) > 0
+	plan.HostedWebSearch = hostedWebSearch
 	if len(plan.Blockers) > 0 {
 		plan.BlockedReason = strings.Join(plan.Blockers, ",")
 	}
@@ -351,6 +523,121 @@ func compactStringList(values []string) []string {
 		result = append(result, value)
 	}
 	return result
+}
+
+func joinNonEmptyLines(values ...string) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		if text := strings.TrimSpace(value); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func extractResponsesReasoningForChatMessage(itemMap map[string]any) map[string]any {
+	reasoningText := firstNonEmptyExact(
+		openAIMessageContentToText(itemMap["reasoning_content"]),
+		openAIMessageContentToText(itemMap["thinking"]),
+		extractResponsesReasoningSummaryText(itemMap),
+	)
+	if reasoningText == "" {
+		return nil
+	}
+	return map[string]any{
+		"reasoning_content": reasoningText,
+	}
+}
+
+func extractResponsesReasoningSummaryText(itemMap map[string]any) string {
+	if itemMap == nil {
+		return ""
+	}
+	parts := make([]string, 0, 4)
+	appendText := func(value any) {
+		text := strings.TrimSpace(openAIMessageContentToText(value))
+		if text == "" {
+			text = strings.TrimSpace(toStringValue(value))
+		}
+		if text != "" {
+			parts = append(parts, text)
+		}
+	}
+	if rawSummary, ok := itemMap["summary"].([]any); ok {
+		for _, rawItem := range rawSummary {
+			summaryMap, ok := rawItem.(map[string]any)
+			if !ok {
+				appendText(rawItem)
+				continue
+			}
+			appendText(firstNonEmptyExact(
+				toStringValue(summaryMap["text"]),
+				toStringValue(summaryMap["content"]),
+			))
+		}
+	}
+	appendText(itemMap["encrypted_content"])
+	if rawDetails, ok := itemMap["details"].([]any); ok {
+		for _, rawItem := range rawDetails {
+			detailMap, ok := rawItem.(map[string]any)
+			if !ok {
+				appendText(rawItem)
+				continue
+			}
+			appendText(firstNonEmptyExact(
+				toStringValue(detailMap["text"]),
+				toStringValue(detailMap["content"]),
+			))
+		}
+	}
+	return strings.Join(compactStringList(parts), "\n")
+}
+
+func extractResponsesReasoningText(itemMap map[string]any) string {
+	if itemMap == nil {
+		return ""
+	}
+	parts := make([]string, 0, 4)
+	appendText := func(value any) {
+		text := strings.TrimSpace(openAIMessageContentToText(value))
+		if text == "" {
+			text = strings.TrimSpace(toStringValue(value))
+		}
+		if text != "" {
+			parts = append(parts, text)
+		}
+	}
+	appendText(itemMap["text"])
+	appendText(itemMap["content"])
+	appendText(itemMap["reasoning_content"])
+	if rawSummary, ok := itemMap["summary"].([]any); ok {
+		for _, rawItem := range rawSummary {
+			summaryMap, ok := rawItem.(map[string]any)
+			if !ok {
+				appendText(rawItem)
+				continue
+			}
+			appendText(firstNonEmptyExact(
+				toStringValue(summaryMap["text"]),
+				toStringValue(summaryMap["content"]),
+			))
+		}
+	}
+	appendText(itemMap["encrypted_content"])
+	if rawDetails, ok := itemMap["details"].([]any); ok {
+		for _, rawItem := range rawDetails {
+			detailMap, ok := rawItem.(map[string]any)
+			if !ok {
+				appendText(rawItem)
+				continue
+			}
+			appendText(firstNonEmptyExact(
+				toStringValue(detailMap["text"]),
+				toStringValue(detailMap["content"]),
+			))
+		}
+	}
+	return strings.Join(compactStringList(parts), "\n")
 }
 
 func convertResponsesRequestContentToChatContent(raw any) (any, []string) {
@@ -454,13 +741,14 @@ func resolveResponsesRequestImageURL(itemMap map[string]any) string {
 	return ""
 }
 
-func convertResponsesRequestToolsToChat(raw any) ([]any, []string) {
+func convertResponsesRequestToolsToChat(raw any) ([]any, []string, bool) {
 	typed, ok := raw.([]any)
 	if !ok || len(typed) == 0 {
-		return nil, nil
+		return nil, nil, false
 	}
 	tools := make([]any, 0, len(typed))
 	blockers := make([]string, 0, 2)
+	hostedWebSearch := false
 	for _, item := range typed {
 		toolMap, ok := item.(map[string]any)
 		if !ok {
@@ -469,26 +757,94 @@ func convertResponsesRequestToolsToChat(raw any) ([]any, []string) {
 		toolType := strings.ToLower(strings.TrimSpace(toStringValue(toolMap["type"])))
 		switch toolType {
 		case "", "function":
+			functionMap, _ := toolMap["function"].(map[string]any)
 			name := strings.TrimSpace(toStringValue(toolMap["name"]))
+			description := strings.TrimSpace(toStringValue(toolMap["description"]))
+			parameters := toolMap["parameters"]
+			strict, hasStrict := toolMap["strict"]
+			if functionMap != nil {
+				name = firstNonEmpty(name, strings.TrimSpace(toStringValue(functionMap["name"])))
+				description = firstNonEmpty(description, strings.TrimSpace(toStringValue(functionMap["description"])))
+				if parameters == nil {
+					parameters = functionMap["parameters"]
+				}
+				if !hasStrict {
+					strict, hasStrict = functionMap["strict"]
+				}
+			}
 			if name == "" {
 				blockers = append(blockers, "function_tool_missing_name")
 				continue
+			}
+			functionPayload := map[string]any{
+				"name":        name,
+				"description": description,
+				"parameters":  cleanJSONSchema(parameters),
+			}
+			if hasStrict {
+				functionPayload["strict"] = strict
+			}
+			tools = append(tools, map[string]any{
+				"type":     "function",
+				"function": functionPayload,
+			})
+		case "custom", "custom_tool":
+			name := strings.TrimSpace(toStringValue(toolMap["name"]))
+			if name == "" {
+				blockers = append(blockers, "custom_tool_missing_name")
+				continue
+			}
+			description := strings.TrimSpace(toStringValue(toolMap["description"]))
+			if formatMap, ok := toolMap["format"].(map[string]any); ok && len(formatMap) > 0 {
+				description = strings.TrimSpace(firstNonEmpty(description, "Freeform custom tool input."))
+				if formatType := strings.TrimSpace(toStringValue(formatMap["type"])); formatType != "" {
+					description += "\nFormat type: " + formatType + "."
+				}
+				if syntax := strings.TrimSpace(toStringValue(formatMap["syntax"])); syntax != "" {
+					description += "\nSyntax: " + syntax + "."
+				}
 			}
 			tools = append(tools, map[string]any{
 				"type": "function",
 				"function": map[string]any{
 					"name":        name,
-					"description": strings.TrimSpace(toStringValue(toolMap["description"])),
-					"parameters":  cleanJSONSchema(toolMap["parameters"]),
+					"description": description,
+					"parameters": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"input": map[string]any{
+								"type":        "string",
+								"description": "Freeform input for the custom tool.",
+							},
+						},
+						"required": []any{"input"},
+					},
 				},
 			})
-		case "web_search":
-			blockers = append(blockers, "tool:web_search")
+		case "web_search", "web_search_preview", "web_search_preview_2025_03_11":
+			hostedWebSearch = true
+			tools = append(tools, map[string]any{
+				"type": "function",
+				"function": map[string]any{
+					"name":        "web_search",
+					"description": "Search the web for current information. This tool is executed by the AllApiDeck gateway.",
+					"parameters": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"query": map[string]any{
+								"type":        "string",
+								"description": "Search query.",
+							},
+						},
+						"required": []any{"query"},
+					},
+				},
+			})
 		default:
 			blockers = append(blockers, "tool:"+toolType)
 		}
 	}
-	return tools, compactStringList(blockers)
+	return tools, compactStringList(blockers), hostedWebSearch
 }
 
 func convertResponsesRequestToolChoiceToChat(raw any) any {
@@ -543,6 +899,10 @@ func shouldFallbackResponsesToChat(statusCode int, responseBody []byte) bool {
 	case strings.Contains(message, "messages is required"):
 		return true
 	case strings.Contains(message, "invalid json"):
+		return true
+	case strings.Contains(message, "failed to deserialize") && strings.Contains(message, "tools"):
+		return true
+	case strings.Contains(message, "missing field") && strings.Contains(message, "tools"):
 		return true
 	case strings.Contains(message, "(html)"):
 		return true
@@ -710,6 +1070,7 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 		messageStarted := false
 		contentPartStarted := false
 		var messageText strings.Builder
+		var reasoningText strings.Builder
 		outputItems := make([]any, 0, 4)
 		outputIndex := 0
 		toolStates := map[int]*advancedProxyChatToResponsesToolState{}
@@ -758,6 +1119,7 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 				return nil
 			}
 			fullText := messageText.String()
+			fullReasoning := strings.TrimSpace(reasoningText.String())
 			if contentPartStarted {
 				if err := writeEvent("response.output_text.done", map[string]any{
 					"item_id":       messageItemID,
@@ -791,6 +1153,9 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 					},
 				},
 			}
+			if fullReasoning != "" {
+				item["reasoning_content"] = fullReasoning
+			}
 			if err := writeEvent("response.output_item.done", map[string]any{
 				"output_index": messageOutputIndex,
 				"item":         item,
@@ -802,6 +1167,7 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 			contentPartStarted = false
 			messageItemID = ""
 			messageText.Reset()
+			reasoningText.Reset()
 			return nil
 		}
 
@@ -945,6 +1311,17 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 				continue
 			}
 			delta, _ := choiceMap["delta"].(map[string]any)
+			if reasoning := firstNonEmptyExact(
+				openAIMessageContentToText(delta["reasoning_content"]),
+				openAIMessageContentToText(delta["reasoning"]),
+				openAIMessageContentToText(delta["thinking"]),
+			); reasoning != "" {
+				if err := ensureMessage(); err != nil {
+					_ = writer.CloseWithError(err)
+					return
+				}
+				reasoningText.WriteString(reasoning)
+			}
 			if text := toStringValue(delta["content"]); text != "" {
 				if err := ensureMessage(); err != nil {
 					_ = writer.CloseWithError(err)
@@ -1094,6 +1471,103 @@ func transformOpenAIChatResultToResponses(result rawProviderAttemptResult, fallb
 	}
 	converted.Headers.Set("Content-Type", "application/json; charset=utf-8")
 	return converted, nil
+}
+
+func openAIResponsesBodyToSSEStream(rawBody []byte) io.ReadCloser {
+	reader, writer := io.Pipe()
+	go func() {
+		defer writer.Close()
+		responseMap := map[string]any{}
+		_ = json.Unmarshal(rawBody, &responseMap)
+		sequence := 0
+		writeEvent := func(eventType string, payload map[string]any) error {
+			if payload == nil {
+				payload = map[string]any{}
+			}
+			payload["type"] = eventType
+			payload["sequence_number"] = sequence
+			sequence++
+			raw, err := json.Marshal(payload)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(writer, "event: %s\ndata: %s\n\n", eventType, string(raw))
+			return err
+		}
+		responseID := firstNonEmpty(strings.TrimSpace(toStringValue(responseMap["id"])), fmt.Sprintf("resp_%d", time.Now().UnixNano()))
+		responseMap["id"] = responseID
+		responseMap["object"] = "response"
+		responseMap["status"] = firstNonEmpty(strings.TrimSpace(toStringValue(responseMap["status"])), "completed")
+		if _, exists := responseMap["created_at"]; !exists {
+			responseMap["created_at"] = time.Now().Unix()
+		}
+		startedResponse := make(map[string]any, len(responseMap))
+		for key, value := range responseMap {
+			startedResponse[key] = value
+		}
+		startedResponse["status"] = "in_progress"
+		startedResponse["output"] = []any{}
+		if err := writeEvent("response.created", map[string]any{"response": startedResponse}); err != nil {
+			_ = writer.CloseWithError(err)
+			return
+		}
+		if err := writeEvent("response.in_progress", map[string]any{"response": startedResponse}); err != nil {
+			_ = writer.CloseWithError(err)
+			return
+		}
+		outputItems, _ := responseMap["output"].([]any)
+		for outputIndex, rawItem := range outputItems {
+			itemMap, _ := rawItem.(map[string]any)
+			if itemMap == nil {
+				continue
+			}
+			itemID := firstNonEmpty(strings.TrimSpace(toStringValue(itemMap["id"])), fmt.Sprintf("item_%d_%d", time.Now().UnixNano(), outputIndex))
+			itemMap["id"] = itemID
+			if err := writeEvent("response.output_item.added", map[string]any{"output_index": outputIndex, "item": itemMap}); err != nil {
+				_ = writer.CloseWithError(err)
+				return
+			}
+			content, _ := itemMap["content"].([]any)
+			for contentIndex, rawContent := range content {
+				contentMap, _ := rawContent.(map[string]any)
+				if contentMap == nil {
+					continue
+				}
+				if err := writeEvent("response.content_part.added", map[string]any{"item_id": itemID, "output_index": outputIndex, "content_index": contentIndex, "part": contentMap}); err != nil {
+					_ = writer.CloseWithError(err)
+					return
+				}
+				if strings.TrimSpace(toStringValue(contentMap["type"])) == "output_text" {
+					text := toStringValue(contentMap["text"])
+					if text != "" {
+						if err := writeEvent("response.output_text.delta", map[string]any{"item_id": itemID, "output_index": outputIndex, "content_index": contentIndex, "delta": text}); err != nil {
+							_ = writer.CloseWithError(err)
+							return
+						}
+						if err := writeEvent("response.output_text.done", map[string]any{"item_id": itemID, "output_index": outputIndex, "content_index": contentIndex, "text": text}); err != nil {
+							_ = writer.CloseWithError(err)
+							return
+						}
+					}
+				}
+				if err := writeEvent("response.content_part.done", map[string]any{"item_id": itemID, "output_index": outputIndex, "content_index": contentIndex, "part": contentMap}); err != nil {
+					_ = writer.CloseWithError(err)
+					return
+				}
+			}
+			if err := writeEvent("response.output_item.done", map[string]any{"output_index": outputIndex, "item": itemMap}); err != nil {
+				_ = writer.CloseWithError(err)
+				return
+			}
+		}
+		responseMap["status"] = "completed"
+		if err := writeEvent("response.completed", map[string]any{"response": responseMap}); err != nil {
+			_ = writer.CloseWithError(err)
+			return
+		}
+		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
+	}()
+	return reader
 }
 
 func transformAnthropicMessagesResultToResponses(result rawProviderAttemptResult, fallbackModel string) (rawProviderAttemptResult, error) {

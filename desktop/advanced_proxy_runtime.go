@@ -2080,6 +2080,14 @@ func anthropicRequestToOpenAIResponses(body map[string]any, provider AdvancedPro
 	}
 	inputItems := make([]any, 0, 8)
 	systemText := anthropicSystemText(body["system"])
+	messageSeq := 0
+	nextMessageID := func(prefix string) string {
+		messageSeq++
+		if strings.TrimSpace(prefix) == "" {
+			prefix = "msg"
+		}
+		return fmt.Sprintf("%s_%d", prefix, messageSeq)
+	}
 	if rawMessages, ok := body["messages"].([]any); ok {
 		for _, rawMessage := range rawMessages {
 			messageMap, ok := rawMessage.(map[string]any)
@@ -2089,15 +2097,26 @@ func anthropicRequestToOpenAIResponses(body map[string]any, provider AdvancedPro
 			role := strings.TrimSpace(toStringValue(messageMap["role"]))
 			contentItems, toolCalls, toolResults := anthropicContentToResponsesPayloads(role, messageMap["content"])
 			if len(contentItems) > 0 {
-				inputItems = append(inputItems, map[string]any{
+				messageItem := map[string]any{
+					"id":      nextMessageID("msg"),
 					"role":    role,
 					"content": contentItems,
-				})
+				}
+				if strings.TrimSpace(role) == "" {
+					messageItem["role"] = "user"
+				}
+				inputItems = append(inputItems, messageItem)
 			}
 			for _, item := range toolCalls {
+				if _, exists := item["id"]; !exists || strings.TrimSpace(toStringValue(item["id"])) == "" {
+					item["id"] = nextMessageID("fc")
+				}
 				inputItems = append(inputItems, item)
 			}
 			for _, item := range toolResults {
+				if _, exists := item["id"]; !exists || strings.TrimSpace(toStringValue(item["id"])) == "" {
+					item["id"] = nextMessageID("fco")
+				}
 				inputItems = append(inputItems, item)
 			}
 		}

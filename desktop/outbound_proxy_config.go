@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -93,6 +94,15 @@ func loadOutboundProxyConfig() (OutboundProxyConfig, error) {
 		return config, err
 	}
 	if err := json.Unmarshal(raw, &config); err != nil {
+		raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
+		if retryErr := json.Unmarshal(raw, &config); retryErr == nil {
+			config = sanitizeOutboundProxyConfig(config)
+			if err := validateOutboundProxyConfig(config); err != nil {
+				debugLogf("outbound proxy config invalid, fallback to system: %v", err)
+				return defaultOutboundProxyConfig(), nil
+			}
+			return config, nil
+		}
 		return defaultOutboundProxyConfig(), err
 	}
 	config = sanitizeOutboundProxyConfig(config)
@@ -139,11 +149,27 @@ func (a *App) SetOutboundProxyConfig(config OutboundProxyConfig) (*OutboundProxy
 	return &saved, nil
 }
 
+func currentOutboundProxyConfig() OutboundProxyConfig {
+	config, err := loadOutboundProxyConfig()
+	if err != nil {
+		return defaultOutboundProxyConfig()
+	}
+	return sanitizeOutboundProxyConfig(config)
+}
+
 func newOutboundHTTPClient(timeout time.Duration) (*http.Client, error) {
 	config, err := loadOutboundProxyConfig()
 	if err != nil {
 		return nil, err
 	}
+	return newOutboundHTTPClientForConfig(timeout, config)
+}
+
+func newOutboundDirectHTTPClient(timeout time.Duration) (*http.Client, error) {
+	return newOutboundHTTPClientForConfig(timeout, OutboundProxyConfig{Mode: outboundProxyModeDirect})
+}
+
+func newOutboundHTTPClientForConfig(timeout time.Duration, config OutboundProxyConfig) (*http.Client, error) {
 	transport, err := newOutboundHTTPTransport(config)
 	if err != nil {
 		return nil, err
@@ -159,6 +185,14 @@ func newOutboundStreamingHTTPClient(responseHeaderTimeout time.Duration) (*http.
 	if err != nil {
 		return nil, err
 	}
+	return newOutboundStreamingHTTPClientForConfig(responseHeaderTimeout, config)
+}
+
+func newOutboundDirectStreamingHTTPClient(responseHeaderTimeout time.Duration) (*http.Client, error) {
+	return newOutboundStreamingHTTPClientForConfig(responseHeaderTimeout, OutboundProxyConfig{Mode: outboundProxyModeDirect})
+}
+
+func newOutboundStreamingHTTPClientForConfig(responseHeaderTimeout time.Duration, config OutboundProxyConfig) (*http.Client, error) {
 	transport, err := newOutboundHTTPTransport(config)
 	if err != nil {
 		return nil, err
@@ -212,6 +246,63 @@ func newOutboundHTTPTransport(config OutboundProxyConfig) (*http.Transport, erro
 	}
 
 	return transport, nil
+}
+
+func describeOutboundProxyConfig(config OutboundProxyConfig) string {
+	config = sanitizeOutboundProxyConfig(config)
+	switch config.Mode {
+	case outboundProxyModeDirect:
+		return "direct"
+	case outboundProxyModeCustom:
+		return "custom:" + strings.TrimSpace(config.CustomURL)
+	default:
+		return "system"
+	}
+}
+
+func shouldRetryOutboundDirect(config OutboundProxyConfig, err error) bool {
+	if err == nil {
+		return false
+	}
+	config = sanitizeOutboundProxyConfig(config)
+	if config.Mode != outboundProxyModeSystem {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(message, "timeout") ||
+		strings.Contains(message, "context deadline exceeded") ||
+		strings.Contains(message, "connection refused") ||
+		strings.Contains(message, "connectex") ||
+		strings.Contains(message, "proxyconnect")
+}
+
+func shouldRetryOutboundDirectStatus(config OutboundProxyConfig, statusCode int) bool {
+	config = sanitizeOutboundProxyConfig(config)
+	if config.Mode != outboundProxyModeSystem {
+		return false
+	}
+	return statusCode == http.StatusBadGateway ||
+		statusCode == http.StatusServiceUnavailable ||
+		statusCode == http.StatusGatewayTimeout
+}
+
+func buildOutboundProxyDiagnostics(config OutboundProxyConfig, targetURL string) string {
+	config = sanitizeOutboundProxyConfig(config)
+	if config.Mode != outboundProxyModeSystem {
+		return describeOutboundProxyConfig(config)
+	}
+	request, err := http.NewRequest(http.MethodGet, targetURL, nil)
+	if err != nil {
+		return "system(resolve_request_failed=" + err.Error() + ")"
+	}
+	proxyURL, err := resolveSystemProxyFunc()(request)
+	if err != nil {
+		return "system(resolve_error=" + err.Error() + ")"
+	}
+	if proxyURL == nil {
+		return "system(no_proxy)"
+	}
+	return "system(" + proxyURL.String() + ")"
 }
 
 func dialProxyContext(ctx context.Context, dialer proxy.Dialer, network string, address string) (net.Conn, error) {

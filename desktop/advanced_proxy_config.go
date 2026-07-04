@@ -1021,6 +1021,14 @@ func (a *App) SetAdvancedProxyConfig(config AdvancedProxyConfig) (*AdvancedProxy
 	if loadedCurrent {
 		logAdvancedProxyAntiPoisonConfigChange(current.AntiPoison, saved.AntiPoison)
 	}
+	if advancedProxyAnyAppEnabled(saved) {
+		if err := a.ensureBridgeServer(); err != nil {
+			appendAdvancedProxyLogf("[BRIDGE_SYNC_START_FAIL] detail=%s", previewAdvancedProxyText(err.Error(), 240))
+			return nil, err
+		}
+	} else {
+		a.stopBridgeServer()
+	}
 	saved.ListenHost = bridgeServerHost
 	saved.ListenPort = currentBridgeServerPort()
 	return &saved, nil

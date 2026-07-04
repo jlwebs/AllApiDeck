@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1911,6 +1912,59 @@ func TestPerformRawUpstreamRequestStreamingDoesNotUseWholeBodyTimeout(t *testing
 	}
 }
 
+func TestPerformRawUpstreamRequestRetriesDirectWhenSystemProxyFails(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen proxy placeholder: %v", err)
+	}
+	proxyAddress := listener.Addr().String()
+	_ = listener.Close()
+	if _, err := saveOutboundProxyConfig(OutboundProxyConfig{Mode: outboundProxyModeCustom, CustomURL: "http://" + proxyAddress}); err != nil {
+		t.Fatalf("save custom proxy config: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	statusCode, _, body, _, _, err := performRawUpstreamRequest(
+		http.MethodPost,
+		server.URL,
+		map[string]string{"Content-Type": "application/json"},
+		[]byte(`{"ping":true}`),
+		5,
+		false,
+	)
+	if err == nil {
+		t.Fatalf("expected custom proxy failure without direct fallback, got status=%d body=%s", statusCode, string(body))
+	}
+
+	if _, err := saveOutboundProxyConfig(OutboundProxyConfig{Mode: outboundProxyModeSystem}); err != nil {
+		t.Fatalf("save system proxy config: %v", err)
+	}
+	t.Setenv("HTTP_PROXY", "http://"+proxyAddress)
+	t.Setenv("HTTPS_PROXY", "http://"+proxyAddress)
+
+	statusCode, _, body, _, _, err = performRawUpstreamRequest(
+		http.MethodPost,
+		server.URL,
+		map[string]string{"Content-Type": "application/json"},
+		[]byte(`{"ping":true}`),
+		5,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("expected direct fallback to recover system proxy failure, got %v", err)
+	}
+	if statusCode != http.StatusOK || !strings.Contains(string(body), `"ok":true`) {
+		t.Fatalf("expected successful fallback response, got status=%d body=%s", statusCode, string(body))
+	}
+}
+
 func TestWriteAnthropicSSEPreservesWhitespaceOnlyTextBlocks(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	writeAnthropicSSE(recorder, map[string]any{
@@ -2611,6 +2665,274 @@ func TestForwardOpenAIRequestViaProviderUsesProviderModelForResponsesRoute(t *te
 	}
 }
 
+func TestEnsureOpenAIResponsesInputItemIDsUsesCapturedCodexPayload(t *testing.T) {
+	rawBody, err := os.ReadFile(filepath.Join("testdata", "advanced_proxy", "request_content.json"))
+	if err != nil {
+		t.Fatalf("read captured request fixture: %v", err)
+	}
+	normalizedBody, changed, err := ensureOpenAIResponsesInputItemIDs(rawBody)
+	if err != nil {
+		t.Fatalf("normalize captured request: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected captured request to need input item ids")
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(normalizedBody, &body); err != nil {
+		t.Fatalf("decode normalized captured request: %v", err)
+	}
+	inputItems, _ := body["input"].([]any)
+	if len(inputItems) != 58 {
+		t.Fatalf("expected captured input length 58, got %d", len(inputItems))
+	}
+	for index, rawItem := range inputItems {
+		itemMap, ok := rawItem.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(toStringValue(itemMap["id"])) == "" {
+			t.Fatalf("expected input[%d] to have id after normalization, got %#v", index, itemMap)
+		}
+	}
+	reasoningItem, _ := inputItems[4].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(reasoningItem["id"])); got != "rs_5" {
+		t.Fatalf("expected captured input[4] reasoning id rs_5, got %q in %#v", got, reasoningItem)
+	}
+	functionCall, _ := inputItems[5].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(functionCall["id"])); got != "fc_call_00_TjYzUAjAjoIiznngHtHU1941" {
+		t.Fatalf("expected function_call id from call_id, got %q in %#v", got, functionCall)
+	}
+}
+
+func TestNormalizeOpenAIResponsesToolsForProviderUsesCapturedCodexPayload(t *testing.T) {
+	rawBody, err := os.ReadFile(filepath.Join("testdata", "advanced_proxy", "request_content.json"))
+	if err != nil {
+		t.Fatalf("read captured request fixture: %v", err)
+	}
+
+	normalizedBody, changed, err := normalizeOpenAIResponsesToolsForProvider(rawBody)
+	if err != nil {
+		t.Fatalf("normalize responses tools: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected captured Codex web_search tool to be normalized")
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(normalizedBody, &body); err != nil {
+		t.Fatalf("decode normalized captured request: %v", err)
+	}
+	tools, ok := body["tools"].([]any)
+	if !ok || len(tools) != 13 {
+		t.Fatalf("expected captured tools length 13, got %#v", body["tools"])
+	}
+	webSearchTool, _ := tools[12].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(webSearchTool["type"])); got != "function" {
+		t.Fatalf("expected captured web_search tool to become function, got %#v", webSearchTool)
+	}
+	if got := strings.TrimSpace(toStringValue(webSearchTool["name"])); got != "web_search" {
+		t.Fatalf("expected captured web_search function name, got %#v", webSearchTool)
+	}
+	parameters, _ := webSearchTool["parameters"].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(parameters["type"])); got != "object" {
+		t.Fatalf("expected captured web_search parameters object, got %#v", webSearchTool)
+	}
+}
+
+func TestNormalizeOpenAIResponsesToolCallOutputOrderUsesCapturedCodexPayload(t *testing.T) {
+	rawBody, err := os.ReadFile(filepath.Join("testdata", "advanced_proxy", "request_content.json"))
+	if err != nil {
+		t.Fatalf("read captured request fixture: %v", err)
+	}
+
+	bodyWithIDs, _, err := ensureOpenAIResponsesInputItemIDs(rawBody)
+	if err != nil {
+		t.Fatalf("normalize captured input ids: %v", err)
+	}
+	normalizedBody, changed, err := normalizeOpenAIResponsesToolCallOutputOrderForProvider(bodyWithIDs)
+	if err != nil {
+		t.Fatalf("normalize captured tool call order: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected captured parallel tool history to be reordered")
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(normalizedBody, &body); err != nil {
+		t.Fatalf("decode normalized captured request: %v", err)
+	}
+	inputItems, _ := body["input"].([]any)
+	if len(inputItems) != 58 {
+		t.Fatalf("expected captured input length 58, got %d", len(inputItems))
+	}
+	for index := 0; index < len(inputItems)-1; index++ {
+		itemMap, _ := inputItems[index].(map[string]any)
+		if strings.TrimSpace(toStringValue(itemMap["type"])) != "function_call" {
+			continue
+		}
+		nextMap, _ := inputItems[index+1].(map[string]any)
+		if got := strings.TrimSpace(toStringValue(nextMap["type"])); got != "function_call_output" {
+			t.Fatalf("expected function_call at input[%d] to be followed by output, got %q in %#v", index, got, nextMap)
+		}
+		if callID := strings.TrimSpace(toStringValue(itemMap["call_id"])); callID != strings.TrimSpace(toStringValue(nextMap["call_id"])) {
+			t.Fatalf("expected adjacent output to match call id %q, got %#v", callID, nextMap)
+		}
+	}
+}
+
+func TestFlattenOpenAIResponsesToolHistoryForProviderUsesCapturedCodexPayload(t *testing.T) {
+	rawBody, err := os.ReadFile(filepath.Join("testdata", "advanced_proxy", "request_content.json"))
+	if err != nil {
+		t.Fatalf("read captured request fixture: %v", err)
+	}
+
+	flattenedBody, changed, err := flattenOpenAIResponsesToolHistoryForProvider(rawBody)
+	if err != nil {
+		t.Fatalf("flatten captured tool history: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected captured tool history to be flattened")
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(flattenedBody, &body); err != nil {
+		t.Fatalf("decode flattened captured request: %v", err)
+	}
+	inputItems, _ := body["input"].([]any)
+	if len(inputItems) != 58 {
+		t.Fatalf("expected captured input length 58, got %d", len(inputItems))
+	}
+	for index, rawItem := range inputItems {
+		itemMap, _ := rawItem.(map[string]any)
+		itemType := strings.TrimSpace(toStringValue(itemMap["type"]))
+		if itemType == "function_call" || itemType == "function_call_output" {
+			t.Fatalf("expected flattened input[%d] to remove tool history item, got %#v", index, itemMap)
+		}
+		if strings.TrimSpace(toStringValue(itemMap["role"])) == "assistant" {
+			contentItems, _ := itemMap["content"].([]any)
+			if len(contentItems) == 0 {
+				t.Fatalf("expected flattened assistant input[%d] to keep non-empty content, got %#v", index, itemMap)
+			}
+			for _, rawContent := range contentItems {
+				contentMap, _ := rawContent.(map[string]any)
+				if strings.TrimSpace(toStringValue(contentMap["text"])) == "" {
+					t.Fatalf("expected flattened assistant input[%d] to keep text content, got %#v", index, itemMap)
+				}
+			}
+		}
+	}
+	firstFlattenedToolCall, _ := inputItems[5].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(firstFlattenedToolCall["role"])); got != "user" {
+		t.Fatalf("expected flattened tool call to become user context, got %#v", firstFlattenedToolCall)
+	}
+	firstContent, _ := firstFlattenedToolCall["content"].([]any)
+	firstBlock, _ := firstContent[0].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(firstBlock["type"])); got != "input_text" {
+		t.Fatalf("expected flattened tool call content to use input_text, got %#v", firstFlattenedToolCall)
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderOpencodeDeepSeekCapturedPayloadUsesChatOnly(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	rawBody, err := os.ReadFile(filepath.Join("testdata", "advanced_proxy", "request_content.json"))
+	if err != nil {
+		t.Fatalf("read captured request fixture: %v", err)
+	}
+
+	var capturedBody map[string]any
+	var capturedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		capturedPath = request.URL.Path
+		if request.URL.Path != "/v1/chat/completions" && request.URL.Path != "/chat/completions" {
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+		if err := json.NewDecoder(request.Body).Decode(&capturedBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"chatcmpl_captured","object":"chat.completion","created":1710000000,"model":"deepseek-v4-flash-free","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":17,"completion_tokens":1,"total_tokens":18}}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "captured-opencode-chat-only-provider",
+		RowKey:    "row-captured-opencode-chat-only",
+		Name:      "Opencode",
+		BaseURL:   server.URL,
+		APIKey:    "public",
+		Model:     "deepseek-v4-flash-free",
+		APIFormat: "openai_responses",
+	}
+
+	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("expected captured Opencode chat-only request to succeed, got %#v body=%s", result, string(result.Body))
+	}
+	if capturedPath != "/v1/chat/completions" && capturedPath != "/chat/completions" {
+		t.Fatalf("expected captured Opencode request to use chat completions, got %s", capturedPath)
+	}
+	if _, exists := capturedBody["input"]; exists {
+		t.Fatalf("expected captured Opencode request to remove Responses input field, got %#v", capturedBody)
+	}
+	if _, exists := capturedBody["prompt_cache_key"]; exists {
+		t.Fatalf("expected captured Opencode chat request to remove Responses prompt_cache_key, got %#v", capturedBody)
+	}
+	messages, ok := capturedBody["messages"].([]any)
+	if !ok || len(messages) == 0 {
+		t.Fatalf("expected captured Opencode request to include chat messages, got %#v", capturedBody)
+	}
+	flattenedToolContext := 0
+	for index, rawMessage := range messages {
+		message, _ := rawMessage.(map[string]any)
+		if _, exists := message["tool_calls"]; exists {
+			t.Fatalf("expected captured Opencode request to flatten tool_calls at message[%d], got %#v", index, message)
+		}
+		if strings.TrimSpace(toStringValue(message["role"])) == "tool" {
+			t.Fatalf("expected captured Opencode request to avoid tool role at message[%d], got %#v", index, message)
+		}
+		if strings.TrimSpace(toStringValue(message["role"])) == "assistant" {
+			if strings.TrimSpace(toStringValue(message["content"])) == "" {
+				t.Fatalf("expected captured Opencode assistant message[%d] to include content, got %#v", index, message)
+			}
+		}
+		if strings.Contains(toStringValue(message["content"]), "Tool call recorded for context.") {
+			flattenedToolContext++
+		}
+	}
+	if flattenedToolContext == 0 {
+		t.Fatalf("expected captured Opencode tool history to become text context, got %#v", messages)
+	}
+	tools, ok := capturedBody["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		t.Fatalf("expected captured Opencode chat tools, got %#v", capturedBody["tools"])
+	}
+	seenWebSearch := false
+	for index, rawTool := range tools {
+		toolMap, _ := rawTool.(map[string]any)
+		functionMap, _ := toolMap["function"].(map[string]any)
+		name := strings.TrimSpace(toStringValue(functionMap["name"]))
+		if name == "" {
+			t.Fatalf("expected captured Opencode chat tool[%d] to include function name, got %#v", index, toolMap)
+		}
+		if name == "web_search" {
+			seenWebSearch = true
+		}
+	}
+	if !seenWebSearch {
+		t.Fatalf("expected captured Opencode web_search tool to be converted to a chat function, got %#v", tools)
+	}
+
+	var responseBody map[string]any
+	if err := json.Unmarshal(result.Body, &responseBody); err != nil {
+		t.Fatalf("decode transformed response: %v", err)
+	}
+	if got := strings.TrimSpace(toStringValue(responseBody["object"])); got != "response" {
+		t.Fatalf("expected chat result transformed to responses payload, got %#v", responseBody)
+	}
+}
+
 func TestForwardOpenAIRequestViaProviderPrefersFinalClaudeModelForUA(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 	if _, err := saveAdvancedProxyConfig(AdvancedProxyConfig{
@@ -2873,6 +3195,373 @@ func TestForwardOpenAIRequestViaProviderFallbacksResponsesToChat(t *testing.T) {
 	messages, ok := lastRequest.Body["messages"].([]any)
 	if !ok || len(messages) < 2 {
 		t.Fatalf("expected fallback chat request to contain system + user messages, got %#v", lastRequest.Body["messages"])
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderFallbacksResponsesDeserializeToolErrorToChat(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	type capturedRequest struct {
+		Path string
+		Body map[string]any
+	}
+
+	var mu sync.Mutex
+	requests := make([]capturedRequest, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+
+		mu.Lock()
+		requests = append(requests, capturedRequest{Path: request.URL.Path, Body: body})
+		mu.Unlock()
+
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/responses", "/responses":
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = writer.Write([]byte(`{"error":{"message":"Error from provider (DeepSeek): Failed to deserialize the JSON body into the target type: tools[12].function: missing field ` + "`name`" + ` at line 1 column 23013","type":"invalid_request_error"}}`))
+		case "/v1/chat/completions", "/chat/completions":
+			_, _ = writer.Write([]byte(`{
+				"id":"chatcmpl_tool_deserialize_fallback",
+				"object":"chat.completion",
+				"created":1710000000,
+				"model":"gpt-5.5",
+				"choices":[
+					{"index":0,"message":{"role":"assistant","content":"fallback ok"},"finish_reason":"stop"}
+				],
+				"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14}
+			}`))
+		default:
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "tool-deserialize-fallback-provider",
+		RowKey:    "row-tool-deserialize-fallback",
+		Name:      "Tool Deserialize Fallback Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test-tool-deserialize-fallback",
+		Model:     "gpt-5.5",
+		APIFormat: "openai_responses",
+	}
+
+	rawBody := []byte(`{
+		"model":"gpt-5.5",
+		"stream":false,
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}
+		],
+		"tools":[
+			{"type":"function","name":"lookup","description":"lookup data","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}
+		],
+		"tool_choice":"auto"
+	}`)
+
+	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("expected deserialize tool error to fallback to chat, got %#v body=%s", result, string(result.Body))
+	}
+	if !strings.Contains(string(result.Body), `"object":"response"`) || !strings.Contains(string(result.Body), "fallback ok") {
+		t.Fatalf("expected chat result transformed to responses body, got %s", string(result.Body))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) < 2 {
+		t.Fatalf("expected responses failure followed by chat fallback, got %#v", requests)
+	}
+	lastRequest := requests[len(requests)-1]
+	if lastRequest.Path != "/v1/chat/completions" && lastRequest.Path != "/chat/completions" {
+		t.Fatalf("expected final request to chat route, got %#v", requests)
+	}
+	tools, ok := lastRequest.Body["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("expected fallback chat tools, got %#v", lastRequest.Body["tools"])
+	}
+	toolMap, _ := tools[0].(map[string]any)
+	functionMap, _ := toolMap["function"].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(functionMap["name"])); got != "lookup" {
+		t.Fatalf("expected fallback chat function name lookup, got %#v", lastRequest.Body["tools"])
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderFallbacksCodexCustomToolsToChat(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	type capturedRequest struct {
+		Path string
+		Body map[string]any
+	}
+
+	var mu sync.Mutex
+	requests := make([]capturedRequest, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		mu.Lock()
+		requests = append(requests, capturedRequest{Path: request.URL.Path, Body: body})
+		mu.Unlock()
+
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/responses", "/responses":
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = writer.Write([]byte(`{"error":{"message":"unknown API route"}}`))
+		case "/v1/chat/completions", "/chat/completions":
+			_, _ = writer.Write([]byte(`{"id":"chatcmpl_codex_tools_fallback","object":"chat.completion","model":"gpt-5.5","choices":[{"index":0,"message":{"role":"assistant","content":"fallback ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}}`))
+		default:
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "codex-tools-fallback-provider",
+		RowKey:    "row-codex-tools-fallback",
+		Name:      "Codex Tools Fallback Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test-codex-tools-fallback",
+		Model:     "gpt-5.5",
+		APIFormat: "openai_responses",
+	}
+
+	rawBody := []byte(`{
+		"model":"gpt-5.5",
+		"stream":false,
+		"instructions":"You are Codex.",
+		"input":[
+			{"type":"message","role":"developer","content":[{"type":"input_text","text":"Use tools when needed."}]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}
+		],
+		"tools":[
+			{"type":"custom","name":"apply_patch","description":"Use apply_patch.","format":{"type":"grammar","syntax":"lark","definition":"start: begin_patch hunk+ end_patch"}},
+			{"type":"function","name":"shell_command","description":"Runs a command.","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}},
+			{"type":"web_search","search_content_types":["text","image"]}
+		],
+		"tool_choice":"auto"
+	}`)
+
+	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("expected codex custom tools request to fallback to chat, got %#v body=%s", result, string(result.Body))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) < 2 {
+		t.Fatalf("expected responses failure followed by chat fallback, got %#v", requests)
+	}
+	lastRequest := requests[len(requests)-1]
+	if lastRequest.Path != "/v1/chat/completions" && lastRequest.Path != "/chat/completions" {
+		t.Fatalf("expected final request to chat route, got %#v", requests)
+	}
+	tools, ok := lastRequest.Body["tools"].([]any)
+	if !ok || len(tools) != 3 {
+		t.Fatalf("expected fallback chat tools to keep custom/function/web_search, got %#v", lastRequest.Body["tools"])
+	}
+	names := map[string]bool{}
+	for _, rawTool := range tools {
+		toolMap, _ := rawTool.(map[string]any)
+		functionMap, _ := toolMap["function"].(map[string]any)
+		names[strings.TrimSpace(toStringValue(functionMap["name"]))] = true
+	}
+	for _, name := range []string{"apply_patch", "shell_command", "web_search"} {
+		if !names[name] {
+			t.Fatalf("expected fallback chat tool %q, got %#v", name, lastRequest.Body["tools"])
+		}
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderOpencodeDeepSeekDoesNotFallbackToResponses(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	var paths []string
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mu.Lock()
+		paths = append(paths, request.URL.Path)
+		mu.Unlock()
+		if strings.Contains(request.URL.Path, "responses") {
+			t.Fatalf("Opencode DeepSeek chat-only provider should not receive responses fallback: %s", request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadGateway)
+		_, _ = writer.Write([]byte(`{"error":{"message":"temporary chat failure"}}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "opencode-chat-only-provider",
+		RowKey:    "row-opencode-chat-only",
+		Name:      "Opencode",
+		BaseURL:   server.URL,
+		APIKey:    "public",
+		Model:     "deepseek-v4-flash-free",
+		APIFormat: "openai_responses",
+	}
+
+	rawBody := []byte(`{
+		"model":"deepseek-v4-flash-free",
+		"stream":false,
+		"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],
+		"tools":[{"type":"web_search","external_web_access":true}]
+	}`)
+	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected chat failure to be returned directly, got %#v body=%s", result, string(result.Body))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) == 0 {
+		t.Fatalf("expected at least one chat attempt")
+	}
+	for _, path := range paths {
+		if path != "/v1/chat/completions" && path != "/chat/completions" {
+			t.Fatalf("expected only chat completion attempts, got %#v", paths)
+		}
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderExecutesHostedWebSearchDuringChatFallback(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+	originalExecutor := advancedProxyHostedWebSearchExecutor
+	advancedProxyHostedWebSearchExecutor = func(query string) (string, error) {
+		if query != "latest allapideck news" {
+			t.Fatalf("unexpected web search query: %q", query)
+		}
+		return `{"query":"latest allapideck news","results":[{"title":"AllApiDeck test result","url":"https://example.com/aad","snippet":"search ok"}]}`, nil
+	}
+	defer func() { advancedProxyHostedWebSearchExecutor = originalExecutor }()
+
+	type capturedRequest struct {
+		Path string
+		Body map[string]any
+	}
+	var mu sync.Mutex
+	requests := make([]capturedRequest, 0, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		mu.Lock()
+		requests = append(requests, capturedRequest{Path: request.URL.Path, Body: body})
+		requestIndex := len(requests)
+		mu.Unlock()
+
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/responses", "/responses":
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = writer.Write([]byte(`{"error":{"message":"unknown API route"}}`))
+		case "/v1/chat/completions", "/chat/completions":
+			if requestIndex == 2 {
+				_, _ = writer.Write([]byte(`{"id":"chatcmpl_web_search_call","object":"chat.completion","model":"gpt-5.5","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_search_1","type":"function","function":{"name":"web_search","arguments":"{\"query\":\"latest allapideck news\"}"}}]},"finish_reason":"tool_calls"}]}`))
+				return
+			}
+			messages, _ := body["messages"].([]any)
+			if len(messages) < 1 {
+				t.Fatalf("expected follow-up chat request messages, got %#v", body)
+			}
+			lastMessage, _ := messages[len(messages)-1].(map[string]any)
+			if lastMessage["role"] != "tool" || !strings.Contains(toStringValue(lastMessage["content"]), "AllApiDeck test result") {
+				t.Fatalf("expected hosted web_search tool result in follow-up request, got %#v", messages)
+			}
+			_, _ = writer.Write([]byte(`{"id":"chatcmpl_web_search_final","object":"chat.completion","model":"gpt-5.5","choices":[{"index":0,"message":{"role":"assistant","content":"Search result says search ok."},"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":6,"total_tokens":26}}`))
+		default:
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "hosted-web-search-provider",
+		RowKey:    "row-hosted-web-search",
+		Name:      "Hosted Web Search Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-hosted-web-search",
+		Model:     "gpt-5.5",
+		APIFormat: "openai_responses",
+	}
+
+	rawBody := []byte(`{
+		"model":"gpt-5.5",
+		"stream":false,
+		"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"search latest allapideck news"}]}],
+		"tools":[{"type":"web_search","search_content_types":["text"]}],
+		"tool_choice":"auto"
+	}`)
+
+	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("expected hosted web_search fallback to succeed, got %#v body=%s", result, string(result.Body))
+	}
+	if !strings.Contains(string(result.Body), "Search result says search ok.") {
+		t.Fatalf("expected final response body, got %s", string(result.Body))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requests) != 3 {
+		t.Fatalf("expected responses + tool-call chat + follow-up chat requests, got %#v", requests)
+	}
+}
+
+func TestExecuteAdvancedProxyHostedWebSearchViaExaMCP(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", request.Method)
+		}
+		if request.URL.Query().Get("exaApiKey") != "sk-exa-test" {
+			t.Fatalf("expected exaApiKey query param, got %q", request.URL.RawQuery)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		if body["method"] != "tools/call" {
+			t.Fatalf("expected tools/call, got %#v", body)
+		}
+		params, _ := body["params"].(map[string]any)
+		if params["name"] != "web_search_exa" {
+			t.Fatalf("expected web_search_exa, got %#v", params)
+		}
+		arguments, _ := params["arguments"].(map[string]any)
+		if arguments["query"] != "current AllApiDeck release" || arguments["type"] != "auto" {
+			t.Fatalf("unexpected Exa arguments: %#v", arguments)
+		}
+
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write([]byte(`event: message
+data: {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Exa result one\nhttps://example.com/exa"}]}}
+
+`))
+	}))
+	defer server.Close()
+
+	t.Setenv("ALLAPIDECK_EXA_MCP_URL", server.URL)
+	t.Setenv("EXA_API_KEY", "sk-exa-test")
+
+	result, err := executeAdvancedProxyHostedWebSearchViaExaMCP("current AllApiDeck release")
+	if err != nil {
+		t.Fatalf("expected Exa MCP search to succeed: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatalf("decode result payload: %v", err)
+	}
+	if payload["provider"] != "exa" || !strings.Contains(toStringValue(payload["result"]), "Exa result one") {
+		t.Fatalf("unexpected Exa search payload: %#v", payload)
 	}
 }
 
@@ -3449,18 +4138,22 @@ func TestForwardOpenAIRequestViaProviderUsesChatPreferenceForResponsesStream(t *
 	}
 }
 
-func TestForwardOpenAIRequestViaProviderBlocksFallbackForPreviousResponseID(t *testing.T) {
+func TestForwardOpenAIRequestViaProviderFallsBackToChatWithPreviousResponseID(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 
-	requestCount := 0
+	requestPaths := make([]string, 0, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		requestCount++
-		if request.URL.Path != "/v1/responses" && request.URL.Path != "/responses" {
-			t.Fatalf("expected fallback to stay blocked on responses route, got %s", request.URL.Path)
-		}
+		requestPaths = append(requestPaths, request.URL.Path)
 		writer.Header().Set("Content-Type", "application/json")
-		writer.WriteHeader(http.StatusNotFound)
-		_, _ = writer.Write([]byte(`{"error":{"message":"unknown API route"}}`))
+		switch request.URL.Path {
+		case "/v1/responses", "/responses":
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = writer.Write([]byte(`{"error":{"message":"unknown API route"}}`))
+		case "/v1/chat/completions", "/chat/completions":
+			_, _ = writer.Write([]byte(`{"id":"chatcmpl_previous_response_fallback","object":"chat.completion","model":"gpt-5.5","choices":[{"index":0,"message":{"role":"assistant","content":"fallback ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}}`))
+		default:
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
 	}))
 	defer server.Close()
 
@@ -3470,7 +4163,7 @@ func TestForwardOpenAIRequestViaProviderBlocksFallbackForPreviousResponseID(t *t
 		Name:      "Blocked Provider",
 		BaseURL:   server.URL,
 		APIKey:    "sk-blocked",
-		APIFormat: "openai_chat",
+		APIFormat: "openai_responses",
 	}
 
 	rawBody := []byte(`{
@@ -3483,11 +4176,18 @@ func TestForwardOpenAIRequestViaProviderBlocksFallbackForPreviousResponseID(t *t
 	}`)
 
 	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, false, AdvancedProxyConfig{})
-	if result.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected blocked fallback to preserve responses failure, got %#v", result)
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("expected previous_response_id request to fallback to chat, got %#v body=%s", result, string(result.Body))
 	}
-	if requestCount < 1 {
-		t.Fatalf("expected blocked fallback to keep at least one responses attempt, got %d", requestCount)
+	if !strings.Contains(string(result.Body), `"object":"response"`) || !strings.Contains(string(result.Body), "fallback ok") {
+		t.Fatalf("expected chat result transformed to responses body, got %s", string(result.Body))
+	}
+	if len(requestPaths) < 2 {
+		t.Fatalf("expected responses failure followed by chat fallback, got %#v", requestPaths)
+	}
+	lastPath := requestPaths[len(requestPaths)-1]
+	if lastPath != "/v1/chat/completions" && lastPath != "/chat/completions" {
+		t.Fatalf("expected final request to chat route, got %#v", requestPaths)
 	}
 }
 
@@ -3554,6 +4254,68 @@ func TestForwardOpenAIRequestViaProviderRecordsAttempts(t *testing.T) {
 	lastRouteStep := records[0].RouteTrace[len(records[0].RouteTrace)-1]
 	if lastRouteStep.Route != "chat" || lastRouteStep.Status != "success" {
 		t.Fatalf("expected final route trace step to capture successful chat fallback, got %#v", records[0].RouteTrace)
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderFallsBackToChatAfterResponsesNetworkError(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	var mu sync.Mutex
+	requestPaths := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mu.Lock()
+		requestPaths = append(requestPaths, request.URL.Path)
+		mu.Unlock()
+
+		switch request.URL.Path {
+		case "/v1/responses", "/responses":
+			hijacker, ok := writer.(http.Hijacker)
+			if !ok {
+				t.Fatalf("response writer does not support hijacking")
+			}
+			conn, _, err := hijacker.Hijack()
+			if err != nil {
+				t.Fatalf("hijack responses connection: %v", err)
+			}
+			_ = conn.Close()
+		case "/v1/chat/completions", "/chat/completions":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"id":"chatcmpl_network_fallback","object":"chat.completion","model":"gpt-5.5","choices":[{"index":0,"message":{"role":"assistant","content":"fallback ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2,"total_tokens":9}}`))
+		default:
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "network-fallback-provider",
+		RowKey:    "row-network-fallback",
+		Name:      "Network Fallback Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-network-fallback-provider",
+		APIFormat: "openai_responses",
+	}
+
+	rawBody := []byte(`{"model":"gpt-5.5","stream":false,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]}`)
+	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("expected chat fallback after responses network error, got %#v", result)
+	}
+	if !strings.Contains(string(result.Body), `"object":"response"`) || !strings.Contains(string(result.Body), "fallback ok") {
+		t.Fatalf("expected chat result transformed to responses body, got %s", string(result.Body))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requestPaths) < 2 {
+		t.Fatalf("expected responses failure followed by chat fallback, got %#v", requestPaths)
+	}
+	if requestPaths[0] != "/v1/responses" && requestPaths[0] != "/responses" {
+		t.Fatalf("expected first request to responses route, got %#v", requestPaths)
+	}
+	lastPath := requestPaths[len(requestPaths)-1]
+	if lastPath != "/v1/chat/completions" && lastPath != "/chat/completions" {
+		t.Fatalf("expected final request to chat route, got %#v", requestPaths)
 	}
 }
 
@@ -4091,6 +4853,137 @@ func TestHandleAdvancedProxyCodexForcesProbeWhenSingleProviderCircuitIsOpen(t *t
 	stats = advancedProxyRuntime.GetStats("codex", "force-provider")
 	if stats.State != circuitStateClosed {
 		t.Fatalf("expected successful forced probe to close breaker, got %#v", stats)
+	}
+}
+
+func TestHandleAdvancedProxyCodexResponsesForwardsCustomToolsRequest(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	requestCount := 0
+	var capturedPath string
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requestCount++
+		capturedPath = request.URL.Path
+		if request.URL.Path != "/v1/responses" && request.URL.Path != "/responses" {
+			t.Fatalf("unexpected upstream path: %s", request.URL.Path)
+		}
+		if err := json.NewDecoder(request.Body).Decode(&capturedBody); err != nil {
+			t.Fatalf("decode upstream body: %v", err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"resp_custom_tools","object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`))
+	}))
+	defer server.Close()
+
+	config := defaultAdvancedProxyConfig()
+	config.Codex.Enabled = true
+	config.Queues.Global.Providers = []AdvancedProxyProvider{
+		{
+			ID:        "codex-custom-tools-provider",
+			RowKey:    "row-codex-custom-tools",
+			Name:      "Codex Custom Tools Provider",
+			BaseURL:   server.URL,
+			APIKey:    "sk-codex-custom-tools",
+			Model:     "gpt-5.4",
+			APIFormat: "openai_responses",
+			Enabled:   true,
+		},
+	}
+	config.Failover.Enabled = false
+	config.AntiPoison.Enabled = false
+	if _, err := saveAdvancedProxyConfig(config); err != nil {
+		t.Fatalf("save advanced proxy config: %v", err)
+	}
+
+	rawBody := `{
+		"client_metadata":{
+			"session_id":"019f118a-c8cd-7a32-96e4-cc46cdaf6f25",
+			"thread_id":"019f118a-c8cd-7a32-96e4-cc46cdaf6f25",
+			"turn_id":"019f118a-cd9c-7c01-9e47-ee274b6447f7",
+			"x-codex-installation-id":"0e2342ee-c5f2-479e-923a-3176825a1bd7",
+			"x-codex-turn-metadata":"{\"request_kind\":\"turn\",\"sandbox\":\"windows_elevated\"}",
+			"x-codex-window-id":"019f118a-c8cd-7a32-96e4-cc46cdaf6f25:0"
+		},
+		"include":["reasoning.encrypted_content"],
+		"input":[
+			{
+				"role":"developer",
+				"type":"message",
+				"content":[
+					{"type":"input_text","text":"<permissions instructions>Filesystem sandboxing defines which files can be read or written.</permissions instructions>"},
+					{"type":"input_text","text":"<skills_instructions>Use available tools when needed.</skills_instructions>"}
+				]
+			},
+			{
+				"role":"user",
+				"type":"message",
+				"content":[{"type":"input_text","text":"hi"}]
+			}
+		],
+		"instructions":"You are Codex, a coding agent based on GPT-5.",
+		"model":"gpt-5.4",
+		"parallel_tool_calls":true,
+		"prompt_cache_key":"019f118a-c8cd-7a32-96e4-cc46cdaf6f25",
+		"reasoning":{"effort":"high"},
+		"store":false,
+		"stream":true,
+		"text":{"verbosity":"low"},
+		"tool_choice":"auto",
+		"tools":[
+			{
+				"type":"custom",
+				"name":"apply_patch",
+				"description":"Use the apply_patch tool to edit files.",
+				"format":{
+					"type":"grammar",
+					"syntax":"lark",
+					"definition":"start: begin_patch hunk+ end_patch"
+				}
+			},
+			{
+				"type":"function",
+				"name":"shell_command",
+				"description":"Runs a Powershell command.",
+				"parameters":{
+					"type":"object",
+					"properties":{"command":{"type":"string"}},
+					"required":["command"]
+				},
+				"strict":false
+			},
+			{"type":"web_search","search_content_types":["text","image"]}
+		]
+	}`
+
+	app := &App{}
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1"+advancedProxyCodexBasePath+"/responses", strings.NewReader(rawBody))
+	request.RemoteAddr = "127.0.0.1:43210"
+	request.Header.Set("Accept", "text/event-stream")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("User-Agent", "codex-tui/0.142.3 (Windows 10.0.19044; x86_64)")
+	request.Header.Set("Originator", "codex-tui")
+	request.Header.Set("X-Codex-Beta-Features", "remote_compaction_v2")
+	recorder := httptest.NewRecorder()
+
+	app.handleAdvancedProxyCodex(recorder, request)
+
+	response := recorder.Result()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("expected custom tools request to reach upstream, status=%d body=%s", response.StatusCode, string(body))
+	}
+	if requestCount != 1 {
+		t.Fatalf("expected one upstream responses request, got %d", requestCount)
+	}
+	if capturedPath == "" {
+		t.Fatalf("expected upstream path to be captured")
+	}
+	if tools, ok := capturedBody["tools"].([]any); !ok || len(tools) != 3 {
+		t.Fatalf("expected raw custom tools to be preserved upstream, got %#v", capturedBody["tools"])
+	}
+	if include, ok := capturedBody["include"].([]any); !ok || len(include) != 1 || include[0] != "reasoning.encrypted_content" {
+		t.Fatalf("expected encrypted content include to be preserved before upstream, got %#v", capturedBody["include"])
 	}
 }
 

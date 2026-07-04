@@ -153,6 +153,35 @@ func TestAnthropicRequestToOpenAIResponsesUsesInstructionsAndMapsImages(t *testi
 	}
 }
 
+func TestAnthropicRequestToOpenAIResponsesAssignsMessageIds(t *testing.T) {
+	request := anthropicRequestToOpenAIResponses(map[string]any{
+		"model": "gpt-5.4",
+		"messages": []any{
+			map[string]any{
+				"role":    "user",
+				"content": []any{map[string]any{"type": "text", "text": "hello"}},
+			},
+			map[string]any{
+				"role":    "assistant",
+				"content": []any{map[string]any{"type": "tool_use", "id": "call_1", "name": "shell_command", "input": map[string]any{"command": "pwd"}}},
+			},
+		},
+	}, AdvancedProxyProvider{})
+
+	input, ok := request["input"].([]any)
+	if !ok || len(input) != 2 {
+		t.Fatalf("expected two input items, got %#v", request["input"])
+	}
+	first, _ := input[0].(map[string]any)
+	second, _ := input[1].(map[string]any)
+	if strings.TrimSpace(toStringValue(first["id"])) == "" {
+		t.Fatalf("expected first message id, got %#v", first)
+	}
+	if strings.TrimSpace(toStringValue(second["id"])) == "" {
+		t.Fatalf("expected second message id, got %#v", second)
+	}
+}
+
 func TestAnthropicRequestToOpenAIResponsesMapsWebSearchTool(t *testing.T) {
 	request := anthropicRequestToOpenAIResponses(map[string]any{
 		"model": "gpt-5.5",

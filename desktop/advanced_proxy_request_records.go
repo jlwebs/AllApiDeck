@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,32 @@ import (
 
 const advancedProxyRequestRecordLimit = 400
 const advancedProxyRequestPayloadLimit = 50
+const advancedProxyActiveConnectionLimit = 50
+
+type AdvancedProxyActiveConnection struct {
+	ID               string `json:"id"`
+	StartedAt        string `json:"startedAt"`
+	UpdatedAt        string `json:"updatedAt"`
+	SessionID        string `json:"sessionId"`
+	SessionOrdinal   int    `json:"sessionOrdinal"`
+	AppType          string `json:"appType"`
+	ClientRoute      string `json:"clientRoute"`
+	InboundEndpoint  string `json:"inboundEndpoint"`
+	OutboundRoute    string `json:"outboundRoute"`
+	ProviderID       string `json:"providerId"`
+	ProviderName     string `json:"providerName"`
+	Model            string `json:"model"`
+	Stream           bool   `json:"stream"`
+	Status           string `json:"status"`
+	Stage            string `json:"stage"`
+	StatusCode       int    `json:"statusCode,omitempty"`
+	ErrorCode        string `json:"errorCode,omitempty"`
+	ErrorDetail      string `json:"errorDetail,omitempty"`
+	UpstreamURL      string `json:"upstreamUrl"`
+	UpstreamEndpoint string `json:"upstreamEndpoint"`
+	RemoteAddr       string `json:"remoteAddr"`
+	UserAgent        string `json:"userAgent"`
+}
 
 type AdvancedProxyRequestRecord struct {
 	ID                       string                          `json:"id"`
@@ -86,7 +113,177 @@ type advancedProxyRequestRecordStore struct {
 	seq     uint64
 }
 
+type advancedProxyActiveConnectionStore struct {
+	mu          sync.Mutex
+	connections map[string]AdvancedProxyActiveConnection
+	seq         uint64
+	sessionSeq  int
+	sessions    map[string]int
+}
+
 var advancedProxyRequestRecords advancedProxyRequestRecordStore
+var advancedProxyActiveConnections advancedProxyActiveConnectionStore
+
+func (s *advancedProxyActiveConnectionStore) begin(connection AdvancedProxyActiveConnection) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.seq++
+	now := time.Now().Format(time.RFC3339Nano)
+	connection.ID = fmt.Sprintf("advconn-%d-%d", time.Now().UnixMilli(), s.seq)
+	if strings.TrimSpace(connection.StartedAt) == "" {
+		connection.StartedAt = now
+	}
+	connection.UpdatedAt = now
+	connection.SessionID = strings.TrimSpace(connection.SessionID)
+	if connection.SessionID != "" {
+		if s.sessions == nil {
+			s.sessions = map[string]int{}
+		}
+		if ordinal, ok := s.sessions[connection.SessionID]; ok {
+			connection.SessionOrdinal = ordinal
+		} else {
+			s.sessionSeq++
+			connection.SessionOrdinal = s.sessionSeq
+			s.sessions[connection.SessionID] = connection.SessionOrdinal
+		}
+	}
+	connection.AppType = strings.TrimSpace(strings.ToLower(connection.AppType))
+	connection.ClientRoute = strings.TrimSpace(connection.ClientRoute)
+	connection.InboundEndpoint = strings.TrimSpace(connection.InboundEndpoint)
+	connection.OutboundRoute = strings.TrimSpace(connection.OutboundRoute)
+	connection.ProviderID = strings.TrimSpace(connection.ProviderID)
+	connection.ProviderName = strings.TrimSpace(connection.ProviderName)
+	connection.Model = strings.TrimSpace(connection.Model)
+	connection.Status = firstNonEmpty(strings.TrimSpace(connection.Status), "active")
+	connection.Stage = firstNonEmpty(strings.TrimSpace(connection.Stage), "received")
+	connection.ErrorCode = strings.TrimSpace(connection.ErrorCode)
+	connection.ErrorDetail = strings.TrimSpace(connection.ErrorDetail)
+	connection.UpstreamURL = strings.TrimSpace(connection.UpstreamURL)
+	connection.UpstreamEndpoint = strings.TrimSpace(connection.UpstreamEndpoint)
+	connection.RemoteAddr = strings.TrimSpace(connection.RemoteAddr)
+	connection.UserAgent = strings.TrimSpace(connection.UserAgent)
+	if s.connections == nil {
+		s.connections = map[string]AdvancedProxyActiveConnection{}
+	}
+	s.connections[connection.ID] = connection
+	s.pruneLocked()
+	return connection.ID
+}
+
+func (s *advancedProxyActiveConnectionStore) update(connectionID string, mutator func(*AdvancedProxyActiveConnection)) {
+	connectionID = strings.TrimSpace(connectionID)
+	if connectionID == "" || mutator == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	connection, ok := s.connections[connectionID]
+	if !ok {
+		return
+	}
+	mutator(&connection)
+	connection.AppType = strings.TrimSpace(strings.ToLower(connection.AppType))
+	connection.ClientRoute = strings.TrimSpace(connection.ClientRoute)
+	connection.InboundEndpoint = strings.TrimSpace(connection.InboundEndpoint)
+	connection.OutboundRoute = strings.TrimSpace(connection.OutboundRoute)
+	connection.ProviderID = strings.TrimSpace(connection.ProviderID)
+	connection.ProviderName = strings.TrimSpace(connection.ProviderName)
+	connection.Model = strings.TrimSpace(connection.Model)
+	connection.Status = firstNonEmpty(strings.TrimSpace(connection.Status), "active")
+	connection.Stage = firstNonEmpty(strings.TrimSpace(connection.Stage), "received")
+	connection.ErrorCode = strings.TrimSpace(connection.ErrorCode)
+	connection.ErrorDetail = strings.TrimSpace(connection.ErrorDetail)
+	connection.UpstreamURL = strings.TrimSpace(connection.UpstreamURL)
+	connection.UpstreamEndpoint = strings.TrimSpace(connection.UpstreamEndpoint)
+	connection.RemoteAddr = strings.TrimSpace(connection.RemoteAddr)
+	connection.UserAgent = strings.TrimSpace(connection.UserAgent)
+	connection.SessionID = strings.TrimSpace(connection.SessionID)
+	connection.UpdatedAt = time.Now().Format(time.RFC3339Nano)
+	s.connections[connectionID] = connection
+	s.pruneLocked()
+}
+
+func (s *advancedProxyActiveConnectionStore) end(connectionID string) {
+	s.finish(connectionID, 0, "", "")
+}
+
+func (s *advancedProxyActiveConnectionStore) finish(connectionID string, statusCode int, errorCode string, errorDetail string) {
+	connectionID = strings.TrimSpace(connectionID)
+	if connectionID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	connection, ok := s.connections[connectionID]
+	if !ok {
+		return
+	}
+	now := time.Now().Format(time.RFC3339Nano)
+	connection.StatusCode = statusCode
+	connection.ErrorCode = strings.TrimSpace(errorCode)
+	connection.ErrorDetail = strings.TrimSpace(errorDetail)
+	if statusCode >= 400 || connection.ErrorCode != "" || connection.ErrorDetail != "" {
+		connection.Status = "failed"
+	} else {
+		connection.Status = "completed"
+	}
+	connection.Stage = "completed"
+	connection.UpdatedAt = now
+	s.connections[connectionID] = connection
+	s.pruneLocked()
+}
+
+func (s *advancedProxyActiveConnectionStore) list() []AdvancedProxyActiveConnection {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.connections) == 0 {
+		return []AdvancedProxyActiveConnection{}
+	}
+	result := make([]AdvancedProxyActiveConnection, 0, len(s.connections))
+	for _, connection := range s.connections {
+		result = append(result, connection)
+	}
+	sort.SliceStable(result, func(left, right int) bool {
+		leftCompleted := isAdvancedProxyConnectionCompleted(result[left])
+		rightCompleted := isAdvancedProxyConnectionCompleted(result[right])
+		if leftCompleted != rightCompleted {
+			return !leftCompleted
+		}
+		return result[left].StartedAt > result[right].StartedAt
+	})
+	return result
+}
+
+func (s *advancedProxyActiveConnectionStore) pruneLocked() {
+	if len(s.connections) <= advancedProxyActiveConnectionLimit {
+		return
+	}
+	connections := make([]AdvancedProxyActiveConnection, 0, len(s.connections))
+	for _, connection := range s.connections {
+		connections = append(connections, connection)
+	}
+	sort.SliceStable(connections, func(left, right int) bool {
+		leftCompleted := isAdvancedProxyConnectionCompleted(connections[left])
+		rightCompleted := isAdvancedProxyConnectionCompleted(connections[right])
+		if leftCompleted != rightCompleted {
+			return leftCompleted
+		}
+		return connections[left].StartedAt < connections[right].StartedAt
+	})
+	for len(s.connections) > advancedProxyActiveConnectionLimit && len(connections) > 0 {
+		delete(s.connections, connections[0].ID)
+		connections = connections[1:]
+	}
+}
+
+func isAdvancedProxyConnectionCompleted(connection AdvancedProxyActiveConnection) bool {
+	status := strings.TrimSpace(strings.ToLower(connection.Status))
+	stage := strings.TrimSpace(strings.ToLower(connection.Stage))
+	return status == "completed" || status == "done" || stage == "completed" || stage == "done"
+}
 
 func (s *advancedProxyRequestRecordStore) append(record AdvancedProxyRequestRecord) {
 	s.mu.Lock()
@@ -167,6 +364,10 @@ func (s *advancedProxyRequestRecordStore) clear() {
 
 func (a *App) GetAdvancedProxyRequestRecords(limit int) ([]AdvancedProxyRequestRecord, error) {
 	return advancedProxyRequestRecords.listSummaries(limit), nil
+}
+
+func (a *App) GetAdvancedProxyActiveConnections() ([]AdvancedProxyActiveConnection, error) {
+	return advancedProxyActiveConnections.list(), nil
 }
 
 func (a *App) ClearAdvancedProxyRequestRecords() (bool, error) {
