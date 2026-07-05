@@ -59,11 +59,13 @@ type sidebarWindowBounds struct {
 
 type trayController interface {
 	Close()
+	SetMinimizeActivatesSidebar(enabled bool)
 }
 
 type noopTrayController struct{}
 
-func (noopTrayController) Close() {}
+func (noopTrayController) Close()                                   {}
+func (noopTrayController) SetMinimizeActivatesSidebar(enabled bool) {}
 
 type panelWindowState struct {
 	screenWidth              int
@@ -220,9 +222,16 @@ func (a *App) runWindowMonitor(stopCh <-chan struct{}) {
 					debugLogf("window monitor skip minimise handling during startup grace window")
 					continue
 				}
-				debugLogf("window monitor detected minimised main window; hiding to tray panel")
-				if err := a.HideToTrayPanel(); err != nil {
-					debugLogf("window monitor hide to tray panel failed: %v", err)
+				if isMinimizeActivatesSidebarEnabled() {
+					debugLogf("window monitor detected minimised main window; hiding to tray panel")
+					if err := a.HideToTrayPanel(); err != nil {
+						debugLogf("window monitor hide to tray panel failed: %v", err)
+					}
+				} else {
+					debugLogf("window monitor detected minimised main window; hiding to tray")
+					if err := a.HideToTray(); err != nil {
+						debugLogf("window monitor hide to tray failed: %v", err)
+					}
 				}
 				continue
 			}

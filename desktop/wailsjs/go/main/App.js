@@ -102,6 +102,10 @@ export function GetLaunchRecordKey() {
   return window['go']['main']['App']['GetLaunchRecordKey']();
 }
 
+export function GetLocalTokenUsageAnalytics() {
+  return window['go']['main']['App']['GetLocalTokenUsageAnalytics']();
+}
+
 export function GetMCPSkillConfigSnapshot() {
   return window['go']['main']['App']['GetMCPSkillConfigSnapshot']();
 }

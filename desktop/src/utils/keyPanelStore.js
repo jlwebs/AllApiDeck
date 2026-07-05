@@ -614,19 +614,24 @@ async function resolveQuickTestModel(record, contextMap) {
 }
 
 export function canRefreshBalance(record, contextMap) {
-  return Boolean(getBatchHistoryContextByKeys(contextMap, record?.siteUrl, record?.apiKey)?.accountData);
+  return Boolean(normalizeSiteUrl(record?.siteUrl) && normalizeApiKey(record?.apiKey));
 }
 
 export async function refreshRecordBalance(record, contextMap) {
   const context = getBatchHistoryContextByKeys(contextMap, record?.siteUrl, record?.apiKey);
-  if (!context?.accountData) {
-    throw new Error('缺少批量检测上下文，无法复用余额刷新逻辑');
-  }
+  const siteUrl = normalizeSiteUrl(record.siteUrl);
+  const apiKey = normalizeApiKey(record.apiKey);
+  const site = context?.accountData || {
+    site_name: record?.siteName || '',
+    site_url: siteUrl,
+    site_type: record?.siteType || record?.site_type || '',
+    tokens: [{ key: apiKey }],
+  };
 
   const label = await fetchQuotaLabelWithBatchLogic({
     apiFetch,
-    site: context.accountData,
-    siteUrl: normalizeSiteUrl(record.siteUrl),
+    site,
+    siteUrl,
   });
   if (!isDisplayableQuotaLabel(label)) {
     throw new Error('批量检测同款余额接口未返回可识别字段');
@@ -659,13 +664,25 @@ function formatBalanceDisplay(value) {
 
 export function getRecordBalanceValue(record) {
   const directLabel = normalizeBalanceLabel(record?.balanceLabel);
-  if (directLabel) return formatBalanceDisplay(directLabel);
-  if (record?.unlimitedQuota) return '无限';
+  if (directLabel) {
+    const formatted = formatBalanceDisplay(directLabel);
+    return shouldDisplayBalanceValue(formatted) ? formatted : '';
+  }
   const remainQuota = Number(record?.remainQuota);
   if (Number.isFinite(remainQuota)) {
-    return `${remainQuota.toFixed(2)} USD`;
+    const formatted = `${remainQuota.toFixed(2)} USD`;
+    return shouldDisplayBalanceValue(formatted) ? formatted : '';
   }
   return '';
+}
+
+function shouldDisplayBalanceValue(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  if (/^(无限|鏃犻檺)/.test(text)) return false;
+  const amount = Number(text.replace(/USD$/i, '').replace(/^\$/, '').replace(/,/g, '').trim());
+  if (Number.isFinite(amount) && amount <= 0) return false;
+  return true;
 }
 
 export function getBalanceRelativeTime(record) {

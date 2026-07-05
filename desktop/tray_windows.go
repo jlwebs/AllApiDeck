@@ -33,6 +33,8 @@ const (
 	trayNIFShowTip = 0x00000080
 
 	trayMFString    = 0x00000000
+	trayMFChecked   = 0x00000008
+	trayMFUnchecked = 0x00000000
 	trayMFSeparator = 0x00000800
 
 	trayTPMLeftAlign   = 0x0000
@@ -46,8 +48,9 @@ const (
 	trayIDCArrow       = 32512
 	trayColorWindow    = 5
 
-	trayMenuShow = 1001
-	trayMenuQuit = 1002
+	trayMenuShow                     = 1001
+	trayMenuQuit                     = 1002
+	trayMenuMinimizeActivatesSidebar = 1003
 )
 
 type trayPoint struct {
@@ -99,14 +102,16 @@ type trayNotifyIconData struct {
 }
 
 type windowsTray struct {
-	showWindow func()
-	quitApp    func()
+	showWindow                func()
+	quitApp                   func()
+	toggleMinimizeSidebarMode func() bool
 
-	className string
-	instance  uintptr
-	hwnd      uintptr
-	menu      uintptr
-	icon      uintptr
+	className                string
+	instance                 uintptr
+	hwnd                     uintptr
+	menu                     uintptr
+	icon                     uintptr
+	minimizeActivatesSidebar bool
 
 	once sync.Once
 }
@@ -148,6 +153,9 @@ func (a *App) initTray() error {
 		func() {
 			a.RequestQuit()
 		},
+		func() bool {
+			return toggleMinimizeActivatesSidebarEnabled()
+		},
 	)
 	if err != nil {
 		return err
@@ -162,13 +170,15 @@ func (a *App) closeTray() {
 	}
 }
 
-func newWindowsTray(showWindow func(), quitApp func()) (*windowsTray, error) {
+func newWindowsTray(showWindow func(), quitApp func(), toggleMinimizeSidebarMode func() bool) (*windowsTray, error) {
 	instance, _, _ := trayGetModuleHandle.Call(0)
 	tray := &windowsTray{
-		showWindow: showWindow,
-		quitApp:    quitApp,
-		instance:   instance,
-		className:  "AllApiDeckTrayWindowClass",
+		showWindow:                showWindow,
+		quitApp:                   quitApp,
+		toggleMinimizeSidebarMode: toggleMinimizeSidebarMode,
+		instance:                  instance,
+		className:                 "AllApiDeckTrayWindowClass",
+		minimizeActivatesSidebar:  isMinimizeActivatesSidebarEnabled(),
 	}
 
 	errCh := make(chan error, 1)
@@ -230,6 +240,7 @@ func (t *windowsTray) run(errCh chan<- error) {
 
 	menu, _, _ := trayCreatePopup.Call()
 	trayAppendMenu.Call(menu, trayMFString, trayMenuShow, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Show Window"))))
+	t.appendMinimizeSidebarMenuItem(menu)
 	trayAppendMenu.Call(menu, trayMFSeparator, 0, 0)
 	trayAppendMenu.Call(menu, trayMFString, trayMenuQuit, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Quit App"))))
 
@@ -293,10 +304,42 @@ func (t *windowsTray) Close() {
 	})
 }
 
+func (t *windowsTray) SetMinimizeActivatesSidebar(enabled bool) {
+	t.minimizeActivatesSidebar = enabled
+}
+
+func (t *windowsTray) appendMinimizeSidebarMenuItem(menu uintptr) {
+	state := uintptr(trayMFString | trayMFUnchecked)
+	if t.minimizeActivatesSidebar {
+		state = uintptr(trayMFString | trayMFChecked)
+	}
+	trayAppendMenu.Call(
+		menu,
+		state,
+		trayMenuMinimizeActivatesSidebar,
+		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("最小化后激活侧栏"))),
+	)
+}
+
+func (t *windowsTray) rebuildContextMenu() {
+	if t.menu != 0 {
+		trayDestroyMenu.Call(t.menu)
+		t.menu = 0
+	}
+	menu, _, _ := trayCreatePopup.Call()
+	trayAppendMenu.Call(menu, trayMFString, trayMenuShow, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Show Window"))))
+	t.appendMinimizeSidebarMenuItem(menu)
+	trayAppendMenu.Call(menu, trayMFSeparator, 0, 0)
+	trayAppendMenu.Call(menu, trayMFString, trayMenuQuit, uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Quit App"))))
+	t.menu = menu
+}
+
 func (t *windowsTray) showContextMenu() {
 	if t.hwnd == 0 || t.menu == 0 {
 		return
 	}
+	t.minimizeActivatesSidebar = isMinimizeActivatesSidebarEnabled()
+	t.rebuildContextMenu()
 	var pt trayPoint
 	trayGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
 	traySetForeground.Call(t.hwnd)
@@ -336,6 +379,11 @@ func trayWindowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		case trayMenuShow:
 			if tray.showWindow != nil {
 				go tray.showWindow()
+			}
+		case trayMenuMinimizeActivatesSidebar:
+			if tray.toggleMinimizeSidebarMode != nil {
+				tray.minimizeActivatesSidebar = tray.toggleMinimizeSidebarMode()
+				tray.rebuildContextMenu()
 			}
 		case trayMenuQuit:
 			if tray.quitApp != nil {

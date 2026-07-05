@@ -316,6 +316,81 @@ func TestAdvancedProxyRequestRecordListOmitsHeavyPayloadsButDetailKeepsThem(t *t
 	}
 }
 
+func TestAdvancedProxyRequestRecordSummaryEstimatesMissingTokenUsage(t *testing.T) {
+	resetAdvancedProxyRequestRecordsForTest(t)
+
+	appendAdvancedProxyRequestRecord(AdvancedProxyRequestRecord{
+		RecordedAt:              time.Now().Format(time.RFC3339Nano),
+		AppType:                 "codex",
+		ProviderID:              "provider-test",
+		ProviderName:            "Provider Test",
+		RequestBody:             `{"model":"gpt-test","input":"请总结这段内容，并列出三个重点。This is a token usage estimate test."}`,
+		UpstreamResponsePreview: "这是一个用于估算输出 token 的响应摘要。",
+		ResponsePreview:         "这是一个用于估算输出 token 的响应摘要。",
+	})
+
+	app := &App{}
+	summaries, err := app.GetAdvancedProxyRequestRecords(10)
+	if err != nil {
+		t.Fatalf("list request records failed: %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("expected one request record summary, got %#v", summaries)
+	}
+	if summaries[0].InputTokens == nil || *summaries[0].InputTokens <= 0 {
+		t.Fatalf("expected summary input token estimate, got %#v", summaries[0])
+	}
+	if summaries[0].OutputTokens == nil || *summaries[0].OutputTokens <= 0 {
+		t.Fatalf("expected summary output token estimate, got %#v", summaries[0])
+	}
+	if summaries[0].RequestBody != "" || summaries[0].UpstreamResponseRaw != "" {
+		t.Fatalf("expected summary to still omit heavy payloads, got %#v", summaries[0])
+	}
+}
+
+func TestAdvancedProxyRequestRecordCapturesReasoningTokens(t *testing.T) {
+	resetAdvancedProxyRequestRecordsForTest(t)
+
+	recordAdvancedProxyOpenAIAttemptWithTraceAndOps(
+		"codex",
+		"responses",
+		"/advanced-proxy/codex/v1/responses",
+		"responses",
+		"direct",
+		AdvancedProxyProvider{
+			ID:      "provider-test",
+			RowKey:  "row-provider-test",
+			Name:    "Provider Test",
+			BaseURL: "https://example.com/v1",
+			APIKey:  "sk-provider-test",
+		},
+		"https://example.com/v1/responses",
+		[]byte(`{"model":"gpt-test","input":"hi"}`),
+		"gpt-test",
+		[]byte(`{"usage":{"input_tokens":10,"output_tokens":20,"output_tokens_details":{"reasoning_tokens":7}}}`),
+		false,
+		http.StatusOK,
+		25*time.Millisecond,
+		"",
+		nil,
+		nil,
+	)
+
+	records := advancedProxyRequestRecords.list(10)
+	if len(records) != 1 {
+		t.Fatalf("expected one request record, got %#v", records)
+	}
+	if records[0].InputTokens == nil || *records[0].InputTokens != 10 {
+		t.Fatalf("expected input tokens captured, got %#v", records[0])
+	}
+	if records[0].OutputTokens == nil || *records[0].OutputTokens != 20 {
+		t.Fatalf("expected output tokens captured, got %#v", records[0])
+	}
+	if records[0].ReasoningTokens == nil || *records[0].ReasoningTokens != 7 {
+		t.Fatalf("expected reasoning tokens captured, got %#v", records[0])
+	}
+}
+
 func TestAdvancedProxyRecordExtractsAntiPoisonPromptPreview(t *testing.T) {
 	resetAdvancedProxyRequestRecordsForTest(t)
 

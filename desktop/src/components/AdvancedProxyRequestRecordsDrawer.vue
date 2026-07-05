@@ -325,6 +325,200 @@
           </div>
         </header>
 
+        <section class="request-records-activity-card">
+          <header class="request-records-activity-head">
+            <div class="request-records-activity-tabs" role="tablist" aria-label="activity sections">
+              <button
+                v-for="item in activitySectionTabs"
+                :key="item.id"
+                type="button"
+                class="request-records-activity-tab"
+                :class="{ 'is-active': activityDashboardTab === item.id }"
+                @click="activityDashboardTab = item.id"
+              >
+                {{ item.label }}
+              </button>
+            </div>
+            <div class="request-records-activity-range" aria-label="activity range">
+              <button
+                v-for="item in dashboardRangeTabs"
+                :key="item.id"
+                type="button"
+                class="request-records-activity-range-button"
+                :class="{ 'is-active': dashboardRangeValue === item.id }"
+                @click="setDashboardRange(item.id)"
+              >
+                {{ item.label }}
+              </button>
+            </div>
+          </header>
+
+          <template v-if="activityDashboardTab === 'token'">
+            <div class="request-records-activity-title">Token 趋势</div>
+            <div class="request-records-token-dashboard">
+              <div class="request-records-token-chart">
+                <div class="request-records-token-legend">
+                  <span><i class="is-window"></i> 时段 Token 用量</span>
+                  <span><i class="is-total"></i> 累计 Token 用量</span>
+                  <span class="request-records-token-source">{{ tokenTrend.sourceLabel }}</span>
+                </div>
+                <div class="request-records-token-plot">
+                  <svg class="request-records-token-svg" viewBox="0 0 640 220" preserveAspectRatio="none" aria-hidden="true">
+                    <path v-for="line in tokenTrend.gridLines" :key="line" class="request-records-token-grid-line" :d="`M0 ${line} H640`" />
+                    <path v-for="line in tokenTrend.verticalLines" :key="`v-${line}`" class="request-records-token-grid-line" :d="`M${line} 0 V220`" />
+                    <path class="request-records-token-line" :d="tokenTrend.linePath" />
+                  </svg>
+                  <div
+                    v-for="bar in tokenTrend.bars"
+                    :key="bar.key"
+                    class="request-records-token-bar"
+                    :class="{ 'is-empty': bar.height <= 0 }"
+                    :style="{ left: `${bar.left}%`, height: `${bar.height}%` }"
+                    :title="bar.title"
+                    @mouseenter="showTokenTooltip(bar, $event)"
+                    @mousemove="moveTokenTooltip($event)"
+                    @mouseleave="hideTokenTooltip"
+                  ></div>
+                  <div
+                    v-if="tokenTooltip.visible"
+                    class="request-records-chart-tooltip"
+                    :style="{ left: `${tokenTooltip.x}px`, top: `${tokenTooltip.y}px` }"
+                  >
+                    <strong>{{ tokenTooltip.title }}</strong>
+                    <span>{{ tokenTooltip.period }}</span>
+                    <span>{{ tokenTooltip.cumulative }}</span>
+                  </div>
+                </div>
+                <div class="request-records-token-axis">
+                  <span v-for="label in tokenTrend.labels" :key="label.key">{{ label.label }}</span>
+                </div>
+              </div>
+
+              <div class="request-records-token-side">
+                <div class="request-records-token-donut" :style="tokenDonutStyle">
+                  <div class="request-records-token-donut-hole">
+                    <strong>{{ tokenTrend.totalLabel }}</strong>
+                    <span>Total</span>
+                  </div>
+                </div>
+                <div class="request-records-token-breakdown">
+                  <span><i class="is-input"></i> 输入 <strong>{{ tokenTrend.inputPercent }}%</strong></span>
+                  <span><i class="is-output"></i> 输出 <strong>{{ tokenTrend.outputPercent }}%</strong></span>
+                  <span><i class="is-reasoning"></i> 推理 <strong>{{ tokenTrend.reasoningPercent }}%</strong></span>
+                </div>
+                <div v-if="tokenTrend.sourceItems.length > 0" class="request-records-token-sources">
+                  <span v-for="source in tokenTrend.sourceItems" :key="source.label">
+                    {{ source.label }} <strong>{{ source.value }}</strong>
+                  </span>
+                </div>
+                <small v-if="!tokenTrend.hasData" class="request-records-token-empty-note">暂无可统计 Token</small>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="activityDashboardTab === 'activity'">
+            <div class="request-records-activity-title">Codex 活跃趋势</div>
+            <div ref="activityViewportRef" class="request-records-activity-viewport">
+              <div class="request-records-activity-months" :style="{ '--activity-columns': activityTrend.columnCount }" aria-hidden="true">
+                <span v-for="month in activityTrend.months" :key="month.key" :style="{ gridColumn: month.column }">{{ month.label }}</span>
+              </div>
+              <div
+                class="request-records-activity-grid"
+                :style="{ '--activity-columns': activityTrend.columnCount }"
+                role="img"
+                :aria-label="activityTrend.description"
+              >
+                <span
+                  v-for="cell in activityTrend.cells"
+                  :key="cell.key"
+                  class="request-records-activity-cell"
+                  :class="[{ 'is-pad': cell.isPad }, `is-level-${cell.level}`]"
+                  :title="cell.title"
+                ></span>
+              </div>
+            </div>
+            <div class="request-records-activity-legend">
+              <span>Less</span>
+              <span class="request-records-activity-cell is-level-0"></span>
+              <span class="request-records-activity-cell is-level-1"></span>
+              <span class="request-records-activity-cell is-level-2"></span>
+              <span class="request-records-activity-cell is-level-3"></span>
+              <span class="request-records-activity-cell is-level-4"></span>
+              <span>More</span>
+            </div>
+            <footer class="request-records-activity-summary">
+              <div>
+                <span>{{ activityTrend.primaryLabel }}</span>
+                <strong>{{ activityTrend.primaryCount }} 个</strong>
+              </div>
+              <div>
+                <span>活跃天数</span>
+                <strong>{{ activityTrend.activeDays }} 天</strong>
+              </div>
+              <div>
+                <span>总会话</span>
+                <strong>{{ activityTrend.totalSessions }} 个</strong>
+              </div>
+            </footer>
+          </template>
+
+          <template v-else-if="activityDashboardTab === 'sessions'">
+            <div class="request-records-activity-title">Session Trend</div>
+            <div class="request-records-session-trend">
+              <div class="request-records-session-bars">
+                <div class="request-records-session-y-axis" aria-hidden="true">
+                  <span v-for="tick in sessionTrend.yTicks" :key="tick.key" :style="{ bottom: `${tick.bottom}%` }">{{ tick.label }}</span>
+                </div>
+                <div class="request-records-session-plot">
+                  <div
+                    v-for="bar in sessionTrend.bars"
+                    :key="bar.key"
+                    class="request-records-session-bar"
+                    :class="{ 'is-empty': bar.height <= 0 }"
+                    :style="{ left: `${bar.left}%`, height: `${bar.height}%`, width: bar.width }"
+                    :title="bar.title"
+                  ></div>
+                </div>
+              </div>
+              <div class="request-records-session-axis">
+                <span v-for="label in sessionTrend.labels" :key="label.key">{{ label.label }}</span>
+              </div>
+              <footer class="request-records-session-summary">
+                <div><span>Total Sessions</span><strong>{{ sessionTrend.totalSessions }}</strong></div>
+                <div><span>Avg Turns</span><strong>{{ sessionTrend.avgTurns }}</strong></div>
+                <div><span>Active Days</span><strong>{{ sessionTrend.activeDays }}</strong></div>
+              </footer>
+            </div>
+          </template>
+
+          <template v-else-if="activityDashboardTab === 'tools'">
+            <div class="request-records-activity-title">Tool Call Ranking</div>
+            <div class="request-records-tool-ranking">
+              <div class="request-records-tool-list">
+                <div v-for="item in toolRanking.items" :key="item.name" class="request-records-tool-row">
+                  <span class="request-records-tool-name">{{ item.name }}</span>
+                  <div class="request-records-tool-track">
+                    <i :style="{ width: `${item.percent}%` }"></i>
+                  </div>
+                  <strong>{{ item.countLabel }}</strong>
+                </div>
+              </div>
+              <div class="request-records-tool-side">
+                <div class="request-records-tool-donut" :style="toolRanking.donutStyle">
+                  <div class="request-records-tool-donut-hole">
+                    <strong>{{ toolRanking.totalLabel }}</strong>
+                    <span>Total Calls</span>
+                  </div>
+                </div>
+                <div class="request-records-tool-breakdown">
+                  <span><i class="is-edit"></i> Edit Tasks <strong>{{ toolRanking.editPercent }}%</strong></span>
+                  <span><i class="is-search"></i> Search Tasks <strong>{{ toolRanking.searchPercent }}%</strong></span>
+                </div>
+              </div>
+            </div>
+          </template>
+        </section>
+
         <section class="request-records-overview">
           <article class="request-records-metric">
             <span class="request-records-metric-label">请求数</span>
@@ -730,6 +924,7 @@ import {
 import {
   clearAdvancedProxyRequestRecords,
   getMCPSkillConfigSnapshot,
+  getLocalTokenUsageAnalytics,
   getTerminalSessionMessages,
   getAdvancedProxyConfig,
   getAdvancedProxyEffectiveProviders,
@@ -773,12 +968,17 @@ const bridgeAvailable = isAdvancedProxyRequestRecordBridgeAvailable();
 const terminalBridgeAvailable = isTerminalSessionBridgeAvailable();
 const mcpSkillBridgeAvailable = isMCPSkillConfigBridgeAvailable();
 const loading = ref(false);
+const tokenAnalyticsLoading = ref(false);
 const sessionsLoading = ref(false);
 const mcpSkillLoading = ref(false);
 const mcpSkillSaving = ref(false);
 const records = ref([]);
+const localTokenAnalytics = ref(null);
 const hiddenAppIds = ref([]);
 const activePanel = ref('records');
+const activityDashboardTab = ref('token');
+const activityRange = ref('week');
+const activityHeatmapRange = ref('week');
 const mcpSkillConfigPath = ref('');
 const managedMCPServers = ref([]);
 const managedSkills = ref([]);
@@ -803,11 +1003,20 @@ const recordDetailLoading = ref(false);
 const tableScrollRef = ref(null);
 const tableElementRef = ref(null);
 const tableHorizontalScrollRef = ref(null);
+const activityViewportRef = ref(null);
 const tableContentWidth = ref(0);
 const tableViewportWidth = ref(0);
 const tableScrollLeft = ref(0);
 const tableVerticalMaxScroll = ref(0);
 const tableDragging = ref(false);
+const tokenTooltip = ref({
+  visible: false,
+  x: 0,
+  y: 0,
+  title: '',
+  period: '',
+  cumulative: '',
+});
 const viewportWidth = ref(typeof window === 'undefined' ? 900 : window.innerWidth);
 const viewportHeight = ref(typeof window === 'undefined' ? 600 : window.innerHeight);
 let tableMetricsFrame = 0;
@@ -827,6 +1036,22 @@ const DEFAULT_TERMINAL_PROVIDERS = [
   { id: 'openclaw', label: 'OpenClaw', total: 0 },
   { id: 'gemini', label: 'Gemini', total: 0 },
 ];
+const activitySectionTabs = [
+  { id: 'token', label: 'Token' },
+  { id: 'activity', label: '活跃趋势' },
+  { id: 'sessions', label: '会话' },
+  { id: 'tools', label: '工具' },
+];
+const activityRangeTabs = [
+  { id: 'today', label: '今日' },
+  { id: 'week', label: '本周' },
+  { id: 'month', label: '本月' },
+];
+const activityHeatmapRangeTabs = [
+  { id: 'week', label: 'Week' },
+  { id: 'month', label: 'Month' },
+  { id: 'year', label: 'Year' },
+];
 const managedAppItems = [
   { id: 'codex', short: 'X', label: 'Codex' },
   { id: 'claude', short: 'C', label: 'Claude' },
@@ -843,6 +1068,12 @@ const TERMINAL_PROVIDER_ICONS = {
 };
 
 const isCompactWindow = computed(() => viewportWidth.value <= 860);
+const dashboardRangeTabs = computed(() => (
+  activityDashboardTab.value === 'activity' ? activityHeatmapRangeTabs : activityRangeTabs
+));
+const dashboardRangeValue = computed(() => (
+  activityDashboardTab.value === 'activity' ? activityHeatmapRange.value : activityRange.value
+));
 const drawerWidth = computed(() => Math.min(Math.max(viewportWidth.value - 18, 380), 1080));
 const detailDrawerWidth = computed(() => Math.min(Math.max(Math.floor(viewportWidth.value * 0.42), 320), 420));
 const tableScrollY = computed(() => {
@@ -966,6 +1197,300 @@ const summary = computed(() => {
     outputTokens: formatCompactNumber(outputTokens),
     totalTokens: formatCompactNumber(inputTokens + outputTokens),
   };
+});
+
+const activityTrend = computed(() => {
+  const today = startOfLocalDay(new Date());
+  const end = new Date(today);
+  const range = activityHeatmapRange.value;
+  const start = getActivityRangeStart(today, range);
+  const firstGridDay = new Date(start);
+  firstGridDay.setDate(firstGridDay.getDate() - firstGridDay.getDay());
+  const counts = new Map();
+
+  const localSessions = Array.isArray(localTokenAnalytics.value?.sessionSeries)
+    ? localTokenAnalytics.value.sessionSeries
+    : [];
+  if (localSessions.length > 0) {
+    localSessions.forEach((item) => {
+      const key = String(item?.date || '');
+      const date = parseDateKey(key);
+      if (!date || date < start || date > end) return;
+      counts.set(key, (counts.get(key) || 0) + getPositiveNumber(item?.sessionCount));
+    });
+  } else {
+    filteredRecords.value.forEach((record) => {
+      const date = getRecordDate(record);
+      if (!date || date < start || date > end) return;
+      const key = formatDateKey(date);
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+  }
+
+  const maxCount = Math.max(0, ...counts.values());
+  const cells = [];
+  const cursor = new Date(firstGridDay);
+  while (cursor <= end) {
+    const key = formatDateKey(cursor);
+    const isPad = cursor < start;
+    const count = counts.get(key) || 0;
+    cells.push({
+      key,
+      count,
+      isPad,
+      level: isPad ? -1 : getActivityLevel(count, maxCount),
+      title: isPad ? '' : `${formatHeatmapDate(cursor)}: ${count} Sessions`,
+    });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  const columnCount = Math.max(1, Math.ceil(cells.length / 7));
+  const months = [];
+  let lastMonthKey = '';
+  cells.forEach((cell, index) => {
+    const date = parseDateKey(cell.key);
+    if (!date || cell.isPad) return;
+    if (date.getDate() > 7) return;
+    const monthKey = `${date.getFullYear()}-${date.getMonth()}`;
+    if (monthKey === lastMonthKey) return;
+    lastMonthKey = monthKey;
+    months.push({
+      key: monthKey,
+      label: `${date.getMonth() + 1}月`,
+      column: `${Math.floor(index / 7) + 1}`,
+    });
+  });
+
+  const activeDays = countActiveDays(counts, start, today);
+  const totalSessions = [...counts.values()].reduce((sum, value) => sum + value, 0);
+  const primaryCount = counts.get(formatDateKey(today)) || 0;
+  const primaryLabel = range === 'week' ? '今日会话' : range === 'month' ? '本月会话' : '本年会话';
+
+  return {
+    cells,
+    months,
+    columnCount,
+    primaryLabel,
+    primaryCount: range === 'week' ? primaryCount : totalSessions,
+    activeDays,
+    totalSessions,
+    description: `Codex activity heatmap, ${cells.length} days`,
+  };
+});
+
+const tokenTrend = computed(() => {
+  const buckets = buildTokenBuckets(activityRange.value);
+  const bucketMap = new Map(buckets.map(bucket => [bucket.key, bucket]));
+  const localEntries = getLocalTokenTrendEntries(activityRange.value);
+  const useLocalAnalytics = localEntries.length > 0;
+  const sourceCounts = new Map();
+
+  if (useLocalAnalytics) {
+    localEntries.forEach((entry) => {
+      const date = parseDateKey(entry.date);
+      if (!date || Number.isNaN(date.getTime())) return;
+      const bucketKey = activityRange.value === 'today'
+        ? `${entry.date}-${String(entry.hour || '00').padStart(2, '0')}`
+        : entry.date;
+      const bucket = bucketMap.get(bucketKey);
+      if (!bucket) return;
+      bucket.input += getPositiveNumber(entry.inputTokens);
+      bucket.output += getPositiveNumber(entry.outputTokens);
+      bucket.reasoning += getPositiveNumber(entry.reasoningTokens);
+      const source = String(entry.sourceLabel || entry.source || 'Codex').trim() || 'Codex';
+      sourceCounts.set(source, (sourceCounts.get(source) || 0) + getPositiveNumber(entry.totalTokens));
+    });
+  } else {
+    filteredRecords.value.forEach((record) => {
+      const date = getRecordTimestamp(record);
+      if (!date) return;
+      const bucketKey = resolveTokenBucketKey(date, activityRange.value);
+      const bucket = bucketMap.get(bucketKey);
+      if (!bucket) return;
+      const usage = getRecordTokenUsage(record);
+      const reasoning = getReasoningTokens(record);
+      bucket.input += usage.input;
+      bucket.output += usage.output;
+      bucket.reasoning += reasoning;
+      const total = usage.input + usage.output + reasoning;
+      if (total > 0) {
+        const source = formatAppName(record?.appType || '代理记录');
+        sourceCounts.set(source, (sourceCounts.get(source) || 0) + total);
+      }
+    });
+  }
+
+  const totals = buckets.map(bucket => bucket.input + bucket.output + bucket.reasoning);
+  const maxTotal = Math.max(1, ...totals);
+  const grandTotal = totals.reduce((sum, value) => sum + value, 0);
+  const inputTotal = buckets.reduce((sum, bucket) => sum + bucket.input, 0);
+  const outputTotal = buckets.reduce((sum, bucket) => sum + bucket.output, 0);
+  const reasoningTotal = buckets.reduce((sum, bucket) => sum + bucket.reasoning, 0);
+  const cumulativeValues = [];
+  totals.reduce((sum, value, index) => {
+    const next = sum + value;
+    cumulativeValues[index] = next;
+    return next;
+  }, 0);
+  const maxCumulative = Math.max(1, ...cumulativeValues);
+  const width = 640;
+  const height = 220;
+  const chartBottom = 204;
+  const chartTop = 16;
+  const chartHeight = chartBottom - chartTop;
+  const pointStep = buckets.length > 1 ? width / (buckets.length - 1) : width;
+  const linePoints = cumulativeValues.map((value, index) => ({
+    x: buckets.length === 1 ? width / 2 : index * pointStep,
+    y: chartBottom - (value / maxCumulative) * chartHeight,
+  }));
+  const linePath = buildSmoothLinePath(linePoints);
+
+  return {
+    bars: buckets.map((bucket, index) => {
+      const total = totals[index] || 0;
+      const left = getBucketCenterPercent(index, buckets.length);
+      return {
+        key: bucket.key,
+        label: bucket.label,
+        total,
+        cumulative: cumulativeValues[index] || 0,
+        left,
+        height: total > 0 ? Math.max(2, (total / maxTotal) * 82) : 0,
+        title: `${bucket.label}: ${formatCompactNumber(total)} Token`,
+        tooltipTitle: bucket.key.length > 10 ? bucket.key : formatTokenTooltipDate(bucket.key),
+        periodLabel: `Period Token Usage ${formatCompactNumber(total)}`,
+        cumulativeLabel: `Cumulative Token Usage ${formatCompactNumber(cumulativeValues[index] || 0)}`,
+      };
+    }),
+    labels: selectAxisLabels(buckets),
+    linePath,
+    gridLines: [28, 76, 124, 172, 220],
+    verticalLines: [128, 256, 384, 512],
+    total: grandTotal,
+    totalLabel: formatCompactNumber(grandTotal),
+    inputPercent: formatPercent(inputTotal, grandTotal),
+    outputPercent: formatPercent(outputTotal, grandTotal),
+    reasoningPercent: formatPercent(reasoningTotal, grandTotal),
+    sourceLabel: useLocalAnalytics ? '本地 Codex' : '代理记录',
+    sourceItems: [...sourceCounts.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .slice(0, 3)
+      .map(([label, value]) => ({ label, value: formatCompactNumber(value) })),
+    loading: tokenAnalyticsLoading.value,
+    hasData: grandTotal > 0,
+  };
+});
+
+const sessionTrend = computed(() => {
+  const buckets = buildTokenBuckets(activityRange.value).map(bucket => ({
+    ...bucket,
+    sessions: 0,
+    turns: 0,
+  }));
+  const bucketMap = new Map(buckets.map(bucket => [bucket.key, bucket]));
+  getLocalSessionTrendEntries(activityRange.value).forEach((entry) => {
+    const bucketKey = activityRange.value === 'today'
+      ? `${entry.date}-${String(new Date().getHours()).padStart(2, '0')}`
+      : entry.date;
+    const bucket = bucketMap.get(bucketKey);
+    if (!bucket) return;
+    bucket.sessions += getPositiveNumber(entry.sessionCount);
+    bucket.turns += getPositiveNumber(entry.turnCount);
+  });
+  const totals = buckets.map(bucket => bucket.sessions);
+  const maxTotal = Math.max(1, ...totals);
+  const axisMax = getNiceAxisMax(maxTotal);
+  const yTicks = buildYAxisTicks(axisMax);
+  const totalSessions = totals.reduce((sum, value) => sum + value, 0);
+  const totalTurns = buckets.reduce((sum, bucket) => sum + bucket.turns, 0);
+  return {
+    bars: buckets.map((bucket, index) => {
+      const left = getBucketCenterPercent(index, buckets.length);
+      const width = activityRange.value === 'month'
+        ? 'clamp(5px, 0.9%, 10px)'
+        : activityRange.value === 'today'
+          ? 'clamp(8px, 1.8%, 18px)'
+          : 'clamp(14px, 2.8%, 26px)';
+      return {
+        key: bucket.key,
+        left,
+        width,
+        height: bucket.sessions > 0 ? Math.max(3, (bucket.sessions / axisMax) * 92) : 0,
+        title: `${formatTokenTooltipDate(bucket.key)}: ${bucket.sessions} Sessions`,
+      };
+    }),
+    labels: selectAxisLabels(buckets),
+    yTicks,
+    totalSessions,
+    avgTurns: totalSessions > 0 ? (totalTurns / totalSessions).toFixed(1) : '0',
+    activeDays: buckets.filter(bucket => bucket.sessions > 0).length,
+  };
+});
+
+const toolRanking = computed(() => {
+  const analytics = localTokenAnalytics.value || {};
+  const items = (Array.isArray(analytics.toolRanking) ? analytics.toolRanking : [])
+    .filter(item => getPositiveNumber(item?.count) > 0)
+    .slice(0, 8);
+  const total = items.reduce((sum, item) => sum + getPositiveNumber(item.count), 0);
+  const maxCount = Math.max(1, ...items.map(item => getPositiveNumber(item.count)));
+  const editCount = items
+    .filter(item => item?.category === 'edit')
+    .reduce((sum, item) => sum + getPositiveNumber(item.count), 0);
+  const searchCount = items
+    .filter(item => item?.category === 'search')
+    .reduce((sum, item) => sum + getPositiveNumber(item.count), 0);
+  const editPercent = formatPercent(editCount, total);
+  const searchPercent = formatPercent(searchCount, total);
+  return {
+    items: items.map(item => ({
+      name: String(item?.name || '').trim(),
+      category: String(item?.category || 'other').trim(),
+      count: getPositiveNumber(item?.count),
+      countLabel: formatCompactNumber(item?.count),
+      percent: Math.max(1, (getPositiveNumber(item?.count) / maxCount) * 100),
+    })),
+    total,
+    totalLabel: formatCompactNumber(total),
+    editPercent,
+    searchPercent,
+    donutStyle: {
+      background: total > 0
+        ? `conic-gradient(#40c463 0 ${editPercent}%, #6fc4ec ${editPercent}% ${editPercent + searchPercent}%, rgba(70, 132, 92, 0.12) ${editPercent + searchPercent}% 100%)`
+        : 'conic-gradient(rgba(120, 132, 126, 0.16) 0 100%)',
+    },
+  };
+});
+
+const tokenDonutStyle = computed(() => {
+  if (!tokenTrend.value.total) {
+    return {
+      background: 'conic-gradient(rgba(120, 132, 126, 0.16) 0 100%)',
+    };
+  }
+  const input = Number(tokenTrend.value.inputPercent || 0);
+  const output = Number(tokenTrend.value.outputPercent || 0);
+  const reasoning = Math.max(0, 100 - input - output);
+  return {
+    background: `conic-gradient(#6fc4ec 0 ${input}%, #77d99e ${input}% ${input + output}%, #ffd06a ${input + output}% ${input + output + reasoning}%, rgba(120, 132, 126, 0.16) ${input + output + reasoning}% 100%)`,
+  };
+});
+
+const activeActivityTabLabel = computed(() => {
+  const tab = activitySectionTabs.find(item => item.id === activityDashboardTab.value);
+  return tab?.label || '统计';
+});
+
+const activityDashboardPlaceholder = computed(() => {
+  if (activityDashboardTab.value === 'sessions') {
+    const total = terminalSessionTotal.value || terminalSessions.value.length || 0;
+    return `当前记录 ${formatCompactNumber(total)} 个会话，后续可展开为会话时长和消息趋势。`;
+  }
+  if (activityDashboardTab.value === 'tools') {
+    const total = managedMCPServers.value.length + managedSkills.value.length;
+    return `当前管理 ${formatCompactNumber(total)} 个 MCP/Skill 项，后续可展开为调用分布。`;
+  }
+  return '暂无可展示数据。';
 });
 
 const statusSummaryItems = computed(() => {
@@ -1248,6 +1773,388 @@ function formatDate(value) {
   if (text === '-') return text;
   const parts = text.split(' ');
   return parts[0] || text;
+}
+
+function startOfLocalDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function formatDateKey(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseDateKey(key) {
+  const [year, month, day] = String(key || '').split('-').map(Number);
+  return new Date(year || 1970, Math.max(0, (month || 1) - 1), day || 1);
+}
+
+function formatHeatmapDate(date) {
+  return date.toLocaleDateString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+  });
+}
+
+function getRecordDate(record) {
+  const date = getRecordTimestamp(record);
+  return date ? startOfLocalDay(date) : null;
+}
+
+function getActivityRangeStart(today, range) {
+  const start = new Date(today);
+  if (range === 'year') {
+    start.setDate(start.getDate() - 364);
+    return start;
+  }
+  if (range === 'month') {
+    start.setDate(start.getDate() - 29);
+    return start;
+  }
+  start.setDate(start.getDate() - 6);
+  return start;
+}
+
+function setDashboardRange(range) {
+  if (activityDashboardTab.value === 'activity') {
+    activityHeatmapRange.value = activityHeatmapRangeTabs.some(item => item.id === range) ? range : 'week';
+    queueActivityViewportSync();
+    return;
+  }
+  activityRange.value = activityRangeTabs.some(item => item.id === range) ? range : 'week';
+}
+
+function queueActivityViewportSync() {
+  nextTick(() => {
+    const element = activityViewportRef.value;
+    if (!element) return;
+    element.scrollLeft = Math.max(0, element.scrollWidth - element.clientWidth);
+  });
+}
+
+function getRecordTimestamp(record) {
+  const candidates = [
+    record?.recordedAt,
+    record?.createdAt,
+    record?.updatedAt,
+    record?.timestamp,
+    record?.time,
+  ];
+  for (const value of candidates) {
+    if (value == null || value === '') continue;
+    const date = typeof value === 'number' ? new Date(value) : new Date(String(value));
+    if (!Number.isNaN(date.getTime())) return date;
+  }
+  return null;
+}
+
+function getNiceAxisMax(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number) || number <= 0) return 4;
+  const magnitude = 10 ** Math.floor(Math.log10(number));
+  const normalized = number / magnitude;
+  const nice = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return Math.max(4, nice * magnitude);
+}
+
+function buildYAxisTicks(maxValue) {
+  const max = getNiceAxisMax(maxValue);
+  return [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
+    key: `${max}-${ratio}`,
+    label: formatCompactNumber(max * ratio),
+    bottom: ratio * 92,
+  })).reverse();
+}
+
+function getBucketCenterPercent(index, total) {
+  const count = Math.max(1, Number(total) || 1);
+  return ((Number(index) + 0.5) / count) * 100;
+}
+
+function buildTokenBuckets(range) {
+  const now = new Date();
+  if (range === 'today') {
+    return Array.from({ length: 24 }, (_, hour) => ({
+      key: `${formatDateKey(now)}-${String(hour).padStart(2, '0')}`,
+      label: `${String(hour).padStart(2, '0')}:00`,
+      input: 0,
+      output: 0,
+      reasoning: 0,
+    }));
+  }
+
+  const days = range === 'month' ? 30 : 7;
+  return Array.from({ length: days }, (_, index) => {
+    const date = startOfLocalDay(now);
+    date.setDate(date.getDate() - (days - 1 - index));
+    return {
+      key: formatDateKey(date),
+      label: range === 'month' ? `${date.getMonth() + 1}/${date.getDate()}` : ['日', '一', '二', '三', '四', '五', '六'][date.getDay()],
+      input: 0,
+      output: 0,
+      reasoning: 0,
+    };
+  });
+}
+
+function resolveTokenBucketKey(date, range) {
+  if (range === 'today') {
+    return `${formatDateKey(date)}-${String(date.getHours()).padStart(2, '0')}`;
+  }
+  return formatDateKey(date);
+}
+
+function getLocalTokenTrendEntries(range) {
+  const analytics = localTokenAnalytics.value;
+  const series = Array.isArray(analytics?.series) ? analytics.series : [];
+  if (series.length === 0 || getPositiveNumber(analytics?.totalTokens) <= 0) {
+    return [];
+  }
+  const now = new Date();
+  const todayKey = formatDateKey(now);
+  const start = startOfLocalDay(now);
+  if (range === 'today') {
+    return series
+      .filter(item => String(item?.date || '') === todayKey)
+      .map(item => ({
+        ...item,
+        hour: String(item?.hour || '00').slice(0, 2),
+      }));
+  }
+  const days = range === 'month' ? 30 : 7;
+  start.setDate(start.getDate() - (days - 1));
+  const startKey = formatDateKey(start);
+  const daily = new Map();
+  series.forEach((item) => {
+    const dateKey = String(item?.date || '');
+    if (dateKey < startKey || dateKey > todayKey) return;
+    const current = daily.get(dateKey) || {
+      date: dateKey,
+      source: item?.source || 'codex',
+      sourceLabel: item?.sourceLabel || 'Codex',
+      sessionCount: 0,
+      totalTokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+    };
+    current.sessionCount += getPositiveNumber(item?.sessionCount);
+    current.totalTokens += getPositiveNumber(item?.totalTokens);
+    current.inputTokens += getPositiveNumber(item?.inputTokens);
+    current.outputTokens += getPositiveNumber(item?.outputTokens);
+    current.reasoningTokens += getPositiveNumber(item?.reasoningTokens);
+    daily.set(dateKey, current);
+  });
+  return [...daily.values()];
+}
+
+function getLocalSessionTrendEntries(range) {
+  const analytics = localTokenAnalytics.value;
+  const series = Array.isArray(analytics?.sessionSeries) ? analytics.sessionSeries : [];
+  if (series.length === 0) return [];
+  const now = new Date();
+  const todayKey = formatDateKey(now);
+  const start = startOfLocalDay(now);
+  const days = range === 'month' ? 30 : 7;
+  start.setDate(start.getDate() - (days - 1));
+  const startKey = range === 'today' ? todayKey : formatDateKey(start);
+  return series.filter((item) => {
+    const dateKey = String(item?.date || '');
+    return dateKey >= startKey && dateKey <= todayKey;
+  });
+}
+
+function formatTokenTooltipDate(key) {
+  const text = String(key || '');
+  if (/^\d{4}-\d{2}-\d{2}-\d{2}$/.test(text)) {
+    return `${text.slice(0, 10)} ${text.slice(11)}:00`;
+  }
+  return text || '-';
+}
+
+function buildSmoothLinePath(points) {
+  if (!Array.isArray(points) || points.length === 0) return '';
+  if (points.length === 1) {
+    const point = points[0];
+    return `M${point.x.toFixed(1)} ${point.y.toFixed(1)}`;
+  }
+  const commands = [`M${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`];
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    const controlOffset = (current.x - previous.x) * 0.5;
+    const controlX1 = previous.x + controlOffset;
+    const controlY1 = previous.y;
+    const controlX2 = current.x - controlOffset;
+    const controlY2 = current.y;
+    commands.push(`C${controlX1.toFixed(1)} ${controlY1.toFixed(1)} ${controlX2.toFixed(1)} ${controlY2.toFixed(1)} ${current.x.toFixed(1)} ${current.y.toFixed(1)}`);
+  }
+  return commands.join(' ');
+}
+
+function showTokenTooltip(bar, event) {
+  tokenTooltip.value = {
+    visible: true,
+    x: 0,
+    y: 0,
+    title: bar?.tooltipTitle || bar?.label || '-',
+    period: bar?.periodLabel || '',
+    cumulative: bar?.cumulativeLabel || '',
+  };
+  moveTokenTooltip(event);
+}
+
+function moveTokenTooltip(event) {
+  if (!tokenTooltip.value.visible) return;
+  const target = event?.currentTarget?.closest?.('.request-records-token-plot') || event?.currentTarget?.parentElement;
+  const rect = target?.getBoundingClientRect?.();
+  if (!rect) return;
+  tokenTooltip.value = {
+    ...tokenTooltip.value,
+    x: Math.min(Math.max(120, event.clientX - rect.left + 14), Math.max(120, rect.width - 150)),
+    y: Math.max(12, event.clientY - rect.top - 18),
+  };
+}
+
+function hideTokenTooltip() {
+  tokenTooltip.value = {
+    ...tokenTooltip.value,
+    visible: false,
+  };
+}
+
+function selectAxisLabels(buckets) {
+  if (!Array.isArray(buckets) || buckets.length === 0) return [];
+  const indexes = buckets.length <= 7
+    ? buckets.map((_, index) => index)
+    : [0, Math.floor((buckets.length - 1) * 0.25), Math.floor((buckets.length - 1) * 0.5), Math.floor((buckets.length - 1) * 0.75), buckets.length - 1];
+  return [...new Set(indexes)].map(index => ({
+    key: buckets[index].key,
+    label: buckets[index].label,
+  }));
+}
+
+function getPositiveNumber(value) {
+  const numeric = Number(value || 0);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+}
+
+function getRecordTokenUsage(record) {
+  const directInput = getPositiveNumber(record?.inputTokens);
+  const directOutput = getPositiveNumber(record?.outputTokens);
+  if (directInput > 0 || directOutput > 0) {
+    return { input: directInput, output: directOutput };
+  }
+
+  const usageSources = [
+    record?.usage,
+    extractUsageFromJSONText(record?.upstreamResponseRaw),
+    extractUsageFromJSONText(record?.upstreamResponsePreview),
+    extractUsageFromJSONText(record?.responsePreview),
+  ].filter(Boolean);
+
+  for (const usage of usageSources) {
+    const input = firstPositiveNumber(
+      usage?.input_tokens,
+      usage?.prompt_tokens,
+      usage?.inputTokens,
+      usage?.promptTokens,
+    );
+    const output = firstPositiveNumber(
+      usage?.output_tokens,
+      usage?.completion_tokens,
+      usage?.outputTokens,
+      usage?.completionTokens,
+    );
+    if (input > 0 || output > 0) {
+      return { input, output };
+    }
+  }
+
+  return { input: 0, output: 0 };
+}
+
+function extractUsageFromJSONText(value) {
+  const text = String(value || '').trim();
+  if (!text || (!text.includes('"usage"') && !text.includes('usage'))) return null;
+  const candidates = [text];
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(text.slice(firstBrace, lastBrace + 1));
+  }
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed?.usage && typeof parsed.usage === 'object') return parsed.usage;
+      if (parsed?.response?.usage && typeof parsed.response.usage === 'object') return parsed.response.usage;
+    } catch {}
+  }
+  return null;
+}
+
+function firstPositiveNumber(...values) {
+  for (const value of values) {
+    const numeric = getPositiveNumber(value);
+    if (numeric > 0) return numeric;
+  }
+  return 0;
+}
+
+function getReasoningTokens(record) {
+  const usageSources = [
+    record?.usage,
+    extractUsageFromJSONText(record?.upstreamResponseRaw),
+    extractUsageFromJSONText(record?.upstreamResponsePreview),
+    extractUsageFromJSONText(record?.responsePreview),
+  ].filter(Boolean);
+  const candidates = [
+    record?.reasoningTokens,
+    record?.reasoning_tokens,
+    record?.outputTokensDetails?.reasoning_tokens,
+    record?.completionTokensDetails?.reasoning_tokens,
+  ];
+  usageSources.forEach((usage) => {
+    candidates.push(
+      usage?.reasoning_tokens,
+      usage?.reasoningTokens,
+      usage?.output_tokens_details?.reasoning_tokens,
+      usage?.output_tokens_details?.reasoningTokens,
+      usage?.completion_tokens_details?.reasoning_tokens,
+      usage?.completion_tokens_details?.reasoningTokens,
+    );
+  });
+  return firstPositiveNumber(...candidates);
+}
+
+function formatPercent(value, total) {
+  const numeric = Number(value || 0);
+  const denominator = Number(total || 0);
+  if (!Number.isFinite(numeric) || !Number.isFinite(denominator) || denominator <= 0) return 0;
+  return Math.round((numeric / denominator) * 100);
+}
+
+function getActivityLevel(count, maxCount) {
+  if (!count || count <= 0) return 0;
+  if (!maxCount || maxCount <= 1) return 1;
+  const ratio = count / maxCount;
+  if (ratio >= 0.8) return 4;
+  if (ratio >= 0.55) return 3;
+  if (ratio >= 0.3) return 2;
+  return 1;
+}
+
+function countActiveDays(counts, start, end) {
+  let total = 0;
+  const cursor = new Date(startOfLocalDay(start));
+  const finalDay = startOfLocalDay(end);
+  while (cursor <= finalDay) {
+    if ((counts.get(formatDateKey(cursor)) || 0) > 0) total += 1;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return total;
 }
 
 function formatDuration(value) {
@@ -2089,7 +2996,11 @@ async function refreshRecords() {
   if (!bridgeAvailable) return;
   loading.value = true;
   try {
-    records.value = await listAdvancedProxyRequestRecords(120);
+    const [nextRecords] = await Promise.all([
+      listAdvancedProxyRequestRecords(400),
+      refreshLocalTokenAnalytics(),
+    ]);
+    records.value = nextRecords;
     await focusRequestedRecord();
     await nextTick();
     queueTableMetricsSync();
@@ -2097,6 +3008,17 @@ async function refreshRecords() {
     message.error(error?.message || '读取高级代理请求记录失败');
   } finally {
     loading.value = false;
+  }
+}
+
+async function refreshLocalTokenAnalytics() {
+  tokenAnalyticsLoading.value = true;
+  try {
+    localTokenAnalytics.value = await getLocalTokenUsageAnalytics();
+  } catch {
+    localTokenAnalytics.value = null;
+  } finally {
+    tokenAnalyticsLoading.value = false;
   }
 }
 
@@ -2211,6 +3133,16 @@ watch(
     }
     await focusRequestedRecord();
   },
+);
+
+watch(
+  () => [activityDashboardTab.value, activityHeatmapRange.value, activityTrend.value.columnCount],
+  () => {
+    if (activityDashboardTab.value === 'activity') {
+      queueActivityViewportSync();
+    }
+  },
+  { flush: 'post' },
 );
 
 watch(
@@ -2706,6 +3638,694 @@ onBeforeUnmount(() => {
 
 .mcp-skill-empty {
   min-height: 140px;
+}
+
+.request-records-activity-card {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 14px;
+  border-radius: 22px;
+  border: 1px solid rgba(109, 126, 116, 0.12);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 250, 245, 0.94)),
+    rgba(255, 255, 255, 0.94);
+  box-shadow:
+    0 18px 36px rgba(86, 102, 92, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
+}
+
+.request-records-activity-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.request-records-activity-tabs,
+.request-records-activity-range {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(237, 238, 238, 0.82);
+}
+
+.request-records-activity-tabs {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.request-records-activity-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.request-records-activity-range {
+  flex: 0 0 auto;
+}
+
+.request-records-activity-tab,
+.request-records-activity-range-button {
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #5f6461;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.request-records-activity-tab.is-active,
+.request-records-activity-range-button.is-active {
+  color: #101513;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 8px 18px rgba(66, 75, 70, 0.12);
+}
+
+.request-records-activity-title {
+  color: #101513;
+  font-size: 17px;
+  font-weight: 850;
+}
+
+.request-records-token-dashboard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 190px;
+  gap: 18px;
+  align-items: stretch;
+  min-height: 268px;
+}
+
+.request-records-token-chart {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(104, 117, 109, 0.12);
+  background: rgba(252, 253, 251, 0.78);
+}
+
+.request-records-token-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  color: #68746c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.request-records-token-legend span,
+.request-records-token-breakdown span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.request-records-token-legend .request-records-token-source {
+  min-height: 18px;
+  padding: 2px 8px;
+  border: 1px solid rgba(117, 140, 126, 0.24);
+  border-radius: 999px;
+  background: rgba(238, 242, 239, 0.78);
+  color: #53685c;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.request-records-token-legend i,
+.request-records-token-breakdown i {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+}
+
+.request-records-token-legend .is-window {
+  background: #40c463;
+}
+
+.request-records-token-legend .is-total {
+  background: #ffd06a;
+}
+
+.request-records-token-plot {
+  position: relative;
+  min-height: 190px;
+  overflow: hidden;
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(248, 251, 247, 0.92), rgba(241, 246, 239, 0.72)),
+    rgba(247, 249, 246, 0.86);
+}
+
+.request-records-token-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.request-records-token-grid-line {
+  fill: none;
+  stroke: rgba(111, 126, 117, 0.16);
+  stroke-width: 1;
+}
+
+.request-records-token-line {
+  fill: none;
+  stroke: #ffd06a;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 5px 9px rgba(219, 162, 53, 0.24));
+}
+
+.request-records-token-bar {
+  position: absolute;
+  bottom: 16px;
+  width: clamp(5px, 2.1%, 14px);
+  min-height: 3px;
+  border-radius: 999px 999px 4px 4px;
+  background: linear-gradient(180deg, #40c463, #78d88f);
+  box-shadow: 0 8px 16px rgba(33, 110, 57, 0.16);
+  transform: translateX(-50%);
+}
+
+.request-records-token-bar.is-empty {
+  display: none;
+}
+
+.request-records-token-bar:not(.is-empty) {
+  cursor: crosshair;
+}
+
+.request-records-token-bar:not(.is-empty):hover {
+  background: linear-gradient(180deg, #30a14e, #68cf82);
+  box-shadow: 0 10px 18px rgba(33, 110, 57, 0.24);
+}
+
+.request-records-chart-tooltip {
+  position: absolute;
+  z-index: 5;
+  display: grid;
+  gap: 4px;
+  min-width: 210px;
+  padding: 12px 14px;
+  border: 1px solid rgba(101, 109, 104, 0.16);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 16px 30px rgba(49, 58, 52, 0.16);
+  color: #5d6460;
+  font-size: 12px;
+  pointer-events: none;
+  transform: translate(-50%, -100%);
+}
+
+.request-records-chart-tooltip strong {
+  color: #151a17;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.request-records-token-axis {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #7a857d;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.request-records-token-side {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 14px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(104, 117, 109, 0.12);
+  background: rgba(252, 253, 251, 0.78);
+}
+
+.request-records-token-donut {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 144px;
+  height: 144px;
+  border-radius: 50%;
+  box-shadow:
+    inset 0 0 0 1px rgba(50, 65, 56, 0.06),
+    0 18px 26px rgba(86, 102, 92, 0.1);
+}
+
+.request-records-token-donut-hole {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  width: 94px;
+  height: 94px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: inset 0 0 0 1px rgba(104, 117, 109, 0.1);
+}
+
+.request-records-token-donut-hole strong {
+  color: #121915;
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 850;
+}
+
+.request-records-token-donut-hole span {
+  margin-top: 5px;
+  color: #7a857d;
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.request-records-token-breakdown {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  color: #627068;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.request-records-token-breakdown .is-input {
+  background: #6fc4ec;
+}
+
+.request-records-token-breakdown .is-output {
+  background: #77d99e;
+}
+
+.request-records-token-breakdown .is-reasoning {
+  background: #ffd06a;
+}
+
+.request-records-token-breakdown strong {
+  margin-left: auto;
+  color: #19211c;
+  font-variant-numeric: tabular-nums;
+}
+
+.request-records-token-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+}
+
+.request-records-token-sources span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 18px;
+  padding: 2px 7px;
+  border: 1px solid rgba(94, 153, 150, 0.22);
+  border-radius: 999px;
+  background: rgba(229, 244, 241, 0.72);
+  color: #4d6f6a;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.request-records-token-sources strong {
+  color: #233a36;
+  font-variant-numeric: tabular-nums;
+}
+
+.request-records-token-empty-note {
+  color: #7a857d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.request-records-session-trend {
+  display: grid;
+  gap: 12px;
+  min-height: 268px;
+}
+
+.request-records-session-bars {
+  position: relative;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 10px;
+  min-height: 210px;
+}
+
+.request-records-session-y-axis {
+  position: relative;
+  min-height: 210px;
+  color: #75817a;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.request-records-session-y-axis span {
+  position: absolute;
+  right: 0;
+  transform: translateY(50%);
+}
+
+.request-records-session-plot {
+  position: relative;
+  min-height: 210px;
+  border-bottom: 1px solid rgba(111, 126, 117, 0.18);
+  background:
+    repeating-linear-gradient(0deg, transparent 0, transparent 49px, rgba(111, 126, 117, 0.11) 50px),
+    repeating-linear-gradient(90deg, transparent 0, transparent 20%, rgba(111, 126, 117, 0.09) calc(20% + 1px));
+}
+
+.request-records-session-bar {
+  position: absolute;
+  bottom: 0;
+  width: clamp(8px, 2.6%, 34px);
+  border-radius: 7px 7px 3px 3px;
+  background: linear-gradient(180deg, rgba(64, 196, 99, 0.9), rgba(48, 161, 78, 0.84));
+  transform: translateX(-50%);
+}
+
+.request-records-session-bar.is-empty {
+  display: none;
+}
+
+.request-records-session-axis {
+  display: flex;
+  justify-content: space-between;
+  color: #68746c;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.request-records-session-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid rgba(111, 126, 117, 0.14);
+}
+
+.request-records-session-summary div {
+  display: grid;
+  gap: 4px;
+  padding: 10px 14px 0;
+  border-right: 1px solid rgba(111, 126, 117, 0.14);
+}
+
+.request-records-session-summary div:last-child {
+  border-right: 0;
+}
+
+.request-records-session-summary span {
+  color: #68746c;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.request-records-session-summary strong {
+  color: #171d19;
+  font-size: 20px;
+  font-weight: 850;
+}
+
+.request-records-tool-ranking {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 210px;
+  gap: 22px;
+  align-items: center;
+  min-height: 268px;
+}
+
+.request-records-tool-list {
+  display: grid;
+  gap: 10px;
+}
+
+.request-records-tool-row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) 56px;
+  align-items: center;
+  gap: 12px;
+}
+
+.request-records-tool-name {
+  overflow: hidden;
+  color: #5f6662;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.request-records-tool-track {
+  height: 24px;
+  overflow: hidden;
+  border-radius: 7px;
+  background: rgba(116, 124, 119, 0.08);
+}
+
+.request-records-tool-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #40c463, #30a14e);
+}
+
+.request-records-tool-row strong {
+  color: #5b625e;
+  font-size: 13px;
+  font-weight: 850;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.request-records-tool-side {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+}
+
+.request-records-tool-donut {
+  display: grid;
+  place-items: center;
+  width: 150px;
+  height: 150px;
+  border-radius: 50%;
+}
+
+.request-records-tool-donut-hole {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  width: 86px;
+  height: 86px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.request-records-tool-donut-hole strong {
+  color: #121915;
+  font-size: 22px;
+  font-weight: 850;
+}
+
+.request-records-tool-donut-hole span {
+  color: #68746c;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.request-records-tool-breakdown {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  color: #636a66;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.request-records-tool-breakdown span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.request-records-tool-breakdown i {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+}
+
+.request-records-tool-breakdown .is-edit {
+  background: #40c463;
+}
+
+.request-records-tool-breakdown .is-search {
+  background: #6fc4ec;
+}
+
+.request-records-tool-breakdown strong {
+  margin-left: auto;
+  color: #151a17;
+  font-variant-numeric: tabular-nums;
+}
+
+.request-records-dashboard-placeholder {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  min-height: 226px;
+  padding: 24px;
+  border-radius: 18px;
+  border: 1px dashed rgba(104, 117, 109, 0.2);
+  background: rgba(250, 252, 249, 0.68);
+  text-align: center;
+}
+
+.request-records-dashboard-placeholder strong {
+  color: #141b17;
+  font-size: 20px;
+  font-weight: 850;
+}
+
+.request-records-dashboard-placeholder span {
+  max-width: 420px;
+  color: #68746c;
+  font-size: 13px;
+  line-height: 1.7;
+  font-weight: 650;
+}
+
+.request-records-activity-viewport {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.request-records-activity-months {
+  display: grid;
+  grid-template-columns: repeat(var(--activity-columns, 53), 11px);
+  justify-content: start;
+  gap: 3px;
+  padding: 0 2px;
+  color: #687069;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.request-records-activity-months span {
+  white-space: nowrap;
+}
+
+.request-records-activity-grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(7, 11px);
+  grid-template-columns: repeat(var(--activity-columns, 53), 11px);
+  grid-auto-columns: 11px;
+  justify-content: start;
+  gap: 3px;
+  overflow: visible;
+  padding: 0 2px 2px;
+  scrollbar-width: none;
+}
+
+.request-records-activity-grid::-webkit-scrollbar {
+  display: none;
+}
+
+.request-records-activity-cell {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  background: #ebedf0;
+  box-shadow: inset 0 0 0 1px rgba(27, 31, 35, 0.035);
+}
+
+.request-records-activity-cell.is-pad {
+  visibility: hidden;
+}
+
+.request-records-activity-cell.is-level-1 { background: #9be9a8; }
+.request-records-activity-cell.is-level-2 { background: #40c463; }
+.request-records-activity-cell.is-level-3 { background: #30a14e; }
+.request-records-activity-cell.is-level-4 { background: #216e39; }
+
+.request-records-activity-legend {
+  display: inline-flex;
+  align-items: center;
+  justify-self: center;
+  gap: 7px;
+  color: #6c716d;
+  font-size: 12px;
+}
+
+.request-records-activity-legend .request-records-activity-cell {
+  width: 11px;
+  height: 11px;
+}
+
+.request-records-activity-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  padding-top: 12px;
+  border-top: 1px solid rgba(104, 117, 109, 0.14);
+}
+
+.request-records-activity-summary div {
+  display: grid;
+  gap: 5px;
+  padding: 0 14px;
+  border-left: 1px solid rgba(104, 117, 109, 0.14);
+}
+
+.request-records-activity-summary div:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+
+.request-records-activity-summary span {
+  color: #68746c;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.request-records-activity-summary strong {
+  color: #111815;
+  font-size: 20px;
+  line-height: 1;
+  font-weight: 850;
 }
 
 .request-records-overview {
@@ -3743,7 +5363,14 @@ onBeforeUnmount(() => {
   color: #a9b9af;
 }
 
+.request-records-shell-dark .request-records-activity-tab,
+.request-records-shell-dark .request-records-activity-range-button {
+  color: #a9b9af;
+}
+
 .request-records-shell-dark .request-records-mode-tab.is-active,
+.request-records-shell-dark .request-records-activity-tab.is-active,
+.request-records-shell-dark .request-records-activity-range-button.is-active,
 .request-records-shell-dark .terminal-provider-tab.is-active {
   color: #eef6ef;
   background: linear-gradient(180deg, rgba(66, 88, 58, 0.92), rgba(42, 60, 38, 0.88));
@@ -3827,6 +5454,7 @@ onBeforeUnmount(() => {
 }
 
 .request-records-shell-dark .request-records-overview .request-records-metric,
+.request-records-shell-dark .request-records-activity-card,
 .request-records-shell-dark .request-records-board,
 .request-records-shell-dark .terminal-sessions-board,
 .request-records-shell-dark .request-records-empty {
@@ -3966,6 +5594,9 @@ onBeforeUnmount(() => {
 }
 
 .request-records-shell-dark .request-records-metric-label,
+.request-records-shell-dark .request-records-activity-months,
+.request-records-shell-dark .request-records-activity-legend,
+.request-records-shell-dark .request-records-activity-summary span,
 .request-records-shell-dark .request-record-detail-section-title,
 .request-records-shell-dark .request-record-detail-item span,
 .request-records-shell-dark .request-record-detail-hero-main small,
@@ -3977,6 +5608,8 @@ onBeforeUnmount(() => {
 }
 
 .request-records-shell-dark .request-records-metric-value,
+.request-records-shell-dark .request-records-activity-title,
+.request-records-shell-dark .request-records-activity-summary strong,
 .request-records-shell-dark .request-records-board-title strong,
 .request-records-shell-dark .request-records-time strong,
 .request-records-shell-dark .request-records-identity strong,
@@ -4005,6 +5638,58 @@ onBeforeUnmount(() => {
 
 .request-records-shell-dark .request-record-debug-result.is-success {
   color: #77d69a;
+}
+
+.request-records-shell-dark .request-records-token-chart,
+.request-records-shell-dark .request-records-token-side,
+.request-records-shell-dark .request-records-dashboard-placeholder {
+  border-color: rgba(133, 162, 145, 0.14);
+  background: rgba(18, 26, 22, 0.72);
+}
+
+.request-records-shell-dark .request-records-token-plot {
+  background:
+    linear-gradient(180deg, rgba(25, 35, 29, 0.94), rgba(18, 27, 22, 0.78)),
+    rgba(19, 27, 23, 0.88);
+}
+
+.request-records-shell-dark .request-records-token-grid-line {
+  stroke: rgba(166, 189, 174, 0.14);
+}
+
+.request-records-shell-dark .request-records-token-legend,
+.request-records-shell-dark .request-records-token-axis,
+.request-records-shell-dark .request-records-token-breakdown,
+.request-records-shell-dark .request-records-token-donut-hole span,
+.request-records-shell-dark .request-records-dashboard-placeholder span {
+  color: #aebfb4;
+}
+
+.request-records-shell-dark .request-records-token-donut-hole {
+  background: rgba(19, 27, 23, 0.96);
+  box-shadow: inset 0 0 0 1px rgba(133, 162, 145, 0.14);
+}
+
+.request-records-shell-dark .request-records-token-donut-hole strong,
+.request-records-shell-dark .request-records-token-breakdown strong,
+.request-records-shell-dark .request-records-dashboard-placeholder strong {
+  color: #edf6ee;
+}
+
+.request-records-shell-dark .request-records-token-legend .request-records-token-source {
+  border-color: rgba(151, 177, 162, 0.22);
+  background: rgba(32, 43, 37, 0.72);
+  color: #b9c9be;
+}
+
+.request-records-shell-dark .request-records-token-sources span {
+  border-color: rgba(118, 184, 177, 0.24);
+  background: rgba(32, 55, 52, 0.66);
+  color: #aed2cd;
+}
+
+.request-records-shell-dark .request-records-token-sources strong {
+  color: #effaf7;
 }
 
 .request-records-shell-dark .request-record-debug-result.is-error {
@@ -4165,6 +5850,7 @@ onBeforeUnmount(() => {
 
   .request-records-toolbar,
   .request-records-board-head,
+  .request-records-activity-head,
   .request-record-detail-hero {
     align-items: flex-start;
     flex-direction: column;
@@ -4173,6 +5859,52 @@ onBeforeUnmount(() => {
   .request-records-toolbar-actions {
     width: 100%;
     justify-content: flex-end;
+  }
+
+  .request-records-activity-tabs,
+  .request-records-activity-range {
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .request-records-activity-tabs::-webkit-scrollbar,
+  .request-records-activity-range::-webkit-scrollbar {
+    display: none;
+  }
+
+  .request-records-activity-summary {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .request-records-activity-summary div,
+  .request-records-activity-summary div:first-child {
+    padding: 0;
+    border-left: 0;
+  }
+
+  .request-records-token-dashboard {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .request-records-token-side {
+    grid-template-columns: auto minmax(0, 1fr);
+    justify-items: stretch;
+  }
+
+  .request-records-token-donut {
+    width: 118px;
+    height: 118px;
+  }
+
+  .request-records-token-donut-hole {
+    width: 76px;
+    height: 76px;
+  }
+
+  .request-records-token-donut-hole strong {
+    font-size: 18px;
   }
 
   .mcp-skill-app-tabs {

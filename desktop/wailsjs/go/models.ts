@@ -1,5 +1,5 @@
 export namespace main {
-	
+
 	export class AdvancedProxyActiveConnection {
 	    id: string;
 	    startedAt: string;
@@ -23,11 +23,11 @@ export namespace main {
 	    upstreamEndpoint: string;
 	    remoteAddr: string;
 	    userAgent: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AdvancedProxyActiveConnection(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -57,11 +57,11 @@ export namespace main {
 	export class AdvancedProxyAppConfig {
 	    enabled: boolean;
 	    basePath: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AdvancedProxyAppConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -71,11 +71,11 @@ export namespace main {
 	export class AntiPoisonStringProtectionConfig {
 	    enabled: boolean;
 	    rules: string[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AntiPoisonStringProtectionConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -89,11 +89,11 @@ export namespace main {
 	    randomInsertionPoints: boolean;
 	    minFakeToolcalls: number;
 	    requirePerToolTypeMarker: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AntiPoisonRandomizationConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -112,11 +112,11 @@ export namespace main {
 	    algorithmPrompt: string;
 	    randomization: AntiPoisonRandomizationConfig;
 	    stringProtection: AntiPoisonStringProtectionConfig;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AntiPoisonConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -127,7 +127,7 @@ export namespace main {
 	        this.randomization = this.convertValues(source["randomization"], AntiPoisonRandomizationConfig);
 	        this.stringProtection = this.convertValues(source["stringProtection"], AntiPoisonStringProtectionConfig);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -151,11 +151,11 @@ export namespace main {
 	    thinkingOptimizer: boolean;
 	    cacheInjection: boolean;
 	    cacheTtl: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new OptimizerConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -168,11 +168,11 @@ export namespace main {
 	    enabled: boolean;
 	    requestThinkingSignature: boolean;
 	    requestThinkingBudget: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new RectifierConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -181,25 +181,25 @@ export namespace main {
 	    }
 	}
 	export class int {
-	
-	
+
+
 	    static createFrom(source: any = {}) {
 	        return new int(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	
+
 	    }
 	}
 	export class HighAvailabilityRPMConfig {
 	    global: number;
 	    providers: Record<string, number>;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new HighAvailabilityRPMConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.global = source["global"];
@@ -211,11 +211,11 @@ export namespace main {
 	    dynamicOptimizeQueue: boolean;
 	    dispatchMode: string;
 	    rpm: HighAvailabilityRPMConfig;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new HighAvailabilityConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -223,7 +223,7 @@ export namespace main {
 	        this.dispatchMode = source["dispatchMode"];
 	        this.rpm = this.convertValues(source["rpm"], HighAvailabilityRPMConfig);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -255,11 +255,11 @@ export namespace main {
 	    circuitTimeoutSeconds: number;
 	    circuitErrorRateThreshold: number;
 	    circuitMinRequests: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AppFailoverConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.appType = source["appType"];
@@ -281,11 +281,11 @@ export namespace main {
 	    basePath: string;
 	    defaultModel: string;
 	    providers: AdvancedProxyProvider[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ClaudeProxyCompatConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -293,7 +293,7 @@ export namespace main {
 	        this.defaultModel = source["defaultModel"];
 	        this.providers = this.convertValues(source["providers"], AdvancedProxyProvider);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -315,11 +315,11 @@ export namespace main {
 	export class ContextAutoCompressionConfig {
 	    enabled: boolean;
 	    thresholdK: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ContextAutoCompressionConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -329,11 +329,11 @@ export namespace main {
 	export class checkUserAgentMapping {
 	    modelContains: string;
 	    targetUA: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new checkUserAgentMapping(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.modelContains = source["modelContains"];
@@ -352,11 +352,11 @@ export namespace main {
 	    enabled: boolean;
 	    sortIndex: number;
 	    sourceType?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AdvancedProxyProvider(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -375,17 +375,17 @@ export namespace main {
 	export class AdvancedProxyQueueConfig {
 	    inheritGlobal: boolean;
 	    providers: AdvancedProxyProvider[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AdvancedProxyQueueConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.inheritGlobal = source["inheritGlobal"];
 	        this.providers = this.convertValues(source["providers"], AdvancedProxyProvider);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -410,11 +410,11 @@ export namespace main {
 	    codex: AdvancedProxyQueueConfig;
 	    opencode: AdvancedProxyQueueConfig;
 	    openclaw: AdvancedProxyQueueConfig;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AdvancedProxyQueuesConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.global = this.convertValues(source["global"], AdvancedProxyQueueConfig);
@@ -423,7 +423,7 @@ export namespace main {
 	        this.opencode = this.convertValues(source["opencode"], AdvancedProxyQueueConfig);
 	        this.openclaw = this.convertValues(source["openclaw"], AdvancedProxyQueueConfig);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -460,11 +460,11 @@ export namespace main {
 	    optimizer: OptimizerConfig;
 	    antiPoison: AntiPoisonConfig;
 	    updatedAt: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AdvancedProxyConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -485,7 +485,7 @@ export namespace main {
 	        this.antiPoison = this.convertValues(source["antiPoison"], AntiPoisonConfig);
 	        this.updatedAt = source["updatedAt"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -504,7 +504,7 @@ export namespace main {
 		    return a;
 		}
 	}
-	
+
 	export class AdvancedProxyProviderRoutingState {
 	    providerId: string;
 	    providerRowKey: string;
@@ -515,11 +515,11 @@ export namespace main {
 	    status: string;
 	    targetUrl: string;
 	    updatedAt: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AdvancedProxyProviderRoutingState(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.providerId = source["providerId"];
@@ -533,8 +533,8 @@ export namespace main {
 	        this.updatedAt = source["updatedAt"];
 	    }
 	}
-	
-	
+
+
 	export class antiPoisonOperationRecord {
 	    id: string;
 	    time: string;
@@ -550,11 +550,11 @@ export namespace main {
 	    provider: string;
 	    blocked: boolean;
 	    reason: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new antiPoisonOperationRecord(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -579,11 +579,11 @@ export namespace main {
 	    argumentsPreview?: string;
 	    textPreview?: string;
 	    rawPreview?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new advancedProxyObservedItem(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.type = source["type"];
@@ -597,11 +597,11 @@ export namespace main {
 	    route: string;
 	    source?: string;
 	    status: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AdvancedProxyRequestRouteStep(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.route = source["route"];
@@ -629,6 +629,7 @@ export namespace main {
 	    latencyMs?: number;
 	    inputTokens?: number;
 	    outputTokens?: number;
+	    reasoningTokens?: number;
 	    tps?: number;
 	    upstreamUrl: string;
 	    upstreamEndpoint: string;
@@ -644,11 +645,11 @@ export namespace main {
 	    upstreamAssistantPreview?: string;
 	    upstreamLatestObserved?: advancedProxyObservedItem;
 	    antiPoisonOps?: antiPoisonOperationRecord[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AdvancedProxyRequestRecord(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -670,6 +671,7 @@ export namespace main {
 	        this.latencyMs = source["latencyMs"];
 	        this.inputTokens = source["inputTokens"];
 	        this.outputTokens = source["outputTokens"];
+	        this.reasoningTokens = source["reasoningTokens"];
 	        this.tps = source["tps"];
 	        this.upstreamUrl = source["upstreamUrl"];
 	        this.upstreamEndpoint = source["upstreamEndpoint"];
@@ -686,7 +688,7 @@ export namespace main {
 	        this.upstreamLatestObserved = this.convertValues(source["upstreamLatestObserved"], advancedProxyObservedItem);
 	        this.antiPoisonOps = this.convertValues(source["antiPoisonOps"], antiPoisonOperationRecord);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -705,7 +707,7 @@ export namespace main {
 		    return a;
 		}
 	}
-	
+
 	export class AdvancedProxyRoutingState {
 	    appType: string;
 	    providerId: string;
@@ -715,11 +717,11 @@ export namespace main {
 	    status: string;
 	    targetUrl: string;
 	    updatedAt: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AdvancedProxyRoutingState(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.appType = source["appType"];
@@ -735,17 +737,17 @@ export namespace main {
 	export class AdvancedProxyRoutingSnapshot {
 	    apps: Record<string, AdvancedProxyRoutingState>;
 	    providers: Record<string, AdvancedProxyProviderRoutingState>;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AdvancedProxyRoutingSnapshot(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.apps = this.convertValues(source["apps"], AdvancedProxyRoutingState, true);
 	        this.providers = this.convertValues(source["providers"], AdvancedProxyProviderRoutingState, true);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -764,21 +766,21 @@ export namespace main {
 		    return a;
 		}
 	}
-	
-	
-	
-	
-	
+
+
+
+
+
 	export class AppUpdateAsset {
 	    name: string;
 	    browserDownloadUrl: string;
 	    size: number;
 	    contentType: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AppUpdateAsset(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -801,11 +803,11 @@ export namespace main {
 	    error: string;
 	    startedAt: number;
 	    updatedAt: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AppUpdateDownloadSnapshot(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.active = source["active"];
@@ -831,11 +833,11 @@ export namespace main {
 	    targetOs: string;
 	    targetArch: string;
 	    asset?: AppUpdateAsset;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AppUpdateReleaseInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.latestTag = source["latestTag"];
@@ -846,7 +848,7 @@ export namespace main {
 	        this.targetArch = source["targetArch"];
 	        this.asset = this.convertValues(source["asset"], AppUpdateAsset);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -882,11 +884,11 @@ export namespace main {
 	    ready: boolean;
 	    readyReason: string;
 	    payload: Record<string, any>;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new BridgeImportRecord(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -919,11 +921,11 @@ export namespace main {
 	    sessionActive: boolean;
 	    clientReady: boolean;
 	    lastClientPing: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new BridgeImportSnapshot(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.records = this.convertValues(source["records"], BridgeImportRecord);
@@ -938,7 +940,7 @@ export namespace main {
 	        this.clientReady = source["clientReady"];
 	        this.lastClientPing = source["lastClientPing"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -960,11 +962,11 @@ export namespace main {
 	export class ChromeProfileAccountInfoInput {
 	    id: any;
 	    access_token: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ChromeProfileAccountInfoInput(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -978,11 +980,11 @@ export namespace main {
 	    site_type: string;
 	    api_key: string;
 	    account_info: ChromeProfileAccountInfoInput;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ChromeProfileAccount(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -992,7 +994,7 @@ export namespace main {
 	        this.api_key = source["api_key"];
 	        this.account_info = this.convertValues(source["account_info"], ChromeProfileAccountInfoInput);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1011,19 +1013,19 @@ export namespace main {
 		    return a;
 		}
 	}
-	
+
 	export class ChromeProfileTokenRequest {
 	    accounts: ChromeProfileAccount[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ChromeProfileTokenRequest(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.accounts = this.convertValues(source["accounts"], ChromeProfileAccount);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1052,11 +1054,11 @@ export namespace main {
 	    resolved_user_id?: string;
 	    storage_fields?: string[];
 	    storage_origin?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ChromeProfileTokenResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -1073,17 +1075,17 @@ export namespace main {
 	export class ChromeProfileTokenResponse {
 	    results: ChromeProfileTokenResult[];
 	    warnings?: string[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ChromeProfileTokenResponse(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.results = this.convertValues(source["results"], ChromeProfileTokenResult);
 	        this.warnings = source["warnings"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1102,18 +1104,18 @@ export namespace main {
 		    return a;
 		}
 	}
-	
+
 	export class CircuitBreakerStats {
 	    state: string;
 	    consecutiveFailures: number;
 	    consecutiveSuccesses: number;
 	    totalRequests: number;
 	    failedRequests: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new CircuitBreakerStats(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.state = source["state"];
@@ -1123,19 +1125,19 @@ export namespace main {
 	        this.failedRequests = source["failedRequests"];
 	    }
 	}
-	
-	
+
+
 	export class DesktopLogContent {
 	    path: string;
 	    name: string;
 	    content: string;
 	    size: number;
 	    updatedAt: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new DesktopLogContent(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
@@ -1154,11 +1156,11 @@ export namespace main {
 	    path: string;
 	    size: number;
 	    updatedAt: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new DesktopLogFileInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.groupKey = source["groupKey"];
@@ -1173,16 +1175,16 @@ export namespace main {
 	}
 	export class DesktopLogSnapshot {
 	    files: DesktopLogFileInfo[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new DesktopLogSnapshot(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.files = this.convertValues(source["files"], DesktopLogFileInfo);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1206,11 +1208,11 @@ export namespace main {
 	    storageKey: string;
 	    accountCount: number;
 	    payload: Record<string, any>;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ExtensionImportResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.sourcePath = source["sourcePath"];
@@ -1224,11 +1226,11 @@ export namespace main {
 	    providerName: string;
 	    sortIndex: number;
 	    enabled: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new FailoverQueueItem(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.providerId = source["providerId"];
@@ -1237,8 +1239,186 @@ export namespace main {
 	        this.enabled = source["enabled"];
 	    }
 	}
-	
-	
+
+
+	export class LocalSessionSeriesPoint {
+	    date: string;
+	    source: string;
+	    sourceLabel: string;
+	    sessionCount: number;
+	    turnCount: number;
+
+	    static createFrom(source: any = {}) {
+	        return new LocalSessionSeriesPoint(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.date = source["date"];
+	        this.source = source["source"];
+	        this.sourceLabel = source["sourceLabel"];
+	        this.sessionCount = source["sessionCount"];
+	        this.turnCount = source["turnCount"];
+	    }
+	}
+	export class LocalToolRankingItem {
+	    name: string;
+	    category: string;
+	    count: number;
+
+	    static createFrom(source: any = {}) {
+	        return new LocalToolRankingItem(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.category = source["category"];
+	        this.count = source["count"];
+	    }
+	}
+	export class LocalToolCallSeriesPoint {
+	    date: string;
+	    hour?: string;
+	    source: string;
+	    sourceLabel: string;
+	    name: string;
+	    category: string;
+	    count: number;
+
+	    static createFrom(source: any = {}) {
+	        return new LocalToolCallSeriesPoint(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.date = source["date"];
+	        this.hour = source["hour"];
+	        this.source = source["source"];
+	        this.sourceLabel = source["sourceLabel"];
+	        this.name = source["name"];
+	        this.category = source["category"];
+	        this.count = source["count"];
+	    }
+	}
+	export class LocalTokenUsageSource {
+	    source: string;
+	    sourceLabel: string;
+	    sessionCount: number;
+	    totalTokens: number;
+	    inputTokens: number;
+	    outputTokens: number;
+	    reasoningTokens: number;
+
+	    static createFrom(source: any = {}) {
+	        return new LocalTokenUsageSource(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source = source["source"];
+	        this.sourceLabel = source["sourceLabel"];
+	        this.sessionCount = source["sessionCount"];
+	        this.totalTokens = source["totalTokens"];
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	        this.reasoningTokens = source["reasoningTokens"];
+	    }
+	}
+	export class LocalTokenUsageSeriesPoint {
+	    date: string;
+	    hour?: string;
+	    source: string;
+	    sourceLabel: string;
+	    sessionCount: number;
+	    totalTokens: number;
+	    inputTokens: number;
+	    outputTokens: number;
+	    reasoningTokens: number;
+
+	    static createFrom(source: any = {}) {
+	        return new LocalTokenUsageSeriesPoint(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.date = source["date"];
+	        this.hour = source["hour"];
+	        this.source = source["source"];
+	        this.sourceLabel = source["sourceLabel"];
+	        this.sessionCount = source["sessionCount"];
+	        this.totalTokens = source["totalTokens"];
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	        this.reasoningTokens = source["reasoningTokens"];
+	    }
+	}
+	export class LocalTokenUsageAnalytics {
+	    source: string;
+	    sourceLabel: string;
+	    sessionsPath: string;
+	    sessionCount: number;
+	    totalTokens: number;
+	    inputTokens: number;
+	    outputTokens: number;
+	    reasoningTokens: number;
+	    series: LocalTokenUsageSeriesPoint[];
+	    sources: LocalTokenUsageSource[];
+	    sessionSeries: LocalSessionSeriesPoint[];
+	    toolCalls: LocalToolCallSeriesPoint[];
+	    toolRanking: LocalToolRankingItem[];
+	    activeDays: number;
+	    avgTurns: number;
+	    totalTurns: number;
+	    toolCallCount: number;
+
+	    static createFrom(source: any = {}) {
+	        return new LocalTokenUsageAnalytics(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source = source["source"];
+	        this.sourceLabel = source["sourceLabel"];
+	        this.sessionsPath = source["sessionsPath"];
+	        this.sessionCount = source["sessionCount"];
+	        this.totalTokens = source["totalTokens"];
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	        this.reasoningTokens = source["reasoningTokens"];
+	        this.series = this.convertValues(source["series"], LocalTokenUsageSeriesPoint);
+	        this.sources = this.convertValues(source["sources"], LocalTokenUsageSource);
+	        this.sessionSeries = this.convertValues(source["sessionSeries"], LocalSessionSeriesPoint);
+	        this.toolCalls = this.convertValues(source["toolCalls"], LocalToolCallSeriesPoint);
+	        this.toolRanking = this.convertValues(source["toolRanking"], LocalToolRankingItem);
+	        this.activeDays = source["activeDays"];
+	        this.avgTurns = source["avgTurns"];
+	        this.totalTurns = source["totalTurns"];
+	        this.toolCallCount = source["toolCallCount"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+
+
+
 	export class ManagedSkill {
 	    id: string;
 	    name: string;
@@ -1248,11 +1428,11 @@ export namespace main {
 	    apps: ManagedAppToggles;
 	    source: string;
 	    updatedAt: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ManagedSkill(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -1264,7 +1444,7 @@ export namespace main {
 	        this.source = source["source"];
 	        this.updatedAt = source["updatedAt"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1290,11 +1470,11 @@ export namespace main {
 	    gemini: boolean;
 	    opencode: boolean;
 	    openclaw: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ManagedAppToggles(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.claude = source["claude"];
@@ -1318,11 +1498,11 @@ export namespace main {
 	    apps: ManagedAppToggles;
 	    source: string;
 	    updatedAt: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ManagedMCPServer(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -1338,7 +1518,7 @@ export namespace main {
 	        this.source = source["source"];
 	        this.updatedAt = source["updatedAt"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1361,18 +1541,18 @@ export namespace main {
 	    configPath: string;
 	    mcp: ManagedMCPServer[];
 	    skills: ManagedSkill[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new MCPSkillConfigSnapshot(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.configPath = source["configPath"];
 	        this.mcp = this.convertValues(source["mcp"], ManagedMCPServer);
 	        this.skills = this.convertValues(source["skills"], ManagedSkill);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1396,11 +1576,11 @@ export namespace main {
 	    fileId: string;
 	    path: string;
 	    backupPath: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ManagedAppConfigAppliedFile(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.appId = source["appId"];
@@ -1413,11 +1593,11 @@ export namespace main {
 	    appId: string;
 	    fileId: string;
 	    content: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ManagedAppConfigWrite(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.appId = source["appId"];
@@ -1427,16 +1607,16 @@ export namespace main {
 	}
 	export class ManagedAppConfigApplyRequest {
 	    files: ManagedAppConfigWrite[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ManagedAppConfigApplyRequest(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.files = this.convertValues(source["files"], ManagedAppConfigWrite);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1457,16 +1637,16 @@ export namespace main {
 	}
 	export class ManagedAppConfigApplyResult {
 	    applied: ManagedAppConfigAppliedFile[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ManagedAppConfigApplyResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.applied = this.convertValues(source["applied"], ManagedAppConfigAppliedFile);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1493,11 +1673,11 @@ export namespace main {
 	    path: string;
 	    exists: boolean;
 	    content: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ManagedAppConfigFile(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.appId = source["appId"];
@@ -1511,16 +1691,16 @@ export namespace main {
 	}
 	export class ManagedAppConfigSnapshot {
 	    files: ManagedAppConfigFile[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ManagedAppConfigSnapshot(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.files = this.convertValues(source["files"], ManagedAppConfigFile);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1539,20 +1719,20 @@ export namespace main {
 		    return a;
 		}
 	}
-	
-	
-	
-	
-	
+
+
+
+
+
 	export class OutboundProxyConfig {
 	    mode: string;
 	    customUrl: string;
 	    updatedAt?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new OutboundProxyConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.mode = source["mode"];
@@ -1566,11 +1746,11 @@ export namespace main {
 	    runtimeBackupDir: string;
 	    localStorageBackupPath: string;
 	    localStorageKeyCount: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new PortableDataPackageResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.backupDir = source["backupDir"];
@@ -1586,11 +1766,11 @@ export namespace main {
 	    localStorageBackupPath: string;
 	    localStorageJson: string;
 	    localStorageKeyCount: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new PortableDataUnpackResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.backupDir = source["backupDir"];
@@ -1600,16 +1780,16 @@ export namespace main {
 	        this.localStorageKeyCount = source["localStorageKeyCount"];
 	    }
 	}
-	
+
 	export class TerminalSessionMessage {
 	    role: string;
 	    content: string;
 	    ts: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new TerminalSessionMessage(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.role = source["role"];
@@ -1627,11 +1807,11 @@ export namespace main {
 	    lastActiveAt: number;
 	    sourcePath: string;
 	    resumeCommand: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new TerminalSessionMeta(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.providerId = source["providerId"];
@@ -1649,11 +1829,11 @@ export namespace main {
 	    id: string;
 	    label: string;
 	    total: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new TerminalSessionProviderSummary(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -1669,11 +1849,11 @@ export namespace main {
 	    hasMore: boolean;
 	    providers: TerminalSessionProviderSummary[];
 	    sessions: TerminalSessionMeta[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new TerminalSessionPage(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.providerId = source["providerId"];
@@ -1684,7 +1864,7 @@ export namespace main {
 	        this.providers = this.convertValues(source["providers"], TerminalSessionProviderSummary);
 	        this.sessions = this.convertValues(source["sessions"], TerminalSessionMeta);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1703,19 +1883,19 @@ export namespace main {
 		    return a;
 		}
 	}
-	
-	
-	
-	
+
+
+
+
 	export class desktopProfileAssistOpenRequest {
 	    siteName: string;
 	    siteUrl: string;
 	    siteType: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new desktopProfileAssistOpenRequest(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.siteName = source["siteName"];
@@ -1733,11 +1913,11 @@ export namespace main {
 	    lastSiteName: string;
 	    startedAt: number;
 	    lastUpdatedAt: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new fetchKeysProgressSnapshot(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.active = source["active"];
@@ -1756,11 +1936,11 @@ export namespace main {
 	    Height: number;
 	    X: number;
 	    Y: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new sidebarWindowBounds(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.Width = source["Width"];

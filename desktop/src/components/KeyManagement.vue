@@ -503,8 +503,8 @@
                       <a-tag v-if="isCompactMode" :color="record.status === 1 ? 'green' : 'red'">{{ record.status === 1 ? '正常' : '异常' }}</a-tag>
                     </div>
                     <div class="site-subline">
-                      <a-tag v-if="record.sourceType === 'manual'" color="blue">手工添加</a-tag>
                       <span class="subtle-text">{{ record.tokenName || '未命名 Token' }}</span>
+                      <span v-if="record.sourceType === 'manual'" class="manual-source-chip">手工</span>
                     </div>
                     <div v-if="isCompactMode" class="compact-site-api-block">
                       <a-typography-text :copyable="{ text: record.apiKey }" :ellipsis="{ tooltip: record.apiKey }" class="cell-copy-text compact-key-text">{{ maskApiKey(record.apiKey) }}</a-typography-text>
@@ -521,7 +521,7 @@
                         <ReloadOutlined class="site-balance-refresh-icon" :class="{ 'site-balance-refresh-icon-spinning': record.balanceLoading }" />
                       </button>
                     </div>
-                    <div class="site-balance-value" :class="{ 'site-balance-value-empty': !getRecordBalanceValue(record) || record.balanceLoading }">
+                    <div v-if="record.balanceLoading || getRecordBalanceValue(record)" class="site-balance-value" :class="{ 'site-balance-value-empty': !getRecordBalanceValue(record) || record.balanceLoading }">
                       <span class="site-balance-label">剩余:</span>
                       <span class="site-balance-text">{{ record.balanceLoading ? '--' : (getRecordBalanceNumericText(record) || '--') }}</span>
                       <span v-if="showBalanceUnit(record)" class="site-balance-unit">USD</span>
@@ -701,12 +701,30 @@
                   :key="item.id"
                   type="button"
                   class="console-provider-card"
-                  :class="{ 'console-provider-card-primary': item.queueOrder === 1, 'console-provider-card-pending': !item.inQueue }"
-                  @click="toggleConsoleProviderQueue(item)"
+                  :class="{
+                    'console-provider-card-primary': item.queueOrder === 1,
+                    'console-provider-card-pending': !item.inQueue,
+                    'console-provider-card-draggable': item.inQueue,
+                    'console-provider-card-dragging': consoleQueueDragState.sourceId === item.id,
+                    'console-provider-card-drop-before': consoleQueueDragState.overId === item.id && !consoleQueueDragState.insertAfter,
+                    'console-provider-card-drop-after': consoleQueueDragState.overId === item.id && consoleQueueDragState.insertAfter,
+                  }"
+                  :data-console-provider-id="item.id"
+                  @click="handleConsoleProviderCardClick(item)"
                 >
                   <div class="console-provider-card-top">
+                    <span
+                      v-if="item.inQueue"
+                      class="console-provider-drag-handle"
+                      title="拖动排序"
+                      aria-label="拖动排序"
+                      @pointerdown.stop.prevent="startConsoleQueueDrag(item, $event)"
+                      @click.stop
+                    >
+                      <i></i><i></i><i></i><i></i><i></i><i></i>
+                    </span>
                     <strong>{{ item.siteName }}</strong>
-                    <span class="console-provider-order">{{ item.queueOrder ? `P${item.queueOrder}` : '待入队' }}</span>
+                    <span v-if="item.queueOrder" class="console-provider-order">{{ `P${item.queueOrder}` }}</span>
                   </div>
                   <div class="console-provider-model">{{ item.modelLabel }}</div>
                   <div class="console-provider-meta">
@@ -1130,6 +1148,26 @@
                 :initial-queue-scope="advancedProxyFocusQueueScope"
                 :focus-queue-token="advancedProxyFocusQueueToken"
               />
+              <Teleport to="body">
+                <div
+                  v-if="consoleQueueDragState.active"
+                  ref="consoleQueueDragGhostRef"
+                  class="console-provider-drag-ghost"
+                  :style="consoleQueueDragGhostStyle"
+                >
+                  <div class="console-provider-card-top">
+                    <span class="console-provider-drag-handle console-provider-drag-handle-ghost" aria-hidden="true">
+                      <i></i><i></i><i></i><i></i><i></i><i></i>
+                    </span>
+                    <strong>{{ consoleQueueDragState.ghostSiteName }}</strong>
+                    <span class="console-provider-order">{{ consoleQueueDragState.ghostOrderLabel }}</span>
+                  </div>
+                  <div class="console-provider-model">{{ consoleQueueDragState.ghostModelLabel }}</div>
+                  <div class="console-provider-meta">
+                    <span v-if="consoleQueueDragState.ghostSkLabel" class="console-provider-chip">{{ consoleQueueDragState.ghostSkLabel }}</span>
+                  </div>
+                </div>
+              </Teleport>
             </div>
           </div>
         </div>
@@ -1168,6 +1206,7 @@ import {
   listAdvancedProxyRequestRecords,
   normalizeAdvancedProxyConfig,
   setAdvancedProxyConfig,
+  setAdvancedProxyConfigOptimistic,
   syncAdvancedProxyProvidersFromRecords,
 } from '../utils/advancedProxyBridge.js';
 import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS, inferProviderKeyFromSnapshot } from '../utils/desktopConfigTransform.js';
@@ -1344,6 +1383,29 @@ const advancedProxyConsoleRecordIds = ref(new Set());
 const advancedProxyActiveConnections = ref([]);
 const advancedProxyActiveConnectionsLoading = ref(false);
 const consoleProxyConfigApplying = ref(false);
+const consoleQueueDragState = reactive({
+  active: false,
+  sourceId: '',
+  overId: '',
+  insertAfter: false,
+  saving: false,
+  moved: false,
+  suppressClickUntil: 0,
+  ghostX: 0,
+  ghostY: 0,
+  ghostWidth: 0,
+  ghostHeight: 0,
+  ghostOffsetX: 0,
+  ghostOffsetY: 0,
+  ghostSiteName: '',
+  ghostModelLabel: '',
+  ghostSkLabel: '',
+  ghostOrderLabel: '',
+});
+let consoleQueueDragFrame = 0;
+let consoleQueueDragGhostX = 0;
+let consoleQueueDragGhostY = 0;
+let consoleQueueDragLayouts = [];
 const consoleProxyPendingAppIds = ref([]);
 const consoleProxyOptimisticApps = reactive({});
 const consoleProxyMasterOptimistic = ref(null);
@@ -1353,6 +1415,7 @@ const consoleAntiPoisonPending = ref(false);
 const consoleTakeoverReconcileCooldownUntil = reactive({});
 const advancedProxyConsoleLogScroller = ref(null);
 const inventoryCardRef = ref(null);
+const consoleQueueDragGhostRef = ref(null);
 const selectedAdvancedProxyConnectionId = ref('');
 const advancedProxyConnectionClockTick = ref(Date.now());
 const advancedProxyFocusedRequestRecordId = ref('');
@@ -2003,12 +2066,240 @@ function handleRequestRecordsDrawerOpenChange(open) {
   }
 }
 
+function getConsoleQueueProviderKey(provider, fallback = '') {
+  return String(provider?.id || provider?.rowKey || provider?.baseUrl || provider?.apiKey || fallback || '').trim();
+}
+
+function resetConsoleQueueDragState(suppressClick = false) {
+  stopConsoleQueueDragListeners();
+  consoleQueueDragState.active = false;
+  consoleQueueDragState.sourceId = '';
+  consoleQueueDragState.overId = '';
+  consoleQueueDragState.insertAfter = false;
+  consoleQueueDragState.moved = false;
+  consoleQueueDragState.ghostX = 0;
+  consoleQueueDragState.ghostY = 0;
+  consoleQueueDragState.ghostWidth = 0;
+  consoleQueueDragState.ghostHeight = 0;
+  consoleQueueDragState.ghostOffsetX = 0;
+  consoleQueueDragState.ghostOffsetY = 0;
+  consoleQueueDragState.ghostSiteName = '';
+  consoleQueueDragState.ghostModelLabel = '';
+  consoleQueueDragState.ghostSkLabel = '';
+  consoleQueueDragState.ghostOrderLabel = '';
+  consoleQueueDragGhostX = 0;
+  consoleQueueDragGhostY = 0;
+  consoleQueueDragLayouts = [];
+  if (consoleQueueDragFrame && typeof window !== 'undefined') {
+    window.cancelAnimationFrame(consoleQueueDragFrame);
+    consoleQueueDragFrame = 0;
+  }
+  if (suppressClick) {
+    consoleQueueDragState.suppressClickUntil = Date.now() + 350;
+  }
+}
+
+function captureConsoleQueueDragLayouts() {
+  if (typeof document === 'undefined') return null;
+  consoleQueueDragLayouts = Array.from(document.querySelectorAll('[data-console-provider-id]'))
+    .map(card => {
+      const id = String(card?.dataset?.consoleProviderId || '').trim();
+      if (!id || id === consoleQueueDragState.sourceId || !consoleQueueCards.value.some(item => item.id === id && item.inQueue)) return null;
+      const rect = card.getBoundingClientRect();
+      return {
+        id,
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+        centerX: rect.left + rect.width / 2,
+        centerY: rect.top + rect.height / 2,
+      };
+    })
+    .filter(Boolean);
+}
+
+function findConsoleQueueDragTarget(clientX, clientY) {
+  let nearest = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  consoleQueueDragLayouts.forEach(layout => {
+    const insideX = clientX >= layout.left && clientX <= layout.right;
+    const insideY = clientY >= layout.top && clientY <= layout.bottom;
+    const distance = insideX && insideY
+      ? 0
+      : ((clientX - layout.centerX) ** 2) + ((clientY - layout.centerY) ** 2);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearest = layout;
+    }
+  });
+  return nearest;
+}
+
+function setConsoleQueueGhostPosition(clientX, clientY) {
+  const x = clientX - consoleQueueDragState.ghostOffsetX;
+  const y = clientY - consoleQueueDragState.ghostOffsetY;
+  consoleQueueDragGhostX = x;
+  consoleQueueDragGhostY = y;
+  if (consoleQueueDragFrame) return;
+  consoleQueueDragFrame = window.requestAnimationFrame(() => {
+    consoleQueueDragFrame = 0;
+    const ghost = consoleQueueDragGhostRef.value;
+    if (ghost) {
+      ghost.style.transform = `translate3d(${consoleQueueDragGhostX}px, ${consoleQueueDragGhostY}px, 0) rotate(-1.5deg)`;
+    }
+  });
+}
+
+function updateConsoleQueueDragTarget(event) {
+  if (!consoleQueueDragState.active) return;
+  const targetLayout = findConsoleQueueDragTarget(event.clientX, event.clientY);
+  const targetId = String(targetLayout?.id || '').trim();
+  const targetItem = consoleQueueCards.value.find(item => item.id === targetId && item.inQueue);
+  if (!targetItem || targetId === consoleQueueDragState.sourceId) {
+    consoleQueueDragState.overId = '';
+    consoleQueueDragState.insertAfter = false;
+    return;
+  }
+  const horizontalGrid = targetLayout.width >= targetLayout.height;
+  const pointerOffset = horizontalGrid ? event.clientX - targetLayout.left : event.clientY - targetLayout.top;
+  const targetSize = horizontalGrid ? targetLayout.width : targetLayout.height;
+  const ratio = targetSize > 0 ? pointerOffset / targetSize : 0.5;
+  let insertAfter = consoleQueueDragState.insertAfter;
+  if (targetId !== consoleQueueDragState.overId) {
+    insertAfter = ratio > 0.5;
+  } else if (ratio < 0.35) {
+    insertAfter = false;
+  } else if (ratio > 0.65) {
+    insertAfter = true;
+  }
+  consoleQueueDragState.overId = targetId;
+  consoleQueueDragState.insertAfter = insertAfter;
+}
+
+function handleConsoleQueueDragMove(event) {
+  if (!consoleQueueDragState.active) return;
+  consoleQueueDragState.moved = true;
+  setConsoleQueueGhostPosition(event.clientX, event.clientY);
+  updateConsoleQueueDragTarget(event);
+}
+
+async function handleConsoleQueueDragEnd(event) {
+  if (!consoleQueueDragState.active) return;
+  updateConsoleQueueDragTarget(event);
+  const sourceId = consoleQueueDragState.sourceId;
+  const targetId = consoleQueueDragState.overId;
+  const insertAfter = consoleQueueDragState.insertAfter;
+  resetConsoleQueueDragState(true);
+  if (!sourceId || !targetId || sourceId === targetId) return;
+  void reorderConsoleProviderQueue(sourceId, targetId, insertAfter);
+}
+
+function handleConsoleQueueDragCancel() {
+  if (!consoleQueueDragState.active) return;
+  resetConsoleQueueDragState(true);
+}
+
+function startConsoleQueueDrag(item, event) {
+  if (!item?.inQueue || consoleQueueDragState.saving || typeof window === 'undefined') return;
+  const card = event.currentTarget?.closest?.('[data-console-provider-id]');
+  const rect = card?.getBoundingClientRect?.();
+  consoleQueueDragState.active = true;
+  consoleQueueDragState.sourceId = item.id;
+  captureConsoleQueueDragLayouts();
+  consoleQueueDragState.overId = '';
+  consoleQueueDragState.insertAfter = false;
+  consoleQueueDragState.moved = false;
+  consoleQueueDragState.suppressClickUntil = Date.now() + 350;
+  consoleQueueDragState.ghostWidth = Math.max(120, rect?.width || 150);
+  consoleQueueDragState.ghostHeight = Math.max(56, rect?.height || 72);
+  consoleQueueDragState.ghostOffsetX = Math.max(0, rect ? event.clientX - rect.left : 18);
+  consoleQueueDragState.ghostOffsetY = Math.max(0, rect ? event.clientY - rect.top : 16);
+  consoleQueueDragState.ghostX = event.clientX - consoleQueueDragState.ghostOffsetX;
+  consoleQueueDragState.ghostY = event.clientY - consoleQueueDragState.ghostOffsetY;
+  consoleQueueDragGhostX = consoleQueueDragState.ghostX;
+  consoleQueueDragGhostY = consoleQueueDragState.ghostY;
+  consoleQueueDragState.ghostSiteName = item.siteName || '';
+  consoleQueueDragState.ghostModelLabel = item.modelLabel || '';
+  consoleQueueDragState.ghostSkLabel = item.skLabel || '';
+  consoleQueueDragState.ghostOrderLabel = item.queueOrder ? `P${item.queueOrder}` : '';
+  event.currentTarget?.setPointerCapture?.(event.pointerId);
+  void nextTick(() => setConsoleQueueGhostPosition(event.clientX, event.clientY));
+  window.addEventListener('pointermove', handleConsoleQueueDragMove, true);
+  window.addEventListener('pointerup', handleConsoleQueueDragEnd, true);
+  window.addEventListener('pointercancel', handleConsoleQueueDragCancel, true);
+}
+
+function stopConsoleQueueDragListeners() {
+  if (typeof window === 'undefined') return;
+  window.removeEventListener('pointermove', handleConsoleQueueDragMove, true);
+  window.removeEventListener('pointerup', handleConsoleQueueDragEnd, true);
+  window.removeEventListener('pointercancel', handleConsoleQueueDragCancel, true);
+}
+
+function handleConsoleProviderCardClick(item) {
+  if (consoleQueueDragState.active || consoleQueueDragState.saving || Date.now() < consoleQueueDragState.suppressClickUntil) {
+    return;
+  }
+  void toggleConsoleProviderQueue(item);
+}
+
+function reorderConsoleQueueCardList(cards, sourceId, targetId, insertAfter) {
+  const list = Array.isArray(cards) ? cards.map(card => ({ ...card })) : [];
+  const sourceIndex = list.findIndex(card => card.id === sourceId);
+  const targetIndex = list.findIndex(card => card.id === targetId);
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
+    return list;
+  }
+  const [movedCard] = list.splice(sourceIndex, 1);
+  let nextIndex = list.findIndex(card => card.id === targetId);
+  if (nextIndex < 0) nextIndex = list.length;
+  if (insertAfter) nextIndex += 1;
+  list.splice(nextIndex, 0, movedCard);
+  return list.map((card, index) => ({
+    ...card,
+    queueOrder: index + 1,
+    skLabel: card.skLabel ? card.skLabel.replace(/^SK\d+/, `SK${index + 1}`) : card.skLabel,
+  }));
+}
+
+async function reorderConsoleProviderQueue(sourceId, targetId, insertAfter) {
+  if (!sourceId || !targetId || sourceId === targetId) return;
+  consoleQueueDragState.saving = true;
+  try {
+    const nextConfig = normalizeAdvancedProxyConfig(JSON.parse(JSON.stringify(advancedProxyConfigSnapshot.value || {})));
+    const queue = ensureAdvancedProxyQueueSection(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
+    const providers = Array.isArray(queue.providers) ? queue.providers.map((provider, index) => ({ ...provider, __queueKey: getConsoleQueueProviderKey(provider, `provider-${index + 1}`) })) : [];
+    const sourceIndex = providers.findIndex(provider => provider.__queueKey === sourceId);
+    const targetIndex = providers.findIndex(provider => provider.__queueKey === targetId);
+    if (sourceIndex < 0 || targetIndex < 0) {
+      message.warning('队列已变化，刷新后再拖动排序');
+      return;
+    }
+    const [movedProvider] = providers.splice(sourceIndex, 1);
+    let nextIndex = providers.findIndex(provider => provider.__queueKey === targetId);
+    if (nextIndex < 0) nextIndex = providers.length;
+    if (insertAfter) nextIndex += 1;
+    providers.splice(nextIndex, 0, movedProvider);
+    const reorderedProviders = providers.map(({ __queueKey, ...provider }) => provider);
+    replaceAdvancedProxyQueueProviders(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, reorderedProviders);
+    await saveAdvancedProxyQueueConfigFast(nextConfig);
+    message.success('Provider 队列顺序已更新');
+  } catch (error) {
+    message.error(error?.message || '更新 Provider 队列顺序失败');
+  } finally {
+    consoleQueueDragState.saving = false;
+    stopConsoleQueueDragListeners();
+  }
+}
+
 async function toggleConsoleProviderQueue(item) {
   const providerId = String(item?.rowKey || item?.id || '').trim();
   if (!providerId) return;
   try {
-    const savedConfig = await getAdvancedProxyConfig();
-    const nextConfig = normalizeAdvancedProxyConfig(savedConfig || {});
+    const nextConfig = normalizeAdvancedProxyConfig(JSON.parse(JSON.stringify(advancedProxyConfigSnapshot.value || {})));
     const queue = ensureAdvancedProxyQueueSection(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
     const currentProviders = Array.isArray(queue.providers) ? queue.providers.map(provider => ({ ...provider })) : [];
     const existingIndex = currentProviders.findIndex(provider => {
@@ -2027,10 +2318,7 @@ async function toggleConsoleProviderQueue(item) {
       currentProviders.push(buildProviderFromManagedRecord(sourceRecord, currentProviders.length + 1));
     }
     replaceAdvancedProxyQueueProviders(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, currentProviders);
-    nextConfig.claude.providers = [...(nextConfig.queues?.[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE]?.providers || [])];
-    const syncedConfig = syncAdvancedProxyConfigSnapshotFromCurrentRecords(nextConfig);
-    await setAdvancedProxyConfig(syncedConfig);
-    advancedProxyConfigSnapshot.value = normalizeAdvancedProxyConfig(syncedConfig);
+    await saveAdvancedProxyQueueConfigFast(nextConfig);
     message.success(existingIndex >= 0 ? '已从全局 Provider 队列移出' : '已加入全局 Provider 队列');
   } catch (error) {
     message.error(error?.message || '更新 Provider 队列失败');
@@ -2969,6 +3257,22 @@ function replaceAdvancedProxyQueueProviders(config, scope, providers) {
   }
 }
 
+async function saveAdvancedProxyQueueConfigFast(nextConfig) {
+  nextConfig.claude.providers = [...(nextConfig.queues?.[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE]?.providers || [])];
+  const normalizedConfig = normalizeAdvancedProxyConfig(nextConfig);
+  advancedProxyConfigSnapshot.value = normalizedConfig;
+  void setAdvancedProxyConfigOptimistic(normalizedConfig, {
+    onError: async (error) => {
+      message.error(error?.message || '后台保存 Provider 队列失败，已刷新配置');
+      try {
+        const savedConfig = await getAdvancedProxyConfig();
+        advancedProxyConfigSnapshot.value = normalizeAdvancedProxyConfig(savedConfig || {});
+      } catch {}
+    },
+  });
+  return normalizedConfig;
+}
+
 function appendAdvancedProxyQueueProviders(config, scope, providers) {
   const queue = ensureAdvancedProxyQueueSection(config, scope);
   const existingProviders = Array.isArray(queue.providers) ? queue.providers : [];
@@ -3862,6 +4166,11 @@ const quickTestFailedKeyCount = computed(() => displayedRows.value.filter(record
 const quickGroupModelRefreshTargetCount = computed(() => tableData.value.filter(record => normalizeSiteUrl(record?.siteUrl) && normalizeApiKey(record?.apiKey)).length);
 const quickGroupModelRefreshDisabled = computed(() => quickGroupModelRefreshRunning.value || quickGroupModelRefreshTargetCount.value === 0);
 const syncSummary = computed(() => !syncMeta.value.lastBatchSyncAt ? '导入并批量检测后，会自动把获取到的 sk key 更新到本页。' : `最近一次批量同步写入 ${syncMeta.value.lastBatchSyncCount} 条记录，失败站点 ${syncMeta.value.lastBatchFailedCount} 个。`);
+const consoleQueueDragGhostStyle = computed(() => ({
+  width: `${Math.max(120, consoleQueueDragState.ghostWidth || 150)}px`,
+  minHeight: `${Math.max(56, consoleQueueDragState.ghostHeight || 72)}px`,
+  transform: `translate3d(${consoleQueueDragState.ghostX}px, ${consoleQueueDragState.ghostY}px, 0) rotate(-1.5deg)`,
+}));
 const consoleQueueCards = computed(() => {
   const queueProviders = getAdvancedProxyQueueProviders(
     advancedProxyConfigSnapshot.value,
@@ -3870,7 +4179,7 @@ const consoleQueueCards = computed(() => {
   );
   const queuedKeys = new Set();
   const queuedCards = queueProviders.map((provider, index) => {
-    const providerId = String(provider?.id || provider?.rowKey || provider?.baseUrl || `provider-${index + 1}`).trim();
+    const providerId = getConsoleQueueProviderKey(provider, `provider-${index + 1}`);
     const rowKey = String(provider?.rowKey || provider?.id || '').trim();
     const apiKey = String(provider?.apiKey || '').trim();
     [providerId, rowKey, apiKey].filter(Boolean).forEach(value => queuedKeys.add(value));
@@ -3902,7 +4211,10 @@ const consoleQueueCards = computed(() => {
       enabled: true,
       inQueue: false,
     }));
-  return [...queuedCards, ...pendingCards].slice(0, 80);
+  const visibleQueuedCards = consoleQueueDragState.active && consoleQueueDragState.overId
+    ? reorderConsoleQueueCardList(queuedCards, consoleQueueDragState.sourceId, consoleQueueDragState.overId, consoleQueueDragState.insertAfter)
+    : queuedCards;
+  return [...visibleQueuedCards, ...pendingCards].slice(0, 80);
 });
 const sortedAdvancedProxyActiveConnections = computed(() => {
   return [...advancedProxyActiveConnections.value].sort((left, right) => {
@@ -4130,6 +4442,7 @@ onBeforeUnmount(() => {
   }
   stopAdvancedProxyConsolePolling();
   stopAdvancedProxyConnectionClock();
+  stopConsoleQueueDragListeners();
   if (typeof window !== 'undefined') {
     window.removeEventListener(THEME_MODE_CHANGE_EVENT, syncThemeState);
     window.removeEventListener(ADVANCED_PROXY_SYNC_EVENT, refreshAdvancedProxyConsoleSnapshot);
@@ -5651,18 +5964,30 @@ function getPerformanceTooltipLines(record) {
 }
 
 function canRefreshBalance(record) {
-  return Boolean(getBatchHistoryContext(record)?.accountData);
+  return Boolean(normalizeSiteUrl(record?.siteUrl) && normalizeApiKey(record?.apiKey));
 }
 
 function getRecordBalanceValue(record) {
   const directLabel = normalizeBalanceLabel(record?.balanceLabel);
-  if (directLabel) return formatBalanceDisplay(directLabel);
-  if (record?.unlimitedQuota) return '无限';
+  if (directLabel) {
+    const formatted = formatBalanceDisplay(directLabel);
+    return shouldDisplayBalanceValue(record, formatted) ? formatted : '';
+  }
   const remainQuota = Number(record?.remainQuota);
   if (Number.isFinite(remainQuota)) {
-    return formatBalanceAmount(remainQuota);
+    const formatted = formatBalanceAmount(remainQuota);
+    return shouldDisplayBalanceValue(record, formatted) ? formatted : '';
   }
   return '';
+}
+
+function shouldDisplayBalanceValue(record, value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  if (/^无限/.test(text)) return false;
+  const amount = Number(text.replace(/USD$/i, '').replace(/^\$/, '').replace(/,/g, '').trim());
+  if (Number.isFinite(amount) && amount <= 0) return false;
+  return true;
 }
 
 function getRecordBalanceNumericText(record) {
@@ -5766,14 +6091,17 @@ async function fetchRecordBalanceSnapshot(record) {
   const timer = setTimeout(() => controller.abort(), 15000);
 
   try {
-    if (!batchContext?.accountData) {
-      throw new Error('缺少批量检测上下文，无法复用余额刷新逻辑');
-    }
+    const site = batchContext?.accountData || {
+      site_name: record?.siteName || '',
+      site_url: siteUrl,
+      site_type: record?.siteType || record?.site_type || '',
+      tokens: [{ key: apiKey }],
+    };
 
-    const batchSnapshot = await tryFetchBatchCheckQuota(batchContext.accountData, siteUrl);
+    const batchSnapshot = await tryFetchBatchCheckQuota(site, siteUrl);
     if (batchSnapshot) return batchSnapshot;
 
-    throw new Error('批量检测同款余额接口未返回可识别字段');
+    throw new Error('余额接口未返回可识别字段');
   } catch (error) {
     if (error?.name === 'AbortError') {
       throw new Error('请求超时');
@@ -6690,12 +7018,13 @@ function persistMeta() {
 .sync-panel-trigger-button-fiery:disabled::after{animation:none;opacity:.42}
 .sync-title-wrap{display:flex;align-items:center;padding-right:16px;margin-right:2px;border-right:1px solid rgba(90,117,79,.14);min-height:42px}
 .sync-title-text{font:700 clamp(18px,2vw,24px)/1 Georgia,'Times New Roman',serif;color:#31422f;letter-spacing:-.03em;white-space:nowrap}
-.site-heading{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0}
+.site-heading{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0;overflow:visible}
 .site-subline{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
-.site-title-text{display:block;flex:0 1 auto;min-width:0;overflow:hidden;white-space:nowrap}
-.site-title-link{display:block;flex:0 1 auto;min-width:0;padding:0;border:0;background:transparent;text-align:left;cursor:pointer;color:inherit}
+.site-title-text{display:block;flex:0 0 auto;min-width:0;overflow:hidden;white-space:nowrap}
+.site-title-link{display:block;flex:0 0 auto;min-width:0;padding:0;border:0;background:transparent;text-align:left;cursor:pointer;color:inherit}
 .site-title-link:hover .site-title-text,.site-title-link:focus-visible .site-title-text{text-decoration:underline}
 .site-title-link:disabled{cursor:default;opacity:1}
+.manual-source-chip{display:inline-flex;align-items:center;height:15px;padding:0 5px;border:1px solid rgba(78,105,148,.35);border-radius:4px;background:rgba(83,115,164,.09);color:#4f6792;font-size:9px;font-weight:700;line-height:1;white-space:nowrap}
 .site-cell{width:100%;position:relative}
 .site-top-row{display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:2px;width:100%}
 .site-main-block{min-width:80px;max-width:106px;width:106px;flex:0 0 auto}
@@ -6706,10 +7035,10 @@ function persistMeta() {
 .site-balance-time{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .site-balance-refresh-icon-button{border:0;background:transparent;color:#6b7280;padding:0;margin-left:2px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
 .site-balance-refresh-icon-button:disabled{opacity:.65;cursor:default}
-.site-balance-value{display:flex;align-items:baseline;gap:6px;color:#c2410c;font-size:12px;font-weight:500;line-height:1.2;white-space:nowrap;max-width:100%}
+.site-balance-value{display:flex;align-items:baseline;gap:6px;color:#7a6041;font-size:12px;font-weight:500;line-height:1.2;white-space:nowrap;max-width:100%}
 .site-balance-value-empty{color:#94a3b8}
 .site-balance-label{color:#6b7280}
-.site-balance-text{overflow:hidden;text-overflow:ellipsis;font-size:12px;font-weight:600;color:#ea580c}
+.site-balance-text{overflow:hidden;text-overflow:ellipsis;font-size:12px;font-weight:600;color:#8a6841}
 .site-balance-unit{color:#6b7280;font-size:11px}
 .site-balance-refresh-icon{font-size:14px}
 .site-balance-refresh-icon-spinning{animation:spin 1s linear infinite}
@@ -7034,13 +7363,22 @@ function persistMeta() {
 .console-provider-grid{height:408px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-auto-rows:minmax(72px,max-content);align-content:start;gap:8px;overflow:auto;padding-right:2px}
 .console-provider-grid{scrollbar-width:none;-ms-overflow-style:none}
 .console-provider-grid::-webkit-scrollbar{width:0;height:0}
-.console-provider-card{width:100%;min-width:0;min-height:72px;padding:8px 9px;border-radius:10px;background:linear-gradient(180deg,rgba(255,255,255,.94),rgba(248,250,246,.92));border:1px solid rgba(90,117,79,.15);box-shadow:inset 0 1px 0 rgba(255,255,255,.7);display:grid;align-content:start;gap:4px;overflow:hidden;text-align:left;cursor:pointer;appearance:none;-webkit-appearance:none;transition:border-color .18s ease,box-shadow .18s ease,transform .18s ease}
+.console-provider-card{position:relative;width:100%;min-width:0;min-height:72px;padding:8px 9px;border-radius:10px;background:linear-gradient(180deg,rgba(255,255,255,.94),rgba(248,250,246,.92));border:1px solid rgba(90,117,79,.15);box-shadow:inset 0 1px 0 rgba(255,255,255,.7);display:grid;align-content:start;gap:4px;overflow:visible;text-align:left;cursor:pointer;appearance:none;-webkit-appearance:none;transition:border-color .18s ease,box-shadow .18s ease,transform .18s ease}
 .console-provider-card:hover{border-color:rgba(88,125,66,.24);box-shadow:0 12px 24px rgba(74,104,58,.08);transform:translateY(-1px)}
 .console-provider-card:focus-visible{outline:2px solid rgba(107,146,88,.55);outline-offset:2px}
 .console-provider-card-primary{background:linear-gradient(180deg,rgba(252,255,249,.98),rgba(242,248,236,.96));border-color:rgba(75,128,50,.34);box-shadow:0 0 0 1px rgba(102,168,68,.12),0 0 0 4px rgba(147,210,109,.12),0 14px 28px rgba(74,104,58,.12)}
 .console-provider-card-pending{background:rgba(255,255,255,.42);border-style:dashed;box-shadow:none;opacity:.84}
-.console-provider-card-top{display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap}
-.console-provider-card-top strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:8.4px;font-weight:700;line-height:1.2;color:#22311c}
+.console-provider-card-draggable{cursor:pointer}
+.console-provider-card-dragging{opacity:.34;transform:scale(.97)}
+.console-provider-card-drop-before{box-shadow:inset 3px 0 0 rgba(64,145,72,.88),0 12px 24px rgba(74,104,58,.1)}
+.console-provider-card-drop-after{box-shadow:inset -3px 0 0 rgba(64,145,72,.88),0 12px 24px rgba(74,104,58,.1)}
+.console-provider-drag-ghost{position:fixed;left:0;top:0;z-index:9999;pointer-events:none;padding:8px 9px;border-radius:10px;background:linear-gradient(180deg,rgba(252,255,249,.86),rgba(242,248,236,.78));border:1px solid rgba(75,128,50,.34);box-shadow:0 18px 36px rgba(45,70,38,.22),0 0 0 4px rgba(147,210,109,.14);display:grid;align-content:start;gap:4px;overflow:hidden;text-align:left;opacity:.86;backdrop-filter:blur(8px)}
+.console-provider-card-top{position:relative;display:flex;align-items:center;justify-content:space-between;gap:5px;flex-wrap:nowrap}
+.console-provider-card-top strong{min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:8.4px;font-weight:700;line-height:1.2;color:#22311c}
+.console-provider-drag-handle{position:absolute;left:-2px;top:50%;width:7px;height:9px;display:grid;grid-template-columns:repeat(2,2px);grid-auto-rows:2px;gap:1px;align-content:center;justify-content:center;flex:0 0 auto;border:0;background:transparent;padding:0;opacity:.58;cursor:grab;touch-action:none;transform:translate(-100%,-50%)}
+.console-provider-drag-handle-ghost{position:static;transform:none}
+.console-provider-drag-handle:active{cursor:grabbing;opacity:.9}
+.console-provider-drag-handle i{width:2px;height:2px;border-radius:50%;background:rgba(70,92,62,.55)}
 .console-provider-order{min-width:22px;height:16px;padding:0 5px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:rgba(60,103,39,.12);color:#2c4a1f;font-size:7px;font-weight:700;flex:0 0 auto}
 .console-provider-model{min-width:0;color:#5f6e5a;font-size:7px;line-height:1.25;word-break:break-word;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .console-provider-meta{min-height:14px;display:flex;align-items:center;gap:4px;flex-wrap:wrap}
@@ -7111,7 +7449,11 @@ function persistMeta() {
 .key-management-gaia .console-provider-card:hover{border-color:rgba(156,203,134,.28);box-shadow:0 12px 24px rgba(0,0,0,.22),inset 0 1px 0 rgba(180,214,225,.06)}
 .key-management-gaia .console-provider-card-primary{border-color:rgba(156,203,134,.34);box-shadow:0 0 0 4px rgba(91,134,86,.12),inset 0 1px 0 rgba(180,214,225,.06)}
 .key-management-gaia .console-provider-card-pending{background:rgba(8,14,18,.24);border-color:rgba(101,129,138,.22);box-shadow:none}
+.key-management-gaia .console-provider-card-drop-before{box-shadow:inset 3px 0 0 rgba(116,184,104,.9),0 12px 24px rgba(0,0,0,.22),inset 0 1px 0 rgba(180,214,225,.06)}
+.key-management-gaia .console-provider-card-drop-after{box-shadow:inset -3px 0 0 rgba(116,184,104,.9),0 12px 24px rgba(0,0,0,.22),inset 0 1px 0 rgba(180,214,225,.06)}
+.key-management-gaia .console-provider-drag-ghost{background:linear-gradient(180deg,rgba(18,31,36,.84),rgba(11,21,26,.76));border-color:rgba(156,203,134,.34);box-shadow:0 18px 36px rgba(0,0,0,.34),0 0 0 4px rgba(91,134,86,.14)}
 .key-management-gaia .console-provider-card-top strong{color:#e8f3ef}
+.key-management-gaia .console-provider-drag-handle i{background:rgba(190,218,184,.62)}
 .key-management-gaia .console-provider-model{color:#aebfba}
 .key-management-gaia .console-provider-order,.key-management-gaia .console-section-count,.key-management-gaia .console-provider-chip{background:rgba(180,214,225,.08);color:#dcece8}
 .key-management-gaia .console-empty-panel{background:rgba(8,14,18,.28);box-shadow:inset 0 1px 0 rgba(180,214,225,.05);color:#9fb3ad}

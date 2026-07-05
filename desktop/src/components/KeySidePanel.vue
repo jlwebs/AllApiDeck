@@ -412,6 +412,7 @@ import {
   getAdvancedProxyLocalSnapshot,
   getAdvancedProxyQueueProviders,
   setAdvancedProxyConfig,
+  setAdvancedProxyConfigOptimistic,
   getAdvancedProxyTakeoverMap,
 } from '../utils/advancedProxyBridge.js';
 import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
@@ -2243,8 +2244,8 @@ async function toggleRecordAdvancedProxyQueue(record) {
   nextConfig.claude.providers = [...nextConfig.queues[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE].providers];
 
   try {
-    const savedConfig = await setAdvancedProxyConfig(nextConfig);
-    advancedProxyConfigSnapshot.value = savedConfig;
+    const optimisticConfig = await setAdvancedProxyConfigOptimistic(nextConfig);
+    advancedProxyConfigSnapshot.value = optimisticConfig;
   } catch (error) {
     message.error(error?.message || '更新全局队列失败');
   }
@@ -4331,7 +4332,7 @@ onBeforeUnmount(() => {
 
 .panel-record-balance-value {
   min-width: 0;
-  color: var(--panel-gold);
+  color: #8a6841;
   font-size: 10px;
   line-height: 1;
   font-weight: 700;

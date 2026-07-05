@@ -52,6 +52,8 @@ export function GetLaunchMode():Promise<string>;
 
 export function GetLaunchRecordKey():Promise<string>;
 
+export function GetLocalTokenUsageAnalytics():Promise<main.LocalTokenUsageAnalytics>;
+
 export function GetMCPSkillConfigSnapshot():Promise<main.MCPSkillConfigSnapshot>;
 
 export function GetOutboundProxyConfig():Promise<main.OutboundProxyConfig>;

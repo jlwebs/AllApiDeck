@@ -61,6 +61,7 @@ type AdvancedProxyRequestRecord struct {
 	LatencyMs                *int64                          `json:"latencyMs,omitempty"`
 	InputTokens              *int                            `json:"inputTokens,omitempty"`
 	OutputTokens             *int                            `json:"outputTokens,omitempty"`
+	ReasoningTokens          *int                            `json:"reasoningTokens,omitempty"`
 	TPS                      *float64                        `json:"tps,omitempty"`
 	UpstreamURL              string                          `json:"upstreamUrl"`
 	UpstreamEndpoint         string                          `json:"upstreamEndpoint"`
@@ -79,8 +80,26 @@ type AdvancedProxyRequestRecord struct {
 }
 
 func (r AdvancedProxyRequestRecord) withoutHeavyPayloads() AdvancedProxyRequestRecord {
+	r = r.withEstimatedTokenUsage()
 	r.RequestBody = ""
 	r.UpstreamResponseRaw = ""
+	return r
+}
+
+func (r AdvancedProxyRequestRecord) withEstimatedTokenUsage() AdvancedProxyRequestRecord {
+	if r.InputTokens != nil && r.OutputTokens != nil {
+		return r
+	}
+	if r.InputTokens == nil {
+		if estimated := estimateAdvancedProxyTextTokens(firstNonEmpty(r.RequestBody, r.AntiPoisonPromptPreview)); estimated > 0 {
+			r.InputTokens = intPtrValue(estimated)
+		}
+	}
+	if r.OutputTokens == nil {
+		if estimated := estimateAdvancedProxyTextTokens(firstNonEmpty(r.UpstreamAssistantPreview, r.ResponsePreview, r.UpstreamResponsePreview)); estimated > 0 {
+			r.OutputTokens = intPtrValue(estimated)
+		}
+	}
 	return r
 }
 
@@ -99,12 +118,13 @@ type AdvancedProxyRequestRouteStep struct {
 }
 
 type advancedProxyRecordedMetrics struct {
-	DurationMs   int64
-	TTFTMs       *int64
-	LatencyMs    *int64
-	InputTokens  *int
-	OutputTokens *int
-	TPS          *float64
+	DurationMs      int64
+	TTFTMs          *int64
+	LatencyMs       *int64
+	InputTokens     *int
+	OutputTokens    *int
+	ReasoningTokens *int
+	TPS             *float64
 }
 
 type advancedProxyRequestRecordStore struct {
@@ -489,8 +509,8 @@ func recordAdvancedProxyOpenAIAttemptWithTrace(appType string, clientRoute strin
 }
 
 func recordAdvancedProxyOpenAIAttemptWithTraceAndOps(appType string, clientRoute string, inboundEndpoint string, outboundRoute string, source string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, resolvedModel string, responseBody []byte, stream bool, statusCode int, elapsed time.Duration, errorDetail string, routeTrace []AdvancedProxyRequestRouteStep, antiPoisonOps []antiPoisonOperationRecord) {
-	usageInput, usageOutput := extractAdvancedProxyUsageFromBody(responseBody)
-	metrics := buildAdvancedProxyRecordedMetrics(elapsed, usageInput, usageOutput)
+	usageInput, usageOutput, usageReasoning := extractAdvancedProxyDetailedUsageFromBody(responseBody)
+	metrics := buildAdvancedProxyRecordedMetricsWithReasoning(elapsed, usageInput, usageOutput, usageReasoning)
 	resolvedDetail := strings.TrimSpace(errorDetail)
 	if resolvedDetail == "" && (statusCode < 200 || statusCode >= 300) {
 		resolvedDetail = summarizeAdvancedProxyBody(responseBody)
@@ -510,6 +530,10 @@ func recordAdvancedProxyOpenAIStreamAttemptWithTrace(appType string, clientRoute
 
 func recordAdvancedProxyOpenAIStreamAttemptWithTraceAndOps(appType string, clientRoute string, inboundEndpoint string, outboundRoute string, source string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, resolvedModel string, statusCode int, stream bool, startedAt time.Time, firstOutputAt *time.Time, completedAt time.Time, inputTokens *int, outputTokens *int, errorDetail string, upstreamResponsePreview string, upstreamResponseRaw string, responsePreview string, routeTrace []AdvancedProxyRequestRouteStep, antiPoisonOps []antiPoisonOperationRecord, upstreamToolCalls []string, upstreamToolArgsPreview []string, upstreamAssistantPreview string, upstreamLatestObserved *advancedProxyObservedItem) {
 	metrics := buildAdvancedProxyStreamRecordedMetrics(startedAt, firstOutputAt, completedAt, inputTokens, outputTokens)
+	_, _, metrics.ReasoningTokens = extractAdvancedProxyDetailedUsageFromBody([]byte(upstreamResponseRaw))
+	if metrics.ReasoningTokens == nil {
+		_, _, metrics.ReasoningTokens = extractAdvancedProxyDetailedUsageFromBody([]byte(upstreamResponsePreview))
+	}
 	appendAdvancedProxyOpenAIRecord(appType, clientRoute, inboundEndpoint, outboundRoute, source, provider, targetURL, requestBody, resolvedModel, stream, statusCode, metrics, errorDetail, upstreamResponsePreview, upstreamResponseRaw, responsePreview, routeTrace, antiPoisonOps, upstreamToolCalls, upstreamToolArgsPreview, upstreamAssistantPreview, upstreamLatestObserved)
 }
 
@@ -533,6 +557,7 @@ func appendAdvancedProxyOpenAIRecord(appType string, clientRoute string, inbound
 		LatencyMs:                metrics.LatencyMs,
 		InputTokens:              metrics.InputTokens,
 		OutputTokens:             metrics.OutputTokens,
+		ReasoningTokens:          metrics.ReasoningTokens,
 		TPS:                      metrics.TPS,
 		UpstreamURL:              targetURL,
 		UpstreamEndpoint:         extractAdvancedProxyURLPath(targetURL),
@@ -586,6 +611,10 @@ func recordAdvancedProxyClaudeStreamAttemptWithTrace(appType string, inboundEndp
 
 func recordAdvancedProxyClaudeStreamAttemptWithTraceAndOps(appType string, inboundEndpoint string, outboundRoute string, provider AdvancedProxyProvider, targetURL string, requestBody []byte, resolvedModel string, statusCode int, stream bool, startedAt time.Time, firstOutputAt *time.Time, completedAt time.Time, inputTokens *int, outputTokens *int, errorDetail string, upstreamResponsePreview string, upstreamResponseRaw string, responsePreview string, routeTrace []AdvancedProxyRequestRouteStep, antiPoisonOps []antiPoisonOperationRecord, upstreamToolCalls []string, upstreamToolArgsPreview []string, upstreamAssistantPreview string, upstreamLatestObserved *advancedProxyObservedItem) {
 	metrics := buildAdvancedProxyStreamRecordedMetrics(startedAt, firstOutputAt, completedAt, inputTokens, outputTokens)
+	_, _, metrics.ReasoningTokens = extractAdvancedProxyDetailedUsageFromBody([]byte(upstreamResponseRaw))
+	if metrics.ReasoningTokens == nil {
+		_, _, metrics.ReasoningTokens = extractAdvancedProxyDetailedUsageFromBody([]byte(upstreamResponsePreview))
+	}
 	appendAdvancedProxyClaudeRecord(appType, inboundEndpoint, outboundRoute, provider, targetURL, requestBody, resolvedModel, stream, statusCode, metrics, errorDetail, upstreamResponsePreview, upstreamResponseRaw, responsePreview, routeTrace, antiPoisonOps, upstreamToolCalls, upstreamToolArgsPreview, upstreamAssistantPreview, upstreamLatestObserved)
 }
 
@@ -609,6 +638,7 @@ func appendAdvancedProxyClaudeRecord(appType string, inboundEndpoint string, out
 		LatencyMs:                metrics.LatencyMs,
 		InputTokens:              metrics.InputTokens,
 		OutputTokens:             metrics.OutputTokens,
+		ReasoningTokens:          metrics.ReasoningTokens,
 		TPS:                      metrics.TPS,
 		UpstreamURL:              targetURL,
 		UpstreamEndpoint:         extractAdvancedProxyURLPath(targetURL),
@@ -937,14 +967,19 @@ func normalizeAdvancedProxyRouteTrace(source []AdvancedProxyRequestRouteStep) []
 }
 
 func buildAdvancedProxyRecordedMetrics(elapsed time.Duration, inputTokens *int, outputTokens *int) advancedProxyRecordedMetrics {
+	return buildAdvancedProxyRecordedMetricsWithReasoning(elapsed, inputTokens, outputTokens, nil)
+}
+
+func buildAdvancedProxyRecordedMetricsWithReasoning(elapsed time.Duration, inputTokens *int, outputTokens *int, reasoningTokens *int) advancedProxyRecordedMetrics {
 	durationMs := elapsed.Milliseconds()
 	if durationMs < 0 {
 		durationMs = 0
 	}
 	metrics := advancedProxyRecordedMetrics{
-		DurationMs:   durationMs,
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
+		DurationMs:      durationMs,
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		ReasoningTokens: reasoningTokens,
 	}
 	if durationMs > 0 {
 		metrics.LatencyMs = int64Ptr(durationMs)
@@ -1023,23 +1058,33 @@ func buildAdvancedProxyClaudeInboundEndpoint() string {
 }
 
 func extractAdvancedProxyUsageFromBody(body []byte) (*int, *int) {
+	input, output, _ := extractAdvancedProxyDetailedUsageFromBody(body)
+	return input, output
+}
+
+func extractAdvancedProxyDetailedUsageFromBody(body []byte) (*int, *int, *int) {
 	if len(body) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	payload := map[string]any{}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return extractAdvancedProxyUsageFromMap(payload)
+	return extractAdvancedProxyDetailedUsageFromMap(payload)
 }
 
 func extractAdvancedProxyUsageFromMap(payload map[string]any) (*int, *int) {
+	input, output, _ := extractAdvancedProxyDetailedUsageFromMap(payload)
+	return input, output
+}
+
+func extractAdvancedProxyDetailedUsageFromMap(payload map[string]any) (*int, *int, *int) {
 	if payload == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	usageMap, _ := payload["usage"].(map[string]any)
 	if usageMap == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	inputValue, inputOK := extractAdvancedProxyFirstPositiveInt(
 		usageMap["input_tokens"],
@@ -1053,15 +1098,35 @@ func extractAdvancedProxyUsageFromMap(payload map[string]any) (*int, *int) {
 		usageMap["outputTokens"],
 		usageMap["completionTokens"],
 	)
+	var reasoningValue int
+	var reasoningOK bool
+	if outputDetails, ok := usageMap["output_tokens_details"].(map[string]any); ok {
+		reasoningValue, reasoningOK = extractAdvancedProxyFirstPositiveInt(outputDetails["reasoning_tokens"], outputDetails["reasoningTokens"])
+	}
+	if !reasoningOK {
+		if completionDetails, ok := usageMap["completion_tokens_details"].(map[string]any); ok {
+			reasoningValue, reasoningOK = extractAdvancedProxyFirstPositiveInt(completionDetails["reasoning_tokens"], completionDetails["reasoningTokens"])
+		}
+	}
+	if !reasoningOK {
+		reasoningValue, reasoningOK = extractAdvancedProxyFirstPositiveInt(
+			usageMap["reasoning_tokens"],
+			usageMap["reasoningTokens"],
+		)
+	}
 	var inputPtr *int
 	var outputPtr *int
+	var reasoningPtr *int
 	if inputOK {
 		inputPtr = intPtrValue(inputValue)
 	}
 	if outputOK {
 		outputPtr = intPtrValue(outputValue)
 	}
-	return inputPtr, outputPtr
+	if reasoningOK {
+		reasoningPtr = intPtrValue(reasoningValue)
+	}
+	return inputPtr, outputPtr, reasoningPtr
 }
 
 func extractAdvancedProxyFirstPositiveInt(values ...any) (int, bool) {
@@ -1089,6 +1154,35 @@ func extractAdvancedProxyFirstPositiveInt(values ...any) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+func estimateAdvancedProxyTextTokens(text string) int {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0
+	}
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return 0
+	}
+	cjk := 0
+	ascii := 0
+	other := 0
+	for _, char := range runes {
+		switch {
+		case char >= 0x4e00 && char <= 0x9fff:
+			cjk++
+		case char <= 0x7f:
+			ascii++
+		default:
+			other++
+		}
+	}
+	estimated := int(math.Ceil(float64(cjk)*0.75 + float64(ascii)/4.0 + float64(other)/2.0))
+	if estimated < 1 {
+		return 1
+	}
+	return estimated
 }
 
 func extractAdvancedProxyModelFromBody(requestBody []byte, fallback string) string {

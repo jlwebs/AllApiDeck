@@ -600,6 +600,33 @@ export async function setAdvancedProxyConfig(config) {
   return saved;
 }
 
+export function setAdvancedProxyConfigOptimistic(config, options = {}) {
+  const nextConfig = normalizeAdvancedProxyConfig(config);
+  saveLocalSnapshot(nextConfig);
+  emitAdvancedProxySync(nextConfig);
+  const app = getAppBridge();
+  if (!app?.SetAdvancedProxyConfig) {
+    return Promise.resolve(nextConfig);
+  }
+  void app.SetAdvancedProxyConfig(nextConfig)
+    .then(savedConfig => {
+      const saved = normalizeAdvancedProxyConfig(savedConfig);
+      saveLocalSnapshot(saved);
+      emitAdvancedProxySync(saved);
+      if (typeof options?.onSaved === 'function') {
+        options.onSaved(saved);
+      }
+      return saved;
+    })
+    .catch(error => {
+      console.warn('[advancedProxyBridge] optimistic config save failed:', error);
+      if (typeof options?.onError === 'function') {
+        options.onError(error);
+      }
+    });
+  return Promise.resolve(nextConfig);
+}
+
 export async function getAdvancedProxyConfigFilePath() {
   const app = getAppBridge();
   if (!app?.GetAdvancedProxyConfigFilePath) {
@@ -689,6 +716,24 @@ export async function listAdvancedProxyRequestRecords(limit = 120) {
   const app = getAppBridge();
   if (!app?.GetAdvancedProxyRequestRecords) return [];
   return app.GetAdvancedProxyRequestRecords(Math.max(1, Number(limit || 120)));
+}
+
+export async function getLocalTokenUsageAnalytics() {
+  const app = getAppBridge();
+  if (!app?.GetLocalTokenUsageAnalytics) {
+    return {
+      source: 'codex',
+      sourceLabel: 'Codex',
+      sessionCount: 0,
+      totalTokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      series: [],
+      sources: [],
+    };
+  }
+  return app.GetLocalTokenUsageAnalytics();
 }
 
 export async function listAdvancedProxyActiveConnections() {
