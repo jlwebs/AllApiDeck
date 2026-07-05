@@ -2705,6 +2705,111 @@ func TestEnsureOpenAIResponsesInputItemIDsUsesCapturedCodexPayload(t *testing.T)
 	}
 }
 
+func TestEnsureOpenAIResponsesInputItemIDsRepairsCustomToolCallPrefix(t *testing.T) {
+	rawBody := []byte(`{
+		"model":"gpt-5.5",
+		"input":[
+			{"type":"message","id":"msg_1","role":"user","content":[{"type":"input_text","text":"hello"}]},
+			{"type":"custom_tool_call","id":"item_50","call_id":"call_custom_123","name":"shell","input":"pwd"},
+			{"type":"custom_tool_call_output","call_id":"call_custom_123","output":"ok"},
+			{"type":"unknown_future_item","content":"leave me alone"}
+		]
+	}`)
+
+	normalizedBody, changed, err := ensureOpenAIResponsesInputItemIDs(rawBody)
+	if err != nil {
+		t.Fatalf("normalize custom tool ids: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected custom tool id repair")
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(normalizedBody, &body); err != nil {
+		t.Fatalf("decode normalized custom tool ids: %v", err)
+	}
+	inputItems, _ := body["input"].([]any)
+	if len(inputItems) != 4 {
+		t.Fatalf("expected four input items, got %#v", body["input"])
+	}
+	customCall, _ := inputItems[1].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(customCall["id"])); got != "ctc_call_custom_123" {
+		t.Fatalf("expected custom_tool_call id to use ctc prefix, got %q in %#v", got, customCall)
+	}
+	customOutput, _ := inputItems[2].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(customOutput["id"])); got != "ctco_call_custom_123" {
+		t.Fatalf("expected custom_tool_call_output id to use ctco prefix, got %q in %#v", got, customOutput)
+	}
+	unknownItem, _ := inputItems[3].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(unknownItem["id"])); got != "" {
+		t.Fatalf("expected unknown item type to avoid synthetic id, got %q in %#v", got, unknownItem)
+	}
+}
+
+func TestEnsureOpenAIResponsesInputItemIDsRepairsOfficialToolItemPrefixes(t *testing.T) {
+	cases := []struct {
+		name     string
+		itemType string
+		badID    string
+		callID   string
+		wantID   string
+	}{
+		{name: "tool_search_call", itemType: "tool_search_call", badID: "item_21", callID: "call_tool_search_1", wantID: "tsc_call_tool_search_1"},
+		{name: "tool_search_output", itemType: "tool_search_output", badID: "item_22", callID: "call_tool_search_1", wantID: "tso_call_tool_search_1"},
+		{name: "shell_call", itemType: "shell_call", badID: "item_23", callID: "call_shell_1", wantID: "sh_call_shell_1"},
+		{name: "shell_call_output", itemType: "shell_call_output", badID: "item_24", callID: "call_shell_1", wantID: "sho_call_shell_1"},
+		{name: "apply_patch_call", itemType: "apply_patch_call", badID: "item_25", callID: "call_patch_1", wantID: "apc_call_patch_1"},
+		{name: "apply_patch_call_output", itemType: "apply_patch_call_output", badID: "item_26", callID: "call_patch_1", wantID: "apco_call_patch_1"},
+		{name: "compaction", itemType: "compaction", badID: "item_27", wantID: "cmp_item_27"},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			item := map[string]any{
+				"type": tt.itemType,
+				"id":   tt.badID,
+			}
+			if tt.callID != "" {
+				item["call_id"] = tt.callID
+			}
+			rawRequest := map[string]any{
+				"model": "gpt-5.5",
+				"input": []any{map[string]any{
+					"type":    "message",
+					"id":      "msg_1",
+					"role":    "user",
+					"content": []any{map[string]any{"type": "input_text", "text": "hello"}},
+				}, item},
+			}
+			rawBody, err := json.Marshal(rawRequest)
+			if err != nil {
+				t.Fatalf("encode request: %v", err)
+			}
+
+			normalizedBody, changed, err := ensureOpenAIResponsesInputItemIDs(rawBody)
+			if err != nil {
+				t.Fatalf("normalize input item ids: %v", err)
+			}
+			if !changed {
+				t.Fatalf("expected %s id repair", tt.itemType)
+			}
+
+			var body map[string]any
+			if err := json.Unmarshal(normalizedBody, &body); err != nil {
+				t.Fatalf("decode normalized input item ids: %v", err)
+			}
+			inputItems, _ := body["input"].([]any)
+			if len(inputItems) != 2 {
+				t.Fatalf("expected two input items, got %#v", body["input"])
+			}
+			gotItem, _ := inputItems[1].(map[string]any)
+			if got := strings.TrimSpace(toStringValue(gotItem["id"])); got != tt.wantID {
+				t.Fatalf("expected %s id %q, got %q in %#v", tt.itemType, tt.wantID, got, gotItem)
+			}
+		})
+	}
+}
+
 func TestNormalizeOpenAIResponsesToolsForProviderUsesCapturedCodexPayload(t *testing.T) {
 	rawBody, err := os.ReadFile(filepath.Join("testdata", "advanced_proxy", "request_content.json"))
 	if err != nil {
@@ -3620,6 +3725,69 @@ func TestForwardOpenAIRequestViaProviderFallbacksResponsesToChatOnSuccessfulErro
 	lastRequest := requests[len(requests)-1]
 	if lastRequest.Path != "/v1/chat/completions" && lastRequest.Path != "/chat/completions" {
 		t.Fatalf("unexpected request order: %#v", requests)
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderDoesNotFallbackOnResponsesInputIDError(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	var mu sync.Mutex
+	requestPaths := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mu.Lock()
+		requestPaths = append(requestPaths, request.URL.Path)
+		mu.Unlock()
+
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/responses", "/responses":
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = writer.Write([]byte(`{"error":{"code":"invalid_value","message":"Invalid 'input[44].id': 'item_50'. Expected an ID that begins with 'ctc'.","param":"input[44].id","type":"invalid_request_error"}}`))
+		case "/v1/chat/completions", "/chat/completions":
+			_, _ = writer.Write([]byte(`{"id":"chatcmpl_should_not_run","object":"chat.completion","choices":[{"message":{"role":"assistant","content":"bad fallback"},"finish_reason":"stop"}]}`))
+		default:
+			t.Fatalf("unexpected path: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "input-id-error-provider",
+		RowKey:    "row-input-id-error",
+		Name:      "Input ID Error Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test-input-id-error",
+		APIFormat: "openai_responses",
+	}
+
+	rawBody := []byte(`{
+		"model":"gpt-5.5",
+		"stream":false,
+		"input":[
+			{"type":"custom_tool_call","id":"ctc_custom_1","call_id":"call_custom_1","name":"shell","input":"pwd"}
+		]
+	}`)
+
+	result := forwardOpenAIRequestViaProvider("codex", provider, "responses", rawBody, false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected original responses error without chat fallback, got %#v body=%s", result, string(result.Body))
+	}
+	if !strings.Contains(string(result.Body), "Expected an ID that begins with 'ctc'") {
+		t.Fatalf("expected upstream input id error body to be preserved, got %s", string(result.Body))
+	}
+
+	scopeKey := resolveAdvancedProxyOpenAIProtocolPreferenceScopeKey(provider, "gpt-5.5")
+	if preference, ok := getAdvancedProxyOpenAIProtocolPreference(scopeKey); ok {
+		t.Fatalf("expected no chat preference after request-shape error, got %v", preference)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requestPaths) != 1 {
+		t.Fatalf("expected only responses request without chat fallback, got %#v", requestPaths)
+	}
+	if requestPaths[0] != "/v1/responses" && requestPaths[0] != "/responses" {
+		t.Fatalf("expected responses request, got %#v", requestPaths)
 	}
 }
 

@@ -4611,14 +4611,18 @@ func ensureOpenAIResponsesInputItemIDs(rawBody []byte) ([]byte, bool, error) {
 		if !ok {
 			continue
 		}
-		if strings.TrimSpace(toStringValue(itemMap["id"])) != "" {
-			continue
-		}
 		itemType := strings.TrimSpace(toStringValue(itemMap["type"]))
 		prefix := openAIResponsesInputItemIDPrefix(itemType)
-		seed := ""
-		if itemType == "function_call" {
-			seed = strings.TrimSpace(toStringValue(itemMap["call_id"]))
+		if prefix == "" {
+			continue
+		}
+		existingID := strings.TrimSpace(toStringValue(itemMap["id"]))
+		if openAIResponsesInputItemIDMatchesPrefix(existingID, prefix) {
+			continue
+		}
+		seed := strings.TrimSpace(toStringValue(itemMap["call_id"]))
+		if seed == "" && existingID != "" {
+			seed = existingID
 		}
 		itemMap["id"] = buildOpenAIResponsesInputItemID(prefix, seed, index+1)
 		changed = true
@@ -4813,6 +4817,26 @@ func openAIResponsesInputItemIDPrefix(itemType string) string {
 		return "fc"
 	case "function_call_output":
 		return "fco"
+	case "custom_tool_call":
+		return "ctc"
+	case "custom_tool_call_output":
+		return "ctco"
+	case "tool_search_call":
+		return "tsc"
+	case "tool_search_output":
+		return "tso"
+	case "compaction":
+		return "cmp"
+	case "code_interpreter_call":
+		return "ci"
+	case "shell_call":
+		return "sh"
+	case "shell_call_output":
+		return "sho"
+	case "apply_patch_call":
+		return "apc"
+	case "apply_patch_call_output":
+		return "apco"
 	case "web_search_call":
 		return "ws"
 	case "file_search_call":
@@ -4824,22 +4848,28 @@ func openAIResponsesInputItemIDPrefix(itemType string) string {
 	case "image_generation_call":
 		return "ig"
 	case "mcp_call":
-		return "mcp"
+		return "mcp_call"
 	case "mcp_list_tools":
-		return "mcplt"
+		return "mcp_list_tools"
 	case "mcp_approval_request":
-		return "mcpar"
+		return "mcp_approval_request"
 	case "mcp_approval_response":
-		return "mcprs"
+		return "mcp_approval_response"
 	default:
-		return "item"
+		return ""
 	}
+}
+
+func openAIResponsesInputItemIDMatchesPrefix(itemID string, prefix string) bool {
+	itemID = strings.TrimSpace(itemID)
+	prefix = strings.TrimSpace(prefix)
+	return itemID != "" && prefix != "" && strings.HasPrefix(itemID, prefix+"_")
 }
 
 func buildOpenAIResponsesInputItemID(prefix string, seed string, fallbackIndex int) string {
 	prefix = strings.TrimSpace(prefix)
 	if prefix == "" {
-		prefix = "item"
+		return ""
 	}
 	suffix := sanitizeOpenAIResponsesInputItemIDSuffix(seed)
 	if suffix == "" {
@@ -5731,7 +5761,7 @@ phaseLoop:
 				recordAdvancedProxyOpenAIAttemptWithTraceAndOps(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, phaseModel, body, stream, statusCode, elapsed, lastMessage, buildRouteTraceSnapshot(phaseIndex, "failed"), annotateAntiPoisonStringProtectionRecords(stringProtectionCtx.Records, routeKind, providerLabel))
 				if phaseIndex < len(phases)-1 {
 					nextPhase := phases[phaseIndex+1]
-					if phase.outboundRoute == "responses" && nextPhase.outboundRoute == "chat" {
+					if phase.outboundRoute == "responses" && nextPhase.outboundRoute == "chat" && shouldFallbackResponsesToChat(statusCode, body) {
 						appendAdvancedProxyLogf(
 							"[OPENAI_PROXY_FALLBACK] app=%s provider=%s from=responses to=chat reason=%s",
 							appType,
@@ -5823,7 +5853,7 @@ phaseLoop:
 				continue
 			}
 
-			if phaseIndex < len(phases)-1 && phase.outboundRoute == "responses" && phases[phaseIndex+1].outboundRoute == "chat" && hasOpenAIErrorEnvelope(body) {
+			if phaseIndex < len(phases)-1 && phase.outboundRoute == "responses" && phases[phaseIndex+1].outboundRoute == "chat" && shouldFallbackSuccessfulResponsesToChat(statusCode, body) {
 				advancedProxyRuntime.MarkResult(appType, provider, phase.outboundRoute, targetURL, false)
 				observeAdvancedProxyAttempt(appType, provider, http.StatusBadGateway, elapsed, nil)
 				if !stream && stringProtectionCtx.Enabled {
