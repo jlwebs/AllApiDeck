@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="./desktop/assets/appicon.png" alt="All API Deck" width="80">
+<img src="./desktop/assets/appicon.png" alt="All API Deck" width="86">
 
-**All API Deck：面向海量中转站 / 密钥的导入、扫描、测试、管理与客户端接管工具**
+# All API Deck
 
-<p>
-支持站点账号便携导入、批量模型发现、快速测活、密钥分组管理、桌面客户端一键接管，以及 Claude / Codex / OpenCode / OpenClaw 的本地高级代理。
-</p>
+**面向海量中转站、API Key、本地 AI 客户端和高级代理调度的桌面控制台**
+
+把导入、同步、测活、分组、模型发现、会话观察、MCP / Skill 管理、客户端接管、防投毒守卫和请求排障放进一套桌面工作流。
 
 <p align="center">
 <a href="https://github.com/jlwebs/AllApiDeck/releases">
@@ -32,143 +32,203 @@
 
 </div>
 
-## 这是什么
+## 总览
 
-All API Deck 不是单纯的“测一个接口能不能用”的小工具，而是围绕“海量站点 / 海量 key / 多模型切换”做的一套桌面工作流：
+All API Deck 不是“测一个接口能不能用”的临时小工具，而是面向长期维护大量站点、key、模型和本地 AI 客户端的一套桌面工作台。
 
-- 把分散在浏览器扩展、备份文件、目录里的站点 / key / 账号便携迁移到桌面端
-- 对大量站点并发做模型发现、快速测活、性能判断和异常筛选
-- 在一个界面里完成分组、筛选、状态查看、调度观察和日常维护
-- 需要接 Claude / Codex / OpenCode / OpenClaw 时，再用本地高级代理把体验补齐
-- 遇到协议不一致时自动尝试 `messages` / `responses` / `chat/completions`，并记录真实路径方便排障
+它适合这类场景：
 
-如果你经常在多个公益站、自建站、聚合站之间切换，还要反复导入、筛选、测试、整理和接管客户端，这个项目就是为这类使用方式设计的。高级代理很重要，但它是并列能力，也是舒适对接的最后一环。
+- 你在多个公益站、自建站、聚合站之间切换，需要统一保存和筛选 API key。
+- 你经常要确认某个模型在哪些站点可用，哪些 key 当前可用，性能如何。
+- 你要把 Claude、Codex、OpenCode、OpenClaw 接到稳定的本地代理入口。
+- 你需要观察 provider 队列、路由 fallback、真实上游出口和最近连接记录。
+- 你担心动态工具链、toolcall 和上游响应被污染，希望在本地网关层做可验证防护。
 
-## 当前能力
+## 核心工作流
 
-- 支持从浏览器扩展桥接、扩展备份文件、目录扫描等方式便携导入站点与账号
-- 支持批量拉取模型列表、批量快速测活、批量检测模型可用性与性能指标
-- 支持按分组、状态、模型等维度管理大量密钥记录
-- 支持本地侧栏 / miniBar / 悬窗视图，方便观察调度状态、组织调用集群与快速操作
-- 支持 Claude / Codex / OpenCode / OpenClaw 一键生成并写入本机配置
-- 内置高级代理，支持 provider 队列、故障转移、协议 fallback、错误修正、请求记录
-- 支持请求记录详情调试：对最近请求自动生成完整 `fetch(...)` 命令，便于改 header / body 直接复测
+| 阶段 | 你要做的事 | All API Deck 提供的能力 |
+|---|---|---|
+| 导入 | 把分散的站点、账号、key 收进桌面端 | 浏览器扩展桥接、ALL-API-HUB 备份 JSON、目录扫描、剪贴板批量导入 |
+| 整理 | 让大量记录变成可维护资产 | 密钥库、分组、状态筛选、站点搜索、专属导出 |
+| 判断 | 找出真实可用的模型和 key | 批量模型发现、快速测活、TTFT / TPS / Latency、协议探测 |
+| 接管 | 让客户端走本地稳定入口 | Claude / Codex / OpenCode / OpenClaw 配置预览与写入 |
+| 调度 | 处理不同上游之间的协议差异 | provider 队列、故障转移、`messages` / `responses` / `chat/completions` fallback |
+| 排障 | 复现失败请求和慢请求 | 请求记录、路由轨迹、连接信息、可编辑 `fetch(...)` 复测 |
+| 防护 | 降低工具链投毒和响应污染风险 | 动态 guard Prompt、字符串保护、toolcall 回流校验、严格模式 |
 
-## 界面预览
+## 新版界面
 
-<img src="./desktop/docs/images/all-api-deck-home.png" alt="All API Deck 首页预览" width="72%" />
-<img src="./desktop/docs/images/all-api-deck-site-management.png" alt="All API Deck 站点管理" width="72%" />
-<img src="./desktop/docs/images/all-api-deck-sidebar.png" alt="侧边栏" width="24%" />
+<table>
+  <tr>
+    <td width="50%">
+      <img src="./desktop/docs/images/keyvault.jpg" alt="同步密钥库">
+      <br><strong>同步密钥库</strong><br>
+      本地记录、状态正常数量、同步历史、分组筛选、站点搜索、快速测活和专属导出集中在一处。
+    </td>
+    <td width="50%">
+      <img src="./desktop/docs/images/sessions.jpg" alt="会话、MCP 与 Skill">
+      <br><strong>会话 / MCP / Skill</strong><br>
+      查看项目会话、消息历史、MCP 入口、Skill 状态和多客户端上下文。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="./desktop/docs/images/proxy.jpg" alt="高级代理连接记录">
+      <br><strong>高级代理连接</strong><br>
+      展示 provider 队列、模型、入口、出口、路由轨迹、耗时、HTTP 状态和最近连接。
+    </td>
+    <td width="50%">
+      <img src="./desktop/docs/images/antipoison.jpg" alt="防投毒守卫">
+      <br><strong>防投毒守卫</strong><br>
+      配置动态工具链水印策略、随机 Prompt、回流校验统计和严格模式。
+    </td>
+  </tr>
+</table>
 
 ## 高级代理流转图
 
-<img src="./desktop/docs/images/advanced-proxy-architecture-light.svg" alt="All API Deck 高级代理流转图" width="86%" />
+<p align="center">
+  <img src="./desktop/docs/images/advanced-proxy-architecture-light.svg" alt="All API Deck 高级代理流转图" width="86%">
+</p>
 
-## 核心功能
+## 功能模块
 
-### 1. 站点 / 账号导入与迁移
+### 1. 同步密钥库
 
-支持多种导入方式：
+新版主工作区围绕密钥库组织：
 
-- 浏览器扩展桥接导入
-- ALL-API-HUB 备份 JSON 导入
-- 扩展目录 / 数据目录扫描导入
+- 显示本地记录数、状态正常数、上次同步时间和最近一次批量同步结果。
+- 按全部密钥、自定义分组、快捷分组和站点名称筛选。
+- 单条记录支持复制 key / base URL、选择模型、快速测活和状态观察。
+- 专属导出可把可用记录送到对应客户端配置流程。
 
-### 2. 批量模型发现与扫描
+### 2. 导入与迁移
 
-对多站点并发拉取模型列表，并保留：
+支持把已有记录快速迁移到桌面端：
 
-- 成功 / 失败状态
-- 失败原因
-- 发现到的模型集合
-- 后续筛选和批量管理所需的结构化结果
+- 浏览器扩展桥接导入。
+- ALL-API-HUB 备份 JSON 导入。
+- 扩展目录 / 数据目录扫描导入。
+- 剪贴板批量导入 API key。
 
-适合快速从大量站点里定位“哪些站点真的有目标模型”。
+常见备份文件名：
 
-### 3. 批量快速测活 / 可用性检测
+- `accounts-backup.json`
+- `accounts-backup-2026-04-01.json`
 
-支持对目标站点和模型执行批量检测，输出：
+### 3. 批量模型发现与快速测活
 
-- 可用 / 异常状态
-- 状态码和错误原因
-- TTFT / TPS / Latency
-- 协议探测与 fallback 结果
-- 复现所需的请求信息
+导入后通常先做两件事：
 
-这里不是只测一个固定协议，而是会结合站点能力，自动尝试可行的 OpenAI / Anthropic 兼容入口。
+1. 批量拉取模型列表，确认每个站点真实支持的模型集合。
+2. 对目标模型快速测活，确认 key 当前是否可用。
 
-### 4. 密钥管理、分组与侧栏 / 悬窗
+检测结果会保留：
+
+- 成功 / 失败状态和失败原因。
+- 状态码、TTFT、TPS、Latency。
+- 协议探测和 fallback 结果。
+- 复现所需的请求信息。
+
+### 4. 会话、MCP 与 Skill 面板
+
+All API Deck 不只管理 key，也开始覆盖本地 AI 工具链的可观察性：
+
+- 按项目路径和时间查看历史会话。
+- 查看用户与助手消息，快速回溯任务上下文。
+- 观察 MCP 服务、Skill 状态和多入口客户端。
+- 减少在不同客户端、配置文件和日志之间切换。
+
+### 5. 侧栏、miniBar 与悬窗
+
+侧栏 / miniBar / 悬窗适合主窗口之外的持续观察和快速操作。
+
+<p align="center">
+    <img src="./desktop/docs/images/minifloating.jpg" alt="All API Deck mini floating" width="34%">
+</p>
 
 支持：
 
-- 给记录分组
-- 从剪贴板批量导入密钥
-- 在 miniBar / 侧栏 / 悬窗里快速查看记录状态
-- 针对单个记录快速刷新、快速测活、切换模型
-- 查看当前 provider 队列和实时调度命中项
-- 观察调度与组织调用集群
+- 在 miniBar / 侧栏 / 悬窗里快速查看记录状态。
+- 对单条记录快速刷新、快速测活、切换模型。
+- 查看当前 provider 队列和实时调度命中项。
+- 观察调度状态、组织调用集群和定位异常请求。
 
-Windows 下的侧栏 / 悬窗体验最完整；非 Windows 环境可通过 miniBar / 独立窗体使用类似能力。
+> Windows 下侧栏 / 悬窗体验最完整；非 Windows 环境可通过 miniBar / 独立窗体使用类似能力。
 
-### 5. 桌面客户端一键接管
+### 6. 桌面客户端一键接管
 
-当前已覆盖的典型目标应用包括：
+当前覆盖的典型目标应用：
 
 - Claude
 - Codex
 - OpenCode
 - OpenClaw
 
-支持基于当前选中的站点记录，生成配置预览并写入本机配置文件，减少手动编辑 base URL、token、模型和协议参数的重复劳动。
+基于当前选中的站点记录，All API Deck 可以生成配置预览并写入本机配置文件，减少手动编辑 base URL、token、模型和协议参数的重复劳动。
 
-### 6. 高级代理
+### 7. 高级代理
+
+高级代理让上层客户端尽量只面对一个稳定本地端点，把协议差异、失败重试和路由选择留在代理层处理。
 
 支持：
 
-- provider 优先级队列
-- 自动故障转移
-- `messages` / `responses` / `chat/completions` 多协议 fallback
-- 针对不同 host / key / model 的协议偏好记忆
-- 请求整流修正
-- `invalid_encrypted_content` 自动愈合
-- 调度状态可视化
-- 请求记录与路由追踪
+- provider 优先级队列。
+- 自动故障转移。
+- `messages` / `responses` / `chat/completions` 多协议 fallback。
+- 按 host / key / model 记忆协议偏好。
+- 请求整流修正。
+- `invalid_encrypted_content` 自动愈合。
+- 调度状态可视化。
+- 请求记录与路由追踪。
 
 典型例子：
 
-- 某个上游只支持 `chat/completions`，但客户端默认走 `responses`
-- 某个 Claude 兼容上游只接受 `/v1/messages`
-- 同一 host 上不同模型支持的协议不一致
+- 某个上游只支持 `chat/completions`，但客户端默认走 `responses`。
+- 某个 Claude 兼容上游只接受 `/v1/messages`。
+- 同一 host 上不同模型支持的协议不一致。
 
-### 7. 请求记录与调试
+### 8. 请求记录与调试
 
-请求记录面板会保存高级代理近期请求的关键信息：
+请求记录面板保存高级代理近期请求的关键信息：
 
-- 入口 / 出口
-- 实际上游 URL
-- 路由回退轨迹
-- 状态码
-- 耗时、TTFT、Latency、TPS
-- 输入 / 输出 Token
-- 错误摘要
+- 入口 / 出口。
+- 实际上游 URL。
+- 路由 fallback 轨迹。
+- 状态码。
+- 耗时、TTFT、Latency、TPS。
+- 输入 / 输出 token。
+- 错误摘要。
 
-此外，最近 50 条请求还会在内存中附带完整 request body。打开详情后可以：
+最近 50 条请求还会在内存中保留完整 request body。打开详情后可以查看格式化请求内容，生成完整 `fetch(...)` 调试命令，并修改 headers / body / URL 后直接复测。
 
-- 查看格式化后的请求内容
-- 自动生成完整 `fetch(...)` 调试命令
-- 直接改 headers / body / URL
-- 立即在前端本地发起复测
+### 9. 防投毒守卫
+
+防投毒模块不是让模型“自己判断自己是否安全”，而是在本地高级代理网关层建立可验证的回流校验机制。
+
+核心机制：
+
+- 请求发往上游前注入本轮动态 guard 规则 Prompt。
+- 如果模型准备输出真实 toolcall，必须先输出 `<aad_guard_json>...</aad_guard_json>`。
+- guard JSON 使用最小绑定字段 `name` 和 `tool_name`。
+- 网关在响应回流时提取真实 toolcall 和 guard JSON，校验二者是否匹配。
+- 校验失败时按配置阻断或告警；通过后剥离 guard JSON，再返回客户端。
+- 对 key、secret、敏感工具结果和用户主动 `<<...>>` 标记内容做字符串保护与还原。
+
+更多细节：
+
+- [防投毒设计 Wiki](anti-poison-wiki.md)
+- [防投毒测试结果](anti-poison-result.md)
+- [本地投毒 Demo 半小时评估报告](anti-poison-demo-eval-report.md)
 
 ## 适合谁
 
-这个项目更适合下面这些用户：
-
-- 有大量中转站 / key / 模型组合，需要集中管理
-- 已经在浏览器扩展或备份文件里积累了很多记录，想便携迁移到桌面端
-- 需要高频做模型发现、批量测试、快速筛选和分组维护
-- 需要给 Claude / Codex / OpenCode / OpenClaw 接入本地代理
-- 经常遇到协议不兼容、模型错配、错误复现困难
-- 希望把“导入、扫描、测试、管理、接管客户端、排查失败”放在一个桌面工具里完成
+- 有大量中转站 / key / 模型组合，需要集中管理。
+- 已经在浏览器扩展或备份文件里积累了很多记录，想迁移到桌面端。
+- 需要高频做模型发现、批量测试、快速筛选和分组维护。
+- 需要给 Claude / Codex / OpenCode / OpenClaw 接入本地代理。
+- 经常遇到协议不兼容、模型错配、错误复现困难。
+- 希望把“导入、测活、分组、接管客户端、观察调度、排查失败、防护 toolcall 污染”放在一个桌面工具里完成。
 
 ## 快速开始
 
@@ -193,43 +253,26 @@ Windows 自动更新当前优先选择并拉起 `.msi` 安装包，`.exe` 作为
 
 推荐优先使用：
 
-- 浏览器扩展桥接导入
-- ALL-API-HUB 备份 JSON 导入
-
-常见备份文件名例如：
-
-- `accounts-backup.json`
-- `accounts-backup-2026-04-01.json`
+- 浏览器扩展桥接导入。
+- ALL-API-HUB 备份 JSON 导入。
 
 ### 3. 批量拉模型 / 快速测活
 
-导入后通常先做两件事：
+导入后通常先批量拉取模型列表，再对目标模型做快速测活。这样可以快速判断：
 
-1. 批量拉取模型列表
-2. 对目标模型做快速测活
-
-这样你能很快知道：
-
-- 哪些站点真的有这个模型
-- 哪些 key 当前可用
-- 哪些站点需要切协议或不适合接入桌面客户端
+- 哪些站点真的有这个模型。
+- 哪些 key 当前可用。
+- 哪些站点需要切协议或不适合接入桌面客户端。
 
 ### 4. 按需开启高级代理接管
 
 如果你要让 Claude / Codex / OpenCode / OpenClaw 走本地高级代理：
 
-1. 在“高级代理功能”里配置 provider 队列
-2. 为目标应用开启接管
-3. 在配置预览里确认 base URL、token、协议类型
-4. 写入本机配置
-
-## 防投毒测试报告
-
-本仓库保留高级代理防投毒能力的设计说明、测试结论和本地投毒演练报告：
-
-- [防投毒设计 Wiki](anti-poison-wiki.md)：说明 guard JSON 校验、协议兼容、字符串保护、面板统计和运维边界。
-- [防投毒测试结果](anti-poison-result.md)：记录当前单测、协议矩阵、阻断链路、流式处理和构建验证结论。
-- [本地投毒 Demo 半小时评估报告](anti-poison-demo-eval-report.md)：保留 v0.5.6 beta 本地投毒 demo 的 30 分钟多协议、流式、多轮、防泄漏历史评估流水。
+1. 在“高级代理功能”里配置 provider 队列。
+2. 为目标应用开启接管。
+3. 在配置预览里确认 base URL、token、协议类型和模型。
+4. 写入本机配置。
+5. 通过请求记录和连接信息观察实际路由。
 
 ## 项目结构
 
@@ -247,6 +290,8 @@ Windows 自动更新当前优先选择并拉起 `.msi` 安装包，`.exe` 作为
 │  ├─ advanced_proxy_*.go            高级代理相关逻辑
 │  ├─ local_api.go                   本地测活 / 协议探测逻辑
 │  └─ window_sidebar.go              托盘 / 侧边栏窗口逻辑
+├─ anti-poison-wiki.md               防投毒设计说明
+├─ anti-poison-result.md             防投毒测试结果
 └─ .github/workflows/                发布与 CI 配置
 ```
 
@@ -322,7 +367,7 @@ desktop/build/bin/
 
 典型位置：
 
-- Windows：`%LOCALAPPDATA%\\BatchApiCheck\\runtime`
+- Windows：`%LOCALAPPDATA%\BatchApiCheck\runtime`
 - macOS：`~/Library/Application Support/BatchApiCheck/runtime`
 - Linux：`$XDG_STATE_HOME` / `$XDG_CACHE_HOME` 下的 `batch-api-check/runtime`
 
@@ -347,10 +392,10 @@ runtime/logs/
 
 当前发布工作流会在打 tag 后自动：
 
-- 构建 Windows / macOS / Linux 产物
-- 为 Windows 额外生成 `.msi`
-- 为 Linux 额外组装 `.deb` 与 `.AppImage`
-- 上传到对应 GitHub Release
+- 构建 Windows / macOS / Linux 产物。
+- 为 Windows 额外生成 `.msi`。
+- 为 Linux 额外组装 `.deb` 与 `.AppImage`。
+- 上传到对应 GitHub Release。
 
 ## 项目主页
 
