@@ -2325,9 +2325,12 @@ async function toggleConsoleProviderQueue(item) {
   }
 }
 
-async function refreshAdvancedProxyConsoleSnapshot() {
+async function refreshAdvancedProxyConsoleSnapshot(event = null) {
   try {
-    const config = await getAdvancedProxyConfig();
+    const eventConfig = event?.detail?.config;
+    const config = eventConfig && typeof eventConfig === 'object'
+      ? eventConfig
+      : await getAdvancedProxyConfig();
     advancedProxyConfigSnapshot.value = await reconcileConsoleLocalAppTakeoverState(config || {});
   } catch (error) {
     console.warn('[KeyManagement] refresh advanced proxy console failed:', error);
