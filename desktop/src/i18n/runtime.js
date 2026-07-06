@@ -31,6 +31,7 @@ const DYNAMIC_TEXT_PATTERNS = [
   regex: new RegExp(item.pattern),
   replacements: item.replacements || {},
 }));
+const FALLBACK_LANGUAGE = 'en';
 let currentLanguage = DEFAULT_LANGUAGE;
 let observer = null;
 let pendingDomPass = 0;
@@ -66,7 +67,33 @@ function normalizeLegacyLanguage(value) {
 export function normalizeLanguage(value) {
   const normalized = normalizeLegacyLanguage(value);
   if (normalized) return normalized;
-  return DEFAULT_LANGUAGE;
+  return FALLBACK_LANGUAGE;
+}
+
+function getNavigatorLanguages() {
+  if (typeof navigator === 'undefined') return [];
+  const values = [];
+  if (Array.isArray(navigator.languages)) {
+    values.push(...navigator.languages);
+  }
+  values.push(navigator.language, navigator.userLanguage, navigator.browserLanguage, navigator.systemLanguage);
+  return values.map(item => String(item || '').trim()).filter(Boolean);
+}
+
+function detectSystemLanguage() {
+  for (const item of getNavigatorLanguages()) {
+    const normalized = String(item || '').trim().toLowerCase().replace(/_/g, '-');
+    if (!normalized) continue;
+    if (normalized.startsWith('zh')) {
+      return /(?:^|-)hant(?:-|$)|(?:^|-)(tw|hk|mo)(?:-|$)/.test(normalized) ? 'zh-TW' : 'zh-CN';
+    }
+    if (normalized.startsWith('en')) return 'en';
+    if (normalized.startsWith('ja') || normalized.startsWith('jp')) return 'ja';
+    if (normalized.startsWith('ko') || normalized.startsWith('kr')) return 'ko';
+    if (normalized.startsWith('hi')) return 'hi';
+    if (normalized.startsWith('ar')) return 'ar';
+  }
+  return FALLBACK_LANGUAGE;
 }
 
 export function toVueI18nLocale(language) {
@@ -90,9 +117,9 @@ function getStoredRawLanguage() {
   try {
     return localStorage.getItem(LANGUAGE_STORAGE_KEY)
       || localStorage.getItem(LEGACY_LOCALE_STORAGE_KEY)
-      || DEFAULT_LANGUAGE;
+      || detectSystemLanguage();
   } catch {
-    return DEFAULT_LANGUAGE;
+    return detectSystemLanguage();
   }
 }
 

@@ -44,14 +44,14 @@
             </button>
           </div>
           <p class="settings-section-title-row">
-            <b>{{ tr('界面语言') }}</b>
+            <b>Language</b>
             <a-tooltip trigger="hover" placement="topLeft" overlayClassName="settings-info-tooltip">
               <template #title>
                 <div class="settings-info-tooltip-copy">
                   <div>{{ tr('中文为默认原文；切换后会按映射文件翻译，未映射文本会自动保留原文。') }}</div>
                 </div>
               </template>
-              <button type="button" class="settings-info-icon" :aria-label="tr('界面语言说明')">i</button>
+              <button type="button" class="settings-info-icon" aria-label="Language help">i</button>
             </a-tooltip>
           </p>
           <a-select

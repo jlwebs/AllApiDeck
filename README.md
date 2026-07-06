@@ -23,6 +23,8 @@
 </a><!--
 --><img alt="Golang" src="https://img.shields.io/badge/Golang-1.24%2B-00ADD8?logo=go&style=flat"><!--
 --><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&style=flat">
+<!--
+--><img alt="Multilingual" src="https://img.shields.io/badge/i18n-7%20languages-2EA44F?style=flat">
 </p>
 
 <p align="center">

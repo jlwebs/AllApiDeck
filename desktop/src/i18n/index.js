@@ -4,7 +4,7 @@ import { getStoredLanguage, toVueI18nLocale } from './runtime.js';
 
 const i18n = createI18n({
   legacy: false,
-  fallbackLocale: 'zh',
+  fallbackLocale: 'en',
   missingWarn: false,
   fallbackWarn: false,
   locale: toVueI18nLocale(getStoredLanguage()),
