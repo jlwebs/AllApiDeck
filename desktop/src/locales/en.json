@@ -229,5 +229,6 @@
   "ENTER_GEMINI_API_KEYS_ONE_PER_LINE": "Enter Gemini API Keys one per line",
   "ENTER_REFRESH_TOKENS": "Please enter Refresh Tokens",
   "ENTER_SESSION_KEYS": "Please enter Session Keys",
-  "ENTER_GEMINI_API_KEYS": "Please enter Gemini API Keys"
+  "ENTER_GEMINI_API_KEYS": "Please enter Gemini API Keys",
+  "BATCH_CHECK": "Batch Check"
 }

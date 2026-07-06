@@ -208,10 +208,10 @@
             <div class="request-records-toolbar-actions">
               <a-button size="small" class="request-records-action-button request-records-action-button-refresh" :loading="mcpSkillLoading" @click="refreshMCPSkillConfig">
                 <ReloadOutlined />
-                刷新
+                {{ tr('刷新') }}
               </a-button>
               <a-button size="small" class="request-records-action-button request-records-action-button-refresh" :loading="mcpSkillSaving" :disabled="!mcpSkillBridgeAvailable" @click="saveMCPSkillConfig">
-                保存
+                {{ tr('保存') }}
               </a-button>
             </div>
           </section>
@@ -942,6 +942,7 @@ import codexAppIcon from '../assets/app-icons/codex.svg';
 import geminiAppIcon from '../assets/app-icons/gemini.svg';
 import opencodeAppIcon from '../assets/app-icons/opencode.svg';
 import openclawAppIcon from '../assets/app-icons/openclaw-fallback.svg';
+import { tr } from '../i18n/runtime.js';
 
 const props = defineProps({
   open: {

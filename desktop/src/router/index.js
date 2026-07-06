@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router';
 import Home from '../views/Home.vue';
 import Batch from '../views/Batch.vue';
 import Layout from '../views/Layout.vue';
+import { applyLanguage, getStoredLanguage, scheduleDomTranslation } from '../i18n/runtime.js';
 
 const loadKeysView = () => import('../views/Keys.vue');
 const loadSitesView = () => import('../views/Sites.vue');
@@ -70,6 +71,9 @@ const runWhenIdle = callback => {
 };
 
 router.afterEach(to => {
+  const language = getStoredLanguage();
+  applyLanguage(language, { persist: false, dispatch: true, translateDom: false });
+  scheduleDomTranslation(document.body || document.documentElement);
   const name = String(to?.name || '').trim();
   if (name === 'Sites') {
     runWhenIdle(() => { void loadKeysView(); });

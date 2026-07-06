@@ -79,16 +79,13 @@
                   </button>
                   <div v-if="showLanguageMenu" class="language-menu">
                     <button
+                      v-for="option in languageOptions"
+                      :key="option.value"
                       class="language-menu-button"
-                      @click="setLanguage('zh')"
+                      :class="{ active: currentLanguageCode === option.value }"
+                      @click="setLanguage(option.value)"
                     >
-                      {{ t('LANGUAGE_CHINESE') }}
-                    </button>
-                    <button
-                      class="language-menu-button"
-                      @click="setLanguage('en')"
-                    >
-                      {{ t('LANGUAGE_ENGLISH') }}
+                      {{ option.label }}
                     </button>
                   </div>
                 </div>
@@ -1125,6 +1122,7 @@ import {
 import { checkForUpdates } from '../utils/update.js';
 import ModelVerifier from '../utils/verify.js';
 import { isDarkThemeMode, toggleTheme } from '../utils/theme.js';
+import { applyLanguage, getLanguageOptions, normalizeLanguage, toVueI18nLocale, tr } from '../i18n/runtime.js';
 import { createSVGDataURL } from '../utils/svg.js';
 import { announcement, appInfo } from '../utils/info.js';
 import { apiFetch, isProbablyWailsRuntime } from '../utils/runtimeApi.js';
@@ -1214,6 +1212,18 @@ const modelConcurrency = ref(5);
 const currentLanguage = computed(() =>
   locale.value.startsWith('zh') ? 'zh' : 'en'
 );
+const currentLanguageCode = computed(() =>
+  locale.value === 'zh' ? 'zh-CN' : normalizeLanguage(locale.value)
+);
+const languageOptions = computed(() =>
+  getLanguageOptions().map(option => {
+    const menuLanguage = currentLanguageCode.value;
+    return {
+      value: option.value,
+      label: `${tr(option.label, menuLanguage)} · ${option.nativeLabel}`,
+    };
+  })
+);
 const showLanguageMenu = ref(false);
 const models = ref([]);
 const selectedModels = ref([]);
@@ -1297,9 +1307,9 @@ const toggleLanguageMenu = () => {
 
 // 语言切换方法
 const setLanguage = language => {
-  locale.value = language;
-  localStorage.setItem('locale', language);
-  showLanguageMenu.value = false; // 切换语言后隐藏菜单
+  const normalized = applyLanguage(language);
+  locale.value = toVueI18nLocale(normalized);
+  showLanguageMenu.value = false;
 };
 
 const FUNCTION_VERIFICATION = computed(() => t('FUNCTION_VERIFICATION'));
@@ -3193,12 +3203,15 @@ body.dark-mode #themeIcon {
 .language-menu {
   position: absolute;
   top: 30px;
-  left: -30px;
+  right: 0;
   background: white;
   box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
   border-radius: 5px;
   overflow: hidden;
   z-index: 1000;
+  min-width: 150px;
+  max-height: 260px;
+  overflow-y: auto;
 }
 
 .language-menu-button {
@@ -3209,10 +3222,13 @@ body.dark-mode #themeIcon {
   padding: 10px;
   cursor: pointer;
   color: #333;
+  text-align: left;
+  white-space: nowrap;
   transition: background 0.3s;
 }
 
-.language-menu-button:hover {
+.language-menu-button:hover,
+.language-menu-button.active {
   background: #e0e0e0;
 }
 

@@ -41,11 +41,11 @@ export default {
   name: 'App',
   setup() {
     const { t } = useI18n();
-    const router = useRouter();
-    const appReady = ref(false);
-    const launchMode = ref('');
-    const routeRenderError = ref(null);
-    const themeMode = ref(getStoredThemeMode());
+const router = useRouter();
+const appReady = ref(false);
+const launchMode = ref('');
+const routeRenderError = ref(null);
+const themeMode = ref(getStoredThemeMode());
     const theme = computed(() => ({
       algorithm: isDarkThemeMode(themeMode.value) ? antTheme.darkAlgorithm : antTheme.defaultAlgorithm,
       token: themeMode.value === 'gaia-dark'
@@ -97,6 +97,17 @@ export default {
     const retryRouteRender = () => {
       routeRenderError.value = null;
       window.location.reload();
+    };
+
+    const consumePendingRouteAfterReload = () => {
+      try {
+        const pendingPath = String(sessionStorage.getItem('allapideck_pending_route_after_reload_v1') || '').trim();
+        sessionStorage.removeItem('allapideck_pending_route_after_reload_v1');
+        if (!pendingPath || pendingPath === '/' || !pendingPath.startsWith('/')) return '';
+        return pendingPath;
+      } catch {
+        return '';
+      }
     };
 
     const markAdvancedProxyDefaultPromptSeen = (version) => {
@@ -169,6 +180,12 @@ export default {
           await router.replace('/desktop-config');
         } else if (mode === 'model-probe' && router.currentRoute.value.path !== '/sites') {
           await router.replace('/sites');
+        }
+        if (mode === '' || mode === 'main') {
+          const pendingPath = consumePendingRouteAfterReload();
+          if (pendingPath && router.currentRoute.value.fullPath !== pendingPath) {
+            await router.replace(pendingPath);
+          }
         }
         if (mode !== 'panel') {
           installSidebarRoutingDiagnostics(mode || 'main');

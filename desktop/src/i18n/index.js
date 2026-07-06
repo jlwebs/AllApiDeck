@@ -1,16 +1,15 @@
 import { createI18n } from 'vue-i18n';
-import en from '../locales/en.json';
-import zh from '../locales/zh.json';
-
-const messages = {
-  en,
-  zh,
-};
+import { legacyMessages } from './legacyMessages.js';
+import { getStoredLanguage, toVueI18nLocale } from './runtime.js';
 
 const i18n = createI18n({
-  legacy: false, // 重要：禁用 legacy 模式
-  locale: 'en',
-  messages,
+  legacy: false,
+  fallbackLocale: 'zh',
+  missingWarn: false,
+  fallbackWarn: false,
+  locale: toVueI18nLocale(getStoredLanguage()),
+  messages: legacyMessages,
+  missing: (_, key) => key,
 });
 
 export default i18n;

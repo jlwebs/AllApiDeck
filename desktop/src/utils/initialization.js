@@ -1,4 +1,5 @@
 import { appInfo, banner } from './info.js';
+import { getStoredLanguage, toVueI18nLocale } from '../i18n/runtime.js';
 import { applyThemeMode, getStoredThemeMode, isDarkThemeMode } from './theme.js';
 
 export function initializeTheme(isDarkMode) {
@@ -7,12 +8,7 @@ export function initializeTheme(isDarkMode) {
 }
 
 export function initializeLanguage(locale, currentLanguage) {
-  const savedLocale = localStorage.getItem('locale');
-  if (savedLocale) {
-    locale.value = savedLocale;
-  } else {
-    locale.value = 'zh';
-  }
+  locale.value = toVueI18nLocale(getStoredLanguage());
 }
 
 export function initConsole() {

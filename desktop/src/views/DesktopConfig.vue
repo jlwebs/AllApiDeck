@@ -3,21 +3,21 @@
     <div class="desktop-config-shell">
       <div class="desktop-config-window-header">
         <div class="desktop-config-window-copy">
-          <div class="desktop-config-window-title">专属一键配置</div>
+          <div class="desktop-config-window-title">{{ tr('专属一键配置') }}</div>
           <div class="desktop-config-window-subtitle">
-            {{ targetRecord ? `${targetRecord.siteName} | ${targetRecord.siteUrl}` : '选择一个密钥配置并生成预览' }}
+            {{ targetRecord ? `${targetRecord.siteName} | ${targetRecord.siteUrl}` : tr('选择一个密钥配置并生成预览') }}
           </div>
         </div>
 
         <div class="desktop-config-window-actions">
-          <a-button @click="closeWindow">关闭</a-button>
+          <a-button @click="closeWindow">{{ tr('关闭') }}</a-button>
           <a-button
             type="primary"
             :loading="desktopConfigLoading"
             :disabled="!targetRecord"
             @click="generateDesktopConfigPreview"
           >
-            生成变更预览
+            {{ tr('生成变更预览') }}
           </a-button>
         </div>
       </div>
@@ -28,18 +28,18 @@
         show-icon
         class="desktop-config-alert"
         :message="`${targetRecord.siteName} | ${targetRecord.siteUrl}`"
-        description="将读取本机应用配置，生成变更预览，确认后才会真正写入。"
+        :description="tr('将读取本机应用配置，生成变更预览，确认后才会真正写入。')"
       />
 
       <a-empty
         v-if="!targetRecord"
-        description="未找到目标密钥记录，无法打开专属配置窗口。"
+        :description="tr('未找到目标密钥记录，无法打开专属配置窗口。')"
       />
 
       <div v-else class="desktop-config-layout">
         <section class="desktop-app-panel">
-          <div class="desktop-panel-title">目标应用</div>
-          <div class="desktop-panel-hint">默认不勾选，按需点选后再生成变更预览。</div>
+          <div class="desktop-panel-title">{{ tr('目标应用') }}</div>
+          <div class="desktop-panel-hint">{{ tr('默认不勾选，按需点选后再生成变更预览。') }}</div>
           <div class="desktop-app-grid">
             <button
               v-for="app in DESKTOP_CONFIG_APPS"
@@ -60,25 +60,25 @@
         <section class="desktop-form-panel">
           <a-form layout="vertical">
             <div class="config-grid">
-              <a-form-item label="Provider 名称">
-                <a-input v-model:value="desktopConfigDraft.providerName" placeholder="例如 My Provider" />
+              <a-form-item :label="tr('Provider 名称')">
+                <a-input v-model:value="desktopConfigDraft.providerName" :placeholder="tr('例如 My Provider')" />
               </a-form-item>
 
               <a-form-item label="Provider Key">
                 <a-input
                   v-model:value="desktopConfigDraft.providerKey"
                   :readonly="desktopConfigDraft.forceCustomProviderKey !== false"
-                  :placeholder="desktopConfigDraft.forceCustomProviderKey !== false ? 'custom' : '请输入 provider key'"
+                  :placeholder="desktopConfigDraft.forceCustomProviderKey !== false ? 'custom' : tr('请输入 provider key')"
                 />
                 <a-checkbox
                   :checked="desktopConfigDraft.forceCustomProviderKey !== false"
                   class="desktop-provider-checkbox"
                   @change="handleDesktopProviderKeyModeChange"
                 >
-                  custom:统一化保证历史会话可见
+                  {{ tr('custom:统一化保证历史会话可见') }}
                 </a-checkbox>
                 <div class="desktop-field-hint">
-                  默认勾选会统一写入 `custom`；取消后保持各应用修改前的当前 provider key。
+                  {{ tr('默认勾选会统一写入 `custom`；取消后保持各应用修改前的当前 provider key。') }}
                 </div>
               </a-form-item>
 
@@ -86,7 +86,7 @@
                 <a-input-password v-model:value="desktopConfigDraft.apiKey" placeholder="sk-..." />
               </a-form-item>
 
-              <a-form-item label="默认模型">
+              <a-form-item :label="tr('默认模型')">
                 <a-select
                   v-model:value="desktopConfigDraft.model"
                   :options="desktopConfigModelOptions"
@@ -94,7 +94,7 @@
                   show-search
                   :filter-option="true"
                   option-filter-prop="label"
-                  placeholder="请选择当前记录模型"
+                  :placeholder="tr('请选择当前记录模型')"
                   @dropdownVisibleChange="handleModelDropdownVisibleChange"
                   @change="handleDesktopModelChange"
                 />
@@ -104,16 +104,16 @@
                 <a-input v-model:value="desktopConfigDraft.claudeBaseUrl" />
               </a-form-item>
 
-              <a-form-item label="Claude Key 字段">
+              <a-form-item :label="tr('Claude Key 字段')">
                 <a-select v-model:value="desktopConfigDraft.claudeApiKeyField">
                   <a-select-option value="ANTHROPIC_AUTH_TOKEN">ANTHROPIC_AUTH_TOKEN</a-select-option>
                   <a-select-option value="ANTHROPIC_API_KEY">ANTHROPIC_API_KEY</a-select-option>
                 </a-select>
               </a-form-item>
 
-              <a-form-item label="Claude 高级代理">
+              <a-form-item :label="tr('Claude 高级代理')">
                 <a-switch v-model:checked="desktopConfigDraft.claudeUseAdvancedProxy" />
-                <div class="desktop-field-hint">开启后会把 Claude Base URL 改写到本机高级代理地址，并由 All API Deck 负责兼容 OpenAI vendor、故障转移和错误修正。</div>
+                <div class="desktop-field-hint">{{ tr('开启后会把 Claude Base URL 改写到本机高级代理地址，并由 All API Deck 负责兼容 OpenAI vendor、故障转移和错误修正。') }}</div>
               </a-form-item>
 
               <a-form-item label="Codex Base URL">
@@ -181,6 +181,7 @@ import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManaged
 import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS, inferProviderKeyFromSnapshot } from '../utils/desktopConfigTransform.js';
 import { getRecordModelOptions, loadPanelRecords, loadRecordModelOptions, persistPanelRecords } from '../utils/keyPanelStore.js';
 import { hydrateLastResultsSnapshotCache } from '../utils/historySnapshotStore.js';
+import { tr } from '../i18n/runtime.js';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
 import opencodeAppIcon from '../assets/app-icons/opencode.svg';

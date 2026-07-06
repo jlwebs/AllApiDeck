@@ -44,6 +44,23 @@
             </button>
           </div>
           <p class="settings-section-title-row">
+            <b>{{ tr('界面语言') }}</b>
+            <a-tooltip trigger="hover" placement="topLeft" overlayClassName="settings-info-tooltip">
+              <template #title>
+                <div class="settings-info-tooltip-copy">
+                  <div>{{ tr('中文为默认原文；切换后会按映射文件翻译，未映射文本会自动保留原文。') }}</div>
+                </div>
+              </template>
+              <button type="button" class="settings-info-icon" :aria-label="tr('界面语言说明')">i</button>
+            </a-tooltip>
+          </p>
+          <a-select
+            class="settings-language-select"
+            :value="languageMode"
+            :options="languageOptions"
+            @change="handleLanguageSelection"
+          />
+          <p class="settings-section-title-row">
             <b>代理模式</b>
             <a-tooltip trigger="hover" placement="topLeft" overlayClassName="settings-info-tooltip">
               <template #title>
@@ -265,7 +282,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { message } from 'ant-design-vue';
 import { isProbablyWailsRuntime } from '../utils/runtimeApi.js';
 import { isDesktopLogBridgeAvailable, listDesktopLogFiles, readDesktopLogFile } from '../utils/desktopLogBridge.js';
@@ -293,6 +310,13 @@ import {
   getStoredThemeMode,
   THEME_MODE_OPTIONS,
 } from '../utils/theme.js';
+import {
+  applyLanguage,
+  getLanguageOptions,
+  getStoredLanguage,
+  LANGUAGE_CHANGE_EVENT,
+  tr,
+} from '../i18n/runtime.js';
 
 const props = defineProps({
   open: {
@@ -342,6 +366,13 @@ const userAgentMappings = ref(loadUserAgentMappings());
 const contextAutoCompressionDraft = reactive(loadContextAutoCompressionConfig());
 const themeMode = ref(getStoredThemeMode());
 const themeModeOptions = THEME_MODE_OPTIONS;
+const languageMode = ref(getStoredLanguage());
+const languageOptions = computed(() =>
+  getLanguageOptions().map(option => ({
+    value: option.value,
+    label: `${tr(option.label, languageMode.value)} · ${option.nativeLabel}`,
+  }))
+);
 const ERROR_SUMMARY_GROUP_KEY = '__error_summary__';
 const ERROR_SUMMARY_FILE_PATH = '__error_summary_all__';
 const ERROR_SUMMARY_GROUP_LABEL = '错误汇总';
@@ -394,11 +425,26 @@ const appLabel = computed(() => props.appVersion
 watch(() => props.open, open => {
   if (!open) return;
   themeMode.value = getStoredThemeMode();
+  languageMode.value = getStoredLanguage();
   userAgentMappings.value = loadUserAgentMappings();
   Object.assign(contextAutoCompressionDraft, loadContextAutoCompressionConfig());
   void loadProxyDraft();
   if (isWailsRuntime) {
     void loadDesktopLogs();
+  }
+});
+
+function syncLanguageMode(event) {
+  languageMode.value = getStoredLanguage() || event?.detail?.language || languageMode.value;
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener(LANGUAGE_CHANGE_EVENT, syncLanguageMode);
+}
+
+onBeforeUnmount(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener(LANGUAGE_CHANGE_EVENT, syncLanguageMode);
   }
 });
 
@@ -478,6 +524,21 @@ function handleTreeExpandedChange(checked) {
 function handleThemeModeSelection(nextMode) {
   themeMode.value = applyThemeMode(nextMode);
   message.success('界面主题已切换');
+}
+
+function handleLanguageSelection(nextLanguage) {
+  languageMode.value = applyLanguage(nextLanguage, { translateDom: false });
+  message.success(tr('界面语言已切换，正在刷新界面'));
+  window.setTimeout(() => {
+    try {
+      const currentPath = `${window.location.pathname || '/'}${window.location.search || ''}${window.location.hash || ''}`;
+      if (currentPath && currentPath !== '/') {
+        sessionStorage.setItem('allapideck_pending_route_after_reload_v1', currentPath);
+      }
+    } catch {}
+    const origin = String(window.location.origin || '').trim();
+    window.location.assign(origin && origin !== 'null' ? `${origin}/` : '/');
+  }, 350);
 }
 
 async function saveUserAgentMappingsDraft() {
@@ -840,6 +901,11 @@ async function loadDesktopLogs() {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 14px;
+}
+
+.settings-language-select {
+  width: 100%;
+  margin-bottom: 16px;
 }
 
 .theme-mode-card {

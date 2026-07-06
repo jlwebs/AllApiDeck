@@ -576,9 +576,9 @@
             <template v-else-if="column.dataIndex === 'exportActions'">
               <div class="export-actions-cell">
                 <div class="inline-export-actions">
-                  <a-tooltip title="便捷一键设置">
+                  <a-tooltip :title="tr('便捷一键设置')">
                     <button type="button" class="export-icon-button export-desktop" @click="openDesktopConfigWizard(record)">
-                      <img :src="quickSetupIcon" alt="便捷一键设置" class="export-icon-image" />
+                      <img :src="quickSetupIcon" :alt="tr('便捷一键设置')" class="export-icon-image" />
                     </button>
                   </a-tooltip>
                   <a-tooltip title="导出到 Cherry Studio">
@@ -939,8 +939,8 @@
       <a-modal
         v-model:open="renameKeyGroupModalOpen"
         title="重命名密钥分组"
-        ok-text="保存"
-        cancel-text="取消"
+        :ok-text="tr('保存')"
+        :cancel-text="tr('取消')"
         :confirm-loading="renameKeyGroupSaving"
         @ok="submitRenameKeyGroup"
         @cancel="closeRenameKeyGroupModal"
@@ -977,8 +977,8 @@
                 type="text"
                 size="small"
                 class="manual-record-close-button"
-                aria-label="关闭"
-                title="关闭"
+                :aria-label="tr('关闭')"
+                :title="tr('关闭')"
                 @click="closeManualRecordModal"
               >
                 ×
@@ -1032,20 +1032,20 @@
           </a-form>
 
           <div class="manual-record-footer">
-            <a-button size="small" @click="closeManualRecordModal">取消</a-button>
-            <a-button type="primary" size="small" :loading="manualRecordSaving" @click="submitManualRecord">保存</a-button>
+            <a-button size="small" @click="closeManualRecordModal">{{ tr('取消') }}</a-button>
+            <a-button type="primary" size="small" :loading="manualRecordSaving" @click="submitManualRecord">{{ tr('保存') }}</a-button>
           </div>
         </div>
       </a-modal>
 
-      <a-modal v-model:open="desktopConfigModalOpen" title="专属一键配置" :confirm-loading="desktopConfigLoading" :footer="null" width="1120px">
+      <a-modal v-model:open="desktopConfigModalOpen" :title="tr('专属一键配置')" :confirm-loading="desktopConfigLoading" :footer="null" width="1120px">
         <div v-if="desktopConfigTargetRecord" class="desktop-config-modal">
           <div class="desktop-config-hero">
             <div class="desktop-config-alert">
               <div class="desktop-config-alert-icon" aria-hidden="true">i</div>
               <div class="desktop-config-alert-copy">
                 <div class="desktop-config-alert-title">{{ `${desktopConfigTargetRecord.siteName} | ${desktopConfigTargetRecord.siteUrl}` }}</div>
-                <div class="desktop-config-alert-desc">将读取本机应用配置，生成变更预览，确认后才会真正写入。</div>
+                <div class="desktop-config-alert-desc">{{ tr('将读取本机应用配置，生成变更预览，确认后才会真正写入。') }}</div>
               </div>
             </div>
             <div class="desktop-config-hero-actions">
@@ -1054,8 +1054,8 @@
           </div>
           <div class="desktop-config-layout">
             <section class="desktop-app-panel">
-              <div class="desktop-panel-title">目标应用</div>
-              <div class="desktop-panel-hint">默认不勾选，按需点选后再生成变更预览。</div>
+              <div class="desktop-panel-title">{{ tr('目标应用') }}</div>
+              <div class="desktop-panel-hint">{{ tr('默认不勾选，按需点选后再生成变更预览。') }}</div>
               <div class="desktop-app-grid">
                 <button
                   v-for="app in DESKTOP_CONFIG_APPS"
@@ -1076,27 +1076,27 @@
             <section class="desktop-form-panel">
               <a-form layout="vertical">
                 <div class="config-grid">
-                  <a-form-item label="Provider 名称"><a-input v-model:value="desktopConfigDraft.providerName" placeholder="例如 My Provider" /></a-form-item>
+                  <a-form-item :label="tr('Provider 名称')"><a-input v-model:value="desktopConfigDraft.providerName" :placeholder="tr('例如 My Provider')" /></a-form-item>
                   <a-form-item label="Provider Key">
                     <a-input
                       v-model:value="desktopConfigDraft.providerKey"
                       :readonly="desktopConfigDraft.forceCustomProviderKey !== false"
-                      :placeholder="desktopConfigDraft.forceCustomProviderKey !== false ? 'custom' : '请输入 provider key'"
+                      :placeholder="desktopConfigDraft.forceCustomProviderKey !== false ? 'custom' : tr('请输入 provider key')"
                     />
                     <a-checkbox :checked="desktopConfigDraft.forceCustomProviderKey !== false" class="desktop-provider-checkbox" @change="handleDesktopProviderKeyModeChange">
-                      custom:统一化保证历史会话可见
+                      {{ tr('custom:统一化保证历史会话可见') }}
                     </a-checkbox>
-                    <div class="desktop-field-hint">默认勾选会统一写入 `custom`；取消后保持各应用修改前的当前 provider key。</div>
+                    <div class="desktop-field-hint">{{ tr('默认勾选会统一写入 `custom`；取消后保持各应用修改前的当前 provider key。') }}</div>
                   </a-form-item>
                   <a-form-item label="API Key"><a-input-password v-model:value="desktopConfigDraft.apiKey" placeholder="sk-..." /></a-form-item>
-                  <a-form-item label="默认模型">
+                  <a-form-item :label="tr('默认模型')">
                     <a-select
                       v-model:value="desktopConfigDraft.model"
                       :options="desktopConfigModelOptions"
                       show-search
                       :filter-option="true"
                       option-filter-prop="label"
-                      placeholder="请选择当前记录模型"
+                      :placeholder="tr('请选择当前记录模型')"
                     />
                   </a-form-item>
                   <a-form-item label="Claude Base URL"><a-input v-model:value="desktopConfigDraft.claudeBaseUrl" /></a-form-item>
@@ -1215,6 +1215,7 @@ import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
 import { normalizeCCSwitchEndpoint } from '../utils/ccSwitch.js';
 import { resolveOpenAIExportBaseUrl } from '../utils/exportEndpoint.js';
 import { getAppliedThemeMode, isDarkThemeMode, THEME_MODE_CHANGE_EVENT } from '../utils/theme.js';
+import { tr } from '../i18n/runtime.js';
 import { exitSidebarMode, isManualSidebarBridgeAvailable, isSidebarBridgeAvailable, openManualSidebarPanel } from '../utils/windowMode.js';
 import { loadDesktopTokenSourceMode, loadTreeExpandedSetting, loadUserAgentMappings } from '../utils/systemSettings.js';
 import { buildPerformanceTooltipLines, derivePerformanceMetricsFromResponse, hasPerformanceMetrics } from '../utils/performanceMetrics.js';
