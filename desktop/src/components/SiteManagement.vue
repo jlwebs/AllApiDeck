@@ -323,7 +323,7 @@
                   <span class="batch-settings-label" style="margin-right: 10px;">并发数：</span>
                   <a-input-number v-model:value="batchConcurrency" :min="1" :max="100" />
                   <span class="batch-settings-label" style="margin-left: 20px; margin-right: 10px;">超时(秒)：</span>
-                  <a-input-number v-model:value="modelTimeout" :min="1" />
+                  <a-input-number v-model:value="modelTimeout" :min="1" :max="60" />
                 </div>
                 <div class="actions">
                   <a-button class="site-secondary-action-button" @click="goBackToImport">重新导入</a-button>
@@ -423,6 +423,7 @@ import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
 import { isCurrentLaunchMode } from '../utils/launchModeState.js';
 
 const SITE_NOTE_MAX_LENGTH = 10;
+const MODEL_TIMEOUT_MAX_SECONDS = 60;
 
 const router = useRouter();
 const showExperimentalFeatures = ref(false);
@@ -470,9 +471,58 @@ const normalizeTreeKeyArray = (values) => Array.from(new Set(
     .map(item => String(item || '').trim())
     .filter(Boolean)
 ));
+
+const normalizeModelTimeoutSeconds = value => {
+  const numeric = Number(value || 15);
+  if (!Number.isFinite(numeric)) return 15;
+  return Math.max(1, Math.min(MODEL_TIMEOUT_MAX_SECONDS, Math.round(numeric)));
+};
 const isModelProbeWindow = computed(() => isCurrentLaunchMode('model-probe'));
+const buildDisplayCheckedTreeKeys = (nodes, checkedModelKeys) => {
+  const checkedModelSet = new Set(normalizeTreeKeyArray(checkedModelKeys).filter(isSelectableModelKey));
+  const displayKeySet = new Set();
+  const modelKeysByNode = new WeakMap();
+  const visited = new WeakSet();
+  const stack = (Array.isArray(nodes) ? nodes : []).map(node => ({ node, ready: false }));
+
+  while (stack.length > 0) {
+    const item = stack.pop();
+    const node = item?.node;
+    if (!node || typeof node !== 'object') continue;
+
+    if (!item.ready) {
+      if (visited.has(node)) continue;
+      visited.add(node);
+      stack.push({ node, ready: true });
+      const children = Array.isArray(node?.children) ? node.children : [];
+      children.forEach(child => stack.push({ node: child, ready: false }));
+      continue;
+    }
+
+    const key = String(node?.key || '').trim();
+    const children = Array.isArray(node?.children) ? node.children : [];
+    let modelKeys = [];
+    if ((node?.isLeaf === true || children.length === 0) && isSelectableModelKey(key)) {
+      modelKeys = [key];
+      if (checkedModelSet.has(key)) displayKeySet.add(key);
+    } else {
+      children.forEach(child => {
+        const childModelKeys = modelKeysByNode.get(child);
+        if (Array.isArray(childModelKeys) && childModelKeys.length > 0) {
+          modelKeys.push(...childModelKeys);
+        }
+      });
+    }
+    modelKeysByNode.set(node, modelKeys);
+    if (key && modelKeys.length > 0 && modelKeys.every(modelKey => checkedModelSet.has(modelKey))) {
+      displayKeySet.add(key);
+    }
+  }
+
+  return normalizeTreeKeyArray(Array.from(displayKeySet));
+};
 const treeCheckedKeysBinding = computed(() => {
-  return normalizeTreeKeyArray(checkedKeys.value);
+  return buildDisplayCheckedTreeKeys(treeData.value, checkedKeys.value);
 });
 const stableSiteOrderMap = new Map();
 const siteBridgeProcessedRecordIds = new Set();
@@ -611,6 +661,25 @@ const cloneNodeList = value => {
   }
 };
 
+const sanitizeCachedTreeNodesForDisplay = nodes => (
+  (Array.isArray(nodes) ? nodes : [])
+    .filter(node => !String(node?.key || '').trim().startsWith('discover-loading|'))
+    .map(node => {
+      if (!node || typeof node !== 'object') return node;
+      const next = {
+        ...node,
+        isModelDiscovering: false,
+        modelDiscoveringHint: '',
+        isBrowserPending: false,
+        pendingHint: '',
+      };
+      if (Array.isArray(next.children)) {
+        next.children = sanitizeCachedTreeNodesForDisplay(next.children);
+      }
+      return next;
+    })
+);
+
 const normalizeProbeTokenTreeNodes = nodes => (
   (Array.isArray(nodes) ? nodes : []).map(node => {
     const next = node && typeof node === 'object' ? { ...node } : node;
@@ -664,8 +733,13 @@ const collectTreeCheckboxDiagnostics = (nodes) => {
     disableCheckboxFalse: 0,
     sample: [],
   };
-  const walk = (list, depth = 0) => {
-    (Array.isArray(list) ? list : []).forEach(node => {
+  const stack = (Array.isArray(nodes) ? nodes : []).map(node => ({ node, depth: 0 }));
+  const visited = new WeakSet();
+  while (stack.length > 0) {
+    const { node, depth } = stack.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (visited.has(node)) continue;
+    visited.add(node);
       const key = String(node?.key || '').trim();
       const children = Array.isArray(node?.children) ? node.children : [];
       const isLeaf = node?.isLeaf === true;
@@ -699,10 +773,8 @@ const collectTreeCheckboxDiagnostics = (nodes) => {
           isModelLeaf,
         });
       }
-      if (children.length > 0) walk(children, depth + 1);
-    });
-  };
-  walk(nodes, 0);
+      children.forEach(child => stack.push({ node: child, depth: depth + 1 }));
+  }
   return stats;
 };
 
@@ -845,14 +917,18 @@ const emitModelProbeSelectionSnapshot = (stage, extra = {}) => {
     .map(node => String(node?.key || '').trim())
     .filter(Boolean);
   const tokenNodeKeys = [];
-  const walk = (nodes) => {
-    (Array.isArray(nodes) ? nodes : []).forEach(node => {
-      const key = String(node?.key || '').trim();
-      if (key.startsWith('token|')) tokenNodeKeys.push(key);
-      if (Array.isArray(node?.children) && node.children.length > 0) walk(node.children);
-    });
-  };
-  walk(treeData.value);
+  const stack = [...(Array.isArray(treeData.value) ? treeData.value : [])];
+  const visited = new WeakSet();
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (visited.has(node)) continue;
+    visited.add(node);
+    const key = String(node?.key || '').trim();
+    if (key.startsWith('token|')) tokenNodeKeys.push(key);
+    const children = Array.isArray(node?.children) ? node.children : [];
+    children.forEach(child => stack.push(child));
+  }
   const payload = {
     stage,
     probe: Boolean(modelProbeContext.value?.siteCacheKey),
@@ -1247,7 +1323,7 @@ const buildFallbackTree = (record, displayOrder) => {
 
 const treeData = computed(() => filteredRecords.value.flatMap(record => {
   const displayOrder = getStableSiteOrder(record) || 0;
-  const cachedNodesRaw = cloneNodeList(record.cachedTreeNodes);
+  const cachedNodesRaw = sanitizeCachedTreeNodesForDisplay(cloneNodeList(record.cachedTreeNodes));
   const cachedNodes = isModelProbeWindow.value
     ? normalizeProbeTokenTreeNodes(cachedNodesRaw)
     : cachedNodesRaw;
@@ -1464,17 +1540,23 @@ const isSelectableModelKey = (key) => {
 };
 
 const collectSelectableModelKeysFromTreeNodes = (nodes, bucket = []) => {
-  (Array.isArray(nodes) ? nodes : []).forEach(node => {
+  const stack = [...(Array.isArray(nodes) ? nodes : [])];
+  const visited = new WeakSet();
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (visited.has(node)) continue;
+    visited.add(node);
     const key = String(node?.key || '');
-    if (node?.isLeaf === true && isSelectableModelKey(key)) {
-      bucket.push(key);
-      return;
-    }
     const children = Array.isArray(node?.children) ? node.children : [];
-    if (children.length > 0) {
-      collectSelectableModelKeysFromTreeNodes(children, bucket);
+    if ((node?.isLeaf === true || children.length === 0) && isSelectableModelKey(key)) {
+      bucket.push(key);
+      continue;
     }
-  });
+    if (children.length > 0) {
+      children.forEach(child => stack.push(child));
+    }
+  }
   return bucket;
 };
 
@@ -1863,7 +1945,7 @@ const restoreSelectedToBatch = async () => {
     return;
   }
   writePendingSiteRestore(selectedSiteCacheKeys.value);
-  await router.push('/');
+  await router.push('/batch');
   message.success(`已将 ${selectedSiteCacheKeys.value.length} 个站点恢复到批量检测`);
 };
 
@@ -2265,7 +2347,7 @@ const toggleSilentBridgeImportMode = async () => {
 
 const goBackToImport = async () => {
   writePendingBatchStart({ autoStart: false });
-  await router.push('/');
+  await router.push('/batch');
 };
 
 const importSelectedKeysOnly = async () => {
@@ -2356,7 +2438,7 @@ const startBatchCheckFromSiteManagement = async () => {
     selectChatOnly: isModelProbeWindow.value,
     checkedKeys: modelKeys,
     batchConcurrency: Number(batchConcurrency.value || 25),
-    modelTimeout: Number(modelTimeout.value || 15),
+    modelTimeout: normalizeModelTimeoutSeconds(modelTimeout.value),
   });
   logClientDiagnostic('model_probe.pending_batch_start', JSON.stringify({
     selectedSiteCacheKeyCount: selectedSiteCacheKeys.value.length,
@@ -2365,9 +2447,9 @@ const startBatchCheckFromSiteManagement = async () => {
     checkedKeysPreview: modelKeys.slice(0, 16),
     selectChatOnly: isModelProbeWindow.value,
     batchConcurrency: Number(batchConcurrency.value || 25),
-    modelTimeout: Number(modelTimeout.value || 15),
+    modelTimeout: normalizeModelTimeoutSeconds(modelTimeout.value),
   }));
-  await router.push('/');
+  await router.push('/batch');
 };
 
 const openSiteUrl = url => {
@@ -2391,13 +2473,64 @@ const handleTreeExpand = keys => {
   expandedKeys.value = Array.isArray(keys) ? [...keys] : [];
 };
 
+const findTreeNodeByKey = (targetKey, nodes = treeData.value) => {
+  const normalizedTargetKey = String(targetKey || '').trim();
+  if (!normalizedTargetKey) return null;
+  const stack = [...(Array.isArray(nodes) ? nodes : [])];
+  const visited = new WeakSet();
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (visited.has(node)) continue;
+    visited.add(node);
+    if (String(node?.key || '').trim() === normalizedTargetKey) return node;
+    const children = Array.isArray(node?.children) ? node.children : [];
+    children.forEach(child => stack.push(child));
+  }
+  return null;
+};
+
+const findTreeNodeByPos = pos => {
+  const parts = String(pos || '')
+    .split('-')
+    .map(item => Number(item))
+    .filter(item => Number.isInteger(item) && item >= 0);
+  if (parts.length < 2) return null;
+  let nodes = treeData.value;
+  let current = null;
+  for (const index of parts.slice(1)) {
+    if (!Array.isArray(nodes) || !nodes[index]) return null;
+    current = nodes[index];
+    nodes = current?.children;
+  }
+  return current;
+};
+
+const getTreeEventNode = info => {
+  const rawNode = info?.node || null;
+  const dataNode = rawNode?.dataRef || null;
+  const key = String(dataNode?.key || rawNode?.key || rawNode?.eventKey || '').trim();
+  const pos = String(dataNode?.pos || rawNode?.pos || '').trim();
+  return findTreeNodeByKey(key) || findTreeNodeByPos(pos) || null;
+};
+
 const handleTreeCheck = (keys, info) => {
   const normalizedChecked = normalizeTreeKeyArray(Array.isArray(keys) ? keys : []);
   const normalizedHalfChecked = normalizeTreeKeyArray([
     ...(Array.isArray(keys?.halfChecked) ? keys.halfChecked : []),
     ...(Array.isArray(info?.halfCheckedKeys) ? info.halfCheckedKeys : []),
   ]);
-  checkedKeys.value = normalizedChecked;
+  const checkedSet = new Set(normalizedChecked.filter(isSelectableModelKey));
+  const eventNode = getTreeEventNode(info);
+  const eventModelKeys = collectSelectableModelKeysFromTreeNodes(eventNode ? [eventNode] : [], []);
+  if (eventModelKeys.length > 0) {
+    if (info?.checked === false) {
+      eventModelKeys.forEach(key => checkedSet.delete(key));
+    } else {
+      eventModelKeys.forEach(key => checkedSet.add(key));
+    }
+  }
+  checkedKeys.value = normalizeTreeKeyArray(Array.from(checkedSet));
   halfCheckedKeys.value = normalizedHalfChecked;
   const checkedKeyKinds = {
     siteRoot: normalizedChecked.filter(key => key.startsWith('site-root|')).length,
@@ -2504,7 +2637,7 @@ onMounted(async () => {
   const pendingBatchStart = consumePendingBatchStart();
   if (pendingBatchStart) {
     batchConcurrency.value = Number(pendingBatchStart?.batchConcurrency || batchConcurrency.value || 25);
-    modelTimeout.value = Number(pendingBatchStart?.modelTimeout || modelTimeout.value || 15);
+    modelTimeout.value = normalizeModelTimeoutSeconds(pendingBatchStart?.modelTimeout || modelTimeout.value || 15);
   }
   if (isModelProbeWindow.value && modelProbeContext.value?.siteCacheKey) {
     const probeSiteCacheKeys = Array.from(new Set([

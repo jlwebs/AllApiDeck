@@ -33,6 +33,28 @@ function clonePlainArray(value) {
   }
 }
 
+function sanitizeCachedTreeNodes(nodes) {
+  return (Array.isArray(nodes) ? nodes : [])
+    .filter(node => {
+      const key = String(node?.key || '').trim();
+      return !key.startsWith('discover-loading|');
+    })
+    .map(node => {
+      const nextNode = {
+        ...node,
+        isModelDiscovering: false,
+        modelDiscoveringHint: '',
+        isBrowserPending: false,
+        pendingHint: '',
+      };
+      const children = sanitizeCachedTreeNodes(node?.children);
+      if (Array.isArray(nextNode.children) || children.length > 0) {
+        nextNode.children = children;
+      }
+      return nextNode;
+    });
+}
+
 function getStorage(storageType) {
   if (typeof window === 'undefined') return null;
   return storageType === 'temp' ? window.sessionStorage : window.localStorage;
@@ -159,7 +181,7 @@ export function normalizeSiteCacheRecord(record) {
       ? [...(record.profileStorageFields || record._profileStorageFields)]
       : [],
     profileStorageOrigin: String(record.profileStorageOrigin || record._profileStorageOrigin || '').trim(),
-    cachedTreeNodes: clonePlainArray(record.cachedTreeNodes || record._cachedTreeNodes),
+    cachedTreeNodes: sanitizeCachedTreeNodes(clonePlainArray(record.cachedTreeNodes || record._cachedTreeNodes)),
     disabled: record.disabled === true,
     note: normalizeNote(record.note),
     createdAt: Number(record.createdAt || now),
@@ -402,7 +424,7 @@ export function removeCustomKeyFromSiteCache(siteCacheKey, tokenKey) {
 }
 
 export function updateSiteCacheTreeNodes(siteCacheKey, cachedTreeNodes) {
-  const normalizedNodes = clonePlainArray(cachedTreeNodes);
+  const normalizedNodes = sanitizeCachedTreeNodes(clonePlainArray(cachedTreeNodes));
   const updateOne = records => records.map(record => {
     if (record.siteCacheKey !== siteCacheKey) return record;
     return {

@@ -335,7 +335,7 @@
                     <span class="batch-settings-label">并发数</span>
                     <a-input-number v-model:value="batchConcurrency":min="1":max="100" class="batch-setting-input" />
                     <span class="batch-settings-label">超时(秒)</span>
-                    <a-input-number v-model:value="modelTimeout":min="1" class="batch-setting-input" />
+                    <a-input-number v-model:value="modelTimeout" :min="1" :max="60" class="batch-setting-input" />
                   </div>
                   <div class="actions">
                     <a-button class="batch-reset-button" @click="resetStep1">重新导入</a-button>
@@ -1694,6 +1694,30 @@ const siteQuotaPendingMap = new Map();
 
 const batchConcurrency = ref(25);
 const modelTimeout = ref(15);
+const MODEL_TIMEOUT_MAX_SECONDS = 60;
+const MODEL_DISCOVERY_ENDPOINT_TIMEOUT_MS = 8000;
+const MODEL_DISCOVERY_SITE_TIMEOUT_MS = 10000;
+const MODEL_DISCOVERY_TOKEN_LIMIT = 2;
+
+const normalizeModelTimeoutSeconds = value => {
+  const numeric = Number(value || 15);
+  if (!Number.isFinite(numeric)) return 15;
+  return Math.max(1, Math.min(MODEL_TIMEOUT_MAX_SECONDS, Math.round(numeric)));
+};
+
+async function apiFetchWithTimeout(url, init = {}, timeoutMs = MODEL_DISCOVERY_ENDPOINT_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await apiFetch(url, {
+      ...init,
+      signal: controller.signal,
+      timeoutMs,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const testing = ref(false);
 const isRefreshingBalances = ref(false); // NEW: 刷新余额状态
@@ -1730,11 +1754,120 @@ const normalizeCheckedLeafKeys = (keys) => {
     .filter(Boolean)
     .filter(isSelectableModelKey);
 };
-const handleSelectionTreeCheck = (nextCheckedKeys) => {
+const isVisualParentCheckKey = key => {
+  const text = String(key || '').trim();
+  return text.startsWith('site-root|') || text.startsWith('token|');
+};
+const normalizeCheckedTreeKeys = (keys) => {
+  const source = Array.isArray(keys) ? keys : [];
+  return source
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+    .filter(key => isSelectableModelKey(key) || isVisualParentCheckKey(key));
+};
+const isManagedSelectionCheckKey = key => isSelectableModelKey(key) || isVisualParentCheckKey(key);
+const normalizeRawTreeCheckKeys = keys => (
+  (Array.isArray(keys) ? keys : [])
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+);
+const orderCheckedTreeKeys = keys => {
+  const keySet = new Set((Array.isArray(keys) ? keys : []).map(item => String(item || '').trim()).filter(Boolean));
+  const ordered = [];
+  const visit = nodes => {
+    (Array.isArray(nodes) ? nodes : []).forEach(node => {
+      const key = String(node?.key || '').trim();
+      if (keySet.has(key)) ordered.push(key);
+      if (Array.isArray(node?.children) && node.children.length > 0) {
+        visit(node.children);
+      }
+    });
+  };
+  visit(treeData.value);
+  keySet.forEach(key => {
+    if (!ordered.includes(key)) ordered.push(key);
+  });
+  return ordered;
+};
+const findSelectionTreeNodeByKey = (targetKey, nodes = treeData.value) => {
+  const normalizedTargetKey = String(targetKey || '').trim();
+  if (!normalizedTargetKey) return null;
+  for (const node of Array.isArray(nodes) ? nodes : []) {
+    if (String(node?.key || '').trim() === normalizedTargetKey) return node;
+    const matched = findSelectionTreeNodeByKey(normalizedTargetKey, node?.children);
+    if (matched) return matched;
+  }
+  return null;
+};
+const findSelectionTreeNodeByPos = pos => {
+  const parts = String(pos || '')
+    .split('-')
+    .map(item => Number(item))
+    .filter(item => Number.isInteger(item) && item >= 0);
+  if (parts.length < 2) return null;
+  let nodes = treeData.value;
+  let current = null;
+  for (const index of parts.slice(1)) {
+    if (!Array.isArray(nodes) || !nodes[index]) return null;
+    current = nodes[index];
+    nodes = current?.children;
+  }
+  return current;
+};
+const getSelectionTreeEventNode = event => {
+  const rawNode = event?.node || null;
+  const dataNode = rawNode?.dataRef || null;
+  const key = String(dataNode?.key || rawNode?.key || rawNode?.eventKey || '').trim();
+  const pos = String(dataNode?.pos || rawNode?.pos || '').trim();
+  return findSelectionTreeNodeByKey(key) ||
+    findSelectionTreeNodeByPos(pos) ||
+    null;
+};
+const inferSelectionTreeCheckKey = (rawKeys, event) => {
+  const eventNode = getSelectionTreeEventNode(event);
+  const eventKey = String(eventNode?.key || event?.node?.eventKey || '').trim();
+  if (eventKey && (isManagedSelectionCheckKey(eventKey) || findSelectionTreeNodeByKey(eventKey))) return eventKey;
+
+  const previousSet = new Set(normalizeRawTreeCheckKeys(checkedKeys.value));
+  const rawSet = new Set(normalizeRawTreeCheckKeys(rawKeys));
+  if (event?.checked === false) {
+    return Array.from(previousSet).find(key => !rawSet.has(key) && findSelectionTreeNodeByKey(key)) || '';
+  }
+  return Array.from(rawSet).find(key => !previousSet.has(key) && findSelectionTreeNodeByKey(key)) ||
+    Array.from(rawSet).find(key => findSelectionTreeNodeByKey(key)) ||
+    '';
+};
+const collectTreeNodeAndDescendantKeys = (node, bucket = []) => {
+  if (!node || typeof node !== 'object') return bucket;
+  const key = String(node?.key || '').trim();
+  if (key) bucket.push(key);
+  (Array.isArray(node?.children) ? node.children : [])
+    .forEach(child => collectTreeNodeAndDescendantKeys(child, bucket));
+  return bucket;
+};
+const handleSelectionTreeCheck = (nextCheckedKeys, event = {}) => {
   const raw = Array.isArray(nextCheckedKeys)
     ? nextCheckedKeys
     : (Array.isArray(nextCheckedKeys?.checked) ? nextCheckedKeys.checked : []);
-  checkedKeys.value = normalizeCheckedLeafKeys(raw);
+  const rawKeys = normalizeRawTreeCheckKeys(raw);
+  const nextKeySet = new Set(rawKeys);
+  const previousKeySet = new Set(normalizeRawTreeCheckKeys(checkedKeys.value));
+  const eventNode = getSelectionTreeEventNode(event);
+  const nodeKey = inferSelectionTreeCheckKey(rawKeys, event);
+  const node = findSelectionTreeNodeByKey(nodeKey) || eventNode;
+  const subtreeKeys = collectTreeNodeAndDescendantKeys(node);
+
+  if (subtreeKeys.length > 0) {
+    const isUnchecked = event?.checked === false ||
+      (nodeKey && previousKeySet.has(nodeKey) && !nextKeySet.has(nodeKey));
+    if (isUnchecked) {
+      subtreeKeys.forEach(key => nextKeySet.delete(key));
+    } else {
+      subtreeKeys.forEach(key => nextKeySet.add(key));
+    }
+  }
+
+  checkedKeys.value = orderCheckedTreeKeys(Array.from(nextKeySet));
 };
 const testResults = ref([]); // all tasks
 const totalTasks = ref(0);
@@ -2801,7 +2934,7 @@ onMounted(() => {
         );
         if (!pendingBatchStart?.autoStart) return;
         batchConcurrency.value = Number(pendingBatchStart?.batchConcurrency || batchConcurrency.value || 25);
-        modelTimeout.value = Number(pendingBatchStart?.modelTimeout || modelTimeout.value || 15);
+        modelTimeout.value = normalizeModelTimeoutSeconds(pendingBatchStart?.modelTimeout || modelTimeout.value || 15);
         const pendingCheckedKeys = Array.isArray(pendingBatchStart?.checkedKeys)
           ? pendingBatchStart.checkedKeys.map(item => String(item || '').trim()).filter(Boolean)
           : [];
@@ -3095,12 +3228,12 @@ const getModelNameFromSelectableKey = (key) => {
 const collectSelectableModelKeysFromTreeNodes = (nodes, bucket = []) => {
   (Array.isArray(nodes) ? nodes : []).forEach(node => {
     const key = String(node?.key || '');
-    if (node?.isLeaf === true && isSelectableModelKey(key)) {
+    const children = Array.isArray(node?.children) ? node.children : [];
+    if ((node?.isLeaf === true || children.length === 0) && isSelectableModelKey(key)) {
       bucket.push(key);
       return;
     }
 
-    const children = Array.isArray(node?.children) ? node.children : [];
     if (children.length > 0) {
       collectSelectableModelKeysFromTreeNodes(children, bucket);
     }
@@ -5015,7 +5148,7 @@ const finalizeBridgeImportSession = async () => {
     writePendingBatchStart({
       autoStart: false,
     });
-    await router.push('/');
+    await router.push('/batch');
     message.info(`已切换到本次导入列表，共 ${importedSiteCacheKeys.length} 个站点`);
   } catch (error) {
     message.error(error?.message || '桥接记录导入失败');
@@ -5363,7 +5496,7 @@ const processAccounts = async (accounts) => {
           try {
             const rawDiscoveryId = site?.account_info?.id || site?.id || site?.uid || site?.user_id || '';
             const discoveryUid = /^\d+$/.test(String(rawDiscoveryId)) ? String(rawDiscoveryId) : '';
-            const res = await apiFetch(`/api/proxy-get?url=${encodeURIComponent(ep.url)}&uid=${discoveryUid}`, {
+            const res = await apiFetchWithTimeout(`/api/proxy-get?url=${encodeURIComponent(ep.url)}&uid=${discoveryUid}`, {
               headers: { Authorization: `Bearer ${testApiKey}` }
             });
             if (res.ok) {
@@ -5674,7 +5807,6 @@ const processAccountsV2 = async (accounts, options = {}) => {
             children: [],
           }),
         ];
-        persistSiteNodeSnapshot(siteCacheKey, siteNodes[idx]);
       } else {
         const existing = existingNodesBySiteCacheKey.get(siteCacheKey);
         siteNodes[idx] = Array.isArray(existing) && existing.length
@@ -5844,11 +5976,24 @@ const processAccountsV2 = async (accounts, options = {}) => {
       const traceLines = [
         `[DISCOVERY_START] site=${siteName} usableTokens=${usableTokens.length}`,
       ];
-      for (const token of usableTokens) {
+      const discoveryStartedAt = Date.now();
+      const discoveryTokens = usableTokens.slice(0, MODEL_DISCOVERY_TOKEN_LIMIT);
+      for (const token of discoveryTokens) {
+        if (Date.now() - discoveryStartedAt >= MODEL_DISCOVERY_SITE_TIMEOUT_MS) {
+          discoveryReason = 'timeout';
+          traceLines.push(`[TIMEOUT] site discovery exceeded ${Math.round(MODEL_DISCOVERY_SITE_TIMEOUT_MS / 1000)}s`);
+          break;
+        }
         const tokenKey = String(token?.key || token?.access_token || '').trim();
         if (!tokenKey) continue;
         const tokenPreview = maskTokenPreview(tokenKey);
         for (const ep of endpointsToTry) {
+          const remainingTimeoutMs = MODEL_DISCOVERY_SITE_TIMEOUT_MS - (Date.now() - discoveryStartedAt);
+          if (remainingTimeoutMs <= 0) {
+            discoveryReason = 'timeout';
+            traceLines.push(`[TIMEOUT] site discovery exceeded ${Math.round(MODEL_DISCOVERY_SITE_TIMEOUT_MS / 1000)}s`);
+            break;
+          }
           const requestHeaders = buildProviderReplayHeaders({
             tokenKey,
             uid: discoveryUid,
@@ -5860,9 +6005,10 @@ const processAccountsV2 = async (accounts, options = {}) => {
           };
           traceLines.push(`[TRY] token=${tokenPreview || '(empty)'} endpoint=${ep.type} url=${ep.url}`);
           try {
-            const res = await apiFetch(`/api/proxy-get?url=${encodeURIComponent(ep.url)}&uid=${discoveryUid}`, {
+            const endpointTimeoutMs = Math.max(1000, Math.min(MODEL_DISCOVERY_ENDPOINT_TIMEOUT_MS, remainingTimeoutMs));
+            const res = await apiFetchWithTimeout(`/api/proxy-get?url=${encodeURIComponent(ep.url)}&uid=${discoveryUid}`, {
               headers: { Authorization: `Bearer ${tokenKey}` },
-            });
+            }, endpointTimeoutMs);
             if (!res.ok) {
               let errorPayload = '';
               try {
@@ -5901,11 +6047,15 @@ const processAccountsV2 = async (accounts, options = {}) => {
               traceLines.push(`[EMPTY_MODELS] ${ep.url} payload=${stringifyPreview(result) || '(empty)'}`);
             }
           } catch (e) {
-            discoveryReason = `exception_${e?.message || 'unknown'}`;
-            traceLines.push(`[EXCEPTION] ${ep.url} error=${e?.message || 'unknown'}`);
+            const isAbort = e?.name === 'AbortError' || /aborted|timeout/i.test(String(e?.message || ''));
+            discoveryReason = isAbort ? 'timeout' : `exception_${e?.message || 'unknown'}`;
+            traceLines.push(isAbort
+              ? `[TIMEOUT] ${ep.url} exceeded ${Math.round(Math.min(MODEL_DISCOVERY_ENDPOINT_TIMEOUT_MS, remainingTimeoutMs) / 1000)}s`
+              : `[EXCEPTION] ${ep.url} error=${e?.message || 'unknown'}`);
           }
         }
         if (supportedModels.length > 0) break;
+        if (discoveryReason === 'timeout' && Date.now() - discoveryStartedAt >= MODEL_DISCOVERY_SITE_TIMEOUT_MS) break;
       }
 
       if (supportedModels.length === 0) {
@@ -5972,7 +6122,50 @@ const processAccountsV2 = async (accounts, options = {}) => {
       while (currentIndex < snapshot.length) {
         const idx = currentIndex++;
         if (runVersion !== discoveryVersion) return;
-        const nodes = await discoverOne(idx);
+        let nodes = [];
+        try {
+          nodes = await discoverOne(idx);
+        } catch (error) {
+          const snapshotSite = snapshot[idx] || extractedSites[idx] || {};
+          const siteName = String(snapshotSite?.site_name || `站点${idx + 1}`);
+          const siteUrl = String(snapshotSite?.site_url || '').replace(/\/+$/, '').trim();
+          const siteCacheKey = String(snapshotSite?._siteCacheKey || snapshotSite?.siteCacheKey || buildSiteCacheKey(snapshotSite)).trim();
+          const rawError = error?.message || String(error || 'model_discovery_failed');
+          const userFacingError = formatUserFacingErrorText(rawError);
+          noModelSiteCount += 1;
+          nodes = [
+            withPendingMeta(siteName, {
+              title: `${idx + 1}. [${siteName}]`,
+              key: `no-model-site|${siteCacheKey}|${idx}`,
+              checkable: false,
+              selectable: false,
+              disableCheckbox: false,
+              switcherIcon: false,
+              isModelDiscovering: false,
+              isSiteRoot: true,
+              siteCacheKey,
+              class: 'site-root-summary-node',
+              titleClass: 'tree-node-grey',
+              providerTitleText: `${idx + 1}. [${siteName}]`,
+              providerStatusText: `- 模型检测失败：${userFacingError}`,
+              providerSiteUrl: siteUrl,
+              isProviderDiagnostic: true,
+              providerDiagnostic: {
+                stage: 'model_discovery',
+                siteName,
+                siteUrl,
+                extractionMode,
+                rawError,
+                userFacingError,
+                traceLines: [
+                  `[DISCOVERY_EXCEPTION] site=${siteName}`,
+                  `[ERROR] ${rawError}`,
+                ],
+              },
+              children: [],
+            }),
+          ];
+        }
         if (runVersion !== discoveryVersion) return;
         siteNodes[idx] = nodes;
         const snapshotSite = snapshot[idx] || extractedSites[idx];
@@ -7205,7 +7398,7 @@ const runSingleTest = async (task, customPayload = null) => {
   const keyToUse = customPayload ? customPayload.key : task.apiKey;
   const messagesToUse = customPayload ? customPayload.messages : buildQuickTestMessages();
 
-  let backendTimeoutMs = modelTimeout.value * 1000;
+  let backendTimeoutMs = normalizeModelTimeoutSeconds(modelTimeout.value) * 1000;
   if (modelToTest.startsWith('o1-')) {
     backendTimeoutMs *= 6;
   }

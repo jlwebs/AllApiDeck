@@ -1,5 +1,8 @@
-export const DEFAULT_CODEX_TARGET_UA = `originator: Codex Desktop
+export const LEGACY_DEFAULT_CODEX_TARGET_UA = `originator: Codex Desktop
 user-agent: Codex Desktop/0.142.0-alpha.6 (Windows 10.0.19044; x86_64) unknown (Codex Desktop; 26.616.51431)`;
+
+export const DEFAULT_CODEX_TARGET_UA = `originator: Codex Desktop
+user-agent: codex-tui/0.142.4 (Windows 10.0.19044; x86_64) WindowsTerminal (codex-tui; 0.142.4)`;
 
 export const LEGACY_DEFAULT_CLAUDE_TARGET_UA = 'User-Agent: claude-cli/2.1.129 (external, cli); x-app: cli';
 
@@ -50,6 +53,15 @@ export function normalizeUserAgentMappingEntry(value) {
 
 function upgradeDefaultUserAgentMappingEntry(entry) {
   const normalized = normalizeUserAgentMappingEntry(entry);
+  if (
+    normalized.modelContains.toLowerCase() === 'gpt' &&
+    normalized.targetUA === LEGACY_DEFAULT_CODEX_TARGET_UA
+  ) {
+    return {
+      ...normalized,
+      targetUA: DEFAULT_CODEX_TARGET_UA,
+    };
+  }
   if (
     normalized.modelContains.toLowerCase() === 'claude' &&
     normalized.targetUA === LEGACY_DEFAULT_CLAUDE_TARGET_UA
