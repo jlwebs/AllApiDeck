@@ -403,3 +403,86 @@ func TestTransformOpenAIChatStreamToResponsesConvertsReadErrorToIncomplete(t *te
 		t.Fatalf("expected DONE marker after read error conversion:\n%s", payload)
 	}
 }
+
+func TestConvertResponsesRequestToolChoiceToChat(t *testing.T) {
+	// Test case 1: string values should pass through
+	result := convertResponsesRequestToolChoiceToChat("required")
+	if result != "required" {
+		t.Fatalf("expected 'required', got %#v", result)
+	}
+
+	result = convertResponsesRequestToolChoiceToChat("auto")
+	if result != "auto" {
+		t.Fatalf("expected 'auto', got %#v", result)
+	}
+
+	result = convertResponsesRequestToolChoiceToChat("none")
+	if result != "none" {
+		t.Fatalf("expected 'none', got %#v", result)
+	}
+
+	// Test case 2: invalid string should return nil
+	result = convertResponsesRequestToolChoiceToChat("invalid")
+	if result != nil {
+		t.Fatalf("expected nil for invalid string, got %#v", result)
+	}
+
+	// Test case 3: correct nested format {"type": "function", "function": {"name": "..."}}
+	result = convertResponsesRequestToolChoiceToChat(map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name": "get_weather",
+		},
+	})
+	resultMap, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any, got %T", result)
+	}
+	if resultMap["type"] != "function" {
+		t.Fatalf("expected type 'function', got %#v", resultMap["type"])
+	}
+	functionMap, ok := resultMap["function"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected 'function' to be a map[string]any, got %T", resultMap["function"])
+	}
+	if functionMap["name"] != "get_weather" {
+		t.Fatalf("expected function name 'get_weather', got %#v", functionMap["name"])
+	}
+
+	// Test case 4: legacy flat format {"type": "function", "name": "..."} should also work
+	result = convertResponsesRequestToolChoiceToChat(map[string]any{
+		"type": "function",
+		"name": "search_database",
+	})
+	resultMap, ok = result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any for legacy format, got %T", result)
+	}
+	if resultMap["type"] != "function" {
+		t.Fatalf("expected type 'function', got %#v", resultMap["type"])
+	}
+	functionMap, ok = resultMap["function"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected 'function' to be a map[string]any, got %T", resultMap["function"])
+	}
+	if functionMap["name"] != "search_database" {
+		t.Fatalf("expected function name 'search_database', got %#v", functionMap["name"])
+	}
+
+	// Test case 5: missing name should return nil
+	result = convertResponsesRequestToolChoiceToChat(map[string]any{
+		"type": "function",
+	})
+	if result != nil {
+		t.Fatalf("expected nil for missing name, got %#v", result)
+	}
+
+	// Test case 6: wrong type should return nil
+	result = convertResponsesRequestToolChoiceToChat(map[string]any{
+		"type": "other",
+		"name": "test",
+	})
+	if result != nil {
+		t.Fatalf("expected nil for wrong type, got %#v", result)
+	}
+}

@@ -967,7 +967,17 @@ func convertResponsesRequestToolChoiceToChat(raw any) any {
 		if choiceType != "function" {
 			return nil
 		}
-		name := strings.TrimSpace(toStringValue(typed["name"]))
+		// OpenAI Responses API tool_choice format: {"type": "function", "function": {"name": "..."}}
+		// Extract name from the nested function object
+		functionMap, _ := typed["function"].(map[string]any)
+		var name string
+		if functionMap != nil {
+			name = strings.TrimSpace(toStringValue(functionMap["name"]))
+		}
+		// Fallback: check if name is at top level (non-standard but handle it)
+		if name == "" {
+			name = strings.TrimSpace(toStringValue(typed["name"]))
+		}
 		if name == "" {
 			return nil
 		}

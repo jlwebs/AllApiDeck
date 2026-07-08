@@ -1134,12 +1134,29 @@ func buildAnyrouterClaudeUpgradeHint(model string) string {
 }
 
 func extractCheckErrorMessage(payload map[string]any, fallback string) string {
-	return firstNonEmpty(
+	extracted := firstNonEmpty(
 		getNestedString(payload, "error", "message"),
 		strings.TrimSpace(toStringValue(payload["message"])),
 		strings.TrimSpace(toStringValue(payload["error"])),
-		fallback,
 	)
+
+	// If we extracted something meaningful, return it
+	if extracted != "" && extracted != "null" {
+		return extracted
+	}
+
+	// For common status codes, provide meaningful fallback messages
+	if strings.HasPrefix(fallback, "HTTP 401") {
+		return "HTTP 401 Unauthorized - API key invalid or expired"
+	}
+	if strings.HasPrefix(fallback, "HTTP 403") {
+		return "HTTP 403 Forbidden - Access denied"
+	}
+	if strings.HasPrefix(fallback, "HTTP 429") {
+		return "HTTP 429 Too Many Requests - Rate limit exceeded"
+	}
+
+	return fallback
 }
 
 func isRetryableCheckStatus(status int) bool {

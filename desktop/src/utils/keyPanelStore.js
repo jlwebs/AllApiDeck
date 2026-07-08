@@ -499,7 +499,16 @@ function buildQuickTestDiagnosticText(payload, statusCode, requestMeta = {}) {
       const status = Number(attempt?.status || 0);
       const endpoint = String(attempt?.endpoint || '').trim();
       const message = String(attempt?.message || '').trim();
-      lines.push(`${index + 1}. [${status || '?'}] ${endpoint}${message ? ` -> ${message}` : ''}`);
+
+      // For 401/403 errors, show the error message prominently
+      if (status === 401 || status === 403) {
+        const errorText = message || 'HTTP ' + status;
+        lines.push(`${index + 1}. [${status}] ${endpoint} -> ${errorText}`);
+      } else if (message) {
+        lines.push(`${index + 1}. [${status || '?'}] ${endpoint} -> ${message}`);
+      } else {
+        lines.push(`${index + 1}. [${status || '?'}] ${endpoint}`);
+      }
     });
   }
 

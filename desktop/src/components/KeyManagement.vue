@@ -104,6 +104,19 @@
                 <QueueOrbitIcon class="inventory-panel-tab-icon inventory-panel-tab-icon-console" />
                 <span class="inventory-panel-tab-label">Dispatch</span>
               </button>
+              <span class="inventory-panel-tab-divider" aria-hidden="true"></span>
+              <button
+                type="button"
+                class="inventory-panel-tab"
+                  :class="{ 'inventory-panel-tab-active': activeInventoryPanel === 'monitor' }"
+                  :aria-selected="activeInventoryPanel === 'monitor' ? 'true' : 'false'"
+                  aria-label="监控面板"
+                  title="监控面板"
+                @click.stop="setActiveInventoryPanel('monitor')"
+              >
+                <FundProjectionScreenOutlined class="inventory-panel-tab-icon inventory-panel-tab-icon-monitor" />
+                <span class="inventory-panel-tab-label">Monitor</span>
+              </button>
             </div>
             </div>
           </div>
@@ -251,6 +264,42 @@
               </button>
             </a-popconfirm>
           </a-space>
+          </div>
+
+          <div v-if="activeInventoryPanel === 'monitor'" class="inventory-panel-actions inventory-panel-actions-monitor">
+            <a-space wrap>
+              <span class="monitor-toolbar-summary">
+                24小时窗口 · {{ monitorActiveCount }}/{{ keyGroups.length }} 已监控
+              </span>
+              <a-select
+                v-model:value="monitorGlobalInterval"
+                style="width: 108px"
+                size="small"
+                @change="handleMonitorIntervalChange"
+              >
+                <a-select-option :value="5">5 分钟</a-select-option>
+                <a-select-option :value="10">10 分钟</a-select-option>
+                <a-select-option :value="15">15 分钟</a-select-option>
+                <a-select-option :value="30">30 分钟</a-select-option>
+              </a-select>
+              <a-tooltip title="刷新全部监控">
+                <button type="button" class="inventory-icon-button inventory-icon-button-primary" @click="handleMonitorRefreshAll">
+                  <ReloadOutlined />
+                </button>
+              </a-tooltip>
+              <a-popconfirm
+                title="确认清空所有监控历史记录？"
+                ok-text="清空"
+                cancel-text="取消"
+                placement="bottomRight"
+                :getPopupContainer="getSidebarPopupContainer"
+                @confirm="handleMonitorClearHistory"
+              >
+                <button type="button" class="inventory-icon-button inventory-icon-button-danger" title="清空监控历史">
+                  <DeleteOutlined />
+                </button>
+              </a-popconfirm>
+            </a-space>
           </div>
         </div>
 
@@ -812,6 +861,17 @@
             </div>
           </section>
         </div>
+
+        <!-- 监控面板 -->
+        <div v-if="activeInventoryPanel === 'monitor'" class="inventory-monitor-panel" aria-label="监控面板">
+          <MonitorPanel
+            :key-groups="keyGroups"
+            :get-group-records="getGroupRecordsForMonitor"
+            :global-interval="monitorGlobalInterval"
+            :refresh-signal="monitorRefreshSignal"
+            @optimize-queue="handleOptimizeQueue"
+          />
+        </div>
       </a-card>
 
       <div
@@ -1178,7 +1238,7 @@
 
 <script setup>
 import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { ClockCircleOutlined, DeleteOutlined, DownloadOutlined, EyeInvisibleOutlined, EyeOutlined, FileTextOutlined, ImportOutlined, KeyOutlined, MenuFoldOutlined, PlusOutlined, ReloadOutlined, SafetyCertificateOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
+import { ClockCircleOutlined, DeleteOutlined, DownloadOutlined, EyeInvisibleOutlined, EyeOutlined, FileTextOutlined, FundProjectionScreenOutlined, ImportOutlined, KeyOutlined, MenuFoldOutlined, PlusOutlined, ReloadOutlined, SafetyCertificateOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import { ConfigProvider, message, Modal, theme } from 'ant-design-vue';
 import { useRoute } from 'vue-router';
 import AppHeader from './AppHeader.vue';
@@ -1187,9 +1247,12 @@ import AdvancedProxyModal from './AdvancedProxyModal.vue';
 import AdvancedProxyRequestRecordsDrawer from './AdvancedProxyRequestRecordsDrawer.vue';
 import DesktopConfigDiffModal from './DesktopConfigDiffModal.vue';
 import SystemSettingsModal from './SystemSettingsModal.vue';
+import MonitorPanel from './MonitorPanel.vue';
 import { fetchModelList } from '../utils/api.js';
 import { logClientDiagnostic } from '../utils/clientDiagnostics.js';
 import { maskApiKey } from '../utils/normal.js';
+import monitorScheduler from '../utils/monitorScheduler.js';
+import { loadMonitorConfigs, setMonitorConfig, getMonitorConfig, clearAllMonitorHistory } from '../utils/monitorStore.js';
 import { apiFetch, isProbablyWailsRuntime, openUrlInSystemBrowser } from '../utils/runtimeApi.js';
 import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManagedAppConfigFiles } from '../utils/desktopConfigBridge.js';
 import {
@@ -1376,6 +1439,12 @@ const manualModelOptions = ref([]);
 const manualModelLoading = ref(false);
 const manualModelFetchKey = ref('');
 const activeInventoryPanel = ref('local');
+const monitorGlobalInterval = ref(10);
+const monitorRefreshSignal = ref(0);
+const monitorActiveCount = computed(() => {
+  const configs = loadMonitorConfigs();
+  return Object.values(configs).filter(c => c.enabled).length;
+});
 const advancedProxyConfigSnapshot = ref(normalizeAdvancedProxyConfig({}));
 const advancedProxyConsoleRecords = ref([]);
 const advancedProxyConsoleRecordsLoading = ref(false);
@@ -2773,7 +2842,14 @@ function stopAdvancedProxyConnectionClock() {
 }
 
 function setActiveInventoryPanel(panel) {
-  activeInventoryPanel.value = panel === 'console' ? 'console' : 'local';
+  if (panel === 'console') {
+    activeInventoryPanel.value = 'console';
+  } else if (panel === 'monitor') {
+    activeInventoryPanel.value = 'monitor';
+  } else {
+    activeInventoryPanel.value = 'local';
+  }
+
   if (activeInventoryPanel.value === 'console') {
     void refreshAdvancedProxyConsoleSnapshot();
     void refreshAdvancedProxyConsoleRecords();
@@ -2784,6 +2860,39 @@ function setActiveInventoryPanel(panel) {
     stopAdvancedProxyConsolePolling();
     stopAdvancedProxyConnectionClock();
   }
+}
+
+function handleMonitorIntervalChange(value) {
+  monitorGlobalInterval.value = value;
+  const configs = loadMonitorConfigs();
+  Object.entries(configs).forEach(([groupName, config]) => {
+    if (config.enabled) {
+      setMonitorConfig(groupName, { ...config, interval: value });
+      monitorScheduler.start(groupName, { ...config, interval: value });
+    }
+  });
+  message.success(`全局监控间隔已更新为 ${value} 分钟`);
+  monitorRefreshSignal.value++;
+}
+
+function handleMonitorRefreshAll() {
+  const configs = loadMonitorConfigs();
+  const activeGroups = Object.entries(configs).filter(([_, c]) => c.enabled);
+  if (activeGroups.length === 0) {
+    message.warning('当前没有启用的监控任务');
+    return;
+  }
+  activeGroups.forEach(([groupName]) => {
+    monitorScheduler.runCheck(groupName);
+  });
+  message.success(`正在刷新 ${activeGroups.length} 个监控任务`);
+  monitorRefreshSignal.value++;
+}
+
+function handleMonitorClearHistory() {
+  clearAllMonitorHistory();
+  message.success('已清空所有监控历史记录');
+  monitorRefreshSignal.value++;
 }
 
 function syncThemeState() {
@@ -2941,6 +3050,19 @@ function buildQuickFilterOptionLabel(category, version, sampleName) {
 function getGroupRecordCount(groupId) {
   if (!groupId) return 0;
   return allSortedRows.value.filter(record => normalizeRecordGroupIds(record?.groupIds).includes(groupId)).length;
+}
+
+function getGroupRecordsForMonitor(groupName) {
+  if (!groupName) return [];
+
+  const group = keyGroups.value.find(g => g.name === groupName);
+  if (!group) return [];
+
+  // 返回该分组下的所有记录
+  return allSortedRows.value.filter(record => {
+    const recordGroupIds = normalizeRecordGroupIds(record?.groupIds);
+    return recordGroupIds.includes(group.id);
+  });
 }
 
 function resetQuickGroupComposer() {
@@ -5681,6 +5803,75 @@ async function handleClearAdvancedProxyQueue() {
   await clearAdvancedProxyQueue();
 }
 
+async function handleOptimizeQueue(payload) {
+  const { groupName, queue, auto = false } = payload;
+
+  if (!queue || queue.length === 0) {
+    if (!auto) {
+      message.warning('没有可用的渠道进行优选（成功率均为0）');
+    }
+    return;
+  }
+
+  try {
+    // 找到该分组的所有记录
+    const group = keyGroups.value.find(g => g.name === groupName);
+    if (!group) {
+      message.error('分组不存在');
+      return;
+    }
+
+    const groupRecords = allSortedRows.value.filter(record => {
+      const recordGroupIds = normalizeRecordGroupIds(record?.groupIds);
+      return recordGroupIds.includes(group.id);
+    });
+
+    // 按优选队列顺序找到对应的 record
+    const optimizedRecords = [];
+    queue.forEach(item => {
+      const record = groupRecords.find(r => {
+        const recordSiteUrl = r.siteUrl || r.site_url || '';
+        const recordModel = getRecordSelectedModelValue(r, group.id);
+        return recordSiteUrl === item.siteUrl && recordModel === item.model;
+      });
+
+      if (record) {
+        optimizedRecords.push(record);
+      }
+    });
+
+    if (optimizedRecords.length === 0) {
+      message.warning('未找到匹配的记录');
+      return;
+    }
+
+    // 构建 provider 队列
+    const savedConfig = await getAdvancedProxyConfig();
+    const nextConfig = normalizeAdvancedProxyConfig(savedConfig || {});
+    const providers = optimizedRecords.map((record, index) => buildProviderFromManagedRecord(record, index + 1));
+
+    replaceAdvancedProxyQueueProviders(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, providers);
+    nextConfig.claude.providers = [...(nextConfig.queues?.[ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE]?.providers || [])];
+
+    const syncedConfig = syncAdvancedProxyConfigSnapshotFromCurrentRecords(nextConfig);
+    await setAdvancedProxyConfig(syncedConfig);
+
+    advancedProxyConfigSnapshot.value = normalizeAdvancedProxyConfig(syncedConfig);
+    advancedProxyFocusQueueScope.value = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE;
+    advancedProxyFocusQueueToken.value = Date.now();
+    showExperimentalFeatures.value = true;
+
+    // 手动触发时显示消息，自动触发时静默更新
+    if (!auto) {
+      message.success(`已将 ${groupName} 分组的 ${optimizedRecords.length} 条渠道按最近1小时成功率优选排序并写入 provider 队列`);
+    }
+  } catch (error) {
+    if (!auto) {
+      message.error(error?.message || '自动优选队列失败');
+    }
+  }
+}
+
 function getCurrentGroupFailedQuickTestRecords() {
   return displayedRows.value.filter(record => String(record?.quickTestStatus || '').trim() === 'error');
 }
@@ -6320,7 +6511,16 @@ function buildQuickTestDiagnosticText(payload, statusCode, requestMeta = {}) {
       const status = Number(attempt?.status || 0);
       const endpoint = String(attempt?.endpoint || '').trim();
       const messageText = String(attempt?.message || '').trim();
-      lines.push(`${index + 1}. [${status || '?'}] ${endpoint}${messageText ? ` -> ${messageText}` : ''}`);
+
+      // For 401/403 errors, show the error message prominently
+      if (status === 401 || status === 403) {
+        const errorText = messageText || 'HTTP ' + status;
+        lines.push(`${index + 1}. [${status}] ${endpoint} -> ${errorText}`);
+      } else if (messageText) {
+        lines.push(`${index + 1}. [${status || '?'}] ${endpoint} -> ${messageText}`);
+      } else {
+        lines.push(`${index + 1}. [${status || '?'}] ${endpoint}`);
+      }
     });
   }
 
@@ -7350,14 +7550,18 @@ function persistMeta() {
 .inventory-panel-tab-label{display:inline-block;font-size:11px;font-weight:800;line-height:1;letter-spacing:.04em;text-transform:uppercase}
 .inventory-panel-tab-icon-key{transform:translateY(1px)}
 .inventory-panel-tab-icon-console{transform:translateY(1px)}
+.inventory-panel-tab-icon-monitor{transform:translateY(1px)}
 .inventory-panel-tab::after{content:'';position:absolute;left:0;right:0;bottom:0;height:2px;border-radius:999px;background:transparent;opacity:0;transition:background .18s ease,opacity .18s ease}
 .inventory-panel-tab:hover{color:#3d563f}
 .inventory-panel-tab-active{color:#2d432f;background:linear-gradient(180deg,rgba(255,255,255,.58),rgba(255,255,255,.12))}
 .inventory-panel-tab-active::after{background:linear-gradient(90deg,rgba(75,108,62,.82),rgba(150,185,92,.54));opacity:1}
 .inventory-panel-tab-divider{width:1px;height:18px;background:rgba(104,124,94,.18);display:inline-flex;flex:0 0 auto}
 .inventory-panel-actions{display:flex;align-items:center;justify-content:flex-end;min-width:0;position:relative;z-index:10}
+.inventory-panel-actions-monitor{gap:10px}
+.monitor-toolbar-summary{font-size:12px;color:#8a9a80;font-weight:600;letter-spacing:0.02em;white-space:nowrap;margin-right:4px}
 .inventory-local-panel{display:flex;flex:1 1 auto;min-height:0;flex-direction:column}
 .inventory-console-panel{flex:1 1 auto;min-height:360px;padding:18px 0 12px;display:flex;flex-direction:column;gap:14px}
+.inventory-monitor-panel{flex:1 1 auto;min-height:400px;padding:0}
 .console-dispatch-top-grid{display:grid;grid-template-columns:minmax(0,65fr) minmax(300px,35fr);gap:14px;align-items:stretch}
 .console-queue-section,.console-dispatch-section,.console-connections-section{min-width:0;display:flex;flex-direction:column;gap:10px}
 .console-section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px}

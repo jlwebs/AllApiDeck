@@ -201,7 +201,10 @@
               </div>
 
               <div class="tree-wrapper">
-                <a-empty v-if="!treeData.length" description="当前没有可展示的站点缓存" />
+                <div v-if="isInitialLoading" class="site-tree-skeleton">
+                  <a-skeleton active :paragraph="{ rows: 8 }" />
+                </div>
+                <a-empty v-else-if="!treeData.length" description="当前没有可展示的站点缓存" />
                 <a-tree
                   v-else
                   :checked-keys="treeCheckedKeysBinding"
@@ -369,9 +372,9 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
-import { ConfigProvider, message, theme } from 'ant-design-vue';
+import { ConfigProvider, message, theme, Skeleton } from 'ant-design-vue';
 import {
   TagsOutlined,
   ReloadOutlined,
@@ -448,6 +451,7 @@ const modelTimeout = ref(15);
 const activeQuickFilters = ref([]);
 const quickFilterSelectionMode = ref(false);
 const siteGroupSiteFilterQuery = ref('');
+const isInitialLoading = ref(true);
 const siteBridgeSilentMode = ref(false);
 const siteBridgeSessionOpening = ref(false);
 const siteBridgePolling = ref(false);
@@ -478,48 +482,94 @@ const normalizeModelTimeoutSeconds = value => {
   return Math.max(1, Math.min(MODEL_TIMEOUT_MAX_SECONDS, Math.round(numeric)));
 };
 const isModelProbeWindow = computed(() => isCurrentLaunchMode('model-probe'));
+// Cache for buildDisplayCheckedTreeKeys to avoid redundant computation
+let cachedTreeDataSignature = '';
+let cachedCheckedKeysSignature = '';
+let cachedDisplayKeys = [];
+
 const buildDisplayCheckedTreeKeys = (nodes, checkedModelKeys) => {
+  // Generate signatures for caching
+  const treeSignature = `${nodes.length}_${nodes.map(n => n?.key).join(',')}`;
+  const checkedSignature = normalizeTreeKeyArray(checkedModelKeys).sort().join(',');
+
+  // Return cached result if inputs haven't changed
+  if (treeSignature === cachedTreeDataSignature && checkedSignature === cachedCheckedKeysSignature) {
+    return cachedDisplayKeys;
+  }
+
   const checkedModelSet = new Set(normalizeTreeKeyArray(checkedModelKeys).filter(isSelectableModelKey));
   const displayKeySet = new Set();
-  const modelKeysByNode = new WeakMap();
-  const visited = new WeakSet();
-  const stack = (Array.isArray(nodes) ? nodes : []).map(node => ({ node, ready: false }));
+
+  // Optimize: use Map instead of WeakMap for better memory management
+  const modelKeysByNodeId = new Map();
+  const visited = new Set();
+
+  // Optimize: single-pass traversal with depth tracking
+  const stack = [];
+  (Array.isArray(nodes) ? nodes : []).forEach((node, idx) => {
+    if (node && typeof node === 'object') {
+      stack.push({ node, nodeId: `root_${idx}`, ready: false });
+    }
+  });
 
   while (stack.length > 0) {
     const item = stack.pop();
-    const node = item?.node;
+    const { node, nodeId, ready } = item;
+
     if (!node || typeof node !== 'object') continue;
 
-    if (!item.ready) {
-      if (visited.has(node)) continue;
-      visited.add(node);
-      stack.push({ node, ready: true });
+    if (!ready) {
+      if (visited.has(nodeId)) continue;
+      visited.add(nodeId);
+
+      stack.push({ node, nodeId, ready: true });
+
       const children = Array.isArray(node?.children) ? node.children : [];
-      children.forEach(child => stack.push({ node: child, ready: false }));
+      for (let i = 0; i < children.length; i++) {
+        const child = children[i];
+        if (child && typeof child === 'object') {
+          stack.push({ node: child, nodeId: `${nodeId}_${i}`, ready: false });
+        }
+      }
       continue;
     }
 
     const key = String(node?.key || '').trim();
     const children = Array.isArray(node?.children) ? node.children : [];
     let modelKeys = [];
+
     if ((node?.isLeaf === true || children.length === 0) && isSelectableModelKey(key)) {
       modelKeys = [key];
       if (checkedModelSet.has(key)) displayKeySet.add(key);
     } else {
-      children.forEach(child => {
-        const childModelKeys = modelKeysByNode.get(child);
+      // Collect from children
+      for (let i = 0; i < children.length; i++) {
+        const childId = `${nodeId}_${i}`;
+        const childModelKeys = modelKeysByNodeId.get(childId);
         if (Array.isArray(childModelKeys) && childModelKeys.length > 0) {
           modelKeys.push(...childModelKeys);
         }
-      });
+      }
     }
-    modelKeysByNode.set(node, modelKeys);
+
+    modelKeysByNodeId.set(nodeId, modelKeys);
+
     if (key && modelKeys.length > 0 && modelKeys.every(modelKey => checkedModelSet.has(modelKey))) {
       displayKeySet.add(key);
     }
   }
 
-  return normalizeTreeKeyArray(Array.from(displayKeySet));
+  // Clear the map to free memory
+  modelKeysByNodeId.clear();
+
+  const result = normalizeTreeKeyArray(Array.from(displayKeySet));
+
+  // Update cache
+  cachedTreeDataSignature = treeSignature;
+  cachedCheckedKeysSignature = checkedSignature;
+  cachedDisplayKeys = result;
+
+  return result;
 };
 const treeCheckedKeysBinding = computed(() => {
   return buildDisplayCheckedTreeKeys(treeData.value, checkedKeys.value);
@@ -652,10 +702,25 @@ const textPromptPlaceholder = computed(() =>
 );
 const textPromptOkText = computed(() => (textPromptMode.value === 'sk' ? '追加' : '保存'));
 
+// Optimized shallow clone for tree nodes (faster than JSON deep clone)
 const cloneNodeList = value => {
   if (!Array.isArray(value)) return [];
   try {
-    return JSON.parse(JSON.stringify(value));
+    // Shallow clone is sufficient since we're not mutating nested objects
+    // and the tree is regenerated each time anyway
+    return value.map(node => {
+      if (!node || typeof node !== 'object') return node;
+      return {
+        ...node,
+        children: Array.isArray(node.children) ? node.children.map(child => {
+          if (!child || typeof child !== 'object') return child;
+          return {
+            ...child,
+            children: Array.isArray(child.children) ? [...child.children] : child.children,
+          };
+        }) : node.children,
+      };
+    });
   } catch {
     return [];
   }
@@ -1321,62 +1386,93 @@ const buildFallbackTree = (record, displayOrder) => {
   }];
 };
 
-const treeData = computed(() => filteredRecords.value.flatMap(record => {
-  const displayOrder = getStableSiteOrder(record) || 0;
-  const cachedNodesRaw = sanitizeCachedTreeNodesForDisplay(cloneNodeList(record.cachedTreeNodes));
-  const cachedNodes = isModelProbeWindow.value
-    ? normalizeProbeTokenTreeNodes(cachedNodesRaw)
-    : cachedNodesRaw;
-  if (!cachedNodes.length) {
-    return buildFallbackTree(record, displayOrder);
+// Optimize: Cache treeData computation with lazy evaluation
+let cachedTreeData = [];
+let cachedTreeDataRecordsSignature = '';
+let isComputingTreeData = false;
+
+const treeData = computed(() => {
+  // Prevent re-entrant computation
+  if (isComputingTreeData) {
+    return cachedTreeData;
   }
-  const siteDisplayTitle = `${displayOrder}. [${record.siteName}]`;
-  const siteModels = buildSiteModelPool(record, [], cachedNodes);
-  const customTokens = Array.isArray(record.customTokens) ? record.customTokens : [];
-  return cachedNodes.map(node => {
-    if (node?.isSiteRoot) {
-      const existingChildren = (Array.isArray(node?.children) ? node.children : []).map((child, index) => {
-        if (!String(child?.key || '').startsWith('token|')) return child;
-        const tokenKey = extractTokenKeyFromNode(child) || `token-${index + 1}`;
-        const tokenModels = collectLeafModelNames([child]);
-        const tokenNeedsModelDebug = tokenModels.length === 0;
-        return {
-          ...child,
-          siteNeedsModelDebug: tokenNeedsModelDebug,
-          providerDiagnostic: tokenNeedsModelDebug
-            ? ensureTokenModelDiagnosticReplay(record, { _origin: child?.isManualToken ? 'manual' : 'built-in', status: 1 }, tokenKey, tokenModels, child?.providerDiagnostic)
-            : (child?.providerDiagnostic || null),
-          titleClass: tokenNeedsModelDebug ? 'tree-site-model-missing' : (child?.titleClass || ''),
-        };
+
+  const currentRecords = filteredRecords.value;
+  const recordsSignature = currentRecords.map(r => `${r.siteCacheKey}_${r.cachedTreeNodes?.length || 0}`).join('|');
+
+  // Return cached result if records haven't changed
+  if (recordsSignature === cachedTreeDataRecordsSignature && cachedTreeData.length > 0) {
+    return cachedTreeData;
+  }
+
+  isComputingTreeData = true;
+
+  try {
+    const result = currentRecords.flatMap(record => {
+      const displayOrder = getStableSiteOrder(record) || 0;
+      const cachedNodesRaw = sanitizeCachedTreeNodesForDisplay(cloneNodeList(record.cachedTreeNodes));
+      const cachedNodes = isModelProbeWindow.value
+        ? normalizeProbeTokenTreeNodes(cachedNodesRaw)
+        : cachedNodesRaw;
+      if (!cachedNodes.length) {
+        return buildFallbackTree(record, displayOrder);
+      }
+      const siteDisplayTitle = `${displayOrder}. [${record.siteName}]`;
+      const siteModels = buildSiteModelPool(record, [], cachedNodes);
+      const customTokens = Array.isArray(record.customTokens) ? record.customTokens : [];
+      return cachedNodes.map(node => {
+        if (node?.isSiteRoot) {
+          const existingChildren = (Array.isArray(node?.children) ? node.children : []).map((child, index) => {
+            if (!String(child?.key || '').startsWith('token|')) return child;
+            const tokenKey = extractTokenKeyFromNode(child) || `token-${index + 1}`;
+            const tokenModels = collectLeafModelNames([child]);
+            const tokenNeedsModelDebug = tokenModels.length === 0;
+            return {
+              ...child,
+              siteNeedsModelDebug: tokenNeedsModelDebug,
+              providerDiagnostic: tokenNeedsModelDebug
+                ? ensureTokenModelDiagnosticReplay(record, { _origin: child?.isManualToken ? 'manual' : 'built-in', status: 1 }, tokenKey, tokenModels, child?.providerDiagnostic)
+                : (child?.providerDiagnostic || null),
+              titleClass: tokenNeedsModelDebug ? 'tree-site-model-missing' : (child?.titleClass || ''),
+            };
+          });
+          const existingTokenKeys = new Set(existingChildren.map(extractTokenKeyFromNode).filter(Boolean));
+          const manualChildren = customTokens
+            .filter(token => !existingTokenKeys.has(String(token?.key || token?.access_token || '').trim()))
+            .map((token, index) => buildManualTokenNode(record, displayOrder, token, index, siteModels))
+            .filter(Boolean);
+          const mergedChildren = [...existingChildren, ...manualChildren];
+          const mergedModelNames = collectLeafModelNames(mergedChildren);
+          const usableKeyCount = mergedChildren.filter(child => String(child?.key || '').startsWith('token|')).length;
+          return {
+            ...node,
+            title: siteDisplayTitle,
+            providerTitleText: siteDisplayTitle,
+            providerStatusText: mergedModelNames.length > 0
+              ? `- ${usableKeyCount} 个可用 Key / ${mergedModelNames.length} 个模型`
+              : (usableKeyCount > 0 ? `- ${usableKeyCount} 个可用 Key` : String(node?.providerStatusText || '').trim()),
+            checkable: true,
+            children: mergedChildren,
+            disableCheckbox: false,
+            selectable: false,
+            siteCacheKey: record.siteCacheKey,
+            siteDisabled: record.disabled === true,
+            siteNote: String(record.note || '').trim(),
+            titleClass: record.disabled === true ? 'tree-site-disabled' : (node?.titleClass || ''),
+          };
+        }
+        return node;
       });
-      const existingTokenKeys = new Set(existingChildren.map(extractTokenKeyFromNode).filter(Boolean));
-      const manualChildren = customTokens
-        .filter(token => !existingTokenKeys.has(String(token?.key || token?.access_token || '').trim()))
-        .map((token, index) => buildManualTokenNode(record, displayOrder, token, index, siteModels))
-        .filter(Boolean);
-      const mergedChildren = [...existingChildren, ...manualChildren];
-      const mergedModelNames = collectLeafModelNames(mergedChildren);
-      const usableKeyCount = mergedChildren.filter(child => String(child?.key || '').startsWith('token|')).length;
-      return {
-        ...node,
-        title: siteDisplayTitle,
-        providerTitleText: siteDisplayTitle,
-        providerStatusText: mergedModelNames.length > 0
-          ? `- ${usableKeyCount} 个可用 Key / ${mergedModelNames.length} 个模型`
-          : (usableKeyCount > 0 ? `- ${usableKeyCount} 个可用 Key` : String(node?.providerStatusText || '').trim()),
-        checkable: true,
-        children: mergedChildren,
-        disableCheckbox: false,
-        selectable: false,
-        siteCacheKey: record.siteCacheKey,
-        siteDisabled: record.disabled === true,
-        siteNote: String(record.note || '').trim(),
-        titleClass: record.disabled === true ? 'tree-site-disabled' : (node?.titleClass || ''),
-      };
-    }
-    return node;
-  });
-}));
+    });
+
+    cachedTreeData = result;
+    cachedTreeDataRecordsSignature = recordsSignature;
+
+    return result;
+  } finally {
+    isComputingTreeData = false;
+  }
+});
 
 const syncExpandedKeys = () => {
   const allowed = new Set(treeData.value.map(node => node.key));
@@ -2613,10 +2709,19 @@ const handleProfileRecoveryPendingChange = () => {
   profileRecoveryPending.value = getProfileRecoveryPending();
 };
 
+let syncTreeKeysTimer = null;
+
 watch(treeData, () => {
-  syncExpandedKeys();
-  syncCheckedKeys();
-});
+  // Debounce to avoid rapid re-computation
+  if (syncTreeKeysTimer) {
+    clearTimeout(syncTreeKeysTimer);
+  }
+  syncTreeKeysTimer = setTimeout(() => {
+    syncExpandedKeys();
+    syncCheckedKeys();
+    syncTreeKeysTimer = null;
+  }, 100);
+}, { flush: 'post' });
 
 watch(siteBridgeImportGuideSignature, (next, prev) => {
   if (!next) {
@@ -2631,46 +2736,15 @@ watch(siteBridgeImportGuideSignature, (next, prev) => {
 onMounted(async () => {
   syncThemeState();
   logClientDiagnostic('model_probe.lifecycle', 'SiteManagement mounted');
+
+  // Priority 1: Load records immediately (lightweight)
   reloadRecords();
-  emitModelProbeSelectionSnapshot('on_mounted_after_reload');
-  handleProfileRecoveryPendingChange();
-  const pendingBatchStart = consumePendingBatchStart();
-  if (pendingBatchStart) {
-    batchConcurrency.value = Number(pendingBatchStart?.batchConcurrency || batchConcurrency.value || 25);
-    modelTimeout.value = normalizeModelTimeoutSeconds(pendingBatchStart?.modelTimeout || modelTimeout.value || 15);
-  }
-  if (isModelProbeWindow.value && modelProbeContext.value?.siteCacheKey) {
-    const probeSiteCacheKeys = Array.from(new Set([
-      ...(Array.isArray(modelProbeContext.value?.siteCacheKeys) ? modelProbeContext.value.siteCacheKeys : []),
-      String(modelProbeContext.value?.siteCacheKey || '').trim(),
-    ].map(item => String(item || '').trim()).filter(Boolean)));
-    const probeRecords = records.value.filter(record => probeSiteCacheKeys.includes(String(record?.siteCacheKey || '').trim()));
-    for (const probeRecord of probeRecords) {
-      await refreshSiteTreeModels(probeRecord, { strict: true });
-    }
-    if (probeRecords.length > 0) {
-      reloadRecords();
-    }
-    checkedKeys.value = treeData.value
-      .flatMap(node => {
-        const leafKeys = [];
-        const walk = nodes => {
-          (Array.isArray(nodes) ? nodes : []).forEach(item => {
-            const key = String(item?.key || '').trim();
-            if (item?.isLeaf === true && isSelectableModelKey(key)) {
-              leafKeys.push(key);
-              return;
-            }
-            if (Array.isArray(item?.children) && item.children.length > 0) {
-              walk(item.children);
-            }
-          });
-        };
-        walk([node]);
-        return leafKeys;
-      });
-    emitModelProbeSelectionSnapshot('on_mounted_after_select_chat_only');
-  }
+
+  // Show content after first render
+  await nextTick();
+  isInitialLoading.value = false;
+
+  // Priority 2: Register event listeners (non-blocking)
   window.addEventListener(THEME_MODE_CHANGE_EVENT, syncThemeState);
   window.addEventListener(SITE_CACHE_SYNC_EVENT, handleSync);
   window.addEventListener(SITE_CACHE_PROFILE_RECOVERY_EVENT, handleProfileRecoveryPendingChange);
@@ -2678,6 +2752,67 @@ onMounted(async () => {
   window.addEventListener('wheel', handleRefreshFailureGuideScrollDismiss, { capture: true, passive: true });
   window.addEventListener('scroll', handleRefreshFailureGuideScrollDismiss, true);
   window.addEventListener('resize', handleRefreshFailureGuideScrollDismiss);
+
+  // Priority 3: Handle pending state (deferred)
+  emitModelProbeSelectionSnapshot('on_mounted_after_reload');
+  handleProfileRecoveryPendingChange();
+
+  const pendingBatchStart = consumePendingBatchStart();
+  if (pendingBatchStart) {
+    batchConcurrency.value = Number(pendingBatchStart?.batchConcurrency || batchConcurrency.value || 25);
+    modelTimeout.value = normalizeModelTimeoutSeconds(pendingBatchStart?.modelTimeout || modelTimeout.value || 15);
+  }
+
+  // Priority 4: Heavy model probe work (async, non-blocking)
+  if (isModelProbeWindow.value && modelProbeContext.value?.siteCacheKey) {
+    // Use requestIdleCallback or setTimeout to defer heavy work
+    const deferredProbeWork = async () => {
+      const probeSiteCacheKeys = Array.from(new Set([
+        ...(Array.isArray(modelProbeContext.value?.siteCacheKeys) ? modelProbeContext.value.siteCacheKeys : []),
+        String(modelProbeContext.value?.siteCacheKey || '').trim(),
+      ].map(item => String(item || '').trim()).filter(Boolean)));
+
+      const probeRecords = records.value.filter(record => probeSiteCacheKeys.includes(String(record?.siteCacheKey || '').trim()));
+
+      for (const probeRecord of probeRecords) {
+        await refreshSiteTreeModels(probeRecord, { strict: true });
+        // Yield to browser between each record
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+
+      if (probeRecords.length > 0) {
+        reloadRecords();
+      }
+
+      checkedKeys.value = treeData.value
+        .flatMap(node => {
+          const leafKeys = [];
+          const walk = nodes => {
+            (Array.isArray(nodes) ? nodes : []).forEach(item => {
+              const key = String(item?.key || '').trim();
+              if (item?.isLeaf === true && isSelectableModelKey(key)) {
+                leafKeys.push(key);
+                return;
+              }
+              if (Array.isArray(item?.children) && item.children.length > 0) {
+                walk(item.children);
+              }
+            });
+          };
+          walk([node]);
+          return leafKeys;
+        });
+
+      emitModelProbeSelectionSnapshot('on_mounted_after_select_chat_only');
+    };
+
+    // Defer to idle time or setTimeout
+    if ('requestIdleCallback' in window) {
+      requestIdleCallback(() => deferredProbeWork(), { timeout: 2000 });
+    } else {
+      setTimeout(() => deferredProbeWork(), 100);
+    }
+  }
 });
 
 onBeforeUnmount(() => {
@@ -2690,6 +2825,12 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', handleRefreshFailureGuideScrollDismiss);
   stopSilentBridgeImportPolling();
   void closeSilentBridgeImportSession();
+
+  // Clean up sync timer
+  if (syncTreeKeysTimer) {
+    clearTimeout(syncTreeKeysTimer);
+    syncTreeKeysTimer = null;
+  }
 });
 </script>
 
@@ -3373,6 +3514,20 @@ onBeforeUnmount(() => {
   overflow-y: auto;
   box-shadow: 0 16px 36px rgba(98, 119, 84, 0.08);
   contain: layout paint;
+}
+
+.site-tree-skeleton {
+  padding: 20px;
+  animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .batch-settings-label {

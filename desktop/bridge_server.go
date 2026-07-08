@@ -22,6 +22,161 @@ import (
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+type bridgeAccessLogResponseWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (w *bridgeAccessLogResponseWriter) WriteHeader(status int) {
+	if w.status == 0 {
+		w.status = status
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *bridgeAccessLogResponseWriter) Write(data []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(data)
+	w.bytes += n
+	return n, err
+}
+
+func (w *bridgeAccessLogResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *bridgeAccessLogResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func advancedProxyBridgeAccessLogMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		path := ""
+		rawQuery := ""
+		if request != nil && request.URL != nil {
+			path = request.URL.Path
+			rawQuery = request.URL.RawQuery
+		}
+		if !strings.HasPrefix(path, "/advanced-proxy/") {
+			next.ServeHTTP(writer, request)
+			return
+		}
+
+		startedAt := time.Now()
+		method := ""
+		remoteAddr := ""
+		contentLength := int64(0)
+		userAgent := ""
+		if request != nil {
+			method = request.Method
+			remoteAddr = request.RemoteAddr
+			contentLength = request.ContentLength
+			userAgent = request.Header.Get("User-Agent")
+		}
+		enterMessage := fmt.Sprintf(
+			"[BRIDGE_ADV_PROXY_ENTER] method=%s path=%s raw_query=%s remote=%s content_length=%d ua=%s",
+			method,
+			previewBridgeText(path, 180),
+			previewBridgeText(rawQuery, 180),
+			previewBridgeText(remoteAddr, 80),
+			contentLength,
+			previewBridgeText(userAgent, 180),
+		)
+		appendAdvancedProxyLogf("%s", enterMessage)
+		appendLine(filepath.Join(resolveRuntimeLogDir(), "bridge-http.log"), fmt.Sprintf(
+			"advanced-proxy request %s %s remote=%s content_length=%d ua=%s",
+			method,
+			path,
+			previewBridgeText(remoteAddr, 80),
+			contentLength,
+			previewBridgeText(userAgent, 180),
+		))
+
+		loggedWriter := &bridgeAccessLogResponseWriter{ResponseWriter: writer}
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				panicMessage := fmt.Sprintf(
+					"[BRIDGE_ADV_PROXY_PANIC] method=%s path=%s remote=%s detail=%s",
+					method,
+					previewBridgeText(path, 180),
+					previewBridgeText(remoteAddr, 80),
+					previewBridgeText(fmt.Sprint(recovered), 360),
+				)
+				appendAdvancedProxyLogf("%s", panicMessage)
+				appendLine(filepath.Join(resolveRuntimeLogDir(), "bridge-http.log"), fmt.Sprintf(
+					"advanced-proxy panic %s %s remote=%s detail=%s",
+					method,
+					path,
+					previewBridgeText(remoteAddr, 80),
+					previewBridgeText(fmt.Sprint(recovered), 360),
+				))
+				http.Error(writer, "advanced proxy bridge panic", http.StatusBadGateway)
+				return
+			}
+			status := loggedWriter.status
+			if status == 0 {
+				status = http.StatusOK
+			}
+			elapsedMs := time.Since(startedAt).Milliseconds()
+			exitMessage := fmt.Sprintf(
+				"[BRIDGE_ADV_PROXY_EXIT] method=%s path=%s remote=%s status=%d bytes=%d elapsed_ms=%d",
+				method,
+				previewBridgeText(path, 180),
+				previewBridgeText(remoteAddr, 80),
+				status,
+				loggedWriter.bytes,
+				elapsedMs,
+			)
+			appendAdvancedProxyLogf("%s", exitMessage)
+			appendLine(filepath.Join(resolveRuntimeLogDir(), "bridge-http.log"), fmt.Sprintf(
+				"advanced-proxy response %s %s | %d bytes=%d elapsed_ms=%d",
+				method,
+				path,
+				status,
+				loggedWriter.bytes,
+				elapsedMs,
+			))
+		}()
+		next.ServeHTTP(loggedWriter, request)
+	})
+}
+
+func registerAdvancedProxyBridgeRoute(mux *http.ServeMux, pattern string, target string, handler func(http.ResponseWriter, *http.Request)) {
+	appendAdvancedProxyLogf("[BRIDGE_ADV_PROXY_ROUTE_REGISTER] pattern=%s target=%s", pattern, target)
+	mux.HandleFunc(pattern, func(writer http.ResponseWriter, request *http.Request) {
+		method := ""
+		path := pattern
+		remoteAddr := ""
+		contentLength := int64(0)
+		userAgent := ""
+		if request != nil {
+			method = request.Method
+			remoteAddr = request.RemoteAddr
+			contentLength = request.ContentLength
+			userAgent = request.Header.Get("User-Agent")
+			if request.URL != nil {
+				path = request.URL.Path
+			}
+		}
+		appendAdvancedProxyLogf(
+			"[BRIDGE_ADV_PROXY_DISPATCH] pattern=%s target=%s method=%s path=%s remote=%s content_length=%d ua=%s",
+			pattern,
+			target,
+			method,
+			previewBridgeText(path, 180),
+			previewBridgeText(remoteAddr, 80),
+			contentLength,
+			previewBridgeText(userAgent, 180),
+		)
+		handler(writer, request)
+	})
+}
+
 //go:embed plugin-bridge-js/bridge.user.js
 var embeddedBridgeUserScript string
 
@@ -540,19 +695,19 @@ func (a *App) ensureBridgeServer() error {
 	mux.HandleFunc("/advanced-proxy/ping", a.handleAdvancedProxyPing)
 	mux.HandleFunc("/advanced-proxy/claude/v1/messages", a.handleAdvancedProxyClaude)
 	mux.HandleFunc("/advanced-proxy/claude/messages", a.handleAdvancedProxyClaude)
-	mux.HandleFunc("/advanced-proxy/codex/v1/chat/completions", a.handleAdvancedProxyCodex)
-	mux.HandleFunc("/advanced-proxy/codex/v1/responses", a.handleAdvancedProxyCodex)
-	mux.HandleFunc("/advanced-proxy/codex/v1/responses/compact", a.handleAdvancedProxyCodex)
-	mux.HandleFunc("/advanced-proxy/opencode/v1/chat/completions", a.handleAdvancedProxyOpenCode)
-	mux.HandleFunc("/advanced-proxy/opencode/v1/responses", a.handleAdvancedProxyOpenCode)
-	mux.HandleFunc("/advanced-proxy/opencode/v1/responses/compact", a.handleAdvancedProxyOpenCode)
-	mux.HandleFunc("/advanced-proxy/openclaw/v1/chat/completions", a.handleAdvancedProxyOpenClaw)
-	mux.HandleFunc("/advanced-proxy/openclaw/v1/responses", a.handleAdvancedProxyOpenClaw)
-	mux.HandleFunc("/advanced-proxy/openclaw/v1/responses/compact", a.handleAdvancedProxyOpenClaw)
+	registerAdvancedProxyBridgeRoute(mux, "/advanced-proxy/codex/v1/chat/completions", "codex.chat", a.handleAdvancedProxyCodex)
+	registerAdvancedProxyBridgeRoute(mux, "/advanced-proxy/codex/v1/responses", "codex.responses", a.handleAdvancedProxyCodex)
+	registerAdvancedProxyBridgeRoute(mux, "/advanced-proxy/codex/v1/responses/compact", "codex.responses_compact", a.handleAdvancedProxyCodex)
+	registerAdvancedProxyBridgeRoute(mux, "/advanced-proxy/opencode/v1/chat/completions", "opencode.chat", a.handleAdvancedProxyOpenCode)
+	registerAdvancedProxyBridgeRoute(mux, "/advanced-proxy/opencode/v1/responses", "opencode.responses", a.handleAdvancedProxyOpenCode)
+	registerAdvancedProxyBridgeRoute(mux, "/advanced-proxy/opencode/v1/responses/compact", "opencode.responses_compact", a.handleAdvancedProxyOpenCode)
+	registerAdvancedProxyBridgeRoute(mux, "/advanced-proxy/openclaw/v1/chat/completions", "openclaw.chat", a.handleAdvancedProxyOpenClaw)
+	registerAdvancedProxyBridgeRoute(mux, "/advanced-proxy/openclaw/v1/responses", "openclaw.responses", a.handleAdvancedProxyOpenClaw)
+	registerAdvancedProxyBridgeRoute(mux, "/advanced-proxy/openclaw/v1/responses/compact", "openclaw.responses_compact", a.handleAdvancedProxyOpenClaw)
 
 	server := &http.Server{
 		Addr:              address,
-		Handler:           mux,
+		Handler:           advancedProxyBridgeAccessLogMiddleware(mux),
 		ReadHeaderTimeout: 3 * time.Second,
 	}
 

@@ -121,9 +121,30 @@ func resolveAdvancedProxyLogPath() string {
 	return filepath.Join(resolveRuntimeLogDir(), "advanced-proxy.log")
 }
 
+func resolveCodexProxyDebugLogPath() string {
+	return filepath.Join(resolveRuntimeLogDir(), "codex-proxy-debug.log")
+}
+
+func appendCodexProxyDebugLogf(format string, args ...any) {
+	appendLine(resolveCodexProxyDebugLogPath(), fmt.Sprintf(format, args...))
+}
+
+func shouldMirrorToCodexProxyDebugLog(message string) bool {
+	upper := strings.ToUpper(message)
+	lower := strings.ToLower(message)
+	return strings.Contains(upper, "OPENAI_PROXY") ||
+		strings.Contains(upper, "BRIDGE_ADV_PROXY") ||
+		strings.Contains(upper, "ANTI_POISON") && strings.Contains(lower, "app=codex") ||
+		strings.Contains(lower, "/advanced-proxy/codex") ||
+		strings.Contains(lower, "app=codex")
+}
+
 func appendAdvancedProxyLogf(format string, args ...any) {
 	message := fmt.Sprintf(format, args...)
 	appendLine(resolveAdvancedProxyLogPath(), message)
+	if shouldMirrorToCodexProxyDebugLog(message) {
+		appendCodexProxyDebugLogf("%s", message)
+	}
 	debugLogf("[ADV_PROXY] %s", message)
 }
 
@@ -6653,14 +6674,17 @@ func (a *App) handleAdvancedProxyClaude(writer http.ResponseWriter, request *htt
 }
 
 func (a *App) handleAdvancedProxyCodex(writer http.ResponseWriter, request *http.Request) {
+	appendAdvancedProxyLogf("[OPENAI_PROXY_APP_HANDLER] app=codex next=handleAdvancedProxyOpenAI path=%s", previewAdvancedProxyText(request.URL.Path, 160))
 	a.handleAdvancedProxyOpenAI("codex", writer, request)
 }
 
 func (a *App) handleAdvancedProxyOpenCode(writer http.ResponseWriter, request *http.Request) {
+	appendAdvancedProxyLogf("[OPENAI_PROXY_APP_HANDLER] app=opencode next=handleAdvancedProxyOpenAI path=%s", previewAdvancedProxyText(request.URL.Path, 160))
 	a.handleAdvancedProxyOpenAI("opencode", writer, request)
 }
 
 func (a *App) handleAdvancedProxyOpenClaw(writer http.ResponseWriter, request *http.Request) {
+	appendAdvancedProxyLogf("[OPENAI_PROXY_APP_HANDLER] app=openclaw next=handleAdvancedProxyOpenAI path=%s", previewAdvancedProxyText(request.URL.Path, 160))
 	a.handleAdvancedProxyOpenAI("openclaw", writer, request)
 }
 
@@ -6674,8 +6698,28 @@ func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWrit
 		request.ContentLength,
 		previewAdvancedProxyText(request.Header.Get("User-Agent"), 180),
 	)
+	path := strings.TrimSpace(request.URL.Path)
+	routeKind := ""
+	logAbort := func(stage string, status int, errorCode string, detail string) {
+		message := fmt.Sprintf(
+			"[OPENAI_PROXY_ABORT] app=%s stage=%s status=%d code=%s route=%s method=%s path=%s remote=%s content_length=%d detail=%s",
+			appType,
+			stage,
+			status,
+			firstNonEmpty(strings.TrimSpace(errorCode), "advanced_proxy_error"),
+			firstNonEmpty(strings.TrimSpace(routeKind), "unknown"),
+			request.Method,
+			previewAdvancedProxyText(path, 160),
+			previewAdvancedProxyText(request.RemoteAddr, 80),
+			request.ContentLength,
+			previewAdvancedProxyText(detail, 360),
+		)
+		appendAdvancedProxyLogf("%s", message)
+	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			detail := fmt.Sprintf("advanced proxy internal panic: %v", recovered)
+			logAbort("panic", http.StatusBadGateway, "advanced_proxy_panic", detail)
 			appendAdvancedProxyLogf(
 				"[OPENAI_PROXY_PANIC] app=%s path=%s detail=%s stack=%s",
 				appType,
@@ -6687,22 +6731,28 @@ func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWrit
 		}
 	}()
 	if request.Method == http.MethodOptions {
+		appendAdvancedProxyLogf(
+			"[OPENAI_PROXY_OPTIONS] app=%s path=%s remote=%s",
+			appType,
+			previewAdvancedProxyText(path, 160),
+			previewAdvancedProxyText(request.RemoteAddr, 80),
+		)
 		writer.WriteHeader(http.StatusOK)
 		return
 	}
 	if request.Method != http.MethodPost {
+		logAbort("method_check", http.StatusMethodNotAllowed, "advanced_proxy_error", "method not allowed")
 		writeOpenAIProxyError(writer, http.StatusMethodNotAllowed, "method not allowed", "advanced_proxy_error", "invalid_request_error")
 		return
 	}
 
 	remoteIP := extractBridgeRemoteIP(request.RemoteAddr)
 	if !isLoopbackBridgeRemote(remoteIP) {
+		logAbort("loopback_check", http.StatusForbidden, "advanced_proxy_error", fmt.Sprintf("advanced proxy only accepts loopback requests remote_ip=%s", remoteIP))
 		writeOpenAIProxyError(writer, http.StatusForbidden, "advanced proxy only accepts loopback requests", "advanced_proxy_error", "invalid_request_error")
 		return
 	}
 
-	path := strings.TrimSpace(request.URL.Path)
-	routeKind := ""
 	switch {
 	case strings.HasSuffix(path, "/responses/compact"):
 		routeKind = "responses_compact"
@@ -6711,24 +6761,67 @@ func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWrit
 	case strings.HasSuffix(path, "/chat/completions"):
 		routeKind = "chat"
 	default:
+		logAbort("route_match", http.StatusNotFound, "advanced_proxy_error", "unsupported advanced proxy path")
 		writeOpenAIProxyError(writer, http.StatusNotFound, "unsupported advanced proxy path", "advanced_proxy_error", "invalid_request_error")
 		return
 	}
+	appendAdvancedProxyLogf(
+		"[OPENAI_PROXY_ROUTE_KIND] app=%s path=%s route=%s",
+		appType,
+		previewAdvancedProxyText(path, 160),
+		routeKind,
+	)
 
 	config, err := loadAdvancedProxyConfig()
 	if err != nil {
+		logAbort("load_config", http.StatusInternalServerError, "advanced_proxy_error", err.Error())
 		writeOpenAIProxyError(writer, http.StatusInternalServerError, err.Error(), "advanced_proxy_error", "invalid_request_error")
 		return
 	}
+	appendAdvancedProxyLogf(
+		"[OPENAI_PROXY_STEP] app=%s stage=load_config route=%s enabled=%t app_enabled=%t",
+		appType,
+		routeKind,
+		config.Enabled,
+		advancedProxyAppEnabled(config, appType),
+	)
 	providers := resolveAdvancedProxyEffectiveProviders(config, appType)
+	appendAdvancedProxyLogf(
+		"[OPENAI_PROXY_STEP] app=%s stage=resolve_providers route=%s providers=%d",
+		appType,
+		routeKind,
+		len(providers),
+	)
 	providers = advancedProxyRuntime.OrderProvidersForDispatch(config, appType, providers)
-	if !config.Enabled || !advancedProxyAppEnabled(config, appType) || len(providers) == 0 {
+	providerNames := make([]string, 0, minInt(len(providers), 8))
+	for index, provider := range providers {
+		if index >= 8 {
+			break
+		}
+		providerNames = append(providerNames, advancedProxyProviderLabel(provider))
+	}
+	appendAdvancedProxyLogf(
+		"[OPENAI_PROXY_STEP] app=%s stage=order_providers route=%s providers=%d ordered=%s",
+		appType,
+		routeKind,
+		len(providers),
+		previewAdvancedProxyText(strings.Join(providerNames, ","), 260),
+	)
+	appEnabled := advancedProxyAppEnabled(config, appType)
+	if !config.Enabled || !appEnabled || len(providers) == 0 {
+		logAbort(
+			"config_ready",
+			http.StatusServiceUnavailable,
+			"advanced_proxy_error",
+			fmt.Sprintf("advanced proxy is disabled or has no providers enabled=%t app_enabled=%t providers=%d", config.Enabled, appEnabled, len(providers)),
+		)
 		writeOpenAIProxyError(writer, http.StatusServiceUnavailable, "advanced proxy is disabled or has no providers", "advanced_proxy_error", "invalid_request_error")
 		return
 	}
 
 	rawBody, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, advancedProxyMaxRequestBodyBytes))
 	if err != nil {
+		logAbort("read_body", http.StatusBadRequest, "advanced_proxy_error", fmt.Sprintf("failed to read request body: %v", err))
 		appendAdvancedProxyLogf(
 			"[OPENAI_PROXY_BODY_READ_FAIL] app=%s route=%s content_length=%d detail=%s",
 			appType,
@@ -6752,6 +6845,7 @@ func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWrit
 	)
 	requestBody := map[string]any{}
 	if err := json.Unmarshal(rawBody, &requestBody); err != nil {
+		logAbort("parse_json", http.StatusBadRequest, "advanced_proxy_error", fmt.Sprintf("invalid JSON request body: %v sha1=%s", err, bodyFingerprint))
 		appendAdvancedProxyLogf(
 			"[OPENAI_PROXY_JSON_INVALID] app=%s route=%s bytes=%d sha1=%s detail=%s head=%s tail=%s",
 			appType,

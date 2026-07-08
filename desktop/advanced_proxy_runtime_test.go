@@ -367,3 +367,50 @@ func TestSanitizeOrphanToolResultsPreservesAdjacentToolResult(t *testing.T) {
 		t.Fatalf("expected valid tool_result preserved, got %#v", block)
 	}
 }
+
+func TestAnthropicToolChoiceToResponsesReturnsCorrectFormat(t *testing.T) {
+	// Test case 1: type "any" should return "required"
+	result := anthropicToolChoiceToResponses(map[string]any{
+		"type": "any",
+	})
+	if result != "required" {
+		t.Fatalf("expected 'required' for type 'any', got %#v", result)
+	}
+
+	// Test case 2: type "auto" should return "auto"
+	result = anthropicToolChoiceToResponses(map[string]any{
+		"type": "auto",
+	})
+	if result != "auto" {
+		t.Fatalf("expected 'auto' for type 'auto', got %#v", result)
+	}
+
+	// Test case 3: type "tool" with function name should return correct object format
+	result = anthropicToolChoiceToResponses(map[string]any{
+		"type": "tool",
+		"name": "get_weather",
+	})
+	resultMap, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map[string]any for type 'tool', got %T", result)
+	}
+	if resultMap["type"] != "function" {
+		t.Fatalf("expected type 'function', got %#v", resultMap["type"])
+	}
+	functionMap, ok := resultMap["function"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected 'function' to be a map[string]any, got %T", resultMap["function"])
+	}
+	if functionMap["name"] != "get_weather" {
+		t.Fatalf("expected function name 'get_weather', got %#v", functionMap["name"])
+	}
+
+	// Test case 4: type "tool" with web_search should return "required"
+	result = anthropicToolChoiceToResponses(map[string]any{
+		"type": "tool",
+		"name": "web_search",
+	})
+	if result != "required" {
+		t.Fatalf("expected 'required' for web_search tool, got %#v", result)
+	}
+}

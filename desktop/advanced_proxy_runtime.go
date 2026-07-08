@@ -1751,7 +1751,9 @@ func anthropicToolChoiceToResponses(raw any) any {
 		}
 		return map[string]any{
 			"type": "function",
-			"name": strings.TrimSpace(toStringValue(choiceMap["name"])),
+			"function": map[string]any{
+				"name": strings.TrimSpace(toStringValue(choiceMap["name"])),
+			},
 		}
 	case "auto":
 		return "auto"

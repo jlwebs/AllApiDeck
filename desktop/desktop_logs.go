@@ -222,7 +222,7 @@ func classifyDesktopLogGroup(name string) (string, string) {
 		return "portable", "绿色化与迁移"
 	case strings.Contains(lower, "fetch"), strings.Contains(lower, "check-keys"), strings.Contains(lower, "bridge-http"), strings.Contains(lower, "extension-import"), strings.Contains(lower, "profile-assist"), strings.Contains(lower, "models"):
 		return "fetch", "抓取与检测"
-	case strings.Contains(lower, "client-runtime"), strings.Contains(lower, "wails"), strings.Contains(lower, "exe_backend"), strings.Contains(lower, "render"):
+	case strings.Contains(lower, "client-runtime"), strings.Contains(lower, "wails"), strings.Contains(lower, "exe_backend"), strings.Contains(lower, "render"), strings.Contains(lower, "codex-proxy-debug"):
 		return "runtime", "核心运行"
 	case strings.Contains(lower, "test"), strings.Contains(lower, "debug"):
 		return "debug", "调试与样本"
