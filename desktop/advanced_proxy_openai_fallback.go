@@ -478,7 +478,7 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 					"type": "function",
 					"function": map[string]any{
 						"name":      name,
-						"arguments": stringifyJSON(itemMap["arguments"]),
+						"arguments": normalizeChatToolCallArgumentsJSON(itemMap["arguments"], false),
 					},
 				})
 			case "function_call_output":
@@ -502,16 +502,12 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 					blockers = append(blockers, "custom_tool_call_missing_identity")
 					continue
 				}
-				arguments := firstNonEmptyExact(
-					stringifyJSON(itemMap["input"]),
-					stringifyJSON(itemMap["arguments"]),
-				)
 				queueToolCall(map[string]any{
 					"id":   toolCallID,
 					"type": "function",
 					"function": map[string]any{
 						"name":      name,
-						"arguments": arguments,
+						"arguments": normalizeCustomToolCallArgumentsForChat(itemMap["input"], itemMap["arguments"]),
 					},
 				})
 			case "custom_tool_call_output":
@@ -593,6 +589,20 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 	}
 	if toolChoice := convertResponsesRequestToolChoiceToChat(requestBody["tool_choice"]); toolChoice != nil {
 		chatBody["tool_choice"] = toolChoice
+	}
+
+	// Final guard for strict chat-compatible providers that reject freeform tool
+	// argument strings (for example: expected JSON object for tool arguments).
+	if chatMessages, ok := chatBody["messages"].([]map[string]any); ok {
+		sanitizeChatMessagesToolCallArguments(chatMessages)
+	} else if rawMessages, ok := chatBody["messages"].([]any); ok {
+		typedMessages := make([]map[string]any, 0, len(rawMessages))
+		for _, rawMessage := range rawMessages {
+			if message, ok := rawMessage.(map[string]any); ok {
+				typedMessages = append(typedMessages, message)
+			}
+		}
+		sanitizeChatMessagesToolCallArguments(typedMessages)
 	}
 
 	chatRaw, err := json.Marshal(chatBody)
@@ -743,6 +753,92 @@ func extractResponsesReasoningText(itemMap map[string]any) string {
 		}
 	}
 	return strings.Join(compactStringList(parts), "\n")
+}
+
+func normalizeChatToolCallArgumentsJSON(value any, freeform bool) string {
+	if normalized, err := normalizeToolArgumentsJSON(value); err == nil {
+		if strings.TrimSpace(normalized) != "" {
+			return normalized
+		}
+		if !freeform {
+			return "{}"
+		}
+	}
+
+	rawText := ""
+	switch typed := value.(type) {
+	case nil:
+		rawText = ""
+	case string:
+		rawText = typed
+	default:
+		rawText = stringifyJSON(typed)
+	}
+	rawText = strings.TrimSpace(rawText)
+	if rawText == "" {
+		return "{}"
+	}
+	// Strict chat-compatible providers (for example Grok-compatible gateways) require
+	// tool-call arguments to decode as a JSON object. Freeform Responses custom tools
+	// historically carry raw text (apply_patch), so wrap them under the synthetic
+	// "input" field used by convertResponsesRequestToolsToChat.
+	return stringifyJSON(map[string]any{"input": rawText})
+}
+
+func normalizeCustomToolCallArgumentsForChat(input any, arguments any) string {
+	if input != nil {
+		switch typed := input.(type) {
+		case string:
+			if strings.TrimSpace(typed) == "" {
+				return "{}"
+			}
+			return stringifyJSON(map[string]any{"input": typed})
+		case map[string]any:
+			if normalized, err := normalizeToolArgumentsJSON(typed); err == nil && strings.TrimSpace(normalized) != "" {
+				return normalized
+			}
+			return stringifyJSON(map[string]any{"input": stringifyJSON(typed)})
+		default:
+			return normalizeChatToolCallArgumentsJSON(typed, true)
+		}
+	}
+	return normalizeChatToolCallArgumentsJSON(arguments, true)
+}
+
+func sanitizeChatMessagesToolCallArguments(messages []map[string]any) {
+	for _, message := range messages {
+		if message == nil {
+			continue
+		}
+		toolCalls, ok := message["tool_calls"].([]any)
+		if !ok || len(toolCalls) == 0 {
+			// also support []map[string]any stored directly
+			if typedCalls, ok := message["tool_calls"].([]map[string]any); ok && len(typedCalls) > 0 {
+				for _, call := range typedCalls {
+					sanitizeChatToolCallArgumentsMap(call)
+				}
+			}
+			continue
+		}
+		for _, rawCall := range toolCalls {
+			call, ok := rawCall.(map[string]any)
+			if !ok || call == nil {
+				continue
+			}
+			sanitizeChatToolCallArgumentsMap(call)
+		}
+	}
+}
+
+func sanitizeChatToolCallArgumentsMap(call map[string]any) {
+	if call == nil {
+		return
+	}
+	functionMap, _ := call["function"].(map[string]any)
+	if functionMap == nil {
+		return
+	}
+	functionMap["arguments"] = normalizeChatToolCallArgumentsJSON(functionMap["arguments"], true)
 }
 
 func convertResponsesRequestContentToChatContent(raw any) (any, []string) {
@@ -994,6 +1090,16 @@ func convertResponsesRequestToolChoiceToChat(raw any) any {
 
 func shouldFallbackResponsesToChat(statusCode int, responseBody []byte) bool {
 	if statusCode == http.StatusNotFound || statusCode == http.StatusMethodNotAllowed {
+		return true
+	}
+	// 许多渠道不支持 /v1/responses 时，会直接返回 400/422（无法解析请求体格式），
+	// 或 501/502/503（未实现/网关层不识别路由）。这些都是路由不受支持的强信号，
+	// 值得降级到 chat 再试一次——chat 请求体更简单、兼容性更好。
+	if statusCode == http.StatusBadRequest ||
+		statusCode == http.StatusUnprocessableEntity ||
+		statusCode == http.StatusNotImplemented ||
+		statusCode == http.StatusBadGateway ||
+		statusCode == http.StatusServiceUnavailable {
 		return true
 	}
 	message := strings.ToLower(strings.TrimSpace(firstNonEmpty(summarizeAdvancedProxyBody(responseBody), fmt.Sprintf("http %d", statusCode))))

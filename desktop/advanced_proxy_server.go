@@ -820,42 +820,153 @@ func prepareOpenAIRequestForEncryptedContentHealing(rawBody []byte, appType stri
 	return sanitizedBody, context, nil
 }
 
-func isInvalidEncryptedContentError(statusCode int, body []byte) (string, string, string, bool) {
-	if statusCode >= 200 && statusCode < 300 || len(body) == 0 {
+func matchInvalidEncryptedContentError(message string, code string, errorType string) (string, string, string, bool) {
+	resolvedMessage := strings.TrimSpace(message)
+	resolvedCode := strings.TrimSpace(code)
+	resolvedType := strings.TrimSpace(errorType)
+	lowerMessage := strings.ToLower(resolvedMessage)
+	lowerCode := strings.ToLower(resolvedCode)
+	if lowerCode == "invalid_encrypted_content" {
+		return resolvedMessage, firstNonEmpty(resolvedCode, "invalid_encrypted_content"), firstNonEmpty(resolvedType, "invalid_request_error"), true
+	}
+	if strings.Contains(lowerMessage, "encrypted content") && (strings.Contains(lowerMessage, "could not be verified") || strings.Contains(lowerMessage, "decrypted") || strings.Contains(lowerMessage, "parsed")) {
+		return resolvedMessage, firstNonEmpty(resolvedCode, "invalid_encrypted_content"), firstNonEmpty(resolvedType, "invalid_request_error"), true
+	}
+	return "", "", "", false
+}
+
+func extractInvalidEncryptedContentErrorFromMap(decoded map[string]any) (string, string, string, bool) {
+	if decoded == nil {
+		return "", "", "", false
+	}
+	candidates := []struct {
+		message   string
+		code      string
+		errorType string
+	}{
+		{
+			message:   getNestedString(decoded, "error", "message"),
+			code:      getNestedString(decoded, "error", "code"),
+			errorType: getNestedString(decoded, "error", "type"),
+		},
+		{
+			message:   getNestedString(decoded, "response", "error", "message"),
+			code:      getNestedString(decoded, "response", "error", "code"),
+			errorType: getNestedString(decoded, "response", "error", "type"),
+		},
+		{
+			message:   strings.TrimSpace(toStringValue(decoded["message"])),
+			code:      strings.TrimSpace(toStringValue(decoded["code"])),
+			errorType: strings.TrimSpace(toStringValue(decoded["type"])),
+		},
+	}
+	for _, candidate := range candidates {
+		if message, code, errorType, ok := matchInvalidEncryptedContentError(candidate.message, candidate.code, candidate.errorType); ok {
+			return message, code, errorType, true
+		}
+	}
+	return "", "", "", false
+}
+
+func detectInvalidEncryptedContentErrorInBody(body []byte) (string, string, string, bool) {
+	if len(body) == 0 {
 		return "", "", "", false
 	}
 
 	var decoded map[string]any
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		message := normalizeAnthropicErrorMessage(body)
-		lower := strings.ToLower(message)
-		if strings.Contains(lower, "encrypted content") && (strings.Contains(lower, "could not be verified") || strings.Contains(lower, "decrypted") || strings.Contains(lower, "parsed")) {
-			return message, "invalid_encrypted_content", "invalid_request_error", true
+	if err := json.Unmarshal(body, &decoded); err == nil {
+		if message, code, errorType, ok := extractInvalidEncryptedContentErrorFromMap(decoded); ok {
+			return message, code, errorType, true
 		}
-		return "", "", "", false
 	}
 
-	message := firstNonEmpty(
-		getNestedString(decoded, "error", "message"),
-		strings.TrimSpace(toStringValue(decoded["message"])),
-	)
-	code := firstNonEmpty(
-		getNestedString(decoded, "error", "code"),
-		strings.TrimSpace(toStringValue(decoded["code"])),
-	)
-	errorType := firstNonEmpty(
-		getNestedString(decoded, "error", "type"),
-		strings.TrimSpace(toStringValue(decoded["type"])),
-	)
-	lowerMessage := strings.ToLower(strings.TrimSpace(message))
-	lowerCode := strings.ToLower(strings.TrimSpace(code))
-	if lowerCode == "invalid_encrypted_content" {
-		return message, code, firstNonEmpty(errorType, "invalid_request_error"), true
+	if events, err := parseAdvancedProxySSEEvents(body); err == nil {
+		for _, event := range events {
+			data, ok := advancedProxySSEJSONPayload(event)
+			if !ok {
+				continue
+			}
+			if message, code, errorType, ok := extractInvalidEncryptedContentErrorFromMap(data); ok {
+				return message, code, errorType, true
+			}
+		}
 	}
-	if strings.Contains(lowerMessage, "encrypted content") && (strings.Contains(lowerMessage, "could not be verified") || strings.Contains(lowerMessage, "decrypted") || strings.Contains(lowerMessage, "parsed")) {
-		return message, firstNonEmpty(code, "invalid_encrypted_content"), firstNonEmpty(errorType, "invalid_request_error"), true
+
+	message := normalizeAnthropicErrorMessage(body)
+	return matchInvalidEncryptedContentError(message, "", "")
+}
+
+func resolveEncryptedContentErrorStatusCode(body []byte, fallback int) int {
+	if fallback <= 0 {
+		fallback = http.StatusBadRequest
 	}
-	return "", "", "", false
+	if len(body) == 0 {
+		return fallback
+	}
+
+	readStatus := func(value any) int {
+		switch typed := value.(type) {
+		case float64:
+			if typed >= 400 && typed <= 599 {
+				return int(typed)
+			}
+		case int:
+			if typed >= 400 && typed <= 599 {
+				return typed
+			}
+		case string:
+			trimmed := strings.TrimSpace(typed)
+			if trimmed == "" {
+				return 0
+			}
+			var parsed int
+			if _, err := fmt.Sscanf(trimmed, "%d", &parsed); err == nil && parsed >= 400 && parsed <= 599 {
+				return parsed
+			}
+		}
+		return 0
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err == nil {
+		if status := readStatus(decoded["status_code"]); status > 0 {
+			return status
+		}
+		if responseMap, _ := decoded["response"].(map[string]any); responseMap != nil {
+			if status := readStatus(responseMap["status_code"]); status > 0 {
+				return status
+			}
+		}
+	}
+
+	if events, err := parseAdvancedProxySSEEvents(body); err == nil {
+		for _, event := range events {
+			data, ok := advancedProxySSEJSONPayload(event)
+			if !ok {
+				continue
+			}
+			if status := readStatus(data["status_code"]); status > 0 {
+				return status
+			}
+			if responseMap, _ := data["response"].(map[string]any); responseMap != nil {
+				if status := readStatus(responseMap["status_code"]); status > 0 {
+					return status
+				}
+			}
+		}
+	}
+	return fallback
+}
+
+func shouldInspectOpenAIStreamForEncryptedContentHealing(rawBody []byte, healingContext encryptedContentHealingContext) bool {
+	return healingContext.OriginalCount > 0 || containsEncryptedContentNeedle(rawBody)
+}
+
+func isInvalidEncryptedContentError(statusCode int, body []byte) (string, string, string, bool) {
+	if statusCode >= 200 && statusCode < 300 || len(body) == 0 {
+		return "", "", "", false
+	}
+	return detectInvalidEncryptedContentErrorInBody(body)
 }
 
 func advancedProxyProviderLabel(provider AdvancedProxyProvider) string {
@@ -1772,47 +1883,8 @@ func performJSONUpstreamRequest(method string, targetURL string, headers map[str
 		return 0, nil, nil, time.Since(startedAt), err
 	}
 	response, err := client.Do(request)
-	if shouldRetryOutboundDirect(outboundConfig, err) {
-		appendAdvancedProxyLogf(
-			"[OUTBOUND_PROXY_DIRECT_RETRY] method=%s endpoint=%s mode=%s detail=%s",
-			method,
-			targetURL,
-			buildOutboundProxyDiagnostics(outboundConfig, targetURL),
-			previewAdvancedProxyText(err.Error(), 260),
-		)
-		if resetErr := resetOutboundRequestBody(request); resetErr != nil {
-			return 0, nil, nil, time.Since(startedAt), resetErr
-		}
-		directClient, directErr := newOutboundDirectHTTPClient(clientTimeout)
-		if directErr != nil {
-			return 0, nil, nil, time.Since(startedAt), directErr
-		}
-		response, err = directClient.Do(request)
-	}
 	if err != nil {
 		return 0, nil, nil, time.Since(startedAt), err
-	}
-	if shouldRetryOutboundDirectStatus(outboundConfig, response.StatusCode) {
-		appendAdvancedProxyLogf(
-			"[OUTBOUND_PROXY_DIRECT_RETRY_STATUS] method=%s endpoint=%s mode=%s status=%d",
-			method,
-			targetURL,
-			buildOutboundProxyDiagnostics(outboundConfig, targetURL),
-			response.StatusCode,
-		)
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))
-		_ = response.Body.Close()
-		if resetErr := resetOutboundRequestBody(request); resetErr != nil {
-			return 0, nil, nil, time.Since(startedAt), resetErr
-		}
-		directClient, directErr := newOutboundDirectHTTPClient(clientTimeout)
-		if directErr != nil {
-			return 0, nil, nil, time.Since(startedAt), directErr
-		}
-		response, err = directClient.Do(request)
-		if err != nil {
-			return 0, nil, nil, time.Since(startedAt), err
-		}
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 8*1024*1024))
@@ -1852,57 +1924,8 @@ func performRawUpstreamRequest(method string, targetURL string, headers map[stri
 		return 0, nil, nil, nil, time.Since(startedAt), err
 	}
 	response, err := client.Do(request)
-	if shouldRetryOutboundDirect(outboundConfig, err) {
-		appendAdvancedProxyLogf(
-			"[OUTBOUND_PROXY_DIRECT_RETRY] method=%s endpoint=%s mode=%s stream=%t detail=%s",
-			method,
-			targetURL,
-			buildOutboundProxyDiagnostics(outboundConfig, targetURL),
-			keepStream,
-			previewAdvancedProxyText(err.Error(), 260),
-		)
-		if resetErr := resetOutboundRequestBody(request); resetErr != nil {
-			return 0, nil, nil, nil, time.Since(startedAt), resetErr
-		}
-		if keepStream {
-			client, err = newOutboundDirectStreamingHTTPClient(clientTimeout)
-		} else {
-			client, err = newOutboundDirectHTTPClient(clientTimeout)
-		}
-		if err != nil {
-			return 0, nil, nil, nil, time.Since(startedAt), err
-		}
-		response, err = client.Do(request)
-	}
 	if err != nil {
 		return 0, nil, nil, nil, time.Since(startedAt), err
-	}
-	if shouldRetryOutboundDirectStatus(outboundConfig, response.StatusCode) {
-		appendAdvancedProxyLogf(
-			"[OUTBOUND_PROXY_DIRECT_RETRY_STATUS] method=%s endpoint=%s mode=%s stream=%t status=%d",
-			method,
-			targetURL,
-			buildOutboundProxyDiagnostics(outboundConfig, targetURL),
-			keepStream,
-			response.StatusCode,
-		)
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))
-		_ = response.Body.Close()
-		if resetErr := resetOutboundRequestBody(request); resetErr != nil {
-			return 0, nil, nil, nil, time.Since(startedAt), resetErr
-		}
-		if keepStream {
-			client, err = newOutboundDirectStreamingHTTPClient(clientTimeout)
-		} else {
-			client, err = newOutboundDirectHTTPClient(clientTimeout)
-		}
-		if err != nil {
-			return 0, nil, nil, nil, time.Since(startedAt), err
-		}
-		response, err = client.Do(request)
-		if err != nil {
-			return 0, nil, nil, nil, time.Since(startedAt), err
-		}
 	}
 	if keepStream && response.StatusCode >= 200 && response.StatusCode < 300 {
 		if shouldBufferSuccessfulStreamingUpstreamResponse(response.Header) {
@@ -5549,12 +5572,42 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 						appendResponsesPhase("fallback_restore", advancedProxyOpenAIProtocolPreferResponses, fallbackPlan.ScopeKey)
 					}
 				} else {
-					appendResponsesPhase("original", 0, "")
+					// 即使 SupportsChat=false 也尝试 chat（providerPreferredRoute 是 chat）
+					if len(fallbackPlan.ChatBody) > 0 {
+						appendPhase(openAIProxyAttemptPhase{
+							outboundRoute:      "chat",
+							requestBody:        fallbackPlan.ChatBody,
+							resolvedModel:      firstNonEmpty(fallbackPlan.Model, resolvedModel),
+							responseTransform:  "chat_to_responses",
+							hostedWebSearch:    fallbackPlan.HostedWebSearch,
+							preferenceValue:    advancedProxyOpenAIProtocolPreferChat,
+							preferenceScopeKey: strings.TrimSpace(fallbackPlan.ScopeKey),
+							source:             "provider_config",
+							antiPoisonCtx:      antiPoisonCtx,
+							stringProtect:      stringProtectionCtx,
+						})
+					} else {
+						appendResponsesPhase("original", 0, "")
+					}
 				}
 				appendMessagesPhase("fallback_anthropic")
 			case "responses":
 				if chatOnlyResponsesProvider {
-					appendChatPhase("provider_chat_only", advancedProxyOpenAIProtocolPreferChat, fallbackPlan.ScopeKey)
+					// 强制添加 chat phase
+					if len(fallbackPlan.ChatBody) > 0 {
+						appendPhase(openAIProxyAttemptPhase{
+							outboundRoute:      "chat",
+							requestBody:        fallbackPlan.ChatBody,
+							resolvedModel:      firstNonEmpty(fallbackPlan.Model, resolvedModel),
+							responseTransform:  "chat_to_responses",
+							hostedWebSearch:    fallbackPlan.HostedWebSearch,
+							preferenceValue:    advancedProxyOpenAIProtocolPreferChat,
+							preferenceScopeKey: strings.TrimSpace(fallbackPlan.ScopeKey),
+							source:             "provider_chat_only",
+							antiPoisonCtx:      antiPoisonCtx,
+							stringProtect:      stringProtectionCtx,
+						})
+					}
 				} else {
 					appendResponsesPhase("provider_config", advancedProxyOpenAIProtocolPreferResponses, fallbackPlan.ScopeKey)
 					appendChatPhase("fallback", advancedProxyOpenAIProtocolPreferChat, fallbackPlan.ScopeKey)
@@ -5562,7 +5615,21 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 				appendMessagesPhase("fallback_anthropic")
 			default:
 				if chatOnlyResponsesProvider {
-					appendChatPhase("provider_chat_only", advancedProxyOpenAIProtocolPreferChat, fallbackPlan.ScopeKey)
+					// 强制添加 chat phase
+					if len(fallbackPlan.ChatBody) > 0 {
+						appendPhase(openAIProxyAttemptPhase{
+							outboundRoute:      "chat",
+							requestBody:        fallbackPlan.ChatBody,
+							resolvedModel:      firstNonEmpty(fallbackPlan.Model, resolvedModel),
+							responseTransform:  "chat_to_responses",
+							hostedWebSearch:    fallbackPlan.HostedWebSearch,
+							preferenceValue:    advancedProxyOpenAIProtocolPreferChat,
+							preferenceScopeKey: strings.TrimSpace(fallbackPlan.ScopeKey),
+							source:             "provider_chat_only",
+							antiPoisonCtx:      antiPoisonCtx,
+							stringProtect:      stringProtectionCtx,
+						})
+					}
 				} else {
 					appendResponsesPhase("original", 0, "")
 					appendChatPhase("fallback", advancedProxyOpenAIProtocolPreferChat, fallbackPlan.ScopeKey)
@@ -5572,9 +5639,40 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 		}
 		if len(phases) == 0 {
 			if chatOnlyResponsesProvider {
-				appendChatPhase("provider_chat_only", advancedProxyOpenAIProtocolPreferChat, fallbackPlan.ScopeKey)
+				// chatOnlyResponsesProvider 时，强制添加 chat phase
+				// 即使 SupportsChat=false 也要尝试（去掉 blockers 后的简化版本）
+				if len(fallbackPlan.ChatBody) > 0 {
+					appendPhase(openAIProxyAttemptPhase{
+						outboundRoute:      "chat",
+						requestBody:        fallbackPlan.ChatBody,
+						resolvedModel:      firstNonEmpty(fallbackPlan.Model, resolvedModel),
+						responseTransform:  "chat_to_responses",
+						hostedWebSearch:    fallbackPlan.HostedWebSearch,
+						preferenceValue:    advancedProxyOpenAIProtocolPreferChat,
+						preferenceScopeKey: strings.TrimSpace(fallbackPlan.ScopeKey),
+						source:             "provider_chat_only",
+						antiPoisonCtx:      antiPoisonCtx,
+						stringProtect:      stringProtectionCtx,
+					})
+				}
 			} else {
 				appendResponsesPhase("original", 0, "")
+				// 强制添加 chat fallback，即使 SupportsChat=false（可能有 blockers）
+				// 当 responses 失败时仍然值得尝试 chat
+				if len(fallbackPlan.ChatBody) > 0 {
+					appendPhase(openAIProxyAttemptPhase{
+						outboundRoute:      "chat",
+						requestBody:        fallbackPlan.ChatBody,
+						resolvedModel:      firstNonEmpty(fallbackPlan.Model, resolvedModel),
+						responseTransform:  "chat_to_responses",
+						hostedWebSearch:    fallbackPlan.HostedWebSearch,
+						preferenceValue:    advancedProxyOpenAIProtocolPreferChat,
+						preferenceScopeKey: strings.TrimSpace(fallbackPlan.ScopeKey),
+						source:             "fallback",
+						antiPoisonCtx:      antiPoisonCtx,
+						stringProtect:      stringProtectionCtx,
+					})
+				}
 			}
 			appendMessagesPhase("fallback_anthropic")
 		}
@@ -5741,6 +5839,66 @@ phaseLoop:
 					continue phaseLoop
 				}
 				continue
+			}
+			// Convert HTTP 200 semantic invalid_encrypted_content failures into the
+			// existing non-2xx healing path. Codex-compatible upstreams may return:
+			//   200 text/event-stream + event: response.failed
+			// instead of a classic 400 JSON error body.
+			if statusCode >= 200 && statusCode < 300 {
+				if streamBody != nil && shouldInspectOpenAIStreamForEncryptedContentHealing(rawBody, healingContext) {
+					rawStream, readErr := io.ReadAll(io.LimitReader(streamBody, 8*1024*1024))
+					_ = streamBody.Close()
+					streamBody = nil
+					if readErr != nil {
+						advancedProxyRuntime.MarkResult(appType, provider, phase.outboundRoute, targetURL, false)
+						observeAdvancedProxyAttempt(appType, provider, statusCode, elapsed, readErr)
+						message := formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, fmt.Sprintf("upstream stream read failed (%s, outbound=%s)", readErr.Error(), buildOutboundProxyDiagnostics(currentOutboundProxyConfig(), targetURL)))
+						lastStatus = http.StatusBadGateway
+						lastMessage = message
+						lastErrorCode = "advanced_proxy_error"
+						lastErrorType = "invalid_request_error"
+						appendAdvancedProxyLogf("[OPENAI_PROXY_ERROR] status=%d app=%s route=%s provider=%s endpoint=%s detail=%s", http.StatusBadGateway, appType, phase.outboundRoute, providerLabel, targetURL, previewAdvancedProxyText(message, 260))
+						recordAdvancedProxyOpenAIAttemptWithTraceAndOps(appType, routeKind, buildAdvancedProxyOpenAIInboundEndpoint(appType, routeKind), phase.outboundRoute, phase.source, provider, targetURL, phase.requestBody, phaseModel, nil, stream, http.StatusBadGateway, elapsed, message, buildRouteTraceSnapshot(phaseIndex, "failed"), annotateAntiPoisonStringProtectionRecords(stringProtectionCtx.Records, routeKind, providerLabel))
+						if phaseIndex < len(phases)-1 && targetIndex == len(targets)-1 {
+							appendAdvancedProxyLogf(
+								"[OPENAI_PROXY_FALLBACK] app=%s provider=%s from=%s to=%s reason=stream_read_error detail=%s",
+								appType,
+								providerLabel,
+								phase.outboundRoute,
+								phases[phaseIndex+1].outboundRoute,
+								previewAdvancedProxyText(readErr.Error(), 220),
+							)
+							continue phaseLoop
+						}
+						continue
+					}
+					if _, _, _, ok := detectInvalidEncryptedContentErrorInBody(rawStream); ok {
+						statusCode = resolveEncryptedContentErrorStatusCode(rawStream, http.StatusBadRequest)
+						body = rawStream
+						appendAdvancedProxyLogf(
+							"[OPENAI_PROXY_HEAL_STREAM_DETECT] app=%s route=%s provider=%s endpoint=%s status=%d detail=response_failed_encrypted_content",
+							appType,
+							phase.outboundRoute,
+							providerLabel,
+							targetURL,
+							statusCode,
+						)
+					} else {
+						streamBody = io.NopCloser(bytes.NewReader(rawStream))
+					}
+				} else if len(body) > 0 {
+					if _, _, _, ok := detectInvalidEncryptedContentErrorInBody(body); ok {
+						statusCode = resolveEncryptedContentErrorStatusCode(body, http.StatusBadRequest)
+						appendAdvancedProxyLogf(
+							"[OPENAI_PROXY_HEAL_BODY_DETECT] app=%s route=%s provider=%s endpoint=%s status=%d detail=semantic_encrypted_content",
+							appType,
+							phase.outboundRoute,
+							providerLabel,
+							targetURL,
+							statusCode,
+						)
+					}
+				}
 			}
 			if statusCode < 200 || statusCode >= 300 {
 				advancedProxyRuntime.MarkResult(appType, provider, phase.outboundRoute, targetURL, false)

@@ -2329,6 +2329,127 @@ func TestFinalizeOpenAIRequestForEncryptedContentHealingRemovesAllResidualHits(t
 	}
 }
 
+func TestDetectInvalidEncryptedContentErrorInBodyFromResponseFailedSSE(t *testing.T) {
+	raw := []byte("event: codex.rate_limits\n" +
+		"data: {\"type\":\"codex.rate_limits\",\"plan_type\":\"k12\"}\n\n" +
+		"event: response.failed\n" +
+		"data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"status_code\":400,\"error\":{\"type\":\"invalid_request_error\",\"code\":\"invalid_encrypted_content\",\"message\":\"The encrypted content 78Px...xV6g could not be verified. Reason: Encrypted content could not be decrypted or parsed.\"}}}\n\n")
+
+	message, code, errorType, ok := detectInvalidEncryptedContentErrorInBody(raw)
+	if !ok {
+		t.Fatalf("expected response.failed SSE payload to be detected as invalid encrypted content")
+	}
+	if code != "invalid_encrypted_content" || errorType != "invalid_request_error" {
+		t.Fatalf("unexpected error metadata: message=%q code=%q type=%q", message, code, errorType)
+	}
+	if !strings.Contains(message, "78Px...xV6g") {
+		t.Fatalf("expected original encrypted content message, got %q", message)
+	}
+	if status := resolveEncryptedContentErrorStatusCode(raw, http.StatusBadRequest); status != http.StatusBadRequest {
+		t.Fatalf("expected nested status_code 400, got %d", status)
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderHealsInvalidEncryptedContentFromStreamResponseFailed(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	var mu sync.Mutex
+	requestBodies := make([]map[string]any, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost {
+			t.Fatalf("unexpected method: %s", request.Method)
+		}
+
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+
+		mu.Lock()
+		requestBodies = append(requestBodies, body)
+		callIndex := len(requestBodies)
+		mu.Unlock()
+
+		if callIndex == 1 {
+			writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+			writer.WriteHeader(http.StatusOK)
+			_, _ = writer.Write([]byte("event: codex.rate_limits\n"))
+			_, _ = writer.Write([]byte("data: {\"type\":\"codex.rate_limits\",\"plan_type\":\"k12\",\"rate_limits\":{\"allowed\":true}}\n\n"))
+			_, _ = writer.Write([]byte("event: response.failed\n"))
+			_, _ = writer.Write([]byte("data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"status_code\":400,\"error\":{\"type\":\"invalid_request_error\",\"code\":\"invalid_encrypted_content\",\"message\":\"The encrypted content 78Px...xV6g could not be verified. Reason: Encrypted content could not be decrypted or parsed.\"}}}\n\n"))
+			return
+		}
+
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"resp_test","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:        "codex-heal-stream-provider",
+		RowKey:    "row-codex-heal-stream",
+		Name:      "Codex Heal Stream Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-test",
+		APIFormat: "openai_chat",
+	}
+
+	firstBody := []byte(`{
+		"metadata":{"user_id":"{\"session_id\":\"sess-stream-heal-123\"}"},
+		"input":[
+			{"type":"reasoning","encrypted_content":"enc-1"},
+			{"type":"reasoning","encrypted_content":"enc-2"},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}
+		],
+		"stream": true
+	}`)
+	firstResult := forwardOpenAIRequestViaProvider("codex", provider, "responses", firstBody, true, AdvancedProxyConfig{})
+	if firstResult.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected first stream call to fail with invalid_encrypted_content, got %#v", firstResult)
+	}
+	if firstResult.ErrorCode != "invalid_encrypted_content" || firstResult.ErrorType != "invalid_request_error" {
+		t.Fatalf("expected upstream error metadata to be preserved, got %#v", firstResult)
+	}
+	if !strings.Contains(firstResult.Message, encryptedContentHealingNotice) {
+		t.Fatalf("expected healing notice to be appended, got %q", firstResult.Message)
+	}
+	if !strings.Contains(firstResult.Message, "78Px...xV6g") {
+		t.Fatalf("expected original encrypted content detail in healing message, got %q", firstResult.Message)
+	}
+
+	sessionKey := "codex|sess-stream-heal-123"
+	if cutoff := advancedProxyEncryptedContentHealState.get(sessionKey); cutoff != 2 {
+		t.Fatalf("expected recorded cutoff 2, got %d", cutoff)
+	}
+
+	secondBody := []byte(`{
+		"metadata":{"user_id":"{\"session_id\":\"sess-stream-heal-123\"}"},
+		"include":["reasoning.encrypted_content"],
+		"input":[
+			{"type":"reasoning","encrypted_content":"enc-1"},
+			{"type":"reasoning","encrypted_content":"enc-2"},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"retry after heal"}]}
+		]
+	}`)
+	secondResult := forwardOpenAIRequestViaProvider("codex", provider, "responses", secondBody, false, AdvancedProxyConfig{})
+	if secondResult.StatusCode != http.StatusOK {
+		t.Fatalf("expected healed follow-up call to succeed, got %#v", secondResult)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requestBodies) != 2 {
+		t.Fatalf("expected two upstream requests, got %d", len(requestBodies))
+	}
+	secondRaw, err := json.Marshal(requestBodies[1])
+	if err != nil {
+		t.Fatalf("marshal second request body: %v", err)
+	}
+	if containsEncryptedContentNeedle(secondRaw) {
+		t.Fatalf("expected healed follow-up request to strip encrypted_content completely, got %s", secondRaw)
+	}
+}
+
 func TestForwardOpenAIRequestViaProviderHealsInvalidEncryptedContentAcrossRequests(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 

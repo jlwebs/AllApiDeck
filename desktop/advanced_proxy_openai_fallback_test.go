@@ -18,6 +18,99 @@ func stringSliceContains(values []string, target string) bool {
 	return false
 }
 
+func TestBuildOpenAIChatFallbackPlanWrapsCustomToolFreeformArguments(t *testing.T) {
+	raw := []byte(`{
+		"model":"grok-4.5",
+		"stream":true,
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"edit smoke"}]},
+			{"type":"custom_tool_call","call_id":"call_patch_1","name":"apply_patch","input":"*** Begin Patch\n*** Update File: apps/server/src/smoke.ts\n@@\n-old\n+new\n*** End Patch"},
+			{"type":"custom_tool_call_output","call_id":"call_patch_1","output":"Success"},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}
+		],
+		"tools":[
+			{"type":"custom","name":"apply_patch","description":"Use the apply_patch tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.","format":{"type":"grammar","syntax":"lark"}}
+		]
+	}`)
+
+	plan, err := buildOpenAIChatFallbackPlanFromResponses(raw, AdvancedProxyProvider{
+		Name:      "CPA赞助",
+		BaseURL:   "https://cpa.zuiniu.de/v1",
+		APIKey:    "public",
+		Model:     "grok-4.5",
+		Enabled:   true,
+		APIFormat: "openai_chat",
+	})
+	if err != nil {
+		t.Fatalf("build fallback plan failed: %v", err)
+	}
+	if !plan.SupportsChat {
+		t.Fatalf("expected chat fallback support, blockers=%v", plan.Blockers)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(plan.ChatBody, &body); err != nil {
+		t.Fatalf("decode chat body failed: %v", err)
+	}
+
+	messages, ok := body["messages"].([]any)
+	if !ok {
+		t.Fatalf("messages missing: %#v", body["messages"])
+	}
+
+	var toolCallArguments string
+	for _, rawMessage := range messages {
+		message, _ := rawMessage.(map[string]any)
+		if toStringValue(message["role"]) != "assistant" {
+			continue
+		}
+		toolCalls, _ := message["tool_calls"].([]any)
+		for _, rawCall := range toolCalls {
+			call, _ := rawCall.(map[string]any)
+			functionMap, _ := call["function"].(map[string]any)
+			if toStringValue(functionMap["name"]) != "apply_patch" {
+				continue
+			}
+			toolCallArguments = toStringValue(functionMap["arguments"])
+		}
+	}
+	if toolCallArguments == "" {
+		t.Fatalf("apply_patch tool call arguments missing: %#v", messages)
+	}
+	if strings.HasPrefix(strings.TrimSpace(toolCallArguments), "*** Begin Patch") {
+		t.Fatalf("expected freeform patch arguments to be wrapped as JSON object, got %q", toolCallArguments)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(toolCallArguments), &decoded); err != nil {
+		t.Fatalf("expected tool arguments JSON object string, got %q err=%v", toolCallArguments, err)
+	}
+	if got := toStringValue(decoded["input"]); !strings.Contains(got, "*** Begin Patch") || !strings.Contains(got, "apps/server/src/smoke.ts") {
+		t.Fatalf("expected wrapped freeform input field, got %#v", decoded)
+	}
+
+	tools, _ := body["tools"].([]any)
+	if len(tools) == 0 {
+		t.Fatalf("expected apply_patch tool schema in chat body")
+	}
+}
+
+func TestNormalizeChatToolCallArgumentsJSONRejectsBareFreeform(t *testing.T) {
+	got := normalizeChatToolCallArgumentsJSON("*** Begin Patch\n*** Update File: a.ts\n*** End Patch", true)
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+		t.Fatalf("expected JSON object, got %q err=%v", got, err)
+	}
+	if !strings.Contains(toStringValue(decoded["input"]), "*** Begin Patch") {
+		t.Fatalf("unexpected wrap result: %#v", decoded)
+	}
+
+	got = normalizeChatToolCallArgumentsJSON(`{"command":"pwd"}`, false)
+	if got != `{"command":"pwd"}` && !strings.Contains(got, `"command"`) {
+		t.Fatalf("expected valid function args preserved, got %q", got)
+	}
+}
+
 func TestBuildOpenAIChatFallbackPlanPreservesResponsesReasoningContent(t *testing.T) {
 	raw := []byte(`{
 		"model":"deepseek-v4-flash-free",
