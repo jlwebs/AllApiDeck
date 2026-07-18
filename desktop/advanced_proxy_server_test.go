@@ -2786,6 +2786,88 @@ func TestForwardOpenAIRequestViaProviderUsesProviderModelForResponsesRoute(t *te
 	}
 }
 
+func TestNormalizeGrokResponsesReasoningInputDropsItemsWithoutEncryptedContent(t *testing.T) {
+	rawBody := []byte(`{
+		"model":"grok-4.5",
+		"input":[
+			{"type":"message","id":"msg_1","role":"user","content":[{"type":"input_text","text":"hello"}]},
+			{"type":"reasoning","id":"rs_null","content":null,"encrypted_content":null,"summary":[{"type":"summary_text","text":"null"}]},
+			{"type":"reasoning","id":"rs_missing","content":null,"summary":[]},
+			{"type":"reasoning","id":"rs_empty","content":null,"encrypted_content":"  ","summary":[]},
+			{"type":"reasoning","id":"rs_valid","content":null,"encrypted_content":"encrypted-grok-thinking","summary":[]},
+			{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":"{}"}
+		]
+	}`)
+
+	normalizedBody, dropped, err := normalizeGrokResponsesReasoningInput(rawBody, AdvancedProxyProvider{})
+	if err != nil {
+		t.Fatalf("normalize Grok reasoning input: %v", err)
+	}
+	if dropped != 3 {
+		t.Fatalf("expected three empty reasoning items dropped, got %d", dropped)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(normalizedBody, &body); err != nil {
+		t.Fatalf("decode normalized request: %v", err)
+	}
+	inputItems, _ := body["input"].([]any)
+	if len(inputItems) != 3 {
+		t.Fatalf("expected message, valid reasoning, and function call to remain, got %#v", inputItems)
+	}
+	validReasoning, _ := inputItems[1].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(validReasoning["id"])); got != "rs_valid" {
+		t.Fatalf("expected valid encrypted reasoning to remain, got %#v", inputItems)
+	}
+}
+
+func TestNormalizeGrokResponsesReasoningInputLeavesOtherModelsUnchanged(t *testing.T) {
+	rawBody := []byte(`{
+		"model":"gpt-5.5",
+		"input":[
+			{"type":"reasoning","id":"rs_null","content":null,"encrypted_content":null,"summary":[]},
+			{"type":"message","id":"msg_1","role":"user","content":[{"type":"input_text","text":"hello"}]}
+		]
+	}`)
+
+	normalizedBody, dropped, err := normalizeGrokResponsesReasoningInput(rawBody, AdvancedProxyProvider{})
+	if err != nil {
+		t.Fatalf("normalize non-Grok reasoning input: %v", err)
+	}
+	if dropped != 0 {
+		t.Fatalf("expected no non-Grok items dropped, got %d", dropped)
+	}
+	if string(normalizedBody) != string(rawBody) {
+		t.Fatalf("expected non-Grok request to remain byte-for-byte unchanged")
+	}
+}
+
+func TestNormalizeGrokResponsesReasoningInputUsesProviderModel(t *testing.T) {
+	rawBody := []byte(`{
+		"model":"gpt-5.5",
+		"input":[
+			{"type":"reasoning","id":"rs_null","content":null,"encrypted_content":null,"summary":[]},
+			{"type":"message","id":"msg_1","role":"user","content":[{"type":"input_text","text":"hello"}]}
+		]
+	}`)
+
+	normalizedBody, dropped, err := normalizeGrokResponsesReasoningInput(rawBody, AdvancedProxyProvider{Model: "grok-4.5"})
+	if err != nil {
+		t.Fatalf("normalize provider-selected Grok reasoning input: %v", err)
+	}
+	if dropped != 1 {
+		t.Fatalf("expected provider model to activate Grok compatibility, got dropped=%d", dropped)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(normalizedBody, &body); err != nil {
+		t.Fatalf("decode normalized request: %v", err)
+	}
+	inputItems, _ := body["input"].([]any)
+	if len(inputItems) != 1 {
+		t.Fatalf("expected only user message to remain, got %#v", inputItems)
+	}
+}
+
 func TestEnsureOpenAIResponsesInputItemIDsUsesCapturedCodexPayload(t *testing.T) {
 	rawBody, err := os.ReadFile(filepath.Join("testdata", "advanced_proxy", "request_content.json"))
 	if err != nil {

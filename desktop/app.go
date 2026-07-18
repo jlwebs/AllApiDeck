@@ -56,6 +56,12 @@ type App struct {
 
 	updateDownloadMu sync.Mutex
 	updateDownload   AppUpdateDownloadSnapshot
+
+	clipboardImportMu               sync.Mutex
+	clipboardImportPending          map[string]chan clipboardImportResult
+	clipboardImportEventsOff        func()
+	clipboardImportSequence         atomic.Uint64
+	clipboardImportDispatchOverride func(clipboardImportEventRequest) (clipboardImportResult, error)
 }
 
 func NewApp(mode launchMode, recordKey string, panelStart panelStartMode) *App {
@@ -64,6 +70,7 @@ func NewApp(mode launchMode, recordKey string, panelStart panelStartMode) *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.initClipboardImportResultListener()
 	clearDesktopLogHistory()
 	debugLogf("startup begin")
 	if a.isPanelMode() {
@@ -103,6 +110,7 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) shutdown(ctx context.Context) {
 	_ = ctx
 	debugLogf("shutdown begin")
+	a.stopClipboardImportResultListener()
 	a.stopWindowMonitor()
 	a.stopPanelAutoController()
 	a.stopPanelSignalWatcher()
@@ -220,12 +228,7 @@ func (a *App) isManualPanelStart() bool {
 }
 
 func (a *App) shouldAutoStartBridgeServer() bool {
-	config, err := loadAdvancedProxyConfig()
-	if err != nil {
-		debugLogf("load advanced proxy config for bridge startup failed: %v", err)
-		return false
-	}
-	return advancedProxyAnyAppEnabled(config)
+	return a != nil && a.isMainMode()
 }
 
 func (a *App) terminateSiblingAppProcesses() {

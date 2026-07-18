@@ -4639,6 +4639,51 @@ func normalizeOpenAIProxyRequestForProvider(rawBody []byte, provider AdvancedPro
 	return normalizedBody, resolvedModel, nil
 }
 
+func normalizeGrokResponsesReasoningInput(rawBody []byte, provider AdvancedProxyProvider) ([]byte, int, error) {
+	requestBody := map[string]any{}
+	if err := json.Unmarshal(rawBody, &requestBody); err != nil {
+		return nil, 0, err
+	}
+	resolvedModel := strings.ToLower(firstNonEmpty(
+		strings.TrimSpace(provider.Model),
+		strings.TrimSpace(toStringValue(requestBody["model"])),
+	))
+	if !strings.HasPrefix(resolvedModel, "grok") {
+		return rawBody, 0, nil
+	}
+
+	inputItems, ok := requestBody["input"].([]any)
+	if !ok || len(inputItems) == 0 {
+		return rawBody, 0, nil
+	}
+
+	normalizedItems := make([]any, 0, len(inputItems))
+	dropped := 0
+	for _, rawItem := range inputItems {
+		itemMap, ok := rawItem.(map[string]any)
+		if !ok || !strings.EqualFold(strings.TrimSpace(toStringValue(itemMap["type"])), "reasoning") {
+			normalizedItems = append(normalizedItems, rawItem)
+			continue
+		}
+		encryptedContent, ok := itemMap["encrypted_content"].(string)
+		if !ok || strings.TrimSpace(encryptedContent) == "" {
+			dropped++
+			continue
+		}
+		normalizedItems = append(normalizedItems, rawItem)
+	}
+	if dropped == 0 {
+		return rawBody, 0, nil
+	}
+
+	requestBody["input"] = normalizedItems
+	normalizedBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, 0, err
+	}
+	return normalizedBody, dropped, nil
+}
+
 func ensureOpenAIResponsesInputItemIDs(rawBody []byte) ([]byte, bool, error) {
 	requestBody := map[string]any{}
 	if err := json.Unmarshal(rawBody, &requestBody); err != nil {
@@ -5387,6 +5432,25 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 
 		appendResponsesPhase := func(source string, preferenceValue int, preferenceScopeKey string) {
 			responsesBody := normalizedBody
+			responsesBodyWithReasoning, droppedReasoningItems, reasoningErr := normalizeGrokResponsesReasoningInput(responsesBody, provider)
+			if reasoningErr != nil {
+				appendAdvancedProxyLogf(
+					"[OPENAI_PROXY_RESPONSES_REASONING_FAIL] app=%s route=responses provider=%s detail=%s",
+					appType,
+					providerLabel,
+					previewAdvancedProxyText(reasoningErr.Error(), 260),
+				)
+			} else {
+				responsesBody = responsesBodyWithReasoning
+				if droppedReasoningItems > 0 {
+					appendAdvancedProxyLogf(
+						"[OPENAI_PROXY_RESPONSES_REASONING] app=%s route=responses provider=%s dropped_empty=%d",
+						appType,
+						providerLabel,
+						droppedReasoningItems,
+					)
+				}
+			}
 			responsesBodyWithTools, normalizedTools, toolsErr := normalizeOpenAIResponsesToolsForProvider(responsesBody)
 			if toolsErr != nil {
 				appendAdvancedProxyLogf(

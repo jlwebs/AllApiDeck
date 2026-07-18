@@ -692,6 +692,7 @@ func (a *App) ensureBridgeServer() error {
 	mux.HandleFunc("/bridge/install", a.handleBridgeInstallPage)
 	mux.HandleFunc("/bridge/install/status", a.handleBridgeInstallStatus)
 	mux.HandleFunc("/bridge/script.user.js", a.handleBridgeUserScript)
+	mux.HandleFunc("/api/key-management/clipboard-import", a.handleClipboardImportHTTP)
 	mux.HandleFunc("/advanced-proxy/ping", a.handleAdvancedProxyPing)
 	mux.HandleFunc("/advanced-proxy/claude/v1/messages", a.handleAdvancedProxyClaude)
 	mux.HandleFunc("/advanced-proxy/claude/messages", a.handleAdvancedProxyClaude)

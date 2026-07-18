@@ -304,7 +304,7 @@ export const I18N_SUPPLEMENTAL_TEXT_MAP = {
   '展开': { en: 'Expand' },
   '导出全部有效 Key': { en: 'Export All Valid Keys' },
   '导出 CSV': { en: 'Export CSV' },
-  '从剪贴板导入': { en: 'Import from Clipboard' },
+  '从剪贴板智能导入': { en: 'Smart Import from Clipboard' },
   '快捷分组': { en: 'Quick Groups' },
   '命中密钥': { en: 'Matched Keys' },
   '当前快捷项未命中任何密钥': { en: 'No keys matched this quick item' },

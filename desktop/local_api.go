@@ -217,6 +217,8 @@ func (a *App) handleLocalAPIRequest(method string, rawURL string, headers map[st
 		return handleLocalFetchKeys(method, body)
 	case "/api/fetch-keys/progress":
 		return jsonBridgeResponse(http.StatusOK, localFetchKeysProgressSnapshot()), nil
+	case "/api/key-management/clipboard-import":
+		return a.handleLocalClipboardImport(method, body), nil
 	case "/api/profile-assist/open":
 		return handleLocalProfileAssistOpen(method, body)
 	case "/api/profile-assist/close":

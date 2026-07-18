@@ -3,12 +3,12 @@
     :open="open"
     title="系统设置"
     :footer="null"
-    :width="600"
+    :width="settingsModalWidth"
     :centered="true"
     :destroyOnClose="true"
     @cancel="emit('update:open', false)"
   >
-    <a-tabs>
+    <a-tabs v-model:activeKey="activeSettingsTab">
       <a-tab-pane key="general" tab="常规设置">
         <div class="settings-tab-content">
           <p class="settings-section-title-row">
@@ -277,6 +277,9 @@
           </template>
         </div>
       </a-tab-pane>
+      <a-tab-pane key="sdk" tab="面板 SDK">
+        <PanelSdkSettings />
+      </a-tab-pane>
     </a-tabs>
   </a-modal>
 </template>
@@ -284,6 +287,7 @@
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { message } from 'ant-design-vue';
+import PanelSdkSettings from './PanelSdkSettings.vue';
 import { isProbablyWailsRuntime } from '../utils/runtimeApi.js';
 import { isDesktopLogBridgeAvailable, listDesktopLogFiles, readDesktopLogFile } from '../utils/desktopLogBridge.js';
 import { isChromeProfileAuthBridgeAvailable } from '../utils/profileAuthBridge.js';
@@ -367,6 +371,8 @@ const contextAutoCompressionDraft = reactive(loadContextAutoCompressionConfig())
 const themeMode = ref(getStoredThemeMode());
 const themeModeOptions = THEME_MODE_OPTIONS;
 const languageMode = ref(getStoredLanguage());
+const activeSettingsTab = ref('general');
+const settingsModalWidth = computed(() => activeSettingsTab.value === 'sdk' ? 960 : 600);
 const languageOptions = computed(() =>
   getLanguageOptions().map(option => ({
     value: option.value,
@@ -424,6 +430,7 @@ const appLabel = computed(() => props.appVersion
 
 watch(() => props.open, open => {
   if (!open) return;
+  activeSettingsTab.value = 'general';
   themeMode.value = getStoredThemeMode();
   languageMode.value = getStoredLanguage();
   userAgentMappings.value = loadUserAgentMappings();

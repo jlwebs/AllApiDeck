@@ -334,8 +334,22 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 		payload := map[string]any{
 			"role": role,
 		}
-		if content != nil {
-			payload["content"] = content
+		// Some strict chat-compatible providers (for example Grok-compatible gateways)
+		// reject assistant tool-call messages when `content` is missing. OpenAI tolerates
+		// null content, but Grok treats the whole message as malformed and reports the
+		// assistant.tool_calls entry as "missing valid id, name or arguments". Always
+		// force `content` to a non-null value so the payload stays provider-portable.
+		resolvedContent := content
+		if resolvedContent == nil {
+			if len(toolCalls) > 0 {
+				resolvedContent = ""
+			} else if role == "assistant" {
+				// pure reasoning / metadata assistant turn with no tool calls
+				resolvedContent = ""
+			}
+		}
+		if resolvedContent != nil {
+			payload["content"] = resolvedContent
 		}
 		if len(toolCalls) > 0 {
 			payload["tool_calls"] = toolCalls
@@ -394,6 +408,7 @@ func buildOpenAIChatFallbackPlanFromResponses(rawBody []byte, provider AdvancedP
 					blockers = append(blockers, "tool_call_missing_output")
 					continue
 				}
+				ensureChatToolCallCompleteness(toolCall)
 				validCalls = append(validCalls, toolCall)
 				validCallIDs[toolCallID] = struct{}{}
 			}
@@ -830,10 +845,37 @@ func sanitizeChatMessagesToolCallArguments(messages []map[string]any) {
 	}
 }
 
+func ensureChatToolCallCompleteness(toolCall map[string]any) {
+	if toolCall == nil {
+		return
+	}
+	if strings.TrimSpace(toStringValue(toolCall["id"])) == "" {
+		toolCall["id"] = fmt.Sprintf("call_%d", time.Now().UnixNano())
+	}
+	if strings.TrimSpace(toStringValue(toolCall["type"])) == "" {
+		toolCall["type"] = "function"
+	}
+	functionMap, ok := toolCall["function"].(map[string]any)
+	if !ok {
+		functionMap = map[string]any{}
+		toolCall["function"] = functionMap
+	}
+	if strings.TrimSpace(toStringValue(functionMap["name"])) == "" {
+		functionMap["name"] = "shell_command"
+	}
+	args := strings.TrimSpace(toStringValue(functionMap["arguments"]))
+	if args == "" {
+		functionMap["arguments"] = "{}"
+	} else if !json.Valid([]byte(args)) {
+		functionMap["arguments"] = stringifyJSON(map[string]any{"input": args})
+	}
+}
+
 func sanitizeChatToolCallArgumentsMap(call map[string]any) {
 	if call == nil {
 		return
 	}
+	ensureChatToolCallCompleteness(call)
 	functionMap, _ := call["function"].(map[string]any)
 	if functionMap == nil {
 		return
@@ -1092,6 +1134,12 @@ func shouldFallbackResponsesToChat(statusCode int, responseBody []byte) bool {
 	if statusCode == http.StatusNotFound || statusCode == http.StatusMethodNotAllowed {
 		return true
 	}
+	message := strings.ToLower(strings.TrimSpace(firstNonEmpty(summarizeAdvancedProxyBody(responseBody), fmt.Sprintf("http %d", statusCode))))
+	if strings.Contains(message, "input[") &&
+		strings.Contains(message, "].id") &&
+		(strings.Contains(message, "expected an id") || strings.Contains(message, "invalid 'input")) {
+		return false
+	}
 	// 许多渠道不支持 /v1/responses 时，会直接返回 400/422（无法解析请求体格式），
 	// 或 501/502/503（未实现/网关层不识别路由）。这些都是路由不受支持的强信号，
 	// 值得降级到 chat 再试一次——chat 请求体更简单、兼容性更好。
@@ -1102,7 +1150,6 @@ func shouldFallbackResponsesToChat(statusCode int, responseBody []byte) bool {
 		statusCode == http.StatusServiceUnavailable {
 		return true
 	}
-	message := strings.ToLower(strings.TrimSpace(firstNonEmpty(summarizeAdvancedProxyBody(responseBody), fmt.Sprintf("http %d", statusCode))))
 	if message == "" {
 		return false
 	}

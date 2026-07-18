@@ -75,6 +75,7 @@ declare module 'vue' {
     MonitorCard: typeof import('./src/components/MonitorCard.vue')['default']
     MonitorHealthBar: typeof import('./src/components/MonitorHealthBar.vue')['default']
     MonitorPanel: typeof import('./src/components/MonitorPanel.vue')['default']
+    PanelSdkSettings: typeof import('./src/components/PanelSdkSettings.vue')['default']
     QueueOrbitIcon: typeof import('./src/components/icons/QueueOrbitIcon.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']

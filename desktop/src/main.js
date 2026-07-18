@@ -9,6 +9,7 @@ import { installClientDiagnostics, logClientDiagnostic } from './utils/clientDia
 import { installRuntimeFetchBridge } from './utils/runtimeApi.js';
 import { hydrateLastResultsSnapshotCache } from './utils/historySnapshotStore.js';
 import { ensureStartupUpdateStatus } from './utils/appUpdateState.js';
+import { installClipboardImportBridge } from './utils/clipboardImportBridge.js';
 
 installClientDiagnostics();
 installRuntimeFetchBridge();
@@ -28,5 +29,6 @@ window.addEventListener(LANGUAGE_CHANGE_EVENT, event => {
 });
 logClientDiagnostic('bootstrap', 'plugins registered');
 app.mount('#app');
+installClipboardImportBridge();
 initializeLanguageRuntime({ installDom: true, dispatch: true });
 logClientDiagnostic('bootstrap', 'app mounted');

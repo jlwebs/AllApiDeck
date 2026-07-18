@@ -234,7 +234,7 @@
                   </button>
                   <button type="button" class="import-export-menu-item" @click="importFromClipboardPackage">
                     <ImportOutlined />
-                    <span>从剪贴板导入</span>
+                    <span>从剪贴板智能导入</span>
                   </button>
                 </div>
               </template>
@@ -1277,6 +1277,7 @@ import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils
 import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
 import { normalizeCCSwitchEndpoint } from '../utils/ccSwitch.js';
 import { resolveOpenAIExportBaseUrl } from '../utils/exportEndpoint.js';
+import { resolveClipboardImportRecords } from '../utils/clipboardSmartImport.js';
 import { getAppliedThemeMode, isDarkThemeMode, THEME_MODE_CHANGE_EVENT } from '../utils/theme.js';
 import { tr } from '../i18n/runtime.js';
 import { exitSidebarMode, isManualSidebarBridgeAvailable, isSidebarBridgeAvailable, openManualSidebarPanel } from '../utils/windowMode.js';
@@ -4175,7 +4176,7 @@ const displayedRows = computed(() => {
 });
 const keyManagementEmptyDescription = computed(() => {
   if (allSortedRows.value.length === 0) {
-    return '暂无本地密钥记录，可从批量检测自动同步、剪贴板导入或手工添加。';
+    return '暂无本地密钥记录，可从批量检测自动同步、从剪贴板智能导入或手工添加。';
   }
   if (normalizedKeyGroupSiteFilterQuery.value) {
     return '当前站点筛选条件下暂无可见密钥。';
@@ -5366,15 +5367,7 @@ async function importFromClipboardPackage() {
       throw new Error('剪贴板为空');
     }
 
-    if (!text.startsWith('sk://')) {
-      throw new Error('剪贴板内容不是 sk:// 导入包');
-    }
-
-    const payload = await resolveClipboardPackagePayload(text.slice('sk://'.length));
-    const importedRecords = Array.isArray(payload?.records) ? payload.records : [];
-    if (importedRecords.length === 0) {
-      throw new Error('导入包中没有记录');
-    }
+    const { records: importedRecords, mode: importMode } = await resolveClipboardImportRecords(text);
 
     const scopedImportGroupId = getScopedGroupId();
     const scopedImportGroupName = scopedImportGroupId
@@ -5435,11 +5428,13 @@ async function importFromClipboardPackage() {
       lastBatchFailedCount: importedRecords.filter(record => Number(record?.status || 1) !== 1).length,
     };
     persistRecords();
+    flushPersistRecords();
     persistMeta();
+    const successPrefix = importMode === 'smart' ? '已智能提取并导入' : '已从剪贴板导入';
     message.success(
       scopedImportGroupName
-        ? `已从剪贴板导入 ${importedRecords.length} 条记录，并追加到分组「${scopedImportGroupName}」`
-        : `已从剪贴板导入 ${importedRecords.length} 条记录`
+        ? `${successPrefix} ${importedRecords.length} 条记录，并分配到分组「${scopedImportGroupName}」`
+        : `${successPrefix} ${importedRecords.length} 条记录`
     );
   } catch (error) {
     console.error(error);
@@ -5594,50 +5589,6 @@ async function compressClipboardPackage(text) {
   return bytesToBase64Url(new Uint8Array(arrayBuffer));
 }
 
-async function decompressClipboardPackage(text) {
-  if (typeof DecompressionStream !== 'function') {
-    throw new Error('当前环境不支持压缩导入');
-  }
-  const bytes = base64UrlToBytes(text);
-  const decompressed = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
-  return await new Response(decompressed).text();
-}
-
-async function resolveClipboardPackagePayload(text) {
-  const encoded = String(text || '').trim();
-  try {
-    return await readClipboardPackagePayload(encoded);
-  } catch (primaryError) {
-    const fallbackEncoded = remapClipboardPackageToken(encoded);
-    if (!fallbackEncoded || fallbackEncoded === encoded) {
-      throw primaryError;
-    }
-    try {
-      return await readClipboardPackagePayload(fallbackEncoded);
-    } catch {
-      throw primaryError;
-    }
-  }
-}
-
-async function readClipboardPackagePayload(text) {
-  const payloadText = await decompressClipboardPackage(text);
-  return JSON.parse(payloadText);
-}
-
-function remapClipboardPackageToken(value) {
-  return String(value || '').replace(/[A-Za-z]/g, letter => {
-    const code = letter.charCodeAt(0);
-    if (code >= 65 && code <= 90) {
-      return String.fromCharCode(90 - (code - 65));
-    }
-    if (code >= 97 && code <= 122) {
-      return String.fromCharCode(122 - (code - 97));
-    }
-    return letter;
-  });
-}
-
 function bytesToBase64Url(bytes) {
   let binary = '';
   const chunkSize = 0x8000;
@@ -5646,17 +5597,6 @@ function bytesToBase64Url(bytes) {
     binary += String.fromCharCode(...chunk);
   }
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}
-
-function base64UrlToBytes(value) {
-  const normalized = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
-  const padding = normalized.length % 4 === 0 ? '' : '='.repeat(4 - (normalized.length % 4));
-  const binary = atob(`${normalized}${padding}`);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
 }
 
 async function exportCsv() {
@@ -7778,5 +7718,3 @@ function persistMeta() {
 @keyframes sync-trigger-orbit{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 @keyframes sync-trigger-pulse{0%{transform:scale(.98);filter:saturate(1)}100%{transform:scale(1.05);filter:saturate(1.16)}}
 </style>
-
-

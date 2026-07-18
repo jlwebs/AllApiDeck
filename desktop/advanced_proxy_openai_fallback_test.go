@@ -95,6 +95,125 @@ func TestBuildOpenAIChatFallbackPlanWrapsCustomToolFreeformArguments(t *testing.
 	}
 }
 
+func TestBuildOpenAIChatFallbackPlanAssistantToolCallHasNonNullContent(t *testing.T) {
+	raw := []byte(`{
+		"model":"grok-4.5",
+		"stream":true,
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"run pwd"}]},
+			{"type":"function_call","call_id":"call_1","name":"shell_command","arguments":"{\"command\":\"pwd\"}"},
+			{"type":"function_call_output","call_id":"call_1","output":"S:\\project"},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}
+		]
+	}`)
+
+	plan, err := buildOpenAIChatFallbackPlanFromResponses(raw, AdvancedProxyProvider{
+		Name:      "7-17",
+		BaseURL:   "https://ld.uzumakinoharu.top/v1",
+		APIKey:    "public",
+		Model:     "grok",
+		Enabled:   true,
+		APIFormat: "openai_chat",
+	})
+	if err != nil {
+		t.Fatalf("build fallback plan failed: %v", err)
+	}
+	if !plan.SupportsChat {
+		t.Fatalf("expected chat fallback support, blockers=%v", plan.Blockers)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(plan.ChatBody, &body); err != nil {
+		t.Fatalf("decode chat body failed: %v", err)
+	}
+
+	messages, ok := body["messages"].([]any)
+	if !ok {
+		t.Fatalf("messages missing: %#v", body["messages"])
+	}
+
+	for _, rawMessage := range messages {
+		message, _ := rawMessage.(map[string]any)
+		if toStringValue(message["role"]) != "assistant" {
+			continue
+		}
+		if _, hasContent := message["content"]; !hasContent {
+			t.Fatalf("assistant tool-call message missing content: %#v", message)
+		}
+		content := message["content"]
+		if content == nil {
+			t.Fatalf("assistant tool-call content is null, expected non-null: %#v", message)
+		}
+		toolCalls, _ := message["tool_calls"].([]any)
+		if len(toolCalls) == 0 {
+			t.Fatalf("expected assistant tool_calls to be present")
+		}
+		for _, rawCall := range toolCalls {
+			call, _ := rawCall.(map[string]any)
+			functionMap, _ := call["function"].(map[string]any)
+			if toStringValue(call["id"]) == "" {
+				t.Fatalf("tool call missing id: %#v", call)
+			}
+			if toStringValue(call["type"]) == "" {
+				t.Fatalf("tool call missing type: %#v", call)
+			}
+			if toStringValue(functionMap["name"]) == "" {
+				t.Fatalf("tool call missing function.name: %#v", call)
+			}
+			args := strings.TrimSpace(toStringValue(functionMap["arguments"]))
+			if args == "" {
+				t.Fatalf("tool call missing function.arguments: %#v", call)
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal([]byte(args), &decoded); err != nil {
+				t.Fatalf("tool arguments not a JSON object: %q err=%v", args, err)
+			}
+		}
+		return
+	}
+	t.Fatalf("assistant tool-call message not found: %#v", messages)
+}
+
+func TestEnsureChatToolCallCompletenessBackfillsMissingFields(t *testing.T) {
+	call := map[string]any{
+		"function": map[string]any{
+			"arguments": "*** Begin Patch\n*** End Patch",
+		},
+	}
+	ensureChatToolCallCompleteness(call)
+	if got := toStringValue(call["id"]); got == "" {
+		t.Fatalf("expected id backfilled, got %#v", call)
+	}
+	if got := toStringValue(call["type"]); got != "function" {
+		t.Fatalf("expected type=function, got %q", got)
+	}
+	functionMap, _ := call["function"].(map[string]any)
+	args := toStringValue(functionMap["arguments"])
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(args), &decoded); err != nil {
+		t.Fatalf("expected wrapped JSON arguments, got %q err=%v", args, err)
+	}
+	if !strings.Contains(toStringValue(decoded["input"]), "*** Begin Patch") {
+		t.Fatalf("expected freeform input preserved, got %#v", decoded)
+	}
+	if toStringValue(functionMap["name"]) != "shell_command" {
+		t.Fatalf("expected default name shell_command, got %q", toStringValue(functionMap["name"]))
+	}
+
+	callEmpty := map[string]any{
+		"id":   "call_1",
+		"type": "function",
+		"function": map[string]any{
+			"name": "shell_command",
+		},
+	}
+	ensureChatToolCallCompleteness(callEmpty)
+	functionMap, _ = callEmpty["function"].(map[string]any)
+	if got := toStringValue(functionMap["arguments"]); got != "{}" {
+		t.Fatalf("expected empty arguments coerced to {}, got %q", got)
+	}
+}
+
 func TestNormalizeChatToolCallArgumentsJSONRejectsBareFreeform(t *testing.T) {
 	got := normalizeChatToolCallArgumentsJSON("*** Begin Patch\n*** Update File: a.ts\n*** End Patch", true)
 	var decoded map[string]any
