@@ -2868,6 +2868,136 @@ func TestNormalizeGrokResponsesReasoningInputUsesProviderModel(t *testing.T) {
 	}
 }
 
+func TestNormalizeGrokResponsesCompatibilityHandlesCodexCustomAndToolSearchHistory(t *testing.T) {
+	rawBody := []byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[
+			{"type":"message","id":"msg_1","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"done"}]},
+			{"type":"reasoning","id":"rs_1","encrypted_content":"encrypted-reasoning","summary":[]},
+			{"type":"custom_tool_call","id":"ctc_old","call_id":"call_patch_1","name":"apply_patch","input":"*** Begin Patch\n*** End Patch","status":"completed"},
+			{"type":"custom_tool_call_output","id":"ctco_old","call_id":"call_patch_1","output":"Success"},
+			{"type":"tool_search_call","id":"tsc_1","call_id":"call_search_1","arguments":"{\"query\":\"browser\"}","execution":"client","status":"completed"},
+			{"type":"tool_search_output","id":"tso_1","call_id":"call_search_1","execution":"client","status":"completed","tools":[]},
+			{"type":"function_call","id":"fc_1","call_id":"call_js_1","namespace":"mcp__node_repl","name":"js","arguments":"{}"},
+			{"type":"function_call_output","id":"fco_1","call_id":"call_js_1","output":"ok"}
+		],
+		"tools":[
+			{"type":"custom","name":"apply_patch","description":"Apply a patch.","format":{"type":"grammar","syntax":"lark","definition":"start: patch"}},
+			{"type":"tool_search","description":"Search deferred tools.","execution":"client","parameters":{"type":"object"}},
+			{"type":"function","name":"shell_command","description":"Run a command.","parameters":{"type":"object"}}
+		]
+	}`)
+
+	normalizedBody, stats, err := normalizeGrokResponsesCompatibility(rawBody, AdvancedProxyProvider{Model: "grok-4.5"})
+	if err != nil {
+		t.Fatalf("normalize Grok Responses compatibility: %v", err)
+	}
+	if stats.StrippedMessagePhases != 1 ||
+		stats.StrippedFunctionNamespaces != 1 ||
+		stats.ConvertedCustomCalls != 1 ||
+		stats.ConvertedCustomOutputs != 1 ||
+		stats.ConvertedCustomTools != 1 ||
+		stats.DroppedToolSearchItems != 2 ||
+		stats.DroppedToolSearchTools != 1 {
+		t.Fatalf("unexpected Grok compatibility stats: %#v", stats)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(normalizedBody, &body); err != nil {
+		t.Fatalf("decode normalized Grok request: %v", err)
+	}
+	inputItems, _ := body["input"].([]any)
+	if len(inputItems) != 6 {
+		t.Fatalf("expected tool-search history to be removed, got %#v", inputItems)
+	}
+	message, _ := inputItems[0].(map[string]any)
+	if _, exists := message["phase"]; exists {
+		t.Fatalf("expected message phase to be removed, got %#v", message)
+	}
+	customCall, _ := inputItems[2].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(customCall["type"])); got != "function_call" {
+		t.Fatalf("expected custom call converted to function_call, got %#v", customCall)
+	}
+	if _, exists := customCall["input"]; exists {
+		t.Fatalf("expected raw custom input field removed, got %#v", customCall)
+	}
+	if _, exists := customCall["status"]; exists {
+		t.Fatalf("expected custom call status removed, got %#v", customCall)
+	}
+	var arguments map[string]any
+	if err := json.Unmarshal([]byte(toStringValue(customCall["arguments"])), &arguments); err != nil {
+		t.Fatalf("expected custom call arguments to be a JSON object: %v", err)
+	}
+	if got := strings.TrimSpace(toStringValue(arguments["input"])); got != "*** Begin Patch\n*** End Patch" {
+		t.Fatalf("expected freeform custom input preserved, got %#v", arguments)
+	}
+	customOutput, _ := inputItems[3].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(customOutput["type"])); got != "function_call_output" {
+		t.Fatalf("expected custom output converted to function_call_output, got %#v", customOutput)
+	}
+	namespacedCall, _ := inputItems[4].(map[string]any)
+	if _, exists := namespacedCall["namespace"]; exists {
+		t.Fatalf("expected function namespace removed, got %#v", namespacedCall)
+	}
+
+	tools, _ := body["tools"].([]any)
+	if len(tools) != 2 {
+		t.Fatalf("expected custom tool conversion and tool-search removal, got %#v", tools)
+	}
+	customTool, _ := tools[0].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(customTool["type"])); got != "function" {
+		t.Fatalf("expected custom tool converted to function, got %#v", customTool)
+	}
+	parameters, _ := customTool["parameters"].(map[string]any)
+	properties, _ := parameters["properties"].(map[string]any)
+	inputProperty, _ := properties["input"].(map[string]any)
+	if !strings.Contains(toStringValue(inputProperty["description"]), "start: patch") {
+		t.Fatalf("expected custom grammar preserved in function description, got %#v", customTool)
+	}
+
+	bodyWithIDs, changedIDs, err := ensureOpenAIResponsesInputItemIDs(normalizedBody)
+	if err != nil {
+		t.Fatalf("normalize converted input ids: %v", err)
+	}
+	if !changedIDs {
+		t.Fatalf("expected converted custom tool ids to be repaired")
+	}
+	if err := json.Unmarshal(bodyWithIDs, &body); err != nil {
+		t.Fatalf("decode id-normalized Grok request: %v", err)
+	}
+	inputItems, _ = body["input"].([]any)
+	customCall, _ = inputItems[2].(map[string]any)
+	customOutput, _ = inputItems[3].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(customCall["id"])); !strings.HasPrefix(got, "fc_") {
+		t.Fatalf("expected converted custom call to use fc id, got %q", got)
+	}
+	if got := strings.TrimSpace(toStringValue(customOutput["id"])); !strings.HasPrefix(got, "fco_") {
+		t.Fatalf("expected converted custom output to use fco id, got %q", got)
+	}
+}
+
+func TestNormalizeGrokResponsesCompatibilityLeavesOtherModelsUnchanged(t *testing.T) {
+	rawBody := []byte(`{
+		"model":"gpt-5.6",
+		"input":[
+			{"type":"message","id":"msg_1","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"done"}]},
+			{"type":"custom_tool_call","id":"ctc_1","call_id":"call_1","name":"apply_patch","input":"patch","status":"completed"}
+		],
+		"tools":[{"type":"custom","name":"apply_patch"}]
+	}`)
+
+	normalizedBody, stats, err := normalizeGrokResponsesCompatibility(rawBody, AdvancedProxyProvider{})
+	if err != nil {
+		t.Fatalf("normalize non-Grok Responses compatibility: %v", err)
+	}
+	if stats.changed() {
+		t.Fatalf("expected no non-Grok compatibility changes, got %#v", stats)
+	}
+	if string(normalizedBody) != string(rawBody) {
+		t.Fatalf("expected non-Grok request to remain byte-for-byte unchanged")
+	}
+}
+
 func TestEnsureOpenAIResponsesInputItemIDsUsesCapturedCodexPayload(t *testing.T) {
 	rawBody, err := os.ReadFile(filepath.Join("testdata", "advanced_proxy", "request_content.json"))
 	if err != nil {

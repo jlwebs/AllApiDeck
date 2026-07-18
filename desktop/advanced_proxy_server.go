@@ -4644,11 +4644,7 @@ func normalizeGrokResponsesReasoningInput(rawBody []byte, provider AdvancedProxy
 	if err := json.Unmarshal(rawBody, &requestBody); err != nil {
 		return nil, 0, err
 	}
-	resolvedModel := strings.ToLower(firstNonEmpty(
-		strings.TrimSpace(provider.Model),
-		strings.TrimSpace(toStringValue(requestBody["model"])),
-	))
-	if !strings.HasPrefix(resolvedModel, "grok") {
+	if !isGrokResponsesRequest(requestBody, provider) {
 		return rawBody, 0, nil
 	}
 
@@ -4682,6 +4678,142 @@ func normalizeGrokResponsesReasoningInput(rawBody []byte, provider AdvancedProxy
 		return nil, 0, err
 	}
 	return normalizedBody, dropped, nil
+}
+
+func isGrokResponsesRequest(requestBody map[string]any, provider AdvancedProxyProvider) bool {
+	resolvedModel := strings.ToLower(firstNonEmpty(
+		strings.TrimSpace(provider.Model),
+		strings.TrimSpace(toStringValue(requestBody["model"])),
+	))
+	return strings.HasPrefix(resolvedModel, "grok")
+}
+
+type grokResponsesCompatibilityStats struct {
+	StrippedMessagePhases      int
+	StrippedFunctionNamespaces int
+	ConvertedCustomCalls       int
+	ConvertedCustomOutputs     int
+	ConvertedCustomTools       int
+	DroppedToolSearchItems     int
+	DroppedToolSearchTools     int
+}
+
+func (stats grokResponsesCompatibilityStats) changed() bool {
+	return stats.StrippedMessagePhases > 0 ||
+		stats.StrippedFunctionNamespaces > 0 ||
+		stats.ConvertedCustomCalls > 0 ||
+		stats.ConvertedCustomOutputs > 0 ||
+		stats.ConvertedCustomTools > 0 ||
+		stats.DroppedToolSearchItems > 0 ||
+		stats.DroppedToolSearchTools > 0
+}
+
+func normalizeGrokResponsesCompatibility(rawBody []byte, provider AdvancedProxyProvider) ([]byte, grokResponsesCompatibilityStats, error) {
+	requestBody := map[string]any{}
+	if err := json.Unmarshal(rawBody, &requestBody); err != nil {
+		return nil, grokResponsesCompatibilityStats{}, err
+	}
+	if !isGrokResponsesRequest(requestBody, provider) {
+		return rawBody, grokResponsesCompatibilityStats{}, nil
+	}
+
+	stats := grokResponsesCompatibilityStats{}
+	if inputItems, ok := requestBody["input"].([]any); ok && len(inputItems) > 0 {
+		normalizedItems := make([]any, 0, len(inputItems))
+		for _, rawItem := range inputItems {
+			itemMap, ok := rawItem.(map[string]any)
+			if !ok {
+				normalizedItems = append(normalizedItems, rawItem)
+				continue
+			}
+
+			switch strings.ToLower(strings.TrimSpace(toStringValue(itemMap["type"]))) {
+			case "message":
+				if _, exists := itemMap["phase"]; exists {
+					delete(itemMap, "phase")
+					stats.StrippedMessagePhases++
+				}
+			case "function_call":
+				if _, exists := itemMap["namespace"]; exists {
+					delete(itemMap, "namespace")
+					stats.StrippedFunctionNamespaces++
+				}
+			case "custom_tool_call":
+				itemMap["type"] = "function_call"
+				itemMap["arguments"] = normalizeCustomToolCallArgumentsForChat(itemMap["input"], itemMap["arguments"])
+				delete(itemMap, "input")
+				delete(itemMap, "status")
+				delete(itemMap, "execution")
+				delete(itemMap, "namespace")
+				stats.ConvertedCustomCalls++
+			case "custom_tool_call_output":
+				itemMap["type"] = "function_call_output"
+				delete(itemMap, "status")
+				delete(itemMap, "execution")
+				stats.ConvertedCustomOutputs++
+			case "tool_search_call", "tool_search_output":
+				stats.DroppedToolSearchItems++
+				continue
+			}
+			normalizedItems = append(normalizedItems, itemMap)
+		}
+		requestBody["input"] = normalizedItems
+	}
+
+	if tools, ok := requestBody["tools"].([]any); ok && len(tools) > 0 {
+		normalizedTools := make([]any, 0, len(tools))
+		for _, rawTool := range tools {
+			toolMap, ok := rawTool.(map[string]any)
+			if !ok {
+				normalizedTools = append(normalizedTools, rawTool)
+				continue
+			}
+			switch strings.ToLower(strings.TrimSpace(toStringValue(toolMap["type"]))) {
+			case "custom", "custom_tool":
+				normalizedTools = append(normalizedTools, buildGrokResponsesFunctionToolFromCustom(toolMap))
+				stats.ConvertedCustomTools++
+			case "tool_search":
+				stats.DroppedToolSearchTools++
+			default:
+				normalizedTools = append(normalizedTools, toolMap)
+			}
+		}
+		requestBody["tools"] = normalizedTools
+	}
+
+	if !stats.changed() {
+		return rawBody, stats, nil
+	}
+	normalizedBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, grokResponsesCompatibilityStats{}, err
+	}
+	return normalizedBody, stats, nil
+}
+
+func buildGrokResponsesFunctionToolFromCustom(toolMap map[string]any) map[string]any {
+	inputDescription := "Freeform input for the custom tool."
+	if formatMap, ok := toolMap["format"].(map[string]any); ok {
+		if definition := strings.TrimSpace(toStringValue(formatMap["definition"])); definition != "" {
+			inputDescription += "\nInput grammar:\n" + definition
+		}
+	}
+	return map[string]any{
+		"type":        "function",
+		"name":        strings.TrimSpace(toStringValue(toolMap["name"])),
+		"description": strings.TrimSpace(toStringValue(toolMap["description"])),
+		"parameters": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"input": map[string]any{
+					"type":        "string",
+					"description": inputDescription,
+				},
+			},
+			"required":             []any{"input"},
+			"additionalProperties": false,
+		},
+	}
 }
 
 func ensureOpenAIResponsesInputItemIDs(rawBody []byte) ([]byte, bool, error) {
@@ -5448,6 +5580,31 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 						appType,
 						providerLabel,
 						droppedReasoningItems,
+					)
+				}
+			}
+			responsesBodyWithGrokCompatibility, grokCompatibilityStats, grokCompatibilityErr := normalizeGrokResponsesCompatibility(responsesBody, provider)
+			if grokCompatibilityErr != nil {
+				appendAdvancedProxyLogf(
+					"[OPENAI_PROXY_RESPONSES_GROK_COMPAT_FAIL] app=%s route=responses provider=%s detail=%s",
+					appType,
+					providerLabel,
+					previewAdvancedProxyText(grokCompatibilityErr.Error(), 260),
+				)
+			} else {
+				responsesBody = responsesBodyWithGrokCompatibility
+				if grokCompatibilityStats.changed() {
+					appendAdvancedProxyLogf(
+						"[OPENAI_PROXY_RESPONSES_GROK_COMPAT] app=%s route=responses provider=%s phases=%d namespaces=%d custom_calls=%d custom_outputs=%d custom_tools=%d dropped_tool_search_items=%d dropped_tool_search_tools=%d",
+						appType,
+						providerLabel,
+						grokCompatibilityStats.StrippedMessagePhases,
+						grokCompatibilityStats.StrippedFunctionNamespaces,
+						grokCompatibilityStats.ConvertedCustomCalls,
+						grokCompatibilityStats.ConvertedCustomOutputs,
+						grokCompatibilityStats.ConvertedCustomTools,
+						grokCompatibilityStats.DroppedToolSearchItems,
+						grokCompatibilityStats.DroppedToolSearchTools,
 					)
 				}
 			}
