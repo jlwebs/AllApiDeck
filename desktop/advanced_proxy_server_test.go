@@ -2884,7 +2884,9 @@ func TestNormalizeGrokResponsesCompatibilityHandlesCodexCustomAndToolSearchHisto
 		"tools":[
 			{"type":"custom","name":"apply_patch","description":"Apply a patch.","format":{"type":"grammar","syntax":"lark","definition":"start: patch"}},
 			{"type":"tool_search","description":"Search deferred tools.","execution":"client","parameters":{"type":"object"}},
-			{"type":"function","name":"shell_command","description":"Run a command.","parameters":{"type":"object"}}
+			{"type":"function","name":"shell_command","description":"Run a command.","parameters":{"type":"object"},"strict":true,"execution":"client"},
+			{"type":"namespace","name":"mcp__node_repl","description":"Node tools.","tools":[{"type":"function","name":"js","description":"Run JavaScript.","parameters":{"type":"object"},"strict":true}]},
+			{"type":"mcp","server_label":"unsupported_for_grok","server_url":"https://example.com/mcp"}
 		]
 	}`)
 
@@ -2898,7 +2900,10 @@ func TestNormalizeGrokResponsesCompatibilityHandlesCodexCustomAndToolSearchHisto
 		stats.ConvertedCustomOutputs != 1 ||
 		stats.ConvertedCustomTools != 1 ||
 		stats.DroppedToolSearchItems != 2 ||
-		stats.DroppedToolSearchTools != 1 {
+		stats.DroppedToolSearchTools != 1 ||
+		stats.FlattenedNamespaceTools != 1 ||
+		stats.DroppedUnsupportedTools != 1 ||
+		stats.TrimmedToolFields != 2 {
 		t.Fatalf("unexpected Grok compatibility stats: %#v", stats)
 	}
 
@@ -2941,8 +2946,8 @@ func TestNormalizeGrokResponsesCompatibilityHandlesCodexCustomAndToolSearchHisto
 	}
 
 	tools, _ := body["tools"].([]any)
-	if len(tools) != 2 {
-		t.Fatalf("expected custom tool conversion and tool-search removal, got %#v", tools)
+	if len(tools) != 3 {
+		t.Fatalf("expected custom conversion, namespace flattening, and unsupported-tool removal, got %#v", tools)
 	}
 	customTool, _ := tools[0].(map[string]any)
 	if got := strings.TrimSpace(toStringValue(customTool["type"])); got != "function" {
@@ -2953,6 +2958,20 @@ func TestNormalizeGrokResponsesCompatibilityHandlesCodexCustomAndToolSearchHisto
 	inputProperty, _ := properties["input"].(map[string]any)
 	if !strings.Contains(toStringValue(inputProperty["description"]), "start: patch") {
 		t.Fatalf("expected custom grammar preserved in function description, got %#v", customTool)
+	}
+	functionTool, _ := tools[1].(map[string]any)
+	if _, exists := functionTool["strict"]; exists {
+		t.Fatalf("expected non-portable function fields removed, got %#v", functionTool)
+	}
+	flattenedTool, _ := tools[2].(map[string]any)
+	if got := strings.TrimSpace(toStringValue(flattenedTool["name"])); got != "js" {
+		t.Fatalf("expected namespace function flattened into top-level tools, got %#v", tools)
+	}
+	for _, rawTool := range tools {
+		toolMap, _ := rawTool.(map[string]any)
+		if got := strings.TrimSpace(toStringValue(toolMap["type"])); got == "namespace" || got == "mcp" {
+			t.Fatalf("expected unsupported Grok tool type removed, got %#v", tools)
+		}
 	}
 
 	bodyWithIDs, changedIDs, err := ensureOpenAIResponsesInputItemIDs(normalizedBody)
@@ -2995,6 +3014,39 @@ func TestNormalizeGrokResponsesCompatibilityLeavesOtherModelsUnchanged(t *testin
 	}
 	if string(normalizedBody) != string(rawBody) {
 		t.Fatalf("expected non-Grok request to remain byte-for-byte unchanged")
+	}
+}
+
+func TestNormalizeGrokResponsesCompatibilityTrimsFunctionToolFieldsWithoutOtherChanges(t *testing.T) {
+	rawBody := []byte(`{
+		"model":"grok-4.5",
+		"tools":[
+			{"type":"function","name":"lookup","description":"Lookup data.","parameters":{"type":"object"},"strict":true,"execution":"client"}
+		]
+	}`)
+
+	normalizedBody, stats, err := normalizeGrokResponsesCompatibility(rawBody, AdvancedProxyProvider{})
+	if err != nil {
+		t.Fatalf("normalize Grok function tool fields: %v", err)
+	}
+	if stats.TrimmedToolFields != 1 || !stats.changed() {
+		t.Fatalf("expected one trimmed function tool, got %#v", stats)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(normalizedBody, &body); err != nil {
+		t.Fatalf("decode normalized Grok function tool: %v", err)
+	}
+	tools, _ := body["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("expected one function tool, got %#v", tools)
+	}
+	tool, _ := tools[0].(map[string]any)
+	if _, exists := tool["strict"]; exists {
+		t.Fatalf("expected strict removed from Grok function tool, got %#v", tool)
+	}
+	if _, exists := tool["execution"]; exists {
+		t.Fatalf("expected execution removed from Grok function tool, got %#v", tool)
 	}
 }
 

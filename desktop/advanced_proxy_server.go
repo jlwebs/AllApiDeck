@@ -4696,6 +4696,9 @@ type grokResponsesCompatibilityStats struct {
 	ConvertedCustomTools       int
 	DroppedToolSearchItems     int
 	DroppedToolSearchTools     int
+	FlattenedNamespaceTools    int
+	DroppedUnsupportedTools    int
+	TrimmedToolFields          int
 }
 
 func (stats grokResponsesCompatibilityStats) changed() bool {
@@ -4705,7 +4708,10 @@ func (stats grokResponsesCompatibilityStats) changed() bool {
 		stats.ConvertedCustomOutputs > 0 ||
 		stats.ConvertedCustomTools > 0 ||
 		stats.DroppedToolSearchItems > 0 ||
-		stats.DroppedToolSearchTools > 0
+		stats.DroppedToolSearchTools > 0 ||
+		stats.FlattenedNamespaceTools > 0 ||
+		stats.DroppedUnsupportedTools > 0 ||
+		stats.TrimmedToolFields > 0
 }
 
 func normalizeGrokResponsesCompatibility(rawBody []byte, provider AdvancedProxyProvider) ([]byte, grokResponsesCompatibilityStats, error) {
@@ -4761,24 +4767,7 @@ func normalizeGrokResponsesCompatibility(rawBody []byte, provider AdvancedProxyP
 	}
 
 	if tools, ok := requestBody["tools"].([]any); ok && len(tools) > 0 {
-		normalizedTools := make([]any, 0, len(tools))
-		for _, rawTool := range tools {
-			toolMap, ok := rawTool.(map[string]any)
-			if !ok {
-				normalizedTools = append(normalizedTools, rawTool)
-				continue
-			}
-			switch strings.ToLower(strings.TrimSpace(toStringValue(toolMap["type"]))) {
-			case "custom", "custom_tool":
-				normalizedTools = append(normalizedTools, buildGrokResponsesFunctionToolFromCustom(toolMap))
-				stats.ConvertedCustomTools++
-			case "tool_search":
-				stats.DroppedToolSearchTools++
-			default:
-				normalizedTools = append(normalizedTools, toolMap)
-			}
-		}
-		requestBody["tools"] = normalizedTools
+		requestBody["tools"] = normalizeGrokResponsesTools(tools, &stats)
 	}
 
 	if !stats.changed() {
@@ -4791,6 +4780,106 @@ func normalizeGrokResponsesCompatibility(rawBody []byte, provider AdvancedProxyP
 	return normalizedBody, stats, nil
 }
 
+func normalizeGrokResponsesTools(tools []any, stats *grokResponsesCompatibilityStats) []any {
+	normalizedTools := make([]any, 0, len(tools))
+	seenTools := map[string]struct{}{}
+	appendTool := func(tool map[string]any) {
+		toolType := strings.ToLower(strings.TrimSpace(toStringValue(tool["type"])))
+		name := strings.TrimSpace(toStringValue(tool["name"]))
+		key := toolType + ":" + name
+		if _, exists := seenTools[key]; exists {
+			return
+		}
+		seenTools[key] = struct{}{}
+		normalizedTools = append(normalizedTools, tool)
+	}
+
+	var visit func(any)
+	visit = func(rawTool any) {
+		toolMap, ok := rawTool.(map[string]any)
+		if !ok {
+			stats.DroppedUnsupportedTools++
+			return
+		}
+		switch strings.ToLower(strings.TrimSpace(toStringValue(toolMap["type"]))) {
+		case "function":
+			name := strings.TrimSpace(toStringValue(toolMap["name"]))
+			if name == "" {
+				stats.DroppedUnsupportedTools++
+				return
+			}
+			if hasUnsupportedGrokResponsesToolFields(toolMap, "type", "name", "description", "parameters") {
+				stats.TrimmedToolFields++
+			}
+			description := strings.TrimSpace(toStringValue(toolMap["description"]))
+			if description == "" {
+				description = "Execute the " + name + " function."
+			}
+			parameters := toolMap["parameters"]
+			if parameters == nil {
+				parameters = map[string]any{
+					"type":                 "object",
+					"properties":           map[string]any{},
+					"additionalProperties": false,
+				}
+			}
+			appendTool(map[string]any{
+				"type":        "function",
+				"name":        name,
+				"description": description,
+				"parameters":  parameters,
+			})
+		case "custom", "custom_tool":
+			name := strings.TrimSpace(toStringValue(toolMap["name"]))
+			if name == "" {
+				stats.DroppedUnsupportedTools++
+				return
+			}
+			appendTool(buildGrokResponsesFunctionToolFromCustom(toolMap))
+			stats.ConvertedCustomTools++
+		case "namespace":
+			nestedTools, ok := toolMap["tools"].([]any)
+			if !ok || len(nestedTools) == 0 {
+				stats.DroppedUnsupportedTools++
+				return
+			}
+			stats.FlattenedNamespaceTools++
+			for _, nestedTool := range nestedTools {
+				visit(nestedTool)
+			}
+		case "web_search", "x_search", "image_generation", "collections_search", "file_search", "code_execution":
+			// xAI's built-in tool union uses only the type discriminator for the
+			// portable baseline. Provider-specific extension fields are not forwarded.
+			if hasUnsupportedGrokResponsesToolFields(toolMap, "type") {
+				stats.TrimmedToolFields++
+			}
+			appendTool(map[string]any{"type": strings.ToLower(strings.TrimSpace(toStringValue(toolMap["type"])))})
+		case "tool_search":
+			stats.DroppedToolSearchTools++
+		default:
+			stats.DroppedUnsupportedTools++
+		}
+	}
+
+	for _, rawTool := range tools {
+		visit(rawTool)
+	}
+	return normalizedTools
+}
+
+func hasUnsupportedGrokResponsesToolFields(toolMap map[string]any, allowedFields ...string) bool {
+	allowed := make(map[string]struct{}, len(allowedFields))
+	for _, field := range allowedFields {
+		allowed[field] = struct{}{}
+	}
+	for field := range toolMap {
+		if _, ok := allowed[field]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
 func buildGrokResponsesFunctionToolFromCustom(toolMap map[string]any) map[string]any {
 	inputDescription := "Freeform input for the custom tool."
 	if formatMap, ok := toolMap["format"].(map[string]any); ok {
@@ -4798,10 +4887,15 @@ func buildGrokResponsesFunctionToolFromCustom(toolMap map[string]any) map[string
 			inputDescription += "\nInput grammar:\n" + definition
 		}
 	}
+	name := strings.TrimSpace(toStringValue(toolMap["name"]))
+	description := strings.TrimSpace(toStringValue(toolMap["description"]))
+	if description == "" {
+		description = "Execute the " + name + " custom tool."
+	}
 	return map[string]any{
 		"type":        "function",
-		"name":        strings.TrimSpace(toStringValue(toolMap["name"])),
-		"description": strings.TrimSpace(toStringValue(toolMap["description"])),
+		"name":        name,
+		"description": description,
 		"parameters": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -5595,7 +5689,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 				responsesBody = responsesBodyWithGrokCompatibility
 				if grokCompatibilityStats.changed() {
 					appendAdvancedProxyLogf(
-						"[OPENAI_PROXY_RESPONSES_GROK_COMPAT] app=%s route=responses provider=%s phases=%d namespaces=%d custom_calls=%d custom_outputs=%d custom_tools=%d dropped_tool_search_items=%d dropped_tool_search_tools=%d",
+						"[OPENAI_PROXY_RESPONSES_GROK_COMPAT] app=%s route=responses provider=%s phases=%d call_namespaces=%d custom_calls=%d custom_outputs=%d custom_tools=%d dropped_tool_search_items=%d dropped_tool_search_tools=%d flattened_tool_namespaces=%d dropped_unsupported_tools=%d trimmed_tool_fields=%d",
 						appType,
 						providerLabel,
 						grokCompatibilityStats.StrippedMessagePhases,
@@ -5605,6 +5699,9 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 						grokCompatibilityStats.ConvertedCustomTools,
 						grokCompatibilityStats.DroppedToolSearchItems,
 						grokCompatibilityStats.DroppedToolSearchTools,
+						grokCompatibilityStats.FlattenedNamespaceTools,
+						grokCompatibilityStats.DroppedUnsupportedTools,
+						grokCompatibilityStats.TrimmedToolFields,
 					)
 				}
 			}
