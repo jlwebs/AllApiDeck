@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { buildDesktopConfigPreview, createDesktopConfigDraft } from '../src/utils/desktopConfigTransform.js';
 
+const storage = new Map();
+globalThis.localStorage = {
+  getItem: key => storage.get(key) || null,
+  setItem: (key, value) => storage.set(key, String(value)),
+};
+
 const draft = {
   ...createDesktopConfigDraft({
     siteName: 'Relay',
@@ -61,3 +67,47 @@ assert.match(content, /context_window = 500000/);
 assert.match(content, /\[mcp\.servers\.echo\]\ncommand = "echo"/);
 assert.match(content, /\[model\."other-profile"\]/);
 assert.doesNotMatch(content, /\[model\."old-profile"\]/);
+
+const advancedProxyDraft = {
+  ...draft,
+  grokbuildUseAdvancedProxy: true,
+};
+
+localStorage.setItem('batch_api_check_advanced_proxy_config_v1', JSON.stringify({
+  enabled: true,
+  grokbuild: {
+    enabled: true,
+    basePath: '/advanced-proxy/grokbuild/v1',
+  },
+  queues: {
+    global: { providers: [] },
+    grokbuild: {
+      inheritGlobal: false,
+      providers: [{
+        id: 'grok-provider',
+        baseUrl: 'https://relay.example.com/v1',
+        apiKey: 'secret-key',
+        model: 'grok-4.5',
+        apiFormat: 'openai_responses',
+        enabled: true,
+      }],
+    },
+  },
+}));
+
+const advancedProxyPreview = buildDesktopConfigPreview(advancedProxyDraft, {
+  files: [{
+    appId: 'grokbuild',
+    appName: 'Grok Build',
+    fileId: 'config',
+    label: 'config.toml',
+    path: 'C:/Users/example/.grok/config.toml',
+    exists: false,
+    content: '',
+  }],
+});
+
+assert.deepEqual(advancedProxyPreview.errors, []);
+assert.match(advancedProxyPreview.writes[0].content, /base_url = "http:\/\/127\.0\.0\.1:8888\/advanced-proxy\/grokbuild\/v1"/);
+assert.match(advancedProxyPreview.writes[0].content, /name = "AllApiDeck Advanced Proxy"/);
+assert.match(advancedProxyPreview.writes[0].content, /api_key = "PROXY_MANAGED"/);

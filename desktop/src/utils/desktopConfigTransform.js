@@ -46,6 +46,7 @@ export function createDesktopConfigDraft(record) {
     codexBaseUrl: smartOpenAIBaseUrl,
     codexUseAdvancedProxy: false,
     grokbuildBaseUrl: smartOpenAIBaseUrl,
+    grokbuildUseAdvancedProxy: false,
     grokbuildApiBackend: 'responses',
     opencodeBaseUrl: smartOpenAIBaseUrl,
     opencodeUseAdvancedProxy: false,
@@ -244,12 +245,20 @@ function buildCodexConfigPreview(appName, draft, file) {
 }
 
 function buildGrokBuildPreview(appName, draft, file) {
+  const advancedProxySnapshot = getAdvancedProxyLocalSnapshot();
+  const useAdvancedProxy = shouldUseAdvancedProxy('grokbuild', appName, draft, advancedProxySnapshot);
   const model = requireField(draft.model, `${appName} model`);
   const next = upsertGrokBuildConfigToml(file.content, {
     model,
-    baseUrl: requireField(draft.grokbuildBaseUrl, `${appName} Base URL`),
-    name: requireField(draft.providerName, `${appName} Provider Name`),
-    apiKey: requireField(draft.apiKey, `${appName} API Key`),
+    baseUrl: useAdvancedProxy
+      ? getAdvancedProxyAppBaseUrl('grokbuild', advancedProxySnapshot)
+      : requireField(draft.grokbuildBaseUrl, `${appName} Base URL`),
+    name: useAdvancedProxy
+      ? ADVANCED_PROXY_PROVIDER_NAME
+      : requireField(draft.providerName, `${appName} Provider Name`),
+    apiKey: useAdvancedProxy
+      ? PROXY_MANAGED_TOKEN
+      : requireField(draft.apiKey, `${appName} API Key`),
     apiBackend: draft.grokbuildApiBackend === 'chat_completions' ? 'chat_completions' : 'responses',
   });
   return buildPreviewFile(file, next);

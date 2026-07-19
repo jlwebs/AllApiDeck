@@ -408,6 +408,7 @@ export namespace main {
 	    global: AdvancedProxyQueueConfig;
 	    claude: AdvancedProxyQueueConfig;
 	    codex: AdvancedProxyQueueConfig;
+	    grokbuild: AdvancedProxyQueueConfig;
 	    opencode: AdvancedProxyQueueConfig;
 	    openclaw: AdvancedProxyQueueConfig;
 	
@@ -420,6 +421,7 @@ export namespace main {
 	        this.global = this.convertValues(source["global"], AdvancedProxyQueueConfig);
 	        this.claude = this.convertValues(source["claude"], AdvancedProxyQueueConfig);
 	        this.codex = this.convertValues(source["codex"], AdvancedProxyQueueConfig);
+	        this.grokbuild = this.convertValues(source["grokbuild"], AdvancedProxyQueueConfig);
 	        this.opencode = this.convertValues(source["opencode"], AdvancedProxyQueueConfig);
 	        this.openclaw = this.convertValues(source["openclaw"], AdvancedProxyQueueConfig);
 	    }
@@ -452,6 +454,7 @@ export namespace main {
 	    contextAutoCompression: ContextAutoCompressionConfig;
 	    claude: ClaudeProxyCompatConfig;
 	    codex: AdvancedProxyAppConfig;
+	    grokbuild: AdvancedProxyAppConfig;
 	    opencode: AdvancedProxyAppConfig;
 	    openclaw: AdvancedProxyAppConfig;
 	    failover: AppFailoverConfig;
@@ -476,6 +479,7 @@ export namespace main {
 	        this.contextAutoCompression = this.convertValues(source["contextAutoCompression"], ContextAutoCompressionConfig);
 	        this.claude = this.convertValues(source["claude"], ClaudeProxyCompatConfig);
 	        this.codex = this.convertValues(source["codex"], AdvancedProxyAppConfig);
+	        this.grokbuild = this.convertValues(source["grokbuild"], AdvancedProxyAppConfig);
 	        this.opencode = this.convertValues(source["opencode"], AdvancedProxyAppConfig);
 	        this.openclaw = this.convertValues(source["openclaw"], AdvancedProxyAppConfig);
 	        this.failover = this.convertValues(source["failover"], AppFailoverConfig);

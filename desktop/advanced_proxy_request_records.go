@@ -1038,6 +1038,8 @@ func calculateAdvancedProxyTPS(outputTokens *int, latencyMs *int64) *float64 {
 func buildAdvancedProxyOpenAIInboundEndpoint(appType string, routeKind string) string {
 	basePath := advancedProxyCodexBasePath
 	switch strings.TrimSpace(strings.ToLower(appType)) {
+	case "grokbuild":
+		basePath = advancedProxyGrokBuildPath
 	case "opencode":
 		basePath = advancedProxyOpenCodePath
 	case "openclaw":

@@ -6912,6 +6912,10 @@ func (a *App) handleAdvancedProxyPing(writer http.ResponseWriter, request *http.
 				"enabled":  config.Codex.Enabled,
 				"basePath": config.Codex.BasePath,
 			},
+			"grokbuild": map[string]any{
+				"enabled":  config.GrokBuild.Enabled,
+				"basePath": config.GrokBuild.BasePath,
+			},
 			"opencode": map[string]any{
 				"enabled":  config.OpenCode.Enabled,
 				"basePath": config.OpenCode.BasePath,
@@ -7152,6 +7156,11 @@ func (a *App) handleAdvancedProxyClaude(writer http.ResponseWriter, request *htt
 func (a *App) handleAdvancedProxyCodex(writer http.ResponseWriter, request *http.Request) {
 	appendAdvancedProxyLogf("[OPENAI_PROXY_APP_HANDLER] app=codex next=handleAdvancedProxyOpenAI path=%s", previewAdvancedProxyText(request.URL.Path, 160))
 	a.handleAdvancedProxyOpenAI("codex", writer, request)
+}
+
+func (a *App) handleAdvancedProxyGrokBuild(writer http.ResponseWriter, request *http.Request) {
+	appendAdvancedProxyLogf("[OPENAI_PROXY_APP_HANDLER] app=grokbuild next=handleAdvancedProxyOpenAI path=%s", previewAdvancedProxyText(request.URL.Path, 160))
+	a.handleAdvancedProxyOpenAI("grokbuild", writer, request)
 }
 
 func (a *App) handleAdvancedProxyOpenCode(writer http.ResponseWriter, request *http.Request) {

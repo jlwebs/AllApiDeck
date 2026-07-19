@@ -5364,6 +5364,51 @@ func TestHandleAdvancedProxyCodexForcesProbeWhenSingleProviderCircuitIsOpen(t *t
 	}
 }
 
+func TestHandleAdvancedProxyGrokBuildUsesSeparateQueueAndInboundEndpoint(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/chat/completions" && request.URL.Path != "/chat/completions" {
+			t.Fatalf("unexpected upstream path: %s", request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"chatcmpl_grokbuild","object":"chat.completion","model":"grok-4.5","choices":[{"index":0,"message":{"role":"assistant","content":"connected"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	config := defaultAdvancedProxyConfig()
+	config.GrokBuild.Enabled = true
+	config.Queues.GrokBuild.InheritGlobal = false
+	config.Queues.GrokBuild.Providers = []AdvancedProxyProvider{{
+		ID:        "grokbuild-provider",
+		RowKey:    "row-grokbuild",
+		Name:      "Grok Build Provider",
+		BaseURL:   server.URL,
+		APIKey:    "sk-grokbuild-provider",
+		APIFormat: "openai_chat",
+		Enabled:   true,
+	}}
+	if _, err := saveAdvancedProxyConfig(config); err != nil {
+		t.Fatalf("save advanced proxy config: %v", err)
+	}
+
+	app := &App{}
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1"+advancedProxyGrokBuildPath+"/chat/completions", strings.NewReader(`{"model":"grok-4.5","messages":[{"role":"user","content":"hello"}],"stream":false}`))
+	request.RemoteAddr = "127.0.0.1:43210"
+	recorder := httptest.NewRecorder()
+
+	app.handleAdvancedProxyGrokBuild(recorder, request)
+
+	response := recorder.Result()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("expected Grok Build request to succeed, status=%d body=%s", response.StatusCode, string(body))
+	}
+	if inbound := buildAdvancedProxyOpenAIInboundEndpoint("grokbuild", "responses"); inbound != advancedProxyGrokBuildPath+"/responses" {
+		t.Fatalf("unexpected Grok Build responses inbound endpoint: %s", inbound)
+	}
+}
+
 func TestHandleAdvancedProxyCodexResponsesForwardsCustomToolsRequest(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 

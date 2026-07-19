@@ -646,6 +646,7 @@ import { message, Modal } from 'ant-design-vue';
 import advancedProxyArchitectureLightSvg from '../../docs/images/advanced-proxy-architecture-light.svg';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
+import grokBuildAppIcon from '../assets/app-icons/grok.svg';
 import opencodeAppIcon from '../assets/app-icons/opencode.svg';
 import openclawAppIcon from '../assets/app-icons/openclaw-fallback.svg';
 import DesktopConfigDiffModal from './DesktopConfigDiffModal.vue';
@@ -681,6 +682,7 @@ const ADVANCED_PROXY_PROVIDER_NAME = 'AllApiDeck Advanced Proxy';
 const ADVANCED_PROXY_APP_ICONS = {
   claude: claudeAppIcon,
   codex: codexAppIcon,
+  grokbuild: grokBuildAppIcon,
   opencode: opencodeAppIcon,
   openclaw: openclawAppIcon,
 };
@@ -1062,6 +1064,8 @@ const appCards = computed(() =>
         ? 'Anthropic Messages 入口'
         : app.id === 'codex'
           ? 'Codex 客户端 · OpenAI Compatible 入口'
+          : app.id === 'grokbuild'
+            ? 'Grok Build 客户端 · OpenAI Compatible 入口'
           : app.id === 'opencode'
             ? 'OpenCode 客户端 · OpenAI Compatible 入口'
             : app.id === 'openclaw'
@@ -1308,6 +1312,47 @@ function extractCodexProviderBaseUrl(text, providerKey) {
   return String(baseUrlMatch?.[1] || '').trim();
 }
 
+function extractGrokBuildDefaultModel(text) {
+  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+  let inModelsSection = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^\[[^\]]+\]\s*$/.test(trimmed)) {
+      inModelsSection = trimmed === '[models]';
+      continue;
+    }
+    if (!inModelsSection) continue;
+    const match = trimmed.match(/^default\s*=\s*(?:"((?:\\.|[^"\\])*)"|'([^'\n]*)'|([^\s#]+))/);
+    if (match) return String(match[1] ?? match[2] ?? match[3] ?? '').trim();
+  }
+  return '';
+}
+
+function extractGrokBuildActiveModelConfig(text) {
+  const model = extractGrokBuildDefaultModel(text);
+  if (!model) return {};
+
+  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+  let inModelSection = false;
+  const fields = {};
+  for (const line of lines) {
+    const sectionMatch = line.match(/^\s*\[([^\]]+)\]\s*$/);
+    if (sectionMatch) {
+      if (inModelSection) break;
+      const section = String(sectionMatch[1] || '').trim();
+      const match = section.match(/^model\.(?:"([^"]+)"|'([^']+)'|([^\s]+))$/);
+      inModelSection = String(match?.[1] || match?.[2] || match?.[3] || '').trim() === model;
+      continue;
+    }
+    if (!inModelSection) continue;
+    const fieldMatch = line.match(/^\s*(base_url|api_key|api_backend)\s*=\s*(?:"((?:\\.|[^"\\])*)"|'([^'\n]*)'|([^\s#]+))/);
+    if (fieldMatch) {
+      fields[fieldMatch[1]] = String(fieldMatch[2] ?? fieldMatch[3] ?? fieldMatch[4] ?? '').trim();
+    }
+  }
+  return fields;
+}
+
 function hasMatchingOpenCodeProxyProvider(config, expectedBaseUrl) {
   const providers = isPlainObject(config?.provider) ? config.provider : {};
   return Object.values(providers).some(provider =>
@@ -1339,6 +1384,7 @@ function detectLocalAdvancedProxyTakeoverState(snapshot, config) {
   const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
   const claudeBaseUrl = normalizeComparableUrl(getAdvancedProxyAppBaseUrl('claude', config));
   const codexBaseUrl = normalizeComparableUrl(getAdvancedProxyAppBaseUrl('codex', config));
+  const grokBuildBaseUrl = normalizeComparableUrl(getAdvancedProxyAppBaseUrl('grokbuild', config));
   const opencodeBaseUrl = normalizeComparableUrl(getAdvancedProxyAppBaseUrl('opencode', config));
   const openclawBaseUrl = normalizeComparableUrl(getAdvancedProxyAppBaseUrl('openclaw', config));
 
@@ -1355,6 +1401,9 @@ function detectLocalAdvancedProxyTakeoverState(snapshot, config) {
   const codexConfigText = String(findManagedSnapshotFile(files, 'codex', 'config')?.content || '');
   const codexProviderKey = extractCodexActiveProviderKey(codexConfigText);
   const codexProviderBaseUrl = normalizeComparableUrl(extractCodexProviderBaseUrl(codexConfigText, codexProviderKey));
+  const grokBuildConfig = extractGrokBuildActiveModelConfig(
+    findManagedSnapshotFile(files, 'grokbuild', 'config')?.content || ''
+  );
 
   const opencodeConfig = parseStrictJsonObjectSafe(
     findManagedSnapshotFile(files, 'opencode', 'config')?.content || '',
@@ -1370,6 +1419,8 @@ function detectLocalAdvancedProxyTakeoverState(snapshot, config) {
       && (isManagedProxyToken(claudeEnv.ANTHROPIC_AUTH_TOKEN) || isManagedProxyToken(claudeEnv.ANTHROPIC_API_KEY)),
     codex: isManagedProxyToken(codexAuth.OPENAI_API_KEY)
       && codexProviderBaseUrl === codexBaseUrl,
+    grokbuild: normalizeComparableUrl(grokBuildConfig.base_url) === grokBuildBaseUrl
+      && isManagedProxyToken(grokBuildConfig.api_key),
     opencode: hasMatchingOpenCodeProxyProvider(opencodeConfig, opencodeBaseUrl),
     openclaw: hasMatchingOpenClawProxyProvider(openclawConfig, openclawBaseUrl),
   };
@@ -1655,7 +1706,7 @@ function getPreferredModelForApp(config, appId, provider = null) {
   return String(globalProviders.find(item => String(item?.model || '').trim())?.model || '').trim();
 }
 
-function createTakeoverDesktopDraft(appId, enabled, config) {
+function createTakeoverDesktopDraft(appId, enabled, config, snapshot = null) {
   const sourceProvider = getCompatibleProviderForApp(config, appId, true);
   const model = getPreferredModelForApp(config, appId, sourceProvider);
   if (!model) {
@@ -1697,10 +1748,18 @@ function createTakeoverDesktopDraft(appId, enabled, config) {
   nextDraft.claudeBaseUrl = appId === 'claude' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
   nextDraft.claudeApiKeyField = enabled ? 'ANTHROPIC_AUTH_TOKEN' : String(sourceProvider?.apiKeyField || 'ANTHROPIC_AUTH_TOKEN').trim();
   nextDraft.codexBaseUrl = appId === 'codex' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
+  nextDraft.grokbuildBaseUrl = appId === 'grokbuild' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
+  const grokBuildConfig = extractGrokBuildActiveModelConfig(
+    findManagedSnapshotFile(snapshot?.files, 'grokbuild', 'config')?.content || ''
+  );
+  nextDraft.grokbuildApiBackend = grokBuildConfig.api_backend === 'chat_completions'
+    ? 'chat_completions'
+    : 'responses';
   nextDraft.opencodeBaseUrl = appId === 'opencode' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
   nextDraft.openclawBaseUrl = appId === 'openclaw' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
   nextDraft.claudeUseAdvancedProxy = false;
   nextDraft.codexUseAdvancedProxy = false;
+  nextDraft.grokbuildUseAdvancedProxy = false;
   nextDraft.opencodeUseAdvancedProxy = false;
   nextDraft.openclawUseAdvancedProxy = false;
   return nextDraft;
@@ -1724,8 +1783,8 @@ async function handleAppTakeoverToggle(appId, value) {
   }
 
   try {
-    const desktopDraft = createTakeoverDesktopDraft(appId, value, nextConfig);
     const snapshot = await readManagedAppConfigFiles([appId]);
+    const desktopDraft = createTakeoverDesktopDraft(appId, value, nextConfig, snapshot);
     const desktopPreview = buildDesktopConfigPreview(desktopDraft, snapshot);
     if (!desktopPreview.appGroups.length && desktopPreview.errors.length) {
       throw new Error(desktopPreview.errors.join('\n'));
@@ -3533,6 +3592,10 @@ function resetAntiPoisonPromptsToDefault() {
 
 .advanced-proxy-app-icon-shell-codex {
   background: linear-gradient(135deg, #ffffff, #f3f4f6);
+}
+
+.advanced-proxy-app-icon-shell-grokbuild {
+  background: linear-gradient(135deg, #eff6ff, #e0f2fe);
 }
 
 .advanced-proxy-app-icon-shell-opencode {

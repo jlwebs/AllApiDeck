@@ -10,6 +10,7 @@ export const ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE = 'global';
 export const ADVANCED_PROXY_APPS = [
   { id: 'claude', label: 'Claude', defaultBasePath: '/advanced-proxy/claude', mode: 'anthropic' },
   { id: 'codex', label: 'Codex', defaultBasePath: '/advanced-proxy/codex/v1', mode: 'openai' },
+  { id: 'grokbuild', label: 'Grok Build', defaultBasePath: '/advanced-proxy/grokbuild/v1', mode: 'openai' },
   { id: 'opencode', label: 'OpenCode', defaultBasePath: '/advanced-proxy/opencode/v1', mode: 'openai' },
   { id: 'openclaw', label: 'OpenClaw', defaultBasePath: '/advanced-proxy/openclaw/v1', mode: 'openai' },
 ];
@@ -138,6 +139,7 @@ export function createDefaultAdvancedProxyConfig() {
       global: getDefaultQueueSection(false),
       claude: getDefaultQueueSection(true),
       codex: getDefaultQueueSection(true),
+      grokbuild: getDefaultQueueSection(true),
       opencode: getDefaultQueueSection(true),
       openclaw: getDefaultQueueSection(true),
     },
@@ -147,6 +149,7 @@ export function createDefaultAdvancedProxyConfig() {
       providers: [],
     },
     codex: getDefaultAppSection('codex'),
+    grokbuild: getDefaultAppSection('grokbuild'),
     opencode: getDefaultAppSection('opencode'),
     openclaw: getDefaultAppSection('openclaw'),
     failover: {
@@ -426,6 +429,10 @@ export function normalizeAdvancedProxyConfig(input) {
       ...defaults.codex,
       ...(input?.codex || {}),
     },
+    grokbuild: {
+      ...defaults.grokbuild,
+      ...(input?.grokbuild || {}),
+    },
     opencode: {
       ...defaults.opencode,
       ...(input?.opencode || {}),
@@ -473,6 +480,7 @@ export function normalizeAdvancedProxyConfig(input) {
   next.claude.providers = [...next.queues.global.providers];
 
   next.codex = normalizeAppSection('codex', next.codex, defaults.codex);
+  next.grokbuild = normalizeAppSection('grokbuild', next.grokbuild, defaults.grokbuild);
   next.opencode = normalizeAppSection('opencode', next.opencode, defaults.opencode);
   next.openclaw = normalizeAppSection('openclaw', next.openclaw, defaults.openclaw);
 

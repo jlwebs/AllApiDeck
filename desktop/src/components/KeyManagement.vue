@@ -1171,6 +1171,10 @@
                     <div class="desktop-field-hint">开启后会把 Codex 的 `base_url` 改写到本地代理，并使用占位 Key。</div>
                   </a-form-item>
                   <a-form-item label="Grok Build Base URL"><a-input v-model:value="desktopConfigDraft.grokbuildBaseUrl" /></a-form-item>
+                  <a-form-item label="Grok Build 高级代理">
+                    <a-switch v-model:checked="desktopConfigDraft.grokbuildUseAdvancedProxy" />
+                    <div class="desktop-field-hint">开启后会将当前默认模型的 `base_url` 改写到本地代理，并使用占位 Key。</div>
+                  </a-form-item>
                   <a-form-item label="Grok Build API Backend"><a-select v-model:value="desktopConfigDraft.grokbuildApiBackend"><a-select-option value="responses">responses</a-select-option><a-select-option value="chat_completions">chat_completions</a-select-option></a-select></a-form-item>
                   <a-form-item label="OpenCode Base URL"><a-input v-model:value="desktopConfigDraft.opencodeBaseUrl" /></a-form-item>
                   <a-form-item label="OpenCode Adapter"><a-select v-model:value="desktopConfigDraft.opencodeNpm"><a-select-option value="@ai-sdk/openai-compatible">@ai-sdk/openai-compatible</a-select-option><a-select-option value="@openrouter/ai-sdk-provider">@openrouter/ai-sdk-provider</a-select-option></a-select></a-form-item>
@@ -1390,10 +1394,11 @@ const DESKTOP_APP_ICONS = {
   opencode: opencodeAppIcon,
   openclaw: openclawAppIcon,
 };
-const CONSOLE_PROXY_APP_IDS = ['claude', 'codex', 'opencode', 'openclaw'];
+const CONSOLE_PROXY_APP_IDS = ['claude', 'codex', 'grokbuild', 'opencode', 'openclaw'];
 const CONSOLE_PROXY_APP_LABELS = {
   claude: 'Claude',
   codex: 'Codex',
+  grokbuild: 'Grok Build',
   opencode: 'OpenCode',
   openclaw: 'OpenClaw',
 };
@@ -1762,6 +1767,47 @@ function extractConsoleCodexProviderBaseUrl(text, providerKey) {
   }
   const baseUrlMatch = sectionLines.join('\n').match(/^\s*base_url\s*=\s*["']([^"'\n]+)["']/m);
   return String(baseUrlMatch?.[1] || '').trim();
+}
+
+function extractConsoleGrokBuildDefaultModel(text) {
+  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+  let inModelsSection = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^\[[^\]]+\]\s*$/.test(trimmed)) {
+      inModelsSection = trimmed === '[models]';
+      continue;
+    }
+    if (!inModelsSection) continue;
+    const match = trimmed.match(/^default\s*=\s*(?:"((?:\\.|[^"\\])*)"|'([^'\n]*)'|([^\s#]+))/);
+    if (match) return String(match[1] ?? match[2] ?? match[3] ?? '').trim();
+  }
+  return '';
+}
+
+function extractConsoleGrokBuildActiveModelConfig(text) {
+  const model = extractConsoleGrokBuildDefaultModel(text);
+  if (!model) return {};
+
+  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+  let inModelSection = false;
+  const fields = {};
+  for (const line of lines) {
+    const sectionMatch = line.match(/^\s*\[([^\]]+)\]\s*$/);
+    if (sectionMatch) {
+      if (inModelSection) break;
+      const section = String(sectionMatch[1] || '').trim();
+      const match = section.match(/^model\.(?:"([^"]+)"|'([^']+)'|([^\s]+))$/);
+      inModelSection = String(match?.[1] || match?.[2] || match?.[3] || '').trim() === model;
+      continue;
+    }
+    if (!inModelSection) continue;
+    const fieldMatch = line.match(/^\s*(base_url|api_key|api_backend)\s*=\s*(?:"((?:\\.|[^"\\])*)"|'([^'\n]*)'|([^\s#]+))/);
+    if (fieldMatch) {
+      fields[fieldMatch[1]] = String(fieldMatch[2] ?? fieldMatch[3] ?? fieldMatch[4] ?? '').trim();
+    }
+  }
+  return fields;
 }
 
 function hasMatchingConsoleOpenCodeProxyProvider(config, expectedBaseUrl) {
@@ -2500,6 +2546,7 @@ function detectConsoleLocalAdvancedProxyTakeoverState(snapshot, config) {
   const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
   const claudeBaseUrl = normalizeConsoleComparableUrl(getAdvancedProxyAppBaseUrl('claude', config));
   const codexBaseUrl = normalizeConsoleComparableUrl(getAdvancedProxyAppBaseUrl('codex', config));
+  const grokBuildBaseUrl = normalizeConsoleComparableUrl(getAdvancedProxyAppBaseUrl('grokbuild', config));
   const opencodeBaseUrl = normalizeConsoleComparableUrl(getAdvancedProxyAppBaseUrl('opencode', config));
   const openclawBaseUrl = normalizeConsoleComparableUrl(getAdvancedProxyAppBaseUrl('openclaw', config));
 
@@ -2516,6 +2563,9 @@ function detectConsoleLocalAdvancedProxyTakeoverState(snapshot, config) {
   const codexConfigText = String(findConsoleManagedSnapshotFile(files, 'codex', 'config')?.content || '');
   const codexProviderKey = extractConsoleCodexActiveProviderKey(codexConfigText);
   const codexProviderBaseUrl = normalizeConsoleComparableUrl(extractConsoleCodexProviderBaseUrl(codexConfigText, codexProviderKey));
+  const grokBuildConfig = extractConsoleGrokBuildActiveModelConfig(
+    findConsoleManagedSnapshotFile(files, 'grokbuild', 'config')?.content || ''
+  );
 
   const opencodeConfig = parseConsoleStrictJsonObjectSafe(
     findConsoleManagedSnapshotFile(files, 'opencode', 'config')?.content || '',
@@ -2531,6 +2581,8 @@ function detectConsoleLocalAdvancedProxyTakeoverState(snapshot, config) {
       && (isConsoleManagedProxyToken(claudeEnv.ANTHROPIC_AUTH_TOKEN) || isConsoleManagedProxyToken(claudeEnv.ANTHROPIC_API_KEY)),
     codex: isConsoleManagedProxyToken(codexAuth.OPENAI_API_KEY)
       && codexProviderBaseUrl === codexBaseUrl,
+    grokbuild: normalizeConsoleComparableUrl(grokBuildConfig.base_url) === grokBuildBaseUrl
+      && isConsoleManagedProxyToken(grokBuildConfig.api_key),
     opencode: hasMatchingConsoleOpenCodeProxyProvider(opencodeConfig, opencodeBaseUrl),
     openclaw: hasMatchingConsoleOpenClawProxyProvider(openclawConfig, openclawBaseUrl),
   };
@@ -2583,7 +2635,7 @@ function getConsolePreferredModelForApp(config, appId, provider = null) {
   return String(globalProviders.find(item => String(item?.model || '').trim())?.model || '').trim();
 }
 
-function createConsoleTakeoverDesktopDraft(appId, enabled, config) {
+function createConsoleTakeoverDesktopDraft(appId, enabled, config, snapshot = null) {
   const sourceProvider = getConsoleCompatibleProviderForApp(config, appId, true);
   const model = getConsolePreferredModelForApp(config, appId, sourceProvider);
   if (!model) {
@@ -2621,10 +2673,18 @@ function createConsoleTakeoverDesktopDraft(appId, enabled, config) {
   nextDraft.claudeBaseUrl = appId === 'claude' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
   nextDraft.claudeApiKeyField = enabled ? 'ANTHROPIC_AUTH_TOKEN' : String(sourceProvider?.apiKeyField || 'ANTHROPIC_AUTH_TOKEN').trim();
   nextDraft.codexBaseUrl = appId === 'codex' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
+  nextDraft.grokbuildBaseUrl = appId === 'grokbuild' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
+  const grokBuildConfig = extractConsoleGrokBuildActiveModelConfig(
+    findConsoleManagedSnapshotFile(snapshot?.files, 'grokbuild', 'config')?.content || ''
+  );
+  nextDraft.grokbuildApiBackend = grokBuildConfig.api_backend === 'chat_completions'
+    ? 'chat_completions'
+    : 'responses';
   nextDraft.opencodeBaseUrl = appId === 'opencode' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
   nextDraft.openclawBaseUrl = appId === 'openclaw' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
   nextDraft.claudeUseAdvancedProxy = false;
   nextDraft.codexUseAdvancedProxy = false;
+  nextDraft.grokbuildUseAdvancedProxy = false;
   nextDraft.opencodeUseAdvancedProxy = false;
   nextDraft.openclawUseAdvancedProxy = false;
   return nextDraft;
@@ -2678,7 +2738,7 @@ async function toggleConsoleProxyMaster(value) {
         setConsoleProxyAppEnabled(nextConfig, appId, enabled);
       });
       nextConfig.enabled = enabled;
-    }, enabled ? '已开启四个客户端高级代理' : '已关闭全部客户端高级代理');
+    }, enabled ? '已开启客户端高级代理' : '已关闭全部客户端高级代理');
   } catch {
     await refreshAdvancedProxyConsoleSnapshot();
   } finally {
@@ -2715,8 +2775,8 @@ async function toggleConsoleProxyApp(appId) {
     syncConsoleProxyMasterEnabled(nextConfig);
 
     const app = ADVANCED_PROXY_APPS.find(item => item.id === appId);
-    const desktopDraft = createConsoleTakeoverDesktopDraft(appId, enabled, nextConfig);
     const snapshot = await readManagedAppConfigFiles([appId]);
+    const desktopDraft = createConsoleTakeoverDesktopDraft(appId, enabled, nextConfig, snapshot);
     const preview = buildDesktopConfigPreview(desktopDraft, snapshot);
     if (!preview.appGroups.length && preview.errors.length) {
       throw new Error(preview.errors.join('；'));
@@ -4412,7 +4472,7 @@ const consoleProxyMasterTitle = computed(() => {
   const enabledLabels = consoleProxyAppCards.value.filter(app => app.enabled).map(app => app.label);
   return enabledLabels.length
     ? `高级代理已开启：${enabledLabels.join(' / ')}`
-    : '开启四个客户端高级代理入口';
+    : '开启客户端高级代理入口';
 });
 const consoleAntiPoisonTitle = computed(() => consoleAntiPoisonEnabled.value ? '防投毒已开启，点击关闭' : '防投毒未开启，点击开启');
 const consoleDispatchLogText = computed(() => {
@@ -7346,7 +7406,7 @@ function persistMeta() {
 .desktop-field-hint{margin-top:8px;color:#64748b;font-size:12px;line-height:1.5}
 .desktop-app-logo{width:58px;height:58px;border-radius:18px;display:inline-flex;align-items:center;justify-content:center;background:#f8fafc;padding:10px}
 .desktop-app-logo-image{width:100%;height:100%;display:block;object-fit:contain}
-.desktop-app-name{font-size:13px;font-weight:600}
+.desktop-app-name{min-width:0;font-size:13px;font-weight:600;white-space:nowrap}
 .desktop-app-claude .desktop-app-logo{background:linear-gradient(135deg,#fff7ed,#ffedd5)}
 .desktop-app-codex .desktop-app-logo{background:linear-gradient(135deg,#ffffff,#f3f4f6)}
 .desktop-app-gemini .desktop-app-logo{background:linear-gradient(135deg,#ffffff,#eef4ff)}
@@ -7697,7 +7757,7 @@ function persistMeta() {
 .key-management-compact .record-model-select :deep(.ant-select-selector){min-height:26px;padding-inline:8px !important}
 .key-management-compact .record-model-select :deep(.ant-select-selection-item),
 .key-management-compact .record-model-select :deep(.ant-select-selection-placeholder){font-size:11px;line-height:24px}
-@media (max-width:900px){.key-management-page-container{padding:8px 8px 0 !important}.desktop-config-hero{grid-template-columns:minmax(0,1fr) auto;padding:14px 16px}.desktop-config-alert{gap:12px;padding-right:12px}.desktop-config-alert-icon{width:42px;height:42px;flex-basis:42px;font-size:27px;border-width:3px}.desktop-config-alert-title{font-size:16px}.desktop-config-alert-desc{font-size:12px}.desktop-config-hero-actions{justify-content:flex-end}.desktop-config-hero-actions :deep(.ant-btn){height:40px;padding:0 16px;border-radius:15px;font-size:14px}.desktop-config-layout{grid-template-columns:1fr}.desktop-app-grid{grid-template-columns:repeat(4,minmax(0,1fr));overflow:auto}.config-grid{grid-template-columns:1fr}}
+@media (max-width:900px){.key-management-page-container{padding:8px 8px 0 !important}.desktop-config-hero{grid-template-columns:minmax(0,1fr) auto;padding:14px 16px}.desktop-config-alert{gap:12px;padding-right:12px}.desktop-config-alert-icon{width:42px;height:42px;flex-basis:42px;font-size:27px;border-width:3px}.desktop-config-alert-title{font-size:16px}.desktop-config-alert-desc{font-size:12px}.desktop-config-hero-actions{justify-content:flex-end}.desktop-config-hero-actions :deep(.ant-btn){height:40px;padding:0 16px;border-radius:15px;font-size:14px}.desktop-config-layout{grid-template-columns:1fr}.desktop-app-grid{grid-template-columns:repeat(5,minmax(104px,1fr));overflow-x:auto;overflow-y:hidden}.desktop-app-card{padding:12px 8px;gap:8px}.desktop-app-logo{width:50px;height:50px;padding:9px}.config-grid{grid-template-columns:1fr}}
 .key-management-gaia{background:transparent;box-shadow:none}
 .key-management-gaia :deep(.ant-card){background:linear-gradient(180deg,rgba(255,255,255,.034),rgba(255,255,255,.012)),rgba(8,14,18,.7);border-color:rgba(101,129,138,.16);box-shadow:0 20px 46px rgba(0,0,0,.24),inset 0 1px 0 rgba(181,214,225,.035)}
 .key-management-gaia :deep(.ant-card-head-title),.key-management-gaia .desktop-panel-title,.key-management-gaia .desktop-app-name,.key-management-gaia .site-title-text{color:#e8f3ef}

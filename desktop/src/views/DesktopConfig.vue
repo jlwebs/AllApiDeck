@@ -129,6 +129,11 @@
                 <a-input v-model:value="desktopConfigDraft.grokbuildBaseUrl" />
               </a-form-item>
 
+              <a-form-item label="Grok Build 高级代理">
+                <a-switch v-model:checked="desktopConfigDraft.grokbuildUseAdvancedProxy" />
+                <div class="desktop-field-hint">开启后会将当前默认模型的 `base_url` 改写到本地代理，并使用占位 Key。</div>
+              </a-form-item>
+
               <a-form-item label="Grok Build API Backend">
                 <a-select v-model:value="desktopConfigDraft.grokbuildApiBackend">
                   <a-select-option value="responses">responses</a-select-option>
@@ -551,10 +556,12 @@ onMounted(() => {
 }
 
 .desktop-app-name {
+  min-width: 0;
   font-size: 12px;
   font-weight: 600;
   line-height: 1.2;
   text-align: center;
+  white-space: nowrap;
 }
 
 .desktop-app-claude .desktop-app-logo {
@@ -639,6 +646,16 @@ onMounted(() => {
   .desktop-config-layout {
     grid-template-columns: 1fr;
     min-height: auto;
+  }
+
+  .desktop-app-grid {
+    grid-template-columns: repeat(5, minmax(104px, 1fr));
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .desktop-app-card {
+    padding: 10px 8px;
   }
 
   .config-grid {

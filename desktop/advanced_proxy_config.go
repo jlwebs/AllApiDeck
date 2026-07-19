@@ -16,6 +16,7 @@ const (
 	advancedProxyConfigFileName = "config.json"
 	advancedProxyClaudeBasePath = "/advanced-proxy/claude"
 	advancedProxyCodexBasePath  = "/advanced-proxy/codex/v1"
+	advancedProxyGrokBuildPath  = "/advanced-proxy/grokbuild/v1"
 	advancedProxyOpenCodePath   = "/advanced-proxy/opencode/v1"
 	advancedProxyOpenClawPath   = "/advanced-proxy/openclaw/v1"
 	advancedProxyGlobalScope    = "global"
@@ -55,11 +56,12 @@ type AdvancedProxyQueueConfig struct {
 }
 
 type AdvancedProxyQueuesConfig struct {
-	Global   AdvancedProxyQueueConfig `json:"global"`
-	Claude   AdvancedProxyQueueConfig `json:"claude"`
-	Codex    AdvancedProxyQueueConfig `json:"codex"`
-	OpenCode AdvancedProxyQueueConfig `json:"opencode"`
-	OpenClaw AdvancedProxyQueueConfig `json:"openclaw"`
+	Global    AdvancedProxyQueueConfig `json:"global"`
+	Claude    AdvancedProxyQueueConfig `json:"claude"`
+	Codex     AdvancedProxyQueueConfig `json:"codex"`
+	GrokBuild AdvancedProxyQueueConfig `json:"grokbuild"`
+	OpenCode  AdvancedProxyQueueConfig `json:"opencode"`
+	OpenClaw  AdvancedProxyQueueConfig `json:"openclaw"`
 }
 
 type AppFailoverConfig struct {
@@ -141,6 +143,7 @@ type AdvancedProxyConfig struct {
 	ContextAutoCompression ContextAutoCompressionConfig `json:"contextAutoCompression"`
 	Claude                 ClaudeProxyCompatConfig      `json:"claude"`
 	Codex                  AdvancedProxyAppConfig       `json:"codex"`
+	GrokBuild              AdvancedProxyAppConfig       `json:"grokbuild"`
 	OpenCode               AdvancedProxyAppConfig       `json:"opencode"`
 	OpenClaw               AdvancedProxyAppConfig       `json:"openclaw"`
 	Failover               AppFailoverConfig            `json:"failover"`
@@ -203,11 +206,12 @@ func defaultAdvancedProxyQueueConfig(inheritGlobal bool) AdvancedProxyQueueConfi
 
 func defaultAdvancedProxyQueuesConfig() AdvancedProxyQueuesConfig {
 	return AdvancedProxyQueuesConfig{
-		Global:   defaultAdvancedProxyQueueConfig(false),
-		Claude:   defaultAdvancedProxyQueueConfig(true),
-		Codex:    defaultAdvancedProxyQueueConfig(true),
-		OpenCode: defaultAdvancedProxyQueueConfig(true),
-		OpenClaw: defaultAdvancedProxyQueueConfig(true),
+		Global:    defaultAdvancedProxyQueueConfig(false),
+		Claude:    defaultAdvancedProxyQueueConfig(true),
+		Codex:     defaultAdvancedProxyQueueConfig(true),
+		GrokBuild: defaultAdvancedProxyQueueConfig(true),
+		OpenCode:  defaultAdvancedProxyQueueConfig(true),
+		OpenClaw:  defaultAdvancedProxyQueueConfig(true),
 	}
 }
 
@@ -321,6 +325,10 @@ func defaultAdvancedProxyConfig() AdvancedProxyConfig {
 			Enabled:  false,
 			BasePath: advancedProxyCodexBasePath,
 		},
+		GrokBuild: AdvancedProxyAppConfig{
+			Enabled:  false,
+			BasePath: advancedProxyGrokBuildPath,
+		},
 		OpenCode: AdvancedProxyAppConfig{
 			Enabled:  false,
 			BasePath: advancedProxyOpenCodePath,
@@ -427,6 +435,7 @@ func sanitizeAdvancedProxyConfig(config AdvancedProxyConfig) AdvancedProxyConfig
 	config.Queues.Global = sanitizeAdvancedProxyQueueConfig(config.Queues.Global, defaults.Queues.Global, legacyGlobalProviders)
 	config.Queues.Claude = sanitizeAdvancedProxyQueueConfig(config.Queues.Claude, defaults.Queues.Claude, nil)
 	config.Queues.Codex = sanitizeAdvancedProxyQueueConfig(config.Queues.Codex, defaults.Queues.Codex, nil)
+	config.Queues.GrokBuild = sanitizeAdvancedProxyQueueConfig(config.Queues.GrokBuild, defaults.Queues.GrokBuild, nil)
 	config.Queues.OpenCode = sanitizeAdvancedProxyQueueConfig(config.Queues.OpenCode, defaults.Queues.OpenCode, nil)
 	config.Queues.OpenClaw = sanitizeAdvancedProxyQueueConfig(config.Queues.OpenClaw, defaults.Queues.OpenClaw, nil)
 
@@ -437,6 +446,7 @@ func sanitizeAdvancedProxyConfig(config AdvancedProxyConfig) AdvancedProxyConfig
 	config.Claude.DefaultModel = strings.TrimSpace(config.Claude.DefaultModel)
 	config.Claude.Providers = append([]AdvancedProxyProvider(nil), config.Queues.Global.Providers...)
 	config.Codex = sanitizeAdvancedProxyAppConfig(config.Codex, defaults.Codex)
+	config.GrokBuild = sanitizeAdvancedProxyAppConfig(config.GrokBuild, defaults.GrokBuild)
 	config.OpenCode = sanitizeAdvancedProxyAppConfig(config.OpenCode, defaults.OpenCode)
 	config.OpenClaw = sanitizeAdvancedProxyAppConfig(config.OpenClaw, defaults.OpenClaw)
 
@@ -699,11 +709,13 @@ func advancedProxyQueuesLikelyMissing(queues AdvancedProxyQueuesConfig) bool {
 	return !queues.Global.InheritGlobal &&
 		!queues.Claude.InheritGlobal &&
 		!queues.Codex.InheritGlobal &&
+		!queues.GrokBuild.InheritGlobal &&
 		!queues.OpenCode.InheritGlobal &&
 		!queues.OpenClaw.InheritGlobal &&
 		len(queues.Global.Providers) == 0 &&
 		len(queues.Claude.Providers) == 0 &&
 		len(queues.Codex.Providers) == 0 &&
+		len(queues.GrokBuild.Providers) == 0 &&
 		len(queues.OpenCode.Providers) == 0 &&
 		len(queues.OpenClaw.Providers) == 0
 }
@@ -892,7 +904,7 @@ func normalizeClaudeAPIKeyField(value string) string {
 
 func normalizeAdvancedProxyQueueScope(scope string) string {
 	switch strings.ToLower(strings.TrimSpace(scope)) {
-	case "claude", "codex", "opencode", "openclaw":
+	case "claude", "codex", "grokbuild", "opencode", "openclaw":
 		return strings.ToLower(strings.TrimSpace(scope))
 	default:
 		return advancedProxyGlobalScope
@@ -901,7 +913,7 @@ func normalizeAdvancedProxyQueueScope(scope string) string {
 
 func isAdvancedProxySupportedAppType(appType string) bool {
 	switch strings.ToLower(strings.TrimSpace(appType)) {
-	case "claude", "codex", "opencode", "openclaw":
+	case "claude", "codex", "grokbuild", "opencode", "openclaw":
 		return true
 	default:
 		return false
@@ -910,7 +922,7 @@ func isAdvancedProxySupportedAppType(appType string) bool {
 
 func isAdvancedProxySupportedQueueScope(scope string) bool {
 	switch strings.ToLower(strings.TrimSpace(scope)) {
-	case "global", "claude", "codex", "opencode", "openclaw":
+	case "global", "claude", "codex", "grokbuild", "opencode", "openclaw":
 		return true
 	default:
 		return false
@@ -918,7 +930,7 @@ func isAdvancedProxySupportedQueueScope(scope string) bool {
 }
 
 func advancedProxyAnyAppEnabled(config AdvancedProxyConfig) bool {
-	return config.Claude.Enabled || config.Codex.Enabled || config.OpenCode.Enabled || config.OpenClaw.Enabled
+	return config.Claude.Enabled || config.Codex.Enabled || config.GrokBuild.Enabled || config.OpenCode.Enabled || config.OpenClaw.Enabled
 }
 
 func advancedProxyAppEnabled(config AdvancedProxyConfig, appType string) bool {
@@ -927,6 +939,8 @@ func advancedProxyAppEnabled(config AdvancedProxyConfig, appType string) bool {
 		return config.Claude.Enabled
 	case "codex":
 		return config.Codex.Enabled
+	case "grokbuild":
+		return config.GrokBuild.Enabled
 	case "opencode":
 		return config.OpenCode.Enabled
 	case "openclaw":
@@ -942,6 +956,8 @@ func advancedProxyAppBasePath(config AdvancedProxyConfig, appType string) string
 		return config.Claude.BasePath
 	case "codex":
 		return config.Codex.BasePath
+	case "grokbuild":
+		return config.GrokBuild.BasePath
 	case "opencode":
 		return config.OpenCode.BasePath
 	case "openclaw":
@@ -957,6 +973,8 @@ func advancedProxyQueueConfigForScope(config *AdvancedProxyConfig, scope string)
 		return &config.Queues.Claude
 	case "codex":
 		return &config.Queues.Codex
+	case "grokbuild":
+		return &config.Queues.GrokBuild
 	case "opencode":
 		return &config.Queues.OpenCode
 	case "openclaw":
