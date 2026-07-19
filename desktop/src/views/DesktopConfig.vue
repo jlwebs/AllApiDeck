@@ -125,6 +125,17 @@
                 <div class="desktop-field-hint">开启后会把 Codex 的 `base_url` 改写到本地代理，并使用占位 Key。</div>
               </a-form-item>
 
+              <a-form-item label="Grok Build Base URL">
+                <a-input v-model:value="desktopConfigDraft.grokbuildBaseUrl" />
+              </a-form-item>
+
+              <a-form-item label="Grok Build API Backend">
+                <a-select v-model:value="desktopConfigDraft.grokbuildApiBackend">
+                  <a-select-option value="responses">responses</a-select-option>
+                  <a-select-option value="chat_completions">chat_completions</a-select-option>
+                </a-select>
+              </a-form-item>
+
               <a-form-item label="OpenCode Base URL">
                 <a-input v-model:value="desktopConfigDraft.opencodeBaseUrl" />
               </a-form-item>
@@ -184,12 +195,14 @@ import { hydrateLastResultsSnapshotCache } from '../utils/historySnapshotStore.j
 import { tr } from '../i18n/runtime.js';
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
+import grokBuildAppIcon from '../assets/app-icons/grok.svg';
 import opencodeAppIcon from '../assets/app-icons/opencode.svg';
 import openclawAppIcon from '../assets/app-icons/openclaw-fallback.svg';
 
 const DESKTOP_APP_ICONS = {
   claude: claudeAppIcon,
   codex: codexAppIcon,
+  grokbuild: grokBuildAppIcon,
   opencode: opencodeAppIcon,
   openclaw: openclawAppIcon,
 };
@@ -550,6 +563,10 @@ onMounted(() => {
 
 .desktop-app-codex .desktop-app-logo {
   background: linear-gradient(135deg, #ffffff, #f3f4f6);
+}
+
+.desktop-app-grokbuild .desktop-app-logo {
+  background: linear-gradient(135deg, #eff6ff, #e0f2fe);
 }
 
 .desktop-app-opencode .desktop-app-logo {

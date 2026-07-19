@@ -110,6 +110,7 @@ func resolveManagedConfigTargets(appIDs []string) ([]managedConfigTarget, error)
 	if len(appIDs) == 0 {
 		requested["claude"] = true
 		requested["codex"] = true
+		requested["grokbuild"] = true
 		requested["opencode"] = true
 		requested["openclaw"] = true
 	} else {
@@ -118,8 +119,8 @@ func resolveManagedConfigTargets(appIDs []string) ([]managedConfigTarget, error)
 		}
 	}
 
-	targets := make([]managedConfigTarget, 0, 5)
-	for _, appID := range []string{"claude", "codex", "opencode", "openclaw"} {
+	targets := make([]managedConfigTarget, 0, 6)
+	for _, appID := range []string{"claude", "codex", "grokbuild", "opencode", "openclaw"} {
 		if !requested[appID] {
 			continue
 		}
@@ -141,6 +142,12 @@ func resolveManagedConfigTargets(appIDs []string) ([]managedConfigTarget, error)
 				return nil, err
 			}
 			targets = append(targets, authTarget, configTarget)
+		case "grokbuild":
+			target, err := resolveManagedConfigTarget("grokbuild", "config")
+			if err != nil {
+				return nil, err
+			}
+			targets = append(targets, target)
 		case "opencode":
 			target, err := resolveManagedConfigTarget("opencode", "config")
 			if err != nil {
@@ -219,6 +226,17 @@ func resolveManagedConfigTarget(appID string, fileID string) (managedConfigTarge
 			fileID:  "config",
 			label:   "opencode.json",
 			path:    filepath.Join(homeDir, ".config", "opencode", "opencode.json"),
+		}, nil
+	case "grokbuild":
+		if fileID != "config" {
+			return managedConfigTarget{}, fmt.Errorf("unsupported Grok Build file: %s", fileID)
+		}
+		return managedConfigTarget{
+			appID:   "grokbuild",
+			appName: "Grok Build",
+			fileID:  "config",
+			label:   "config.toml",
+			path:    filepath.Join(homeDir, ".grok", "config.toml"),
 		}, nil
 	case "openclaw":
 		if fileID != "config" {

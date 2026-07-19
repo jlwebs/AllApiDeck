@@ -18,6 +18,7 @@ const ADVANCED_PROXY_PROVIDER_NAME = 'AllApiDeck Advanced Proxy';
 export const DESKTOP_CONFIG_APPS = [
   { id: 'claude', label: 'Claude' },
   { id: 'codex', label: 'Codex' },
+  { id: 'grokbuild', label: 'Grok Build' },
   { id: 'opencode', label: 'OpenCode' },
   { id: 'openclaw', label: 'OpenClaw' },
 ];
@@ -44,6 +45,8 @@ export function createDesktopConfigDraft(record) {
     claudeUseAdvancedProxy: false,
     codexBaseUrl: smartOpenAIBaseUrl,
     codexUseAdvancedProxy: false,
+    grokbuildBaseUrl: smartOpenAIBaseUrl,
+    grokbuildApiBackend: 'responses',
     opencodeBaseUrl: smartOpenAIBaseUrl,
     opencodeUseAdvancedProxy: false,
     opencodeNpm: '@ai-sdk/openai-compatible',
@@ -159,6 +162,8 @@ function buildAppFilePreview(appId, appName, draft, snapshotFiles) {
         buildCodexAuthPreview(appName, draft, findSnapshotFile(snapshotFiles, 'codex', 'auth')),
         buildCodexConfigPreview(appName, draft, findSnapshotFile(snapshotFiles, 'codex', 'config')),
       ];
+    case 'grokbuild':
+      return [buildGrokBuildPreview(appName, draft, findSnapshotFile(snapshotFiles, 'grokbuild', 'config'))];
     case 'opencode':
       return [buildOpenCodePreview(appName, draft, findSnapshotFile(snapshotFiles, 'opencode', 'config'))];
     case 'openclaw':
@@ -235,6 +240,18 @@ function buildCodexConfigPreview(appName, draft, file) {
     model,
   });
 
+  return buildPreviewFile(file, next);
+}
+
+function buildGrokBuildPreview(appName, draft, file) {
+  const model = requireField(draft.model, `${appName} model`);
+  const next = upsertGrokBuildConfigToml(file.content, {
+    model,
+    baseUrl: requireField(draft.grokbuildBaseUrl, `${appName} Base URL`),
+    name: requireField(draft.providerName, `${appName} Provider Name`),
+    apiKey: requireField(draft.apiKey, `${appName} API Key`),
+    apiBackend: draft.grokbuildApiBackend === 'chat_completions' ? 'chat_completions' : 'responses',
+  });
   return buildPreviewFile(file, next);
 }
 
@@ -580,6 +597,103 @@ function upsertCodexConfigToml(currentText, options) {
   text = `${text.trim()}\n\n${providerSection}\n`;
 
   return ensureTrailingNewline(text.replace(/\n{3,}/g, '\n\n').trim());
+}
+
+function upsertGrokBuildConfigToml(currentText, options) {
+  const model = String(options.model || '').trim();
+  const retained = removeGrokBuildSections(currentText, model, extractGrokBuildDefaultModel(currentText));
+  const configSections = [
+    '[models]',
+    `default = ${quoteTomlString(model)}`,
+    [
+      `[model.${quoteTomlString(model)}]`,
+      `model = ${quoteTomlString(model)}`,
+      `base_url = ${quoteTomlString(options.baseUrl)}`,
+      `name = ${quoteTomlString(options.name)}`,
+      `api_key = ${quoteTomlString(options.apiKey)}`,
+      `api_backend = ${quoteTomlString(options.apiBackend)}`,
+      'context_window = 500000',
+    ].join('\n'),
+  ];
+
+  if (retained) {
+    configSections.unshift(retained);
+  }
+  return ensureTrailingNewline(configSections.join('\n\n').replace(/\n{3,}/g, '\n\n').trim());
+}
+
+function removeGrokBuildSections(text, selectedModel, previousDefaultModel = '') {
+  const source = String(text || '').replace(/\r\n/g, '\n');
+  const keptSections = [];
+  let currentHeader = '';
+  let currentLines = [];
+
+  const flush = () => {
+    if (!currentLines.length) return;
+    const sectionText = currentLines.join('\n').trim();
+    if (sectionText && !shouldDropGrokBuildSection(currentHeader, selectedModel, previousDefaultModel)) {
+      keptSections.push(sectionText);
+    }
+    currentHeader = '';
+    currentLines = [];
+  };
+
+  source.split('\n').forEach(line => {
+    if (/^\[[^\]]+\]\s*$/.test(line.trim())) {
+      flush();
+      currentHeader = line.trim();
+      currentLines = [line];
+      return;
+    }
+    if (!currentLines.length) {
+      currentLines = [line];
+      return;
+    }
+    currentLines.push(line);
+  });
+  flush();
+
+  return keptSections.join('\n\n').trim();
+}
+
+function shouldDropGrokBuildSection(header, selectedModel, previousDefaultModel = '') {
+  const normalizedHeader = String(header || '').trim();
+  const dropModelHeaders = [
+    selectedModel,
+    previousDefaultModel,
+  ]
+    .map(value => String(value || '').trim())
+    .filter(Boolean)
+    .flatMap(model => [
+      `[model.${quoteTomlString(model)}]`,
+      `[model.${model}]`,
+    ]);
+
+  return normalizedHeader === '[models]' ||
+    dropModelHeaders.includes(normalizedHeader);
+}
+
+function extractGrokBuildDefaultModel(text) {
+  const source = String(text || '').replace(/\r\n/g, '\n');
+  const lines = source.split('\n');
+  let inModels = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^\[[^\]]+\]\s*$/.test(trimmed)) {
+      inModels = trimmed === '[models]';
+      continue;
+    }
+    if (!inModels) continue;
+
+    const match = trimmed.match(/^default\s*=\s*(?:"((?:\\.|[^"\\])*)"|'([^'\n]*)'|([^\s#]+))/);
+    if (match) {
+      const raw = match[1] ?? match[2] ?? match[3] ?? '';
+      return String(raw).trim();
+    }
+  }
+
+  return '';
 }
 
 function removeMatchingCodexProviderSections(text, options) {
