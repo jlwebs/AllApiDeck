@@ -50,6 +50,14 @@ type advancedProxyChatToResponsesToolState struct {
 
 var advancedProxyOpenAIProtocolPreferences = advancedProxyOpenAIProtocolPreferenceStore{}
 
+func buildOpenAIResponsesOutputTextPart(text string) map[string]any {
+	return map[string]any{
+		"type":        "output_text",
+		"text":        text,
+		"annotations": []any{},
+	}
+}
+
 func streamAdvancedProxySSEDataPayloads(reader io.Reader, onPayload func(payload string) (bool, error)) error {
 	buffer := make([]byte, 0, 64*1024)
 	chunk := make([]byte, 32*1024)
@@ -1266,10 +1274,7 @@ func convertOpenAIChatResponseMapToResponses(response map[string]any, fallbackMo
 					"status": "completed",
 					"role":   "assistant",
 					"content": []any{
-						map[string]any{
-							"type": "output_text",
-							"text": messageText,
-						},
+						buildOpenAIResponsesOutputTextPart(messageText),
 					},
 				})
 			}
@@ -1402,8 +1407,9 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 					"output_index":  messageOutputIndex,
 					"content_index": 0,
 					"part": map[string]any{
-						"type": "output_text",
-						"text": fullText,
+						"type":        "output_text",
+						"text":        fullText,
+						"annotations": []any{},
 					},
 				}); err != nil {
 					return err
@@ -1415,10 +1421,7 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 				"status": "completed",
 				"role":   "assistant",
 				"content": []any{
-					map[string]any{
-						"type": "output_text",
-						"text": fullText,
-					},
+					buildOpenAIResponsesOutputTextPart(fullText),
 				},
 			}
 			if fullReasoning != "" {
@@ -1456,10 +1459,7 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 					"status": "in_progress",
 					"role":   "assistant",
 					"content": []any{
-						map[string]any{
-							"type": "output_text",
-							"text": "",
-						},
+						buildOpenAIResponsesOutputTextPart(""),
 					},
 				},
 			})
@@ -1644,8 +1644,9 @@ func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallba
 						"output_index":  messageOutputIndex,
 						"content_index": 0,
 						"part": map[string]any{
-							"type": "output_text",
-							"text": "",
+							"type":        "output_text",
+							"text":        "",
+							"annotations": []any{},
 						},
 					}); err != nil {
 						return true, err
@@ -1943,10 +1944,7 @@ func convertAnthropicMessagesResponseBodyToResponses(rawBody []byte, fallbackMod
 					"status": "completed",
 					"role":   "assistant",
 					"content": []any{
-						map[string]any{
-							"type": "output_text",
-							"text": text,
-						},
+						buildOpenAIResponsesOutputTextPart(text),
 					},
 				})
 			}
@@ -2059,10 +2057,7 @@ func transformAnthropicMessagesStreamToResponsesStream(streamBody io.ReadCloser,
 								"status": "in_progress",
 								"role":   "assistant",
 								"content": []any{
-									map[string]any{
-										"type": "output_text",
-										"text": "",
-									},
+									buildOpenAIResponsesOutputTextPart(""),
 								},
 							},
 						})
@@ -2071,8 +2066,9 @@ func transformAnthropicMessagesStreamToResponsesStream(streamBody io.ReadCloser,
 							"output_index":  messageOutputIndex,
 							"content_index": 0,
 							"part": map[string]any{
-								"type": "output_text",
-								"text": "",
+								"type":        "output_text",
+								"text":        "",
+								"annotations": []any{},
 							},
 						})
 					}
@@ -2108,8 +2104,9 @@ func transformAnthropicMessagesStreamToResponsesStream(streamBody io.ReadCloser,
 						"output_index":  messageOutputIndex,
 						"content_index": 0,
 						"part": map[string]any{
-							"type": "output_text",
-							"text": fullText,
+							"type":        "output_text",
+							"text":        fullText,
+							"annotations": []any{},
 						},
 					})
 					_ = writeEvent("response.output_item.done", map[string]any{
@@ -2120,10 +2117,7 @@ func transformAnthropicMessagesStreamToResponsesStream(streamBody io.ReadCloser,
 							"status": "completed",
 							"role":   "assistant",
 							"content": []any{
-								map[string]any{
-									"type": "output_text",
-									"text": fullText,
-								},
+								buildOpenAIResponsesOutputTextPart(fullText),
 							},
 						},
 					})
@@ -2133,10 +2127,7 @@ func transformAnthropicMessagesStreamToResponsesStream(streamBody io.ReadCloser,
 						"status": "completed",
 						"role":   "assistant",
 						"content": []any{
-							map[string]any{
-								"type": "output_text",
-								"text": fullText,
-							},
+							buildOpenAIResponsesOutputTextPart(fullText),
 						},
 					})
 					messageItemID = ""

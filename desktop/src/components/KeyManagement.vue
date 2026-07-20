@@ -742,7 +742,19 @@
                   <h4>Provider 队列</h4>
                   <p>全局队列和可调度密钥统一展示。</p>
                 </div>
-                <span class="console-section-count">{{ consoleQueueCards.length }} 条</span>
+                <div class="console-queue-filter">
+                  <div class="key-group-site-filter console-dispatch-site-filter">
+                    <a-input
+                      v-model:value="consolePendingSiteFilterDisplayValue"
+                      size="small"
+                      allow-clear
+                      class="key-group-site-filter-input"
+                      placeholder="输入中转站名字筛选"
+                      @focus="handleConsolePendingSiteFilterFocus"
+                      @blur="handleConsolePendingSiteFilterBlur"
+                    />
+                  </div>
+                </div>
               </div>
               <div v-if="consoleQueueCards.length" class="console-provider-grid">
                 <button
@@ -932,6 +944,16 @@
           @click="handleRowContextAIImage"
         >
           发起AI绘图
+        </button>
+        <button
+          type="button"
+          class="import-export-menu-item key-row-context-action"
+          :class="{ 'key-row-context-action-active': isRowContextProxyQueueActive }"
+          @click="handleRowContextToggleProxyQueue"
+        >
+          {{ rowContextMenu.batch
+            ? (isRowContextProxyQueueActive ? `取消代理队列（${rowContextMenu.records.length}）` : `激活至代理队尾（${rowContextMenu.records.length}）`)
+            : (isRowContextProxyQueueActive ? '取消代理队列' : '激活至代理队尾') }}
         </button>
         <button
           type="button"
@@ -3417,6 +3439,84 @@ function buildProviderFromManagedRecord(record, sortIndex) {
   };
 }
 
+function getAdvancedProxyGlobalQueueProviders(config = advancedProxyConfigSnapshot.value) {
+  return getAdvancedProxyQueueProviders(
+    config,
+    ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
+    { enabledOnly: false }
+  );
+}
+
+function isRecordInAdvancedProxyQueue(record, config = advancedProxyConfigSnapshot.value) {
+  const rowKey = String(record?.rowKey || '').trim();
+  const apiKey = String(record?.apiKey || '').trim();
+  if (!rowKey && !apiKey) return false;
+  return getAdvancedProxyGlobalQueueProviders(config).some(provider => {
+    const providerId = String(provider?.id || provider?.rowKey || '').trim();
+    const providerApiKey = String(provider?.apiKey || '').trim();
+    return (rowKey && (providerId === rowKey || String(provider?.rowKey || '').trim() === rowKey))
+      || (apiKey && providerApiKey === apiKey);
+  });
+}
+
+function isRecordEligibleForProxyQueue(record) {
+  return isValidProviderQueueSourceRecord(record);
+}
+
+const isRowContextProxyQueueActive = computed(() => {
+  const records = getRowContextRecords();
+  if (!records.length) return false;
+  return records.every(record => isRecordInAdvancedProxyQueue(record));
+});
+
+async function handleRowContextToggleProxyQueue() {
+  const records = getRowContextRecords().filter(Boolean);
+  closeRowContextMenu();
+  if (!records.length) return;
+
+  try {
+    const nextConfig = normalizeAdvancedProxyConfig(JSON.parse(JSON.stringify(advancedProxyConfigSnapshot.value || {})));
+    const queue = ensureAdvancedProxyQueueSection(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE);
+    const currentProviders = Array.isArray(queue.providers) ? queue.providers.map(provider => ({ ...provider })) : [];
+    const shouldRemove = records.every(record => isRecordInAdvancedProxyQueue(record, nextConfig));
+
+    if (shouldRemove) {
+      const removeKeys = new Set();
+      records.forEach(record => {
+        const rowKey = String(record?.rowKey || '').trim();
+        const apiKey = String(record?.apiKey || '').trim();
+        if (rowKey) removeKeys.add(rowKey);
+        if (apiKey) removeKeys.add(apiKey);
+      });
+      const nextProviders = currentProviders.filter(provider => {
+        const providerId = String(provider?.id || provider?.rowKey || '').trim();
+        const providerApiKey = String(provider?.apiKey || '').trim();
+        return !(removeKeys.has(providerId) || removeKeys.has(providerApiKey));
+      });
+      replaceAdvancedProxyQueueProviders(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, nextProviders);
+      await saveAdvancedProxyQueueConfigFast(nextConfig);
+      message.success(records.length > 1 ? `已取消 ${records.length} 条代理队列` : '已取消代理队列');
+      return;
+    }
+
+    const appendRecords = records.filter(record => isRecordEligibleForProxyQueue(record) && !isRecordInAdvancedProxyQueue(record, nextConfig));
+    if (!appendRecords.length) {
+      message.warning(records.length > 1 ? '选中记录均已在代理队列中，或状态异常无法入队' : '当前记录已在代理队列中，或状态异常无法入队');
+      return;
+    }
+
+    const nextProviders = [...currentProviders];
+    appendRecords.forEach(record => {
+      nextProviders.push(buildProviderFromManagedRecord(record, nextProviders.length + 1));
+    });
+    replaceAdvancedProxyQueueProviders(nextConfig, ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, nextProviders);
+    await saveAdvancedProxyQueueConfigFast(nextConfig);
+    message.success(appendRecords.length > 1 ? `已激活 ${appendRecords.length} 条到代理队尾` : '已激活至代理队尾');
+  } catch (error) {
+    message.error(error?.message || '更新代理队列失败');
+  }
+}
+
 function ensureAdvancedProxyQueueSection(config, scope = ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE) {
   if (!config.queues || typeof config.queues !== 'object') {
     config.queues = {};
@@ -4219,6 +4319,36 @@ function handleKeyGroupSiteFilterBlur() {
   }
 }
 
+const consolePendingSiteFilterQuery = ref('');
+const consolePendingSiteFilterDisplayValue = computed({
+  get() {
+    return consolePendingSiteFilterQuery.value;
+  },
+  set(value) {
+    const nextValue = String(value || '');
+    if (!nextValue) {
+      consolePendingSiteFilterQuery.value = '';
+      return;
+    }
+    consolePendingSiteFilterQuery.value = nextValue.startsWith(' ')
+      ? nextValue
+      : ` ${nextValue.trimStart()}`;
+  },
+});
+const normalizedConsolePendingSiteFilterQuery = computed(() => String(consolePendingSiteFilterQuery.value || '').trim().toLowerCase());
+
+function handleConsolePendingSiteFilterFocus() {
+  if (!consolePendingSiteFilterQuery.value) {
+    consolePendingSiteFilterQuery.value = ' ';
+  }
+}
+
+function handleConsolePendingSiteFilterBlur() {
+  if (!String(consolePendingSiteFilterQuery.value || '').trim()) {
+    consolePendingSiteFilterQuery.value = '';
+  }
+}
+
 function toggleHideInvalidKeys() {
   hideInvalidKeys.value = !hideInvalidKeys.value;
 }
@@ -4391,6 +4521,11 @@ const consoleQueueCards = computed(() => {
       const rowKey = String(record?.rowKey || '').trim();
       const apiKey = String(record?.apiKey || '').trim();
       return rowKey && !queuedKeys.has(rowKey) && !queuedKeys.has(apiKey);
+    })
+    .filter(record => {
+      if (!normalizedConsolePendingSiteFilterQuery.value) return true;
+      const siteName = String(record?.siteName || '').trim().toLowerCase();
+      return siteName.includes(normalizedConsolePendingSiteFilterQuery.value);
     })
     .map((record, index) => ({
       id: `pending-${String(record?.rowKey || index).trim() || index}`,
@@ -7302,6 +7437,8 @@ function persistMeta() {
 .key-row-context-menu-dark .import-export-menu-item-danger{background:rgba(190,24,93,.16);color:#fda4af}
 .key-row-context-menu-dark .import-export-menu-item-danger:hover:not(:disabled){background:rgba(190,24,93,.24);color:#fecdd3}
 .key-row-context-action{width:100%;padding:8px 12px;font-size:13px;line-height:1.35;border-radius:16px}
+.key-row-context-action-active{border-color:rgba(117,156,90,.36);background:rgba(230,242,219,.96);color:#203226}
+.key-row-context-menu-dark .key-row-context-action-active{border-color:rgba(157,208,128,.34);background:rgba(186,228,149,.12);color:#e2e8f0}
 .key-row-context-submenu-trigger{display:flex;align-items:center;justify-content:space-between}
 .key-row-context-submenu-trigger-active{background:#edf5df;color:#203226}
 .key-row-context-submenu-arrow{font-size:16px;line-height:1;opacity:.72}
@@ -7565,13 +7702,17 @@ function persistMeta() {
 .inventory-panel-actions-monitor{gap:10px}
 .monitor-toolbar-summary{font-size:12px;color:#8a9a80;font-weight:600;letter-spacing:0.02em;white-space:nowrap;margin-right:4px}
 .inventory-local-panel{display:flex;flex:1 1 auto;min-height:0;flex-direction:column}
-.inventory-console-panel{flex:1 1 auto;min-height:360px;padding:18px 0 12px;display:flex;flex-direction:column;gap:14px}
+.inventory-console-panel{flex:1 1 auto;min-height:360px;padding:8px 0 12px;display:flex;flex-direction:column;gap:12px}
 .inventory-monitor-panel{flex:1 1 auto;min-height:400px;padding:0}
 .console-dispatch-top-grid{display:grid;grid-template-columns:minmax(0,65fr) minmax(300px,35fr);gap:14px;align-items:stretch}
 .console-queue-section,.console-dispatch-section,.console-connections-section{min-width:0;display:flex;flex-direction:column;gap:10px}
 .console-section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px}
 .console-section-head h4{margin:0;font:800 16px/1.1 Georgia,'Times New Roman',serif;color:#233923}
 .console-section-head p{margin:5px 0 0;color:#60725f;font-size:12px;line-height:1.35}
+.console-queue-filter{display:flex;align-items:center;flex:0 0 220px;min-width:0}
+.console-queue-filter .console-dispatch-site-filter{width:100%;min-width:0;max-width:none;height:24px}
+.console-queue-filter .key-group-site-filter-input :deep(.ant-input){height:24px;font-size:11px}
+.console-queue-filter .key-group-site-filter-input :deep(.ant-input-affix-wrapper){height:24px;padding:0 9px;font-size:11px;border-radius:9px}
 .console-section-count{border-radius:999px;padding:4px 10px;background:rgba(73,103,62,.1);color:#314a31;font-size:12px;font-weight:700}
 .console-provider-grid{height:408px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));grid-auto-rows:minmax(72px,max-content);align-content:start;gap:8px;overflow:auto;padding-right:2px}
 .console-provider-grid{scrollbar-width:none;-ms-overflow-style:none}
@@ -7778,7 +7919,7 @@ function persistMeta() {
 .key-management-gaia .sync-panel-trigger-button{border-color:rgba(101,129,138,.2);background:rgba(255,255,255,.05);color:#dce8e7}
 .key-management-gaia .sync-panel-trigger-button:hover:not(:disabled){background:rgba(88,116,126,.18);border-color:rgba(122,155,166,.3);color:#f4faf8;box-shadow:0 10px 24px rgba(0,0,0,.24)}
 .key-management-gaia.key-management-compact{background:linear-gradient(180deg,#0a1116,#111c22)}
-@media (max-width:700px){.console-dispatch-control-rack{grid-template-columns:1fr}.console-dispatch-summary-top{order:1}.console-dispatch-control-panel{order:2;justify-content:flex-start;flex-wrap:wrap}}
+@media (max-width:700px){.console-dispatch-control-rack{grid-template-columns:1fr}.console-dispatch-summary-top{order:1}.console-dispatch-control-panel{order:2;justify-content:flex-start;flex-wrap:wrap}.console-queue-filter{flex:1 1 220px}}
 @media (max-width:520px){.console-dispatch-top-grid{grid-template-columns:1fr}.console-provider-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.console-dispatch-summary{grid-template-columns:1fr}.console-dispatch-summary-block{grid-template-columns:1fr}.console-connection-table{overflow:auto}.console-connection-row{min-width:860px}}
 @keyframes sync-trigger-orbit{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 @keyframes sync-trigger-pulse{0%{transform:scale(.98);filter:saturate(1)}100%{transform:scale(1.05);filter:saturate(1.16)}}

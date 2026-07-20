@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <a-modal
     :open="open"
     title="高级代理功能"
@@ -3324,7 +3324,7 @@ function resetAntiPoisonPromptsToDefault() {
 
 .advanced-proxy-app-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -3957,7 +3957,8 @@ function resetAntiPoisonPromptsToDefault() {
   }
 
   .advanced-proxy-app-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 6px;
   }
 }
 
