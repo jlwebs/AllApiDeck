@@ -2318,6 +2318,18 @@ func proxyOpenAIStreamToClientWithMetrics(writer http.ResponseWriter, streamBody
 		}
 		return nil
 	}
+	if shouldPruneGrokBuildResponsesStream(recordContext) {
+		var dropped int
+		streamRaw, dropped = pruneGrokBuildResponsesSSEBody(streamRaw)
+		if dropped > 0 {
+			appendAdvancedProxyLogf(
+				"[GROKBUILD_RESPONSES_PRUNE] route=%s provider=%s dropped=%d mode=buffered",
+				recordContext.ClientRoute,
+				advancedProxyProviderLabel(recordContext.Provider),
+				dropped,
+			)
+		}
+	}
 
 	flusher, _ := writer.(http.Flusher)
 	reader := bufio.NewReader(bytes.NewReader(streamRaw))
@@ -6774,32 +6786,95 @@ func proxyOpenAIStreamDirectToClientWithMetrics(writer http.ResponseWriter, stre
 	flusher, _ := writer.(http.Flusher)
 	reader := bufio.NewReader(streamBody)
 	var streamErr error
-	var preview bytes.Buffer
+	var upstreamPreview bytes.Buffer
+	var deliveredPreview bytes.Buffer
+	pruneForGrokBuild := shouldPruneGrokBuildResponsesStream(recordContext)
+	var pendingEvent bytes.Buffer
+	droppedEvents := 0
+
+	appendPreview := func(preview *bytes.Buffer, raw []byte) {
+		if preview.Len() >= 64*1024 || len(raw) == 0 {
+			return
+		}
+		remaining := 64*1024 - preview.Len()
+		if len(raw) > remaining {
+			_, _ = preview.Write(raw[:remaining])
+			return
+		}
+		_, _ = preview.Write(raw)
+	}
+	forward := func(raw []byte) error {
+		if len(raw) == 0 {
+			return nil
+		}
+		reader := bufio.NewReader(bytes.NewReader(raw))
+		for {
+			line, readErr := reader.ReadBytes('\n')
+			if len(line) > 0 {
+				processOpenAIStreamMetricsLine(line, observedFormat, &observation)
+			}
+			if readErr != nil {
+				if errors.Is(readErr, io.EOF) {
+					break
+				}
+				return readErr
+			}
+		}
+		if _, writeErr := writer.Write(raw); writeErr != nil {
+			return writeErr
+		}
+		appendPreview(&deliveredPreview, raw)
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return nil
+	}
+	flushPendingEvent := func() error {
+		raw := pendingEvent.Bytes()
+		if len(raw) == 0 {
+			return nil
+		}
+		if pruneForGrokBuild {
+			filtered, dropped := pruneGrokBuildResponsesSSEBody(raw)
+			droppedEvents += dropped
+			if dropped > 0 {
+				pendingEvent.Reset()
+				return nil
+			}
+			raw = filtered
+		}
+		pendingEvent.Reset()
+		return forward(raw)
+	}
 
 	for {
 		line, err := reader.ReadBytes('\n')
 		if len(line) > 0 {
-			if preview.Len() < 64*1024 {
-				remaining := 64*1024 - preview.Len()
-				if len(line) > remaining {
-					_, _ = preview.Write(line[:remaining])
-				} else {
-					_, _ = preview.Write(line)
+			appendPreview(&upstreamPreview, line)
+			if pruneForGrokBuild {
+				_, _ = pendingEvent.Write(line)
+				if strings.TrimSpace(string(line)) == "" {
+					if forwardErr := flushPendingEvent(); forwardErr != nil {
+						streamErr = forwardErr
+						break
+					}
 				}
-			}
-			processOpenAIStreamMetricsLine(line, observedFormat, &observation)
-			if _, writeErr := writer.Write(line); writeErr != nil {
-				streamErr = writeErr
-				break
-			}
-			if flusher != nil {
-				flusher.Flush()
+			} else {
+				if forwardErr := forward(line); forwardErr != nil {
+					streamErr = forwardErr
+					break
+				}
 			}
 		}
 		if err == nil {
 			continue
 		}
 		if errors.Is(err, io.EOF) {
+			if streamErr == nil && pruneForGrokBuild {
+				if forwardErr := flushPendingEvent(); forwardErr != nil {
+					streamErr = forwardErr
+				}
+			}
 			break
 		}
 		streamErr = err
@@ -6812,10 +6887,18 @@ func proxyOpenAIStreamDirectToClientWithMetrics(writer http.ResponseWriter, stre
 		errorDetail = fmt.Sprintf("stream forward failed: %s", streamErr.Error())
 	}
 	if recordContext != nil {
-		rawPreview := preview.Bytes()
+		rawPreview := upstreamPreview.Bytes()
 		recordContext.UpstreamResponsePreview = summarizeAdvancedProxyRawStreamPreview(rawPreview)
-		recordContext.DeliveredResponsePreview = recordContext.UpstreamResponsePreview
+		recordContext.DeliveredResponsePreview = summarizeAdvancedProxyRawStreamPreview(deliveredPreview.Bytes())
 		recordContext.UpstreamToolCalls, recordContext.UpstreamToolArgsPreview, recordContext.UpstreamAssistantPreview, recordContext.UpstreamLatestObserved = summarizeAdvancedProxyRawStreamFeedbackContext(rawPreview, observedFormat)
+		if pruneForGrokBuild && droppedEvents > 0 {
+			appendAdvancedProxyLogf(
+				"[GROKBUILD_RESPONSES_PRUNE] route=%s provider=%s dropped=%d mode=direct",
+				recordContext.ClientRoute,
+				advancedProxyProviderLabel(recordContext.Provider),
+				droppedEvents,
+			)
+		}
 		recordAdvancedProxyStreamObservation(recordContext, observation, http.StatusOK, errorDetail)
 	}
 	return streamErr
