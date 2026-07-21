@@ -207,6 +207,7 @@ function buildMergedModelList(record, context) {
   return normalizeModels([
     ...getContextModelNames(context),
     ...(Array.isArray(record?.modelsList) ? record.modelsList : []),
+    ...(Array.isArray(record?.customModels) ? record.customModels : []),
     record?.selectedModel || '',
     record?.quickTestModel || '',
   ]);
@@ -214,16 +215,22 @@ function buildMergedModelList(record, context) {
 
 export function hydrateRecordModelSelection(record, contextMap) {
   const context = getBatchHistoryContextByKeys(contextMap, record?.siteUrl, record?.apiKey);
-  const modelsList = buildMergedModelList(record, context);
+  const customModels = normalizeModels(record?.customModels);
+  const modelsList = normalizeModels([
+    ...getContextModelNames(context),
+    ...(Array.isArray(record?.modelsList) ? record.modelsList : normalizeModels(record?.modelsText)),
+  ]);
+  const availableModels = normalizeModels([...modelsList, ...customModels]);
   const selectedModel = String(record?.selectedModel || '').trim();
-  const preferredModel = context?.preferredModel || pickPreferredModel(modelsList) || '';
-  const nextSelectedModel = modelsList.includes(selectedModel)
+  const preferredModel = context?.preferredModel || pickPreferredModel(availableModels) || '';
+  const nextSelectedModel = availableModels.includes(selectedModel)
     ? selectedModel
-    : (modelsList.includes(preferredModel) ? preferredModel : (modelsList[0] || ''));
+    : (availableModels.includes(preferredModel) ? preferredModel : (availableModels[0] || ''));
   return {
     ...record,
     modelsList,
     modelsText: modelsList.join(', ') || '未提供模型信息',
+    customModels,
     selectedModel: nextSelectedModel,
     modelLoading: false,
     quickTestLoading: false,
@@ -281,6 +288,7 @@ export function loadPanelRecords() {
           apiKey: String(record.apiKey || '').trim(),
           modelsList: normalizeModels(record.modelsList || record.modelsText),
           modelsText: record.modelsText || '未提供模型信息',
+          customModels: normalizeModels(record.customModels),
           selectedModel: String(record.selectedModel || '').trim(),
           quickTestStatus: record.quickTestStatus || '',
           quickTestLabel: record.quickTestLabel || '',
@@ -320,6 +328,7 @@ export function persistPanelRecords(records, options = {}) {
       sourceType: record.sourceType || 'auto',
       modelsList: normalizeModels(record.modelsList || record.modelsText),
       modelsText: normalizeModels(record.modelsList || record.modelsText).join(', '),
+      customModels: normalizeModels(record.customModels),
       selectedModel: String(record.selectedModel || '').trim(),
       quickTestResponseContent: record.quickTestResponseContent || '',
       rowKey: record.rowKey || (record.sourceType === 'manual' ? buildManualRowKey() : buildRowKey(record.siteUrl, record.apiKey)),
@@ -397,18 +406,21 @@ export async function loadRecordModelOptions(record, contextMap, force = false) 
   const rawCandidates = modelResponse?.data || modelResponse?.models || [];
   const normalizedCandidates = normalizeModels(rawCandidates);
   const context = getBatchHistoryContextByKeys(contextMap, record.siteUrl, record.apiKey);
-  const mergedModels = normalizeModels([
+  const customModels = normalizeModels(record.customModels);
+  const fetchedModels = normalizeModels([
     ...getContextModelNames(context),
     ...normalizedCandidates,
     ...(Array.isArray(record.modelsList) ? record.modelsList : []),
   ]);
+  const mergedModels = normalizeModels([...fetchedModels, ...customModels]);
   if (!mergedModels.length) {
     throw new Error('没有获取到可用模型');
   }
   return {
     ...record,
-    modelsList: mergedModels,
-    modelsText: mergedModels.join(', '),
+    modelsList: fetchedModels,
+    modelsText: fetchedModels.join(', '),
+    customModels,
     modelFetchKey: currentFetchKey,
     selectedModel: record.selectedModel && mergedModels.includes(record.selectedModel)
       ? record.selectedModel

@@ -104,6 +104,12 @@ var terminalSessionProviders = []terminalSessionProviderDef{
 		parse:   parseClaudeTerminalSession,
 	},
 	{
+		id:      "grok",
+		label:   "Grok",
+		command: func(sessionID string) string { return "grok --resume " + sessionID },
+		scanner: scanGrokTerminalSessions,
+	},
+	{
 		id:      "opencode",
 		label:   "OpenCode",
 		command: func(sessionID string) string { return "opencode -s " + sessionID },
@@ -199,6 +205,8 @@ func (a *App) GetTerminalSessionMessages(providerID string, sourcePath string, l
 		messages, err = loadOpenClawTerminalSessionMessages(sourcePath)
 	case "gemini":
 		messages, err = loadGeminiTerminalSessionMessages(sourcePath)
+	case "grok":
+		messages, err = loadGrokTerminalSessionMessages(sourcePath)
 	default:
 		return nil, fmt.Errorf("unsupported terminal session provider: %s", providerID)
 	}
@@ -738,6 +746,281 @@ func loadGeminiTerminalSessionMessages(path string) ([]TerminalSessionMessage, e
 		}
 	}
 	return messages, nil
+}
+
+func scanGrokTerminalSessions(page int, pageSize int) ([]TerminalSessionMeta, int) {
+	root := userHomeJoin(".grok", "sessions")
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		return []TerminalSessionMeta{}, 0
+	}
+
+	allSessions := make([]TerminalSessionMeta, 0, 64)
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil || entry == nil || !entry.IsDir() {
+			return nil
+		}
+		// Session dirs are second-level: sessions/<encoded_cwd>/<session_id>
+		if path == root {
+			return nil
+		}
+		summaryPath := filepath.Join(path, "summary.json")
+		if _, err := os.Stat(summaryPath); err != nil {
+			return nil
+		}
+		// Skip if parent is root (encoded cwd folders may also accidentally hold files)
+		parent := filepath.Dir(path)
+		if parent == root {
+			return nil
+		}
+		session, ok := parseGrokTerminalSession(path)
+		if !ok {
+			return nil
+		}
+		allSessions = append(allSessions, session)
+		return nil
+	})
+
+	sortTerminalSessions(allSessions)
+	start := (page - 1) * pageSize
+	if start >= len(allSessions) {
+		return []TerminalSessionMeta{}, len(allSessions)
+	}
+	end := start + pageSize
+	if end > len(allSessions) {
+		end = len(allSessions)
+	}
+	return append([]TerminalSessionMeta(nil), allSessions[start:end]...), len(allSessions)
+}
+
+func parseGrokTerminalSession(dir string) (TerminalSessionMeta, bool) {
+	summaryPath := filepath.Join(dir, "summary.json")
+	data, err := os.ReadFile(summaryPath)
+	if err != nil {
+		return TerminalSessionMeta{}, false
+	}
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return TerminalSessionMeta{}, false
+	}
+	info := objectValue(value["info"])
+	sessionID := firstNonEmpty(stringValue(info["id"]), filepath.Base(dir))
+	if sessionID == "" {
+		return TerminalSessionMeta{}, false
+	}
+	projectDir := stringValue(info["cwd"])
+	title := firstNonEmpty(
+		stringValue(value["generated_title"]),
+		stringValue(value["session_summary"]),
+		filepath.Base(projectDir),
+		sessionID,
+	)
+	createdAt := parseTimestampMs(value["created_at"])
+	lastActiveAt := parseTimestampMs(firstNonEmptyAny(value["last_active_at"], value["updated_at"]))
+	if lastActiveAt == 0 {
+		if st, err := os.Stat(summaryPath); err == nil {
+			lastActiveAt = st.ModTime().UnixMilli()
+		}
+	}
+	if createdAt == 0 {
+		createdAt = lastActiveAt
+	}
+	sourcePath := dir
+	if _, err := os.Stat(filepath.Join(dir, "chat_history.jsonl")); err == nil {
+		sourcePath = filepath.Join(dir, "chat_history.jsonl")
+	}
+	return TerminalSessionMeta{
+		ProviderID:    "grok",
+		SessionID:     sessionID,
+		Title:         truncateTerminalText(title, 90),
+		Summary:       truncateTerminalText(firstNonEmpty(stringValue(value["session_summary"]), title), 180),
+		ProjectDir:    projectDir,
+		CreatedAt:     createdAt,
+		LastActiveAt:  lastActiveAt,
+		SourcePath:    sourcePath,
+		ResumeCommand: "grok --resume " + sessionID,
+	}, true
+}
+
+func loadGrokTerminalSessionMessages(sourcePath string) ([]TerminalSessionMessage, error) {
+	dir := sourcePath
+	if strings.HasSuffix(strings.ToLower(sourcePath), ".jsonl") {
+		dir = filepath.Dir(sourcePath)
+	}
+	chatPath := filepath.Join(dir, "chat_history.jsonl")
+	if _, err := os.Stat(chatPath); err != nil {
+		chatPath = sourcePath
+	}
+	// Stream large chat_history files; keep only the most recent messages.
+	const retainCap = 400
+	messages := make([]TerminalSessionMessage, 0, 64)
+	file, err := os.Open(chatPath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	reader := bufio.NewReaderSize(file, 1<<20)
+	for {
+		line, readErr := reader.ReadString('\n')
+		if len(line) > 0 {
+			value := parseJSONObjectLine(strings.TrimRight(line, "\r\n"))
+			if value != nil {
+				if message, ok := parseGrokChatHistoryMessage(value); ok {
+					messages = append(messages, message)
+					if len(messages) > retainCap {
+						messages = append([]TerminalSessionMessage(nil), messages[len(messages)-retainCap:]...)
+					}
+				}
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return messages, readErr
+		}
+	}
+	// If chat_history has almost no assistant text, supplement from updates.jsonl
+	assistantCount := 0
+	for _, m := range messages {
+		if m.Role == "assistant" {
+			assistantCount++
+		}
+	}
+	if assistantCount == 0 {
+		if updateMessages := loadGrokUpdateMessageChunks(dir); len(updateMessages) > 0 {
+			messages = append(messages, updateMessages...)
+			sort.SliceStable(messages, func(i, j int) bool {
+				return messages[i].Ts < messages[j].Ts
+			})
+		}
+	}
+	return messages, nil
+}
+
+func parseGrokChatHistoryMessage(value map[string]any) (TerminalSessionMessage, bool) {
+	msgType := strings.ToLower(stringValue(value["type"]))
+	switch msgType {
+	case "user":
+		if stringValue(value["synthetic_reason"]) != "" {
+			return TerminalSessionMessage{}, false
+		}
+		raw := extractTerminalText(value["content"])
+		content := extractGrokUserQuery(raw)
+		if content == "" {
+			content = raw
+		}
+		trimmed := strings.TrimSpace(content)
+		if strings.HasPrefix(trimmed, "<user_info>") || strings.HasPrefix(trimmed, "<system-reminder>") {
+			return TerminalSessionMessage{}, false
+		}
+		message := normalizeTerminalMessage(TerminalSessionMessage{
+			Role:    "user",
+			Content: content,
+			Ts:      parseTimestampMs(firstNonEmptyAny(value["timestamp"], value["created_at"])),
+		})
+		if message.Content == "" {
+			return TerminalSessionMessage{}, false
+		}
+		return message, true
+	case "assistant":
+		content := extractTerminalText(value["content"])
+		if content == "" {
+			return TerminalSessionMessage{}, false
+		}
+		message := normalizeTerminalMessage(TerminalSessionMessage{
+			Role:    "assistant",
+			Content: content,
+			Ts:      parseTimestampMs(firstNonEmptyAny(value["timestamp"], value["created_at"])),
+		})
+		if message.Content == "" {
+			return TerminalSessionMessage{}, false
+		}
+		return message, true
+	default:
+		return TerminalSessionMessage{}, false
+	}
+}
+
+func loadGrokUpdateMessageChunks(dir string) []TerminalSessionMessage {
+	updatePath := filepath.Join(dir, "updates.jsonl")
+	lines, err := readAllLines(updatePath)
+	if err != nil {
+		return nil
+	}
+	var (
+		messages   []TerminalSessionMessage
+		builder    strings.Builder
+		lastTs     int64
+		collecting bool
+	)
+	flush := func() {
+		text := strings.TrimSpace(builder.String())
+		if text == "" {
+			return
+		}
+		messages = append(messages, normalizeTerminalMessage(TerminalSessionMessage{
+			Role:    "assistant",
+			Content: text,
+			Ts:      lastTs,
+		}))
+		builder.Reset()
+		collecting = false
+	}
+	for _, line := range lines {
+		value := parseJSONObjectLine(line)
+		if value == nil {
+			continue
+		}
+		params := objectValue(value["params"])
+		update := objectValue(params["update"])
+		sessionUpdate := stringValue(update["sessionUpdate"])
+		ts := parseTimestampMs(firstNonEmptyAny(value["timestamp"], update["timestamp"]))
+		switch sessionUpdate {
+		case "agent_message_chunk":
+			content := objectValue(update["content"])
+			text := firstNonEmpty(stringValue(content["text"]), extractTerminalText(update["content"]))
+			if text == "" {
+				continue
+			}
+			builder.WriteString(text)
+			if ts > 0 {
+				lastTs = ts
+			}
+			collecting = true
+		case "user_message_chunk", "tool_call", "tool_call_update", "agent_thought_chunk":
+			if collecting {
+				flush()
+			}
+		default:
+			if collecting && sessionUpdate != "" {
+				flush()
+			}
+		}
+	}
+	if collecting {
+		flush()
+	}
+	return messages
+}
+
+func extractGrokUserQuery(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	const openTag = "<user_query>"
+	const closeTag = "</user_query>"
+	start := strings.Index(trimmed, openTag)
+	if start < 0 {
+		return ""
+	}
+	start += len(openTag)
+	end := strings.Index(trimmed[start:], closeTag)
+	if end < 0 {
+		return strings.TrimSpace(trimmed[start:])
+	}
+	return strings.TrimSpace(trimmed[start : start+end])
 }
 
 func loadOpenCodeTerminalSessionMessages(sourcePath string) ([]TerminalSessionMessage, error) {

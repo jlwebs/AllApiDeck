@@ -940,6 +940,7 @@ import {
 import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
 import geminiAppIcon from '../assets/app-icons/gemini.svg';
+import grokAppIcon from '../assets/app-icons/grok.svg';
 import opencodeAppIcon from '../assets/app-icons/opencode.svg';
 import openclawAppIcon from '../assets/app-icons/openclaw-fallback.svg';
 import { tr } from '../i18n/runtime.js';
@@ -1033,6 +1034,7 @@ const TERMINAL_SESSION_COLLAPSE_LINE_LIMIT = 10;
 const DEFAULT_TERMINAL_PROVIDERS = [
   { id: 'codex', label: 'Codex', total: 0 },
   { id: 'claude', label: 'Claude', total: 0 },
+  { id: 'grok', label: 'Grok', total: 0 },
   { id: 'opencode', label: 'OpenCode', total: 0 },
   { id: 'openclaw', label: 'OpenClaw', total: 0 },
   { id: 'gemini', label: 'Gemini', total: 0 },
@@ -1066,6 +1068,7 @@ const TERMINAL_PROVIDER_ICONS = {
   opencode: opencodeAppIcon,
   openclaw: openclawAppIcon,
   gemini: geminiAppIcon,
+  grok: grokAppIcon,
 };
 
 const isCompactWindow = computed(() => viewportWidth.value <= 860);

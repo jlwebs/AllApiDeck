@@ -587,15 +587,19 @@
                   <a-tooltip :title="getRecordModelTooltip(record)">
                     <a-select
                       size="small"
+                      show-search
+                      allow-clear
                       class="record-model-select api-model-select"
                       popup-class-name="record-model-dropdown"
                       :value="getRecordSelectedModelValue(record) || undefined"
                       :options="getRecordModelOptions(record)"
                       :loading="record.modelLoading"
-                      :filter-option="true"
+                      :filter-option="filterRecordModelOption"
                       option-filter-prop="label"
-                      :placeholder="record.modelsList?.length ? '选择模型' : '点击拉取模型列表'"
+                      :placeholder="getRecordModelPlaceholder(record)"
                       @dropdownVisibleChange="open => handleRecordModelDropdownVisibleChange(record, open)"
+                      @search="value => handleRecordModelSearch(record, value)"
+                      @inputKeyDown="event => handleRecordModelInputKeyDown(record, event)"
                       @change="value => handleRecordModelSelectionChange(record, value)"
                     />
                   </a-tooltip>
@@ -606,15 +610,19 @@
               <a-tooltip :title="getRecordModelTooltip(record)">
                 <a-select
                   size="small"
+                  show-search
+                  allow-clear
                   class="record-model-select"
                   popup-class-name="record-model-dropdown"
                   :value="getRecordSelectedModelValue(record) || undefined"
                   :options="getRecordModelOptions(record)"
                   :loading="record.modelLoading"
-                  :filter-option="true"
+                  :filter-option="filterRecordModelOption"
                   option-filter-prop="label"
-                  :placeholder="record.modelsList?.length ? '选择模型' : '点击拉取模型列表'"
+                  :placeholder="getRecordModelPlaceholder(record)"
                   @dropdownVisibleChange="open => handleRecordModelDropdownVisibleChange(record, open)"
+                  @search="value => handleRecordModelSearch(record, value)"
+                  @inputKeyDown="event => handleRecordModelInputKeyDown(record, event)"
                   @change="value => handleRecordModelSelectionChange(record, value)"
                 />
               </a-tooltip>
@@ -1593,6 +1601,7 @@ const PERSIST_DEBOUNCE_MS = 240;
 let persistRecordsTimer = null;
 let lastPersistedRecordsSnapshot = '';
 const recordRenderMetaCache = new Map();
+const recordModelSearchTextMap = new Map();
 
 const configProviderTheme = computed(() => ({
   algorithm: isDarkMode.value ? theme.darkAlgorithm : theme.defaultAlgorithm,
@@ -6747,6 +6756,7 @@ function loadStoredRecords() {
       apiKey: String(record.apiKey || '').trim(),
       modelsList: normalizeModels(record.modelsList || record.modelsText),
       modelsText: record.modelsText || '未提供模型信息',
+      customModels: normalizeCustomModels(record.customModels),
       selectedModel: String(record.selectedModel || '').trim(),
       groupSelectedModels: normalizeGroupSelectedModels(record.groupSelectedModels),
       quickTestStatus: record.quickTestStatus || '',
@@ -6779,6 +6789,7 @@ function loadStoredRecords() {
       apiKey: String(record.apiKey || '').trim(),
       modelsList: normalizeModels(record.modelsList || record.modelsText),
       modelsText: record.modelsText || '未提供模型信息',
+      customModels: normalizeCustomModels(record.customModels),
       selectedModel: String(record.selectedModel || '').trim(),
       groupSelectedModels: normalizeGroupSelectedModels(record.groupSelectedModels),
       quickTestStatus: record.quickTestStatus || '',
@@ -6974,10 +6985,71 @@ function buildModelOptionLabel(model, task = null) {
   return summary ? `${model} (${summary})` : model;
 }
 
+function normalizeCustomModels(rawModels) {
+  return normalizeModels(rawModels);
+}
+
+function getRecordCustomModels(record) {
+  return normalizeCustomModels(record?.customModels);
+}
+
+function setRecordCustomModels(record, models) {
+  const nextModels = normalizeCustomModels(models);
+  record.customModels = nextModels;
+  return nextModels;
+}
+
+function addRecordCustomModel(record, model) {
+  const normalized = normalizeCustomModels([model])[0] || '';
+  if (!normalized) return '';
+  const nextModels = normalizeCustomModels([...(getRecordCustomModels(record) || []), normalized]);
+  setRecordCustomModels(record, nextModels);
+  return normalized;
+}
+
+function getRecordModelSearchKey(record) {
+  return String(record?.rowKey || buildRowKey(record?.siteUrl, record?.apiKey) || '').trim();
+}
+
+function getRecordModelSearchText(record) {
+  const key = getRecordModelSearchKey(record);
+  if (!key) return '';
+  return String(recordModelSearchTextMap.get(key) || '').trim();
+}
+
+function setRecordModelSearchText(record, value) {
+  const key = getRecordModelSearchKey(record);
+  if (!key) return;
+  const text = String(value || '');
+  if (!text.trim()) {
+    recordModelSearchTextMap.delete(key);
+    return;
+  }
+  recordModelSearchTextMap.set(key, text);
+}
+
+function clearRecordModelSearchText(record) {
+  setRecordModelSearchText(record, '');
+}
+
+function filterRecordModelOption(input, option) {
+  const keyword = String(input || '').trim().toLowerCase();
+  if (!keyword) return true;
+  const label = String(option?.label || option?.value || '').toLowerCase();
+  const value = String(option?.value || '').toLowerCase();
+  return label.includes(keyword) || value.includes(keyword);
+}
+
+function getRecordModelPlaceholder(record) {
+  if (getRecordCustomModels(record).length || record?.modelsList?.length) return '选择或输入模型后回车';
+  return '点击拉取，或直接输入模型后回车';
+}
+
 function buildMergedModelList(record, context = getBatchHistoryContext(record)) {
   return normalizeModels([
     ...getContextModelNames(context),
     ...(Array.isArray(record?.modelsList) ? record.modelsList : []),
+    ...getRecordCustomModels(record),
     ...Object.values(normalizeGroupSelectedModels(record?.groupSelectedModels)),
     record?.selectedModel || '',
     record?.quickTestModel || '',
@@ -6986,16 +7058,23 @@ function buildMergedModelList(record, context = getBatchHistoryContext(record)) 
 
 function hydrateRecordModelSelection(record) {
   const context = getBatchHistoryContext(record);
-  const modelsList = buildMergedModelList(record, context);
+  const customModels = getRecordCustomModels(record);
+  // Keep remote/fetched models separate from user custom models.
+  const modelsList = normalizeModels([
+    ...getContextModelNames(context),
+    ...(Array.isArray(record?.modelsList) ? record.modelsList : normalizeModels(record?.modelsText)),
+  ]);
+  const availableModels = normalizeModels([...modelsList, ...customModels]);
   const selectedModel = String(record?.selectedModel || '').trim();
-  const preferredModel = context?.preferredModel || pickPreferredModel(modelsList) || '';
-  const nextSelectedModel = modelsList.includes(selectedModel)
+  const preferredModel = context?.preferredModel || pickPreferredModel(availableModels) || '';
+  const nextSelectedModel = availableModels.includes(selectedModel)
     ? selectedModel
-    : (modelsList.includes(preferredModel) ? preferredModel : (modelsList[0] || ''));
+    : (availableModels.includes(preferredModel) ? preferredModel : (availableModels[0] || ''));
   return {
     ...record,
     modelsList,
     modelsText: modelsList.join(', ') || '未提供模型信息',
+    customModels,
     selectedModel: nextSelectedModel,
     groupSelectedModels: normalizeGroupSelectedModels(record?.groupSelectedModels),
     modelLoading: false,
@@ -7005,6 +7084,7 @@ function hydrateRecordModelSelection(record) {
 function getRecordRenderMeta(record) {
   const context = getBatchHistoryContext(record);
   const baseModels = Array.isArray(record?.modelsList) ? record.modelsList : normalizeModels(record?.modelsText);
+  const customModels = getRecordCustomModels(record);
   const signature = [
     record?.rowKey || '',
     getScopedGroupId(),
@@ -7012,6 +7092,7 @@ function getRecordRenderMeta(record) {
     getRecordSelectedModelValue(record),
     String(record?.quickTestModel || '').trim(),
     baseModels.join('|'),
+    customModels.join('|'),
   ].join('::');
 
   const cached = recordRenderMetaCache.get(record?.rowKey || '');
@@ -7020,17 +7101,25 @@ function getRecordRenderMeta(record) {
   }
 
   const modelsList = buildMergedModelList(record, context);
+  const customSet = new Set(customModels);
   const taskMap = new Map((Array.isArray(context?.tasks) ? context.tasks : []).map(task => [task.modelName, task]));
   const selectedModel = getRecordSelectedModelValue(record);
   const selectedTask = selectedModel ? (taskMap.get(selectedModel) || null) : null;
   const summary = buildHistoryTaskSummary(selectedTask);
   const value = {
-    options: modelsList.map(model => ({
-      label: buildModelOptionLabel(model, taskMap.get(model) || null),
-      value: model,
-    })),
+    options: modelsList.map(model => {
+      const baseLabel = buildModelOptionLabel(model, taskMap.get(model) || null);
+      return {
+        label: customSet.has(model) ? `${baseLabel} · 自添加` : baseLabel,
+        value: model,
+      };
+    }),
     selectedTask,
-    tooltip: selectedModel ? (summary ? `${selectedModel} (${summary})` : selectedModel) : (record?.modelsText || '未提供模型信息'),
+    tooltip: selectedModel
+      ? (summary
+        ? `${selectedModel} (${summary})`
+        : (customSet.has(selectedModel) ? `${selectedModel} · 自添加` : selectedModel))
+      : (record?.modelsText || '未提供模型信息'),
   };
   recordRenderMetaCache.set(record?.rowKey || '', { signature, value });
   return value;
@@ -7061,24 +7150,29 @@ async function loadRecordModelOptions(record, force = false, options = {}) {
     const rawCandidates = modelResponse?.data || modelResponse?.models || [];
     const normalizedCandidates = normalizeModels(rawCandidates);
     const context = getBatchHistoryContext(record);
-    const mergedModels = normalizeModels([
+    const customModels = getRecordCustomModels(record);
+    // Keep remote/fetched models independent from user custom models.
+    const fetchedModels = normalizeModels([
       ...getContextModelNames(context),
       ...normalizedCandidates,
       ...(Array.isArray(record.modelsList) ? record.modelsList : []),
-      ...Object.values(normalizeGroupSelectedModels(record?.groupSelectedModels)),
-      record?.selectedModel || '',
-      record?.quickTestModel || '',
     ]);
-    if (!mergedModels.length) {
+    if (!fetchedModels.length && !customModels.length) {
       throw new Error('没有获取到可用模型');
     }
-    record.modelsList = mergedModels;
-    record.modelsText = mergedModels.join(', ');
+    record.modelsList = fetchedModels;
+    record.modelsText = fetchedModels.join(', ');
+    record.customModels = customModels;
     record.modelFetchKey = currentFetchKey;
+    const availableModels = normalizeModels([...fetchedModels, ...customModels]);
     const currentSelectedModel = getRecordSelectedModelValue(record);
-    if (!currentSelectedModel || !mergedModels.includes(currentSelectedModel)) {
-      setRecordSelectedModelValue(record, context?.preferredModel || pickPreferredModel(mergedModels) || mergedModels[0] || '');
+    if (!currentSelectedModel || !availableModels.includes(currentSelectedModel)) {
+      setRecordSelectedModelValue(
+        record,
+        context?.preferredModel || pickPreferredModel(availableModels) || availableModels[0] || '',
+      );
     }
+    recordRenderMetaCache.delete(record?.rowKey || '');
     persistRecords();
     return true;
   } catch (error) {
@@ -7093,17 +7187,55 @@ async function loadRecordModelOptions(record, force = false, options = {}) {
 }
 
 async function handleRecordModelDropdownVisibleChange(record, open) {
-  if (!open) return;
+  if (!open) {
+    clearRecordModelSearchText(record);
+    return;
+  }
   await loadRecordModelOptions(record);
+}
+
+function handleRecordModelSearch(record, value) {
+  setRecordModelSearchText(record, value);
+}
+
+function commitRecordCustomModelInput(record, rawValue = '') {
+  const typed = normalizeModels([rawValue || getRecordModelSearchText(record)])[0] || '';
+  if (!typed) return false;
+  const existing = new Set(buildMergedModelList(record));
+  if (!existing.has(typed)) {
+    addRecordCustomModel(record, typed);
+  }
+  setRecordSelectedModelValue(record, typed);
+  clearRecordModelSearchText(record);
+  recordRenderMetaCache.delete(record?.rowKey || '');
+  persistRecords();
+  return true;
+}
+
+function handleRecordModelInputKeyDown(record, event) {
+  if (event?.key !== 'Enter' && event?.keyCode !== 13) return;
+  const typed = getRecordModelSearchText(record);
+  if (!typed) return;
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  commitRecordCustomModelInput(record, typed);
 }
 
 function handleRecordModelSelectionChange(record, value) {
   const normalizedValue = normalizeModels([value])[0] || '';
-  setRecordSelectedModelValue(record, normalizedValue);
-  if (normalizedValue && !normalizeModels(record.modelsList).includes(normalizedValue)) {
-    record.modelsList = normalizeModels([...(record.modelsList || []), normalizedValue]);
-    record.modelsText = record.modelsList.join(', ');
+  if (!normalizedValue) {
+    setRecordSelectedModelValue(record, '');
+    clearRecordModelSearchText(record);
+    persistRecords();
+    return;
   }
+  setRecordSelectedModelValue(record, normalizedValue);
+  const fetchedModels = normalizeModels(record.modelsList);
+  if (!fetchedModels.includes(normalizedValue)) {
+    addRecordCustomModel(record, normalizedValue);
+  }
+  clearRecordModelSearchText(record);
+  recordRenderMetaCache.delete(record?.rowKey || '');
   persistRecords();
 }
 
@@ -7147,6 +7279,7 @@ function createPersistRecordsSnapshot() {
       ...record,
       sourceType: record.sourceType || 'auto',
       modelsList: normalizeModels(record.modelsList || record.modelsText),
+      customModels: normalizeCustomModels(record.customModels),
       selectedModel: String(record.selectedModel || '').trim(),
       quickTestResponseContent: record.quickTestResponseContent || '',
       groupIds: normalizeRecordGroupIds(record.groupIds),
@@ -7410,6 +7543,9 @@ function persistMeta() {
 .record-model-select :deep(.ant-select-selection-item){overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:22px}
 .record-model-select :deep(.ant-select-arrow){font-size:11px}
 .record-model-select :deep(.ant-select-selection-placeholder){font-size:11px;line-height:22px}
+.record-model-select :deep(.ant-select-selection-search-input){opacity:.42;color:inherit;caret-color:rgba(55,78,58,.55)}
+.record-model-select :deep(.ant-select-focused .ant-select-selection-search-input),
+.record-model-select :deep(.ant-select-open .ant-select-selection-search-input){opacity:.58;caret-color:rgba(55,78,58,.68)}
 :deep(.record-model-dropdown .ant-select-item-option-content){font-size:11px;line-height:1.35}
 :deep(.record-model-dropdown .ant-select-item){font-size:11px;min-height:34px;padding-block:6px}
 .import-export-menu{width:max-content;min-width:0;max-width:calc(100vw - 24px);display:flex;flex-direction:column;gap:8px}
