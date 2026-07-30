@@ -1,6 +1,6 @@
 import { fetchModelList } from './api.js';
 import { apiFetch } from './runtimeApi.js';
-import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from './balance.js';
+import { fetchQuotaLabelWithBatchLogic, formatNewApiQuotaAmount, isDisplayableQuotaLabel } from './balance.js';
 import { buildQuickTestMessages } from './quickTestPrompts.js';
 import { derivePerformanceMetricsFromResponse } from './performanceMetrics.js';
 import { getCachedLastResultsSnapshotRaw } from './historySnapshotStore.js';
@@ -691,7 +691,8 @@ export function getRecordBalanceValue(record) {
   }
   const remainQuota = Number(record?.remainQuota);
   if (Number.isFinite(remainQuota)) {
-    const formatted = `${remainQuota.toFixed(2)} USD`;
+    const quotaLabel = formatNewApiQuotaAmount(remainQuota);
+    const formatted = quotaLabel ? `${quotaLabel.slice(1)} USD` : '';
     return shouldDisplayBalanceValue(formatted) ? formatted : '';
   }
   return '';

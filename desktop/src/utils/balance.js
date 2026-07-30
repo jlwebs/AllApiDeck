@@ -6,12 +6,20 @@ function toFiniteNumber(value) {
   return Number.isFinite(num) ? num : null;
 }
 
+export const NEW_API_QUOTA_PER_USD = 500000;
+
 function formatQuotaAmount(rawQuota) {
   const quota = toFiniteNumber(rawQuota);
   if (quota == null) return '';
   const isDirectAmount = Math.abs(quota) < 100000;
-  const amount = isDirectAmount ? quota : quota / 500000;
+  const amount = isDirectAmount ? quota : quota / NEW_API_QUOTA_PER_USD;
   return `$${amount.toFixed(3)}`;
+}
+
+export function formatNewApiQuotaAmount(rawQuota) {
+  const quota = toFiniteNumber(rawQuota);
+  if (quota == null) return '';
+  return `$${(quota / NEW_API_QUOTA_PER_USD).toFixed(3)}`;
 }
 
 function normalizeQuotaBaseUrl(rawUrl) {
@@ -35,30 +43,32 @@ function formatQuotaLabelFromTokens(tokens) {
   if (!list.length) return '';
 
   let totalRemainQuota = 0;
-  let hasFiniteRemainQuota = false;
+  let hasQuotaUnit = false;
+  let hasDirectAmount = false;
 
   for (const token of list) {
     const unlimitedQuota =
       token?.unlimited_quota === true ||
       token?.unlimitedQuota === true;
-    const remainQuota = toFiniteNumber(
-      token?.remain_quota ??
-      token?.remainQuota ??
-      token?.quota ??
-      token?.balance
-    );
+    const quotaValue = token?.remain_quota ?? token?.remainQuota ?? token?.quota;
+    const directValue = token?.balance;
+    const rawValue = quotaValue ?? directValue;
+    const remainQuota = toFiniteNumber(rawValue);
 
     if (unlimitedQuota || (remainQuota != null && remainQuota < 0)) {
       return '无限';
     }
     if (remainQuota != null) {
       totalRemainQuota += remainQuota;
-      hasFiniteRemainQuota = true;
+      if (quotaValue != null) hasQuotaUnit = true;
+      if (quotaValue == null && directValue != null) hasDirectAmount = true;
     }
   }
 
-  if (!hasFiniteRemainQuota) return '';
-  return formatQuotaAmount(totalRemainQuota);
+  if (!hasQuotaUnit && !hasDirectAmount) return '';
+  return hasQuotaUnit
+    ? formatNewApiQuotaAmount(totalRemainQuota)
+    : formatQuotaAmount(totalRemainQuota);
 }
 
 function uniqueValues(list) {
@@ -74,6 +84,34 @@ function buildUsageEndpoints(normalizedSiteUrl) {
     `${withoutV1}/v1/usage`,
     `${base}/usage`,
   ]);
+}
+
+function buildNewApiUsageEndpoints(normalizedSiteUrl) {
+  const base = normalizeQuotaBaseUrl(normalizedSiteUrl);
+  if (!base) return [];
+
+  const root = base
+    .replace(/\/(?:api\/)?v\d+$/i, '')
+    .replace(/\/api$/i, '');
+  if (!root) return [];
+
+  return uniqueValues([
+    `${root}/api/usage/token/`,
+    `${root}/api/usage/token`,
+  ]);
+}
+
+function buildUsageEndpointCandidates(normalizedSiteUrl) {
+  return [
+    ...buildNewApiUsageEndpoints(normalizedSiteUrl).map(endpoint => ({
+      endpoint,
+      kind: 'new-api',
+    })),
+    ...buildUsageEndpoints(normalizedSiteUrl).map(endpoint => ({
+      endpoint,
+      kind: 'generic',
+    })),
+  ];
 }
 
 function pickFiniteField(source, keys) {
@@ -158,10 +196,34 @@ function extractQuotaFromUsagePayload(payload) {
   return null;
 }
 
+function extractNewApiQuotaSnapshot(payload) {
+  const objects = [payload?.data, payload]
+    .filter(item => item && typeof item === 'object');
+
+  for (const item of objects) {
+    if (item.unlimited_quota === true || item.unlimitedQuota === true) {
+      return { unlimited: true, quota: null };
+    }
+
+    const totalAvailable = pickFiniteField(item, ['total_available', 'totalAvailable']);
+    if (totalAvailable != null) {
+      return { unlimited: false, quota: totalAvailable };
+    }
+
+    const total = pickFiniteField(item, ['total_granted', 'totalGranted']);
+    const used = pickFiniteField(item, ['total_used', 'totalUsed']);
+    if (total != null && used != null) {
+      return { unlimited: false, quota: total - used };
+    }
+  }
+
+  return null;
+}
+
 async function tryFetchUsageQuotaLabel({ apiFetch, normalizedSiteUrl, auth, signal }) {
   let lastStatus = 0;
 
-  for (const endpoint of buildUsageEndpoints(normalizedSiteUrl)) {
+  for (const { endpoint, kind } of buildUsageEndpointCandidates(normalizedSiteUrl)) {
     const proxyUrl = `/api/proxy-get?url=${encodeURIComponent(endpoint)}`;
     const res = await apiFetch(proxyUrl, {
       headers: { Authorization: `Bearer ${auth}` },
@@ -178,9 +240,23 @@ async function tryFetchUsageQuotaLabel({ apiFetch, normalizedSiteUrl, auth, sign
     } catch {
       continue;
     }
+
+    const newApiSnapshot = extractNewApiQuotaSnapshot(json);
+    if (kind === 'new-api' || newApiSnapshot) {
+      const snapshot = newApiSnapshot;
+      if (!snapshot) continue;
+      if (snapshot.unlimited) {
+        return { label: '无限', status: res.status, forbidden: false };
+      }
+      const label = formatNewApiQuotaAmount(snapshot.quota);
+      if (isDisplayableQuotaLabel(label)) {
+        return { label, status: res.status, forbidden: false };
+      }
+      continue;
+    }
+
     const quota = extractQuotaFromUsagePayload(json);
     if (quota == null) continue;
-
     const label = formatQuotaAmount(quota);
     if (isDisplayableQuotaLabel(label)) {
       return { label, status: res.status, forbidden: false };
@@ -253,7 +329,9 @@ export async function fetchQuotaLabelWithBatchLogic({ apiFetch, site, siteUrl })
             ?? json?.total_quota
             ?? null;
           if (quota !== null) {
-            const label = formatQuotaAmount(quota);
+            const label = isSub2Api
+              ? formatQuotaAmount(quota)
+              : formatNewApiQuotaAmount(quota);
             if (isDisplayableQuotaLabel(label)) {
               lastKnownQuotaLabel = label;
               if (isMeaningfulQuotaLabel(label)) {

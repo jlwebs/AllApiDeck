@@ -1375,7 +1375,7 @@ import {
   syncAdvancedProxyProvidersFromRecords,
 } from '../utils/advancedProxyBridge.js';
 import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS, inferProviderKeyFromSnapshot } from '../utils/desktopConfigTransform.js';
-import { fetchQuotaLabelWithBatchLogic, isDisplayableQuotaLabel } from '../utils/balance.js';
+import { fetchQuotaLabelWithBatchLogic, formatNewApiQuotaAmount, isDisplayableQuotaLabel } from '../utils/balance.js';
 import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
 import { normalizeCCSwitchEndpoint } from '../utils/ccSwitch.js';
 import { resolveOpenAIExportBaseUrl } from '../utils/exportEndpoint.js';
@@ -6573,10 +6573,8 @@ function normalizeBalanceLabel(value) {
 }
 
 function formatBalanceAmount(rawAmount) {
-  const amount = Number(rawAmount);
-  if (!Number.isFinite(amount)) return '';
-  const finalAmount = amount < 100000 ? amount.toFixed(2) : (amount / 500000).toFixed(2);
-  return `${finalAmount} USD`;
+  const formatted = formatNewApiQuotaAmount(rawAmount);
+  return formatted ? `${formatted.slice(1)} USD` : '';
 }
 
 function formatBalanceDisplay(value) {
