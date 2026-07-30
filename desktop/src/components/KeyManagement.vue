@@ -921,7 +921,7 @@
         class="key-row-context-menu"
         :class="{ 'key-row-context-menu-dark': isDarkMode }"
         :style="{ left: `${rowContextMenu.x}px`, top: `${rowContextMenu.y}px` }"
-        @mouseleave="closeRowContextGroupSubmenu"
+        @mouseleave="closeRowContextSubmenus"
       >
         <button
           v-if="!rowContextMenu.batch"
@@ -963,6 +963,64 @@
             ? (isRowContextProxyQueueActive ? `取消代理队列（${rowContextMenu.records.length}）` : `激活至代理队尾（${rowContextMenu.records.length}）`)
             : (isRowContextProxyQueueActive ? '取消代理队列' : '激活至代理队尾') }}
         </button>
+        <div class="key-row-context-submenu-row">
+          <button
+            type="button"
+            class="import-export-menu-item key-row-context-action key-row-context-submenu-trigger"
+            :class="{ 'key-row-context-submenu-trigger-active': rowContextMenu.effortSubmenuOpen }"
+            @mouseenter="openRowContextEffortSubmenu"
+          >
+            <span>Effort（{{ getRowContextEffortLabel() }}）</span>
+            <span class="key-row-context-submenu-arrow">›</span>
+          </button>
+          <div
+            v-if="rowContextMenu.effortSubmenuOpen"
+            class="key-row-context-submenu key-row-context-submenu-inline"
+            :class="{ 'key-row-context-submenu-dark': isDarkMode }"
+            @mouseenter="openRowContextEffortSubmenu"
+          >
+            <button
+              v-for="effort in advancedProxyEffortOptions"
+              :key="effort"
+              type="button"
+              class="import-export-menu-item key-row-context-action key-row-context-option"
+              :class="{ 'key-row-context-action-active': getRowContextEffortLabel() === effort }"
+              @click="handleRowContextEffortChange(effort)"
+            >
+              <span>{{ effort }}</span>
+              <span v-if="getRowContextEffortLabel() === effort">✓</span>
+            </button>
+          </div>
+        </div>
+        <div class="key-row-context-submenu-row">
+          <button
+            type="button"
+            class="import-export-menu-item key-row-context-action key-row-context-submenu-trigger"
+            :class="{ 'key-row-context-submenu-trigger-active': rowContextMenu.protocolSubmenuOpen }"
+            @mouseenter="openRowContextProtocolSubmenu"
+          >
+            <span>代理使用协议（{{ getRowContextProtocolLabel() }}）</span>
+            <span class="key-row-context-submenu-arrow">›</span>
+          </button>
+          <div
+            v-if="rowContextMenu.protocolSubmenuOpen"
+            class="key-row-context-submenu key-row-context-submenu-inline"
+            :class="{ 'key-row-context-submenu-dark': isDarkMode }"
+            @mouseenter="openRowContextProtocolSubmenu"
+          >
+            <button
+              v-for="option in advancedProxyProtocolOptions"
+              :key="option.value"
+              type="button"
+              class="import-export-menu-item key-row-context-action key-row-context-option"
+              :class="{ 'key-row-context-action-active': getRowContextProtocolLabel() === option.label }"
+              @click="handleRowContextProtocolChange(option.value)"
+            >
+              <span>{{ option.label }}</span>
+              <span v-if="getRowContextProtocolLabel() === option.label">✓</span>
+            </button>
+          </div>
+        </div>
         <button
           type="button"
           class="import-export-menu-item key-row-context-action key-row-context-submenu-trigger"
@@ -1189,6 +1247,10 @@
                       :placeholder="tr('请选择当前记录模型')"
                     />
                   </a-form-item>
+                  <a-form-item label="Effort">
+                    <a-input v-model:value="desktopConfigDraft.effort" placeholder="high / xhigh / max" />
+                    <div class="desktop-field-hint">按客户端写入对应字段：Codex `model_reasoning_effort`、Claude `effortLevel`、OpenCode `reasoningEffort`。</div>
+                  </a-form-item>
                   <a-form-item label="Claude Base URL"><a-input v-model:value="desktopConfigDraft.claudeBaseUrl" /></a-form-item>
                   <a-form-item label="Claude Key 字段"><a-select v-model:value="desktopConfigDraft.claudeApiKeyField"><a-select-option value="ANTHROPIC_AUTH_TOKEN">ANTHROPIC_AUTH_TOKEN</a-select-option><a-select-option value="ANTHROPIC_API_KEY">ANTHROPIC_API_KEY</a-select-option></a-select></a-form-item>
                   <a-form-item label="Claude 高级代理">
@@ -1294,6 +1356,8 @@ import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManaged
 import {
   ADVANCED_PROXY_SYNC_EVENT,
   ADVANCED_PROXY_APPS,
+  ADVANCED_PROXY_EFFORT_OPTIONS,
+  ADVANCED_PROXY_PROTOCOL_OPTIONS,
   ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
   getAdvancedProxyAppBaseUrl,
   getAdvancedProxyConfig,
@@ -1303,7 +1367,9 @@ import {
   isAdvancedProxyRequestRecordBridgeAvailable,
   listAdvancedProxyActiveConnections,
   listAdvancedProxyRequestRecords,
+  normalizeAdvancedProxyEffort,
   normalizeAdvancedProxyConfig,
+  normalizeAdvancedProxyProtocol,
   setAdvancedProxyConfig,
   setAdvancedProxyConfigOptimistic,
   syncAdvancedProxyProvidersFromRecords,
@@ -1587,7 +1653,11 @@ const rowContextMenu = reactive({
   records: [],
   batch: false,
   groupSubmenuOpen: false,
+  effortSubmenuOpen: false,
+  protocolSubmenuOpen: false,
 });
+const advancedProxyEffortOptions = ADVANCED_PROXY_EFFORT_OPTIONS;
+const advancedProxyProtocolOptions = ADVANCED_PROXY_PROTOCOL_OPTIONS;
 const selectedRowKeys = ref([]);
 const providerQueueInlineConfirmOpen = ref(false);
 const keyGroupContextMenu = reactive({
@@ -3441,6 +3511,8 @@ function buildProviderFromManagedRecord(record, sortIndex) {
     apiKey: record.apiKey,
     model: getRecordSelectedModelValue(record) || record.quickTestModel || '',
     apiFormat: 'openai_responses',
+    effort: normalizeAdvancedProxyEffort(record?.gatewayEffort),
+    proxyProtocol: normalizeAdvancedProxyProtocol(record?.gatewayProxyProtocol),
     apiKeyField: 'ANTHROPIC_AUTH_TOKEN',
     enabled: true,
     sortIndex,
@@ -3745,6 +3817,8 @@ function closeRowContextMenu() {
   rowContextMenu.records = [];
   rowContextMenu.batch = false;
   rowContextMenu.groupSubmenuOpen = false;
+  rowContextMenu.effortSubmenuOpen = false;
+  rowContextMenu.protocolSubmenuOpen = false;
 }
 
 function normalizeRowKeyValue(value) {
@@ -3817,7 +3891,7 @@ async function openRowContextMenu(record, event) {
   rowContextMenu.groupSubmenuOpen = false;
   const anchorX = Number(event.clientX) || 0;
   const anchorY = Number(event.clientY) || 0;
-  const initialPosition = resolveContextMenuPosition(anchorX, anchorY, 224, 220);
+  const initialPosition = resolveContextMenuPosition(anchorX, anchorY, 224, 360);
   rowContextMenu.x = initialPosition.x;
   rowContextMenu.y = initialPosition.y;
   rowContextMenu.open = true;
@@ -3879,6 +3953,101 @@ function isRowContextGroupActive(groupId) {
   return records.every(record => isRecordInGroup(record, groupId));
 }
 
+function findAdvancedProxyProviderForRecord(record, config = advancedProxyConfigSnapshot.value) {
+  const rowKey = String(record?.rowKey || '').trim();
+  const apiKey = String(record?.apiKey || '').trim();
+  return getAdvancedProxyGlobalQueueProviders(config).find(provider => {
+    const providerId = String(provider?.id || provider?.rowKey || '').trim();
+    const providerApiKey = String(provider?.apiKey || '').trim();
+    return (rowKey && (providerId === rowKey || String(provider?.rowKey || '').trim() === rowKey))
+      || (apiKey && providerApiKey === apiKey);
+  }) || null;
+}
+
+function getRowContextEffortLabel() {
+  const records = getRowContextRecords();
+  if (!records.length) return 'high';
+  const values = new Set(records.map(record => normalizeAdvancedProxyEffort(
+    findAdvancedProxyProviderForRecord(record)?.effort || record?.gatewayEffort
+  )));
+  return values.size === 1 ? [...values][0] : '多选';
+}
+
+function getRowContextProtocolLabel() {
+  const records = getRowContextRecords();
+  if (!records.length) return 'auto';
+  const values = new Set(records.map(record => normalizeAdvancedProxyProtocol(
+    findAdvancedProxyProviderForRecord(record)?.proxyProtocol || record?.gatewayProxyProtocol
+  )));
+  if (values.size !== 1) return '多选';
+  return advancedProxyProtocolOptions.find(option => option.value === [...values][0])?.label || 'auto';
+}
+
+function isAdvancedProxyProviderForRecord(provider, record) {
+  const rowKey = String(record?.rowKey || '').trim();
+  const apiKey = String(record?.apiKey || '').trim();
+  const providerId = String(provider?.id || provider?.rowKey || '').trim();
+  const providerApiKey = String(provider?.apiKey || '').trim();
+  return (rowKey && (providerId === rowKey || String(provider?.rowKey || '').trim() === rowKey))
+    || (apiKey && providerApiKey === apiKey);
+}
+
+function getRowContextProtocolDisplayLabel(value) {
+  return advancedProxyProtocolOptions.find(option => option.value === value)?.label || value;
+}
+
+async function handleRowContextGatewaySetting(setting, value) {
+  const records = getRowContextRecords();
+  if (!records.length) return;
+  const normalizedValue = setting === 'effort'
+    ? normalizeAdvancedProxyEffort(value)
+    : normalizeAdvancedProxyProtocol(value);
+  closeRowContextMenu();
+
+  records.forEach(record => {
+    if (setting === 'effort') {
+      record.gatewayEffort = normalizedValue;
+    } else {
+      record.gatewayProxyProtocol = normalizedValue;
+    }
+  });
+  persistRecords();
+
+  try {
+    const nextConfig = normalizeAdvancedProxyConfig(JSON.parse(JSON.stringify(advancedProxyConfigSnapshot.value || {})));
+    let changed = false;
+    [ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE, ...ADVANCED_PROXY_APPS.map(app => app.id)].forEach(scope => {
+      const queue = nextConfig?.queues?.[scope];
+      if (!queue || !Array.isArray(queue.providers)) return;
+      queue.providers = queue.providers.map(provider => {
+        if (!records.some(record => isAdvancedProxyProviderForRecord(provider, record))) return provider;
+        const nextProvider = {
+          ...provider,
+          [setting === 'effort' ? 'effort' : 'proxyProtocol']: normalizedValue,
+        };
+        if (JSON.stringify(nextProvider) !== JSON.stringify(provider)) changed = true;
+        return nextProvider;
+      });
+    });
+    if (changed) {
+      await saveAdvancedProxyQueueConfigFast(nextConfig);
+    }
+    message.success(setting === 'effort'
+      ? `Effort 已切换为 ${normalizedValue}`
+      : `代理使用协议已切换为 ${getRowContextProtocolDisplayLabel(normalizedValue)}`);
+  } catch (error) {
+    message.error(error?.message || '网关角色设置保存失败');
+  }
+}
+
+function handleRowContextEffortChange(value) {
+  void handleRowContextGatewaySetting('effort', value);
+}
+
+function handleRowContextProtocolChange(value) {
+  void handleRowContextGatewaySetting('proxyProtocol', value);
+}
+
 function getRowContextGroupMark(groupId) {
   const records = getRowContextRecords();
   if (!records.length) return '';
@@ -3931,11 +4100,31 @@ function handleGlobalContextMenuScroll(event) {
 }
 
 function openRowContextGroupSubmenu() {
+  rowContextMenu.effortSubmenuOpen = false;
+  rowContextMenu.protocolSubmenuOpen = false;
   rowContextMenu.groupSubmenuOpen = true;
 }
 
 function closeRowContextGroupSubmenu() {
   rowContextMenu.groupSubmenuOpen = false;
+}
+
+function openRowContextEffortSubmenu() {
+  rowContextMenu.groupSubmenuOpen = false;
+  rowContextMenu.protocolSubmenuOpen = false;
+  rowContextMenu.effortSubmenuOpen = true;
+}
+
+function openRowContextProtocolSubmenu() {
+  rowContextMenu.groupSubmenuOpen = false;
+  rowContextMenu.effortSubmenuOpen = false;
+  rowContextMenu.protocolSubmenuOpen = true;
+}
+
+function closeRowContextSubmenus() {
+  rowContextMenu.groupSubmenuOpen = false;
+  rowContextMenu.effortSubmenuOpen = false;
+  rowContextMenu.protocolSubmenuOpen = false;
 }
 
 function openKeyGroupMergeSubmenu() {
@@ -7561,7 +7750,10 @@ function persistMeta() {
 .row-actions-stack :deep(.ant-btn),.row-actions-stack :deep(.ant-popconfirm){width:100%}
 .inline-export-actions{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0}
 .key-row-context-menu{position:fixed;z-index:1200;display:flex;flex-direction:column;gap:10px;width:224px;padding:10px;border-radius:18px;background:rgba(255,255,255,.96);box-shadow:0 18px 48px rgba(15,23,42,.24);backdrop-filter:blur(14px)}
+.key-row-context-submenu-row{position:relative}
 .key-row-context-submenu{position:absolute;left:calc(100% - 6px);top:118px;z-index:2;display:flex;flex-direction:column;gap:8px;width:196px;padding:10px;border-radius:16px;background:rgba(255,255,255,.98);box-shadow:0 18px 48px rgba(15,23,42,.2);backdrop-filter:blur(14px)}
+.key-row-context-submenu-inline{top:auto;bottom:0}
+.key-row-context-option{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .key-management :deep(.compact-key-table .ant-table-tbody > tr.key-row-context-target > td){background:rgba(15,23,42,.085) !important;transition:background .16s ease}
 .key-management :deep(.compact-key-table .ant-table-tbody > tr.key-row-context-target:hover > td){background:rgba(15,23,42,.11) !important}
 .key-management :deep(.compact-key-table .ant-table-tbody > tr.key-row-selected > td){background:rgba(15,23,42,.085) !important;transition:background .16s ease}

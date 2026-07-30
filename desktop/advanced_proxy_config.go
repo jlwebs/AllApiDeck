@@ -25,17 +25,19 @@ const (
 var advancedProxyConfigMu sync.Mutex
 
 type AdvancedProxyProvider struct {
-	ID          string `json:"id"`
-	RowKey      string `json:"rowKey,omitempty"`
-	Name        string `json:"name"`
-	BaseURL     string `json:"baseUrl"`
-	APIKey      string `json:"apiKey"`
-	Model       string `json:"model"`
-	APIFormat   string `json:"apiFormat"`
-	APIKeyField string `json:"apiKeyField"`
-	Enabled     bool   `json:"enabled"`
-	SortIndex   int    `json:"sortIndex"`
-	SourceType  string `json:"sourceType,omitempty"`
+	ID            string `json:"id"`
+	RowKey        string `json:"rowKey,omitempty"`
+	Name          string `json:"name"`
+	BaseURL       string `json:"baseUrl"`
+	APIKey        string `json:"apiKey"`
+	Model         string `json:"model"`
+	APIFormat     string `json:"apiFormat"`
+	Effort        string `json:"effort"`
+	ProxyProtocol string `json:"proxyProtocol"`
+	APIKeyField   string `json:"apiKeyField"`
+	Enabled       bool   `json:"enabled"`
+	SortIndex     int    `json:"sortIndex"`
+	SourceType    string `json:"sourceType,omitempty"`
 }
 
 type ClaudeProxyCompatConfig struct {
@@ -755,6 +757,8 @@ func sanitizeAdvancedProxyProviders(providers []AdvancedProxyProvider) []Advance
 		provider.Model = strings.TrimSpace(provider.Model)
 		provider.SourceType = strings.TrimSpace(provider.SourceType)
 		provider.APIFormat = normalizeClaudeAPIFormat(provider.APIFormat)
+		provider.Effort = normalizeAdvancedProxyEffort(provider.Effort)
+		provider.ProxyProtocol = normalizeAdvancedProxyProtocol(provider.ProxyProtocol)
 		provider.APIKeyField = normalizeClaudeAPIKeyField(provider.APIKeyField)
 		if provider.ID == "" {
 			switch {
@@ -892,6 +896,30 @@ func normalizeClaudeAPIFormat(value string) string {
 		return "openai_responses"
 	default:
 		return "anthropic"
+	}
+}
+
+func normalizeAdvancedProxyEffort(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "low", "medium", "high", "xhigh", "max":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "high"
+	}
+}
+
+func normalizeAdvancedProxyProtocol(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "response", "responses":
+		return "responses"
+	case "responses_compact", "responses/compact":
+		return "responses_compact"
+	case "chat", "chat/completion", "chat/completions":
+		return "chat"
+	case "message", "messages", "anthropic/messages":
+		return "messages"
+	default:
+		return "auto"
 	}
 }
 

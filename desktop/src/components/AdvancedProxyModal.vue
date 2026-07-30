@@ -656,6 +656,7 @@ import { buildDesktopConfigPreview, createDesktopConfigDraft } from '../utils/de
 import { loadPanelRecords } from '../utils/keyPanelStore.js';
 import {
   ADVANCED_PROXY_APPS,
+  normalizeAdvancedProxyEffort,
   ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE,
   ADVANCED_PROXY_QUEUE_SCOPES,
   DEFAULT_ANTI_POISON_ALGORITHM_PROMPT,
@@ -669,6 +670,7 @@ import {
   getCircuitBreakerStats,
   listAdvancedProxyRequestRecords,
   normalizeAdvancedProxyConfig,
+  normalizeAdvancedProxyProtocol,
   resetCircuitBreaker,
   setAdvancedProxyConfig,
   syncAdvancedProxyProvidersFromRecords,
@@ -1549,6 +1551,8 @@ function buildProviderFromRecord(record, sortIndex) {
     apiKey: record.apiKey,
     model: record.selectedModel || record.quickTestModel || '',
     apiFormat: 'openai_responses',
+    effort: normalizeAdvancedProxyEffort(record?.gatewayEffort),
+    proxyProtocol: normalizeAdvancedProxyProtocol(record?.gatewayProxyProtocol),
     apiKeyField: 'ANTHROPIC_AUTH_TOKEN',
     enabled: true,
     sortIndex,

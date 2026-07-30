@@ -1320,6 +1320,439 @@ func convertOpenAIChatResponseMapToResponses(response map[string]any, fallbackMo
 	return result
 }
 
+func convertOpenAIResponsesResponseBodyToChat(rawBody []byte, fallbackModel string) ([]byte, error) {
+	responseMap := map[string]any{}
+	if err := json.Unmarshal(rawBody, &responseMap); err != nil {
+		return nil, err
+	}
+	return json.Marshal(convertOpenAIResponsesResponseMapToChat(responseMap, fallbackModel))
+}
+
+func convertOpenAIResponsesResponseMapToChat(response map[string]any, fallbackModel string) map[string]any {
+	model := firstNonEmpty(strings.TrimSpace(toStringValue(response["model"])), strings.TrimSpace(fallbackModel))
+	messageText := strings.Builder{}
+	reasoningText := strings.Builder{}
+	toolCalls := make([]any, 0, 2)
+	output, _ := response["output"].([]any)
+	for _, rawItem := range output {
+		item, ok := rawItem.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(toStringValue(item["type"])) {
+		case "message":
+			content := openAIMessageContentToText(item["content"])
+			if content != "" {
+				if messageText.Len() > 0 {
+					messageText.WriteString("\n")
+				}
+				messageText.WriteString(content)
+			}
+		case "reasoning":
+			summary, _ := item["summary"].([]any)
+			for _, rawSummary := range summary {
+				if summaryMap, ok := rawSummary.(map[string]any); ok {
+					if text := strings.TrimSpace(toStringValue(summaryMap["text"])); text != "" {
+						if reasoningText.Len() > 0 {
+							reasoningText.WriteString("\n")
+						}
+						reasoningText.WriteString(text)
+					}
+				}
+			}
+		case "function_call":
+			callID := firstNonEmpty(strings.TrimSpace(toStringValue(item["call_id"])), strings.TrimSpace(toStringValue(item["id"])), fmt.Sprintf("call_%d", len(toolCalls)+1))
+			toolCalls = append(toolCalls, map[string]any{
+				"id":   callID,
+				"type": "function",
+				"function": map[string]any{
+					"name":      strings.TrimSpace(toStringValue(item["name"])),
+					"arguments": toStringValue(item["arguments"]),
+				},
+			})
+		}
+	}
+	if messageText.Len() == 0 {
+		messageText.WriteString(strings.TrimSpace(toStringValue(response["output_text"])))
+	}
+	message := map[string]any{
+		"role":    "assistant",
+		"content": messageText.String(),
+	}
+	if reasoningText.Len() > 0 {
+		message["reasoning_content"] = reasoningText.String()
+	}
+	if len(toolCalls) > 0 {
+		message["tool_calls"] = toolCalls
+	}
+	finishReason := "stop"
+	if len(toolCalls) > 0 {
+		finishReason = "tool_calls"
+	} else if strings.EqualFold(strings.TrimSpace(toStringValue(response["status"])), "incomplete") {
+		finishReason = "length"
+	}
+	result := map[string]any{
+		"id":      firstNonEmpty(strings.TrimSpace(toStringValue(response["id"])), fmt.Sprintf("chatcmpl_%d", time.Now().UnixNano())),
+		"object":  "chat.completion",
+		"created": int64(toIntValue(response["created_at"])),
+		"model":   model,
+		"choices": []any{map[string]any{
+			"index":         0,
+			"message":       message,
+			"finish_reason": finishReason,
+		}},
+	}
+	if result["created"].(int64) <= 0 {
+		result["created"] = time.Now().Unix()
+	}
+	if usageMap, ok := response["usage"].(map[string]any); ok && usageMap != nil {
+		result["usage"] = map[string]any{
+			"prompt_tokens":     toIntValue(usageMap["input_tokens"]),
+			"completion_tokens": toIntValue(usageMap["output_tokens"]),
+			"total_tokens":      toIntValue(usageMap["total_tokens"]),
+		}
+	}
+	return result
+}
+
+func convertAnthropicMessagesResponseBodyToChat(rawBody []byte, fallbackModel string) ([]byte, error) {
+	responseMap := map[string]any{}
+	if err := json.Unmarshal(rawBody, &responseMap); err != nil {
+		return nil, err
+	}
+	model := firstNonEmpty(strings.TrimSpace(toStringValue(responseMap["model"])), strings.TrimSpace(fallbackModel))
+	textParts := make([]string, 0, 2)
+	reasoningParts := make([]string, 0, 2)
+	toolCalls := make([]any, 0, 2)
+	content, _ := responseMap["content"].([]any)
+	for index, rawBlock := range content {
+		block, ok := rawBlock.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(toStringValue(block["type"])) {
+		case "text":
+			if value := strings.TrimSpace(toStringValue(block["text"])); value != "" {
+				textParts = append(textParts, value)
+			}
+		case "thinking", "redacted_thinking":
+			if value := strings.TrimSpace(toStringValue(block["thinking"])); value != "" {
+				reasoningParts = append(reasoningParts, value)
+			}
+		case "tool_use":
+			callID := firstNonEmpty(strings.TrimSpace(toStringValue(block["id"])), fmt.Sprintf("call_%d", index+1))
+			arguments, _ := block["input"].(map[string]any)
+			argumentBytes, _ := json.Marshal(arguments)
+			toolCalls = append(toolCalls, map[string]any{
+				"id":   callID,
+				"type": "function",
+				"function": map[string]any{
+					"name":      strings.TrimSpace(toStringValue(block["name"])),
+					"arguments": string(argumentBytes),
+				},
+			})
+		}
+	}
+	message := map[string]any{
+		"role":    "assistant",
+		"content": strings.Join(textParts, ""),
+	}
+	if len(reasoningParts) > 0 {
+		message["reasoning_content"] = strings.Join(reasoningParts, "\n")
+	}
+	if len(toolCalls) > 0 {
+		message["tool_calls"] = toolCalls
+	}
+	finishReason := "stop"
+	if len(toolCalls) > 0 || strings.EqualFold(strings.TrimSpace(toStringValue(responseMap["stop_reason"])), "tool_use") {
+		finishReason = "tool_calls"
+	} else if strings.EqualFold(strings.TrimSpace(toStringValue(responseMap["stop_reason"])), "max_tokens") {
+		finishReason = "length"
+	}
+	result := map[string]any{
+		"id":      firstNonEmpty(strings.TrimSpace(toStringValue(responseMap["id"])), fmt.Sprintf("chatcmpl_%d", time.Now().UnixNano())),
+		"object":  "chat.completion",
+		"created": time.Now().Unix(),
+		"model":   model,
+		"choices": []any{map[string]any{
+			"index":         0,
+			"message":       message,
+			"finish_reason": finishReason,
+		}},
+	}
+	if usageMap, ok := responseMap["usage"].(map[string]any); ok && usageMap != nil {
+		result["usage"] = map[string]any{
+			"prompt_tokens":     toIntValue(usageMap["input_tokens"]),
+			"completion_tokens": toIntValue(usageMap["output_tokens"]),
+			"total_tokens":      toIntValue(usageMap["input_tokens"]) + toIntValue(usageMap["output_tokens"]),
+		}
+	}
+	return json.Marshal(result)
+}
+
+func writeOpenAIChatStreamChunk(writer io.Writer, responseID string, model string, created int64, delta map[string]any, finishReason any, usage map[string]any) error {
+	if created <= 0 {
+		created = time.Now().Unix()
+	}
+	payload := map[string]any{
+		"id":      firstNonEmpty(strings.TrimSpace(responseID), fmt.Sprintf("chatcmpl_%d", time.Now().UnixNano())),
+		"object":  "chat.completion.chunk",
+		"created": created,
+		"model":   model,
+		"choices": []any{},
+	}
+	if delta != nil || finishReason != nil {
+		payload["choices"] = []any{map[string]any{
+			"index":         0,
+			"delta":         firstNonNilMap(delta),
+			"finish_reason": finishReason,
+		}}
+	}
+	if usage != nil {
+		payload["usage"] = usage
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(writer, "data: %s\n\n", string(raw))
+	return err
+}
+
+func firstNonNilMap(value map[string]any) map[string]any {
+	if value == nil {
+		return map[string]any{}
+	}
+	return value
+}
+
+func transformOpenAIResponsesStreamToChatStream(streamBody io.ReadCloser, fallbackModel string) io.ReadCloser {
+	reader, writer := io.Pipe()
+	go func() {
+		defer streamBody.Close()
+		defer writer.Close()
+		responseID := ""
+		model := strings.TrimSpace(fallbackModel)
+		created := time.Now().Unix()
+		toolNames := map[int]string{}
+		toolIDs := map[int]string{}
+		toolSeen := map[int]bool{}
+		finished := false
+		finishReason := "stop"
+		emitDone := func() error {
+			if finished {
+				return nil
+			}
+			finished = true
+			if len(toolNames) > 0 || len(toolSeen) > 0 {
+				finishReason = "tool_calls"
+			}
+			if err := writeOpenAIChatStreamChunk(writer, responseID, model, created, map[string]any{}, finishReason, nil); err != nil {
+				return err
+			}
+			_, err := io.WriteString(writer, "data: [DONE]\n\n")
+			return err
+		}
+		streamErr := streamAdvancedProxySSEDataPayloads(streamBody, func(payload string) (bool, error) {
+			if payload == "" {
+				return false, nil
+			}
+			if payload == "[DONE]" {
+				return true, emitDone()
+			}
+			chunk := map[string]any{}
+			if json.Unmarshal([]byte(payload), &chunk) != nil {
+				return false, nil
+			}
+			if id := strings.TrimSpace(toStringValue(chunk["id"])); id != "" {
+				responseID = id
+			}
+			if value := strings.TrimSpace(toStringValue(chunk["model"])); value != "" {
+				model = value
+			}
+			eventType := strings.TrimSpace(toStringValue(chunk["type"]))
+			if responseMap, ok := chunk["response"].(map[string]any); ok {
+				if id := strings.TrimSpace(toStringValue(responseMap["id"])); id != "" {
+					responseID = id
+				}
+				if value := strings.TrimSpace(toStringValue(responseMap["model"])); value != "" {
+					model = value
+				}
+				if value := int64(toIntValue(responseMap["created_at"])); value > 0 {
+					created = value
+				}
+			}
+			switch eventType {
+			case "response.output_item.added":
+				item, _ := chunk["item"].(map[string]any)
+				if strings.EqualFold(strings.TrimSpace(toStringValue(item["type"])), "function_call") {
+					index := toIntValue(chunk["output_index"])
+					toolSeen[index] = true
+					toolIDs[index] = firstNonEmpty(strings.TrimSpace(toStringValue(item["call_id"])), strings.TrimSpace(toStringValue(item["id"])), fmt.Sprintf("call_%d", index+1))
+					toolNames[index] = strings.TrimSpace(toStringValue(item["name"]))
+					delta := map[string]any{"tool_calls": []any{map[string]any{
+						"index": index,
+						"id":    toolIDs[index],
+						"type":  "function",
+						"function": map[string]any{
+							"name":      toolNames[index],
+							"arguments": "",
+						},
+					}}}
+					return false, writeOpenAIChatStreamChunk(writer, responseID, model, created, delta, nil, nil)
+				}
+			case "response.output_text.delta":
+				if delta := toStringValue(chunk["delta"]); delta != "" {
+					return false, writeOpenAIChatStreamChunk(writer, responseID, model, created, map[string]any{"content": delta}, nil, nil)
+				}
+			case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+				if delta := toStringValue(chunk["delta"]); delta != "" {
+					return false, writeOpenAIChatStreamChunk(writer, responseID, model, created, map[string]any{"reasoning_content": delta}, nil, nil)
+				}
+			case "response.function_call_arguments.delta":
+				index := toIntValue(chunk["output_index"])
+				arguments := toStringValue(chunk["delta"])
+				if arguments == "" {
+					arguments = toStringValue(chunk["arguments"])
+				}
+				if arguments != "" {
+					return false, writeOpenAIChatStreamChunk(writer, responseID, model, created, map[string]any{"tool_calls": []any{map[string]any{
+						"index": index,
+						"id":    toolIDs[index],
+						"type":  "function",
+						"function": map[string]any{
+							"name":      toolNames[index],
+							"arguments": arguments,
+						},
+					}}}, nil, nil)
+				}
+			case "response.incomplete":
+				finishReason = "length"
+			case "response.completed":
+				return true, emitDone()
+			}
+			return false, nil
+		})
+		if streamErr != nil {
+			return
+		}
+		_ = emitDone()
+	}()
+	return reader
+}
+
+func transformAnthropicMessagesStreamToChatStream(streamBody io.ReadCloser, fallbackModel string) io.ReadCloser {
+	reader, writer := io.Pipe()
+	go func() {
+		defer streamBody.Close()
+		defer writer.Close()
+		responseID := ""
+		model := strings.TrimSpace(fallbackModel)
+		created := time.Now().Unix()
+		blockIndex := -1
+		toolIDs := map[int]string{}
+		toolNames := map[int]string{}
+		toolSeen := map[int]bool{}
+		finishReason := "stop"
+		finished := false
+		emitDone := func() error {
+			if finished {
+				return nil
+			}
+			finished = true
+			if len(toolSeen) > 0 {
+				finishReason = "tool_calls"
+			}
+			if err := writeOpenAIChatStreamChunk(writer, responseID, model, created, map[string]any{}, finishReason, nil); err != nil {
+				return err
+			}
+			_, err := io.WriteString(writer, "data: [DONE]\n\n")
+			return err
+		}
+		streamErr := streamAdvancedProxySSEDataPayloads(streamBody, func(payload string) (bool, error) {
+			if payload == "" {
+				return false, nil
+			}
+			if payload == "[DONE]" {
+				return true, emitDone()
+			}
+			chunk := map[string]any{}
+			if json.Unmarshal([]byte(payload), &chunk) != nil {
+				return false, nil
+			}
+			eventType := strings.TrimSpace(toStringValue(chunk["type"]))
+			switch eventType {
+			case "message_start":
+				message, _ := chunk["message"].(map[string]any)
+				responseID = firstNonEmpty(strings.TrimSpace(toStringValue(message["id"])), responseID)
+				model = firstNonEmpty(strings.TrimSpace(toStringValue(message["model"])), model)
+				if err := writeOpenAIChatStreamChunk(writer, responseID, model, created, map[string]any{"role": "assistant"}, nil, nil); err != nil {
+					return true, err
+				}
+			case "content_block_start":
+				blockIndex = toIntValue(chunk["index"])
+				block, _ := chunk["content_block"].(map[string]any)
+				if strings.EqualFold(strings.TrimSpace(toStringValue(block["type"])), "tool_use") {
+					toolSeen[blockIndex] = true
+					toolIDs[blockIndex] = strings.TrimSpace(toStringValue(block["id"]))
+					toolNames[blockIndex] = strings.TrimSpace(toStringValue(block["name"]))
+					delta := map[string]any{"tool_calls": []any{map[string]any{
+						"index": blockIndex,
+						"id":    toolIDs[blockIndex],
+						"type":  "function",
+						"function": map[string]any{
+							"name":      toolNames[blockIndex],
+							"arguments": "",
+						},
+					}}}
+					return false, writeOpenAIChatStreamChunk(writer, responseID, model, created, delta, nil, nil)
+				}
+			case "content_block_delta":
+				index := toIntValue(chunk["index"])
+				delta, _ := chunk["delta"].(map[string]any)
+				switch strings.TrimSpace(toStringValue(delta["type"])) {
+				case "text_delta":
+					if value := toStringValue(delta["text"]); value != "" {
+						return false, writeOpenAIChatStreamChunk(writer, responseID, model, created, map[string]any{"content": value}, nil, nil)
+					}
+				case "thinking_delta", "signature_delta":
+					if value := toStringValue(delta["thinking"]); value != "" {
+						return false, writeOpenAIChatStreamChunk(writer, responseID, model, created, map[string]any{"reasoning_content": value}, nil, nil)
+					}
+				case "input_json_delta":
+					if value := toStringValue(delta["partial_json"]); value != "" {
+						return false, writeOpenAIChatStreamChunk(writer, responseID, model, created, map[string]any{"tool_calls": []any{map[string]any{
+							"index": index,
+							"id":    toolIDs[index],
+							"type":  "function",
+							"function": map[string]any{
+								"name":      toolNames[index],
+								"arguments": value,
+							},
+						}}}, nil, nil)
+					}
+				}
+			case "message_delta":
+				delta, _ := chunk["delta"].(map[string]any)
+				switch strings.TrimSpace(toStringValue(delta["stop_reason"])) {
+				case "tool_use":
+					finishReason = "tool_calls"
+				case "max_tokens":
+					finishReason = "length"
+				}
+			case "message_stop":
+				return true, emitDone()
+			}
+			return false, nil
+		})
+		if streamErr != nil {
+			return
+		}
+		_ = emitDone()
+	}()
+	return reader
+}
+
 func transformOpenAIChatStreamToResponsesStream(streamBody io.ReadCloser, fallbackModel string) io.ReadCloser {
 	reader, writer := io.Pipe()
 	go func() {
@@ -1779,6 +2212,60 @@ func transformOpenAIChatResultToResponses(result rawProviderAttemptResult, fallb
 	}
 
 	convertedBody, err := convertOpenAIChatResponseBodyToResponses(result.Body, fallbackModel)
+	if err != nil {
+		return result, err
+	}
+	converted.Body = convertedBody
+	if converted.Headers == nil {
+		converted.Headers = http.Header{}
+	} else {
+		converted.Headers = converted.Headers.Clone()
+	}
+	converted.Headers.Set("Content-Type", "application/json; charset=utf-8")
+	return converted, nil
+}
+
+func transformOpenAIResponsesResultToChat(result rawProviderAttemptResult, fallbackModel string) (rawProviderAttemptResult, error) {
+	converted := result
+	if result.StreamBody != nil {
+		converted.StreamBody = transformOpenAIResponsesStreamToChatStream(result.StreamBody, fallbackModel)
+		if converted.Headers == nil {
+			converted.Headers = http.Header{}
+		} else {
+			converted.Headers = converted.Headers.Clone()
+		}
+		converted.Headers.Set("Content-Type", "text/event-stream; charset=utf-8")
+		converted.Body = nil
+		return converted, nil
+	}
+	convertedBody, err := convertOpenAIResponsesResponseBodyToChat(result.Body, fallbackModel)
+	if err != nil {
+		return result, err
+	}
+	converted.Body = convertedBody
+	if converted.Headers == nil {
+		converted.Headers = http.Header{}
+	} else {
+		converted.Headers = converted.Headers.Clone()
+	}
+	converted.Headers.Set("Content-Type", "application/json; charset=utf-8")
+	return converted, nil
+}
+
+func transformAnthropicMessagesResultToChat(result rawProviderAttemptResult, fallbackModel string) (rawProviderAttemptResult, error) {
+	converted := result
+	if result.StreamBody != nil {
+		converted.StreamBody = transformAnthropicMessagesStreamToChatStream(result.StreamBody, fallbackModel)
+		if converted.Headers == nil {
+			converted.Headers = http.Header{}
+		} else {
+			converted.Headers = converted.Headers.Clone()
+		}
+		converted.Headers.Set("Content-Type", "text/event-stream; charset=utf-8")
+		converted.Body = nil
+		return converted, nil
+	}
+	convertedBody, err := convertAnthropicMessagesResponseBodyToChat(result.Body, fallbackModel)
 	if err != nil {
 		return result, err
 	}

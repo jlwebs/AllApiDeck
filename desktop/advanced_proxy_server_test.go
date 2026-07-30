@@ -4579,6 +4579,102 @@ func TestForwardOpenAIRequestViaProviderFallbacksResponsesStreamToChatOnSuccessf
 	}
 }
 
+func TestForwardOpenAIRequestViaProviderForcesResponsesAndEffortForChatClient(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	var requestPath string
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requestPath = request.URL.Path
+		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+			t.Errorf("decode forced responses request: %v", err)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"resp_forced_1","object":"response","created_at":1710000000,"model":"gpt-5.6","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"forced responses"}]}]}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:            "forced-responses-provider",
+		Name:          "Forced Responses Provider",
+		BaseURL:       server.URL,
+		APIKey:        "sk-forced-responses",
+		Model:         "gpt-5.6",
+		APIFormat:     "openai_chat",
+		Effort:        "max",
+		ProxyProtocol: "responses",
+	}
+	result := forwardOpenAIRequestViaProvider("codex", provider, "chat", []byte(`{"model":"client-model","stream":false,"messages":[{"role":"user","content":"hello"}]}`), false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("expected forced responses request to succeed, got %#v", result)
+	}
+	if !strings.Contains(requestPath, "responses") {
+		t.Fatalf("expected responses endpoint, got %q", requestPath)
+	}
+	reasoning, ok := requestBody["reasoning"].(map[string]any)
+	if !ok || toStringValue(reasoning["effort"]) != "max" {
+		t.Fatalf("expected max responses effort, got %#v", requestBody)
+	}
+	if _, exists := requestBody["messages"]; exists {
+		t.Fatalf("expected chat request to be converted to responses, got %#v", requestBody)
+	}
+	var clientBody map[string]any
+	if err := json.Unmarshal(result.Body, &clientBody); err != nil {
+		t.Fatalf("decode chat response: %v", err)
+	}
+	if got := toStringValue(clientBody["object"]); got != "chat.completion" {
+		t.Fatalf("expected chat response conversion, got %#v", clientBody)
+	}
+}
+
+func TestForwardOpenAIRequestViaProviderForcesMessagesAndEffortForChatClient(t *testing.T) {
+	resetAdvancedProxyRuntimeForTest(t)
+
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+			t.Errorf("decode forced messages request: %v", err)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"msg_forced_1","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"forced messages"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":3}}`))
+	}))
+	defer server.Close()
+
+	provider := AdvancedProxyProvider{
+		ID:            "forced-messages-provider",
+		Name:          "Forced Messages Provider",
+		BaseURL:       server.URL,
+		APIKey:        "sk-forced-messages",
+		Model:         "claude-sonnet-4-6",
+		APIFormat:     "anthropic",
+		Effort:        "xhigh",
+		ProxyProtocol: "messages",
+	}
+	result := forwardOpenAIRequestViaProvider("codex", provider, "chat", []byte(`{"model":"client-model","stream":false,"messages":[{"role":"system","content":"be concise"},{"role":"user","content":"hello"}]}`), false, AdvancedProxyConfig{})
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("expected forced messages request to succeed, got %#v", result)
+	}
+	outputConfig, ok := requestBody["output_config"].(map[string]any)
+	if !ok || toStringValue(outputConfig["effort"]) != "xhigh" {
+		t.Fatalf("expected xhigh messages effort, got %#v", requestBody)
+	}
+	if toStringValue(requestBody["system"]) != "be concise" {
+		t.Fatalf("expected system message conversion, got %#v", requestBody)
+	}
+	if messages, ok := requestBody["messages"].([]any); !ok || len(messages) != 1 {
+		t.Fatalf("expected one converted user message, got %#v", requestBody)
+	}
+	var clientBody map[string]any
+	if err := json.Unmarshal(result.Body, &clientBody); err != nil {
+		t.Fatalf("decode chat response: %v", err)
+	}
+	if got := toStringValue(clientBody["object"]); got != "chat.completion" {
+		t.Fatalf("expected chat response conversion, got %#v", clientBody)
+	}
+}
+
 func TestForwardOpenAIRequestViaProviderUsesChatPreferenceForResponsesStream(t *testing.T) {
 	resetAdvancedProxyRuntimeForTest(t)
 

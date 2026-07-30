@@ -348,6 +348,8 @@ export namespace main {
 	    apiKey: string;
 	    model: string;
 	    apiFormat: string;
+	    effort: string;
+	    proxyProtocol: string;
 	    apiKeyField: string;
 	    enabled: boolean;
 	    sortIndex: number;
@@ -366,6 +368,8 @@ export namespace main {
 	        this.apiKey = source["apiKey"];
 	        this.model = source["model"];
 	        this.apiFormat = source["apiFormat"];
+	        this.effort = source["effort"];
+	        this.proxyProtocol = source["proxyProtocol"];
 	        this.apiKeyField = source["apiKeyField"];
 	        this.enabled = source["enabled"];
 	        this.sortIndex = source["sortIndex"];

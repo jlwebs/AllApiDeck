@@ -15,6 +15,15 @@ export const ADVANCED_PROXY_APPS = [
   { id: 'openclaw', label: 'OpenClaw', defaultBasePath: '/advanced-proxy/openclaw/v1', mode: 'openai' },
 ];
 
+export const ADVANCED_PROXY_EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max'];
+export const ADVANCED_PROXY_PROTOCOL_OPTIONS = [
+  { value: 'auto', label: 'auto' },
+  { value: 'responses', label: 'responses' },
+  { value: 'responses_compact', label: 'responses/compact' },
+  { value: 'chat', label: 'chat/completions' },
+  { value: 'messages', label: 'messages' },
+];
+
 export const ADVANCED_PROXY_VERSIONED_DEFAULT_FAILOVER_FIELDS = [
   'maxRetries',
   'streamingFirstByteTimeout',
@@ -195,6 +204,25 @@ function normalizeApiFormat(value) {
   return 'anthropic';
 }
 
+export function normalizeAdvancedProxyEffort(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ADVANCED_PROXY_EFFORT_OPTIONS.includes(normalized) ? normalized : 'high';
+}
+
+export function normalizeAdvancedProxyProtocol(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  const aliases = {
+    response: 'responses',
+    'responses/compact': 'responses_compact',
+    'chat/completion': 'chat',
+    'chat/completions': 'chat',
+    message: 'messages',
+    'anthropic/messages': 'messages',
+  };
+  const canonical = aliases[normalized] || normalized;
+  return ADVANCED_PROXY_PROTOCOL_OPTIONS.some(option => option.value === canonical) ? canonical : 'auto';
+}
+
 function normalizeApiKeyField(value) {
   return String(value || '').trim() === 'ANTHROPIC_API_KEY'
     ? 'ANTHROPIC_API_KEY'
@@ -220,6 +248,8 @@ function sanitizeProviders(providers) {
       apiKey: String(provider?.apiKey || '').trim(),
       model: String(provider?.model || '').trim(),
       apiFormat: normalizeApiFormat(provider?.apiFormat),
+      effort: normalizeAdvancedProxyEffort(provider?.effort),
+      proxyProtocol: normalizeAdvancedProxyProtocol(provider?.proxyProtocol),
       apiKeyField: normalizeApiKeyField(provider?.apiKeyField),
       enabled: provider?.enabled !== false,
       sortIndex: Number(provider?.sortIndex || index + 1),

@@ -99,6 +99,10 @@
                   @change="handleDesktopModelChange"
                 />
               </a-form-item>
+              <a-form-item label="Effort">
+                <a-input v-model:value="desktopConfigDraft.effort" placeholder="high / xhigh / max" />
+                <div class="desktop-field-hint">按客户端写入对应字段：Codex `model_reasoning_effort`、Claude `effortLevel`、OpenCode `reasoningEffort`。</div>
+              </a-form-item>
 
               <a-form-item label="Claude Base URL">
                 <a-input v-model:value="desktopConfigDraft.claudeBaseUrl" />

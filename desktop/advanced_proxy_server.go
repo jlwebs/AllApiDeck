@@ -1066,7 +1066,10 @@ func buildClaudeProxyAttemptPhases(provider AdvancedProxyProvider, requestBody m
 		switch apiFormat {
 		case "openai_chat":
 			return "chat"
-		case "openai_responses":
+		case "openai_responses", "openai_responses_compact":
+			if apiFormat == "openai_responses_compact" {
+				return "responses_compact"
+			}
 			return "responses"
 		default:
 			return "messages"
@@ -1074,7 +1077,9 @@ func buildClaudeProxyAttemptPhases(provider AdvancedProxyProvider, requestBody m
 	}
 
 	appendPhase := func(phases []claudeProxyAttemptPhase, apiFormat string, source string, preferenceValue int, preferenceScopeKey string) []claudeProxyAttemptPhase {
-		apiFormat = normalizeClaudeAPIFormat(apiFormat)
+		if apiFormat != "openai_responses_compact" {
+			apiFormat = normalizeClaudeAPIFormat(apiFormat)
+		}
 		if apiFormat == "" {
 			apiFormat = "anthropic"
 		}
@@ -1094,6 +1099,25 @@ func buildClaudeProxyAttemptPhases(provider AdvancedProxyProvider, requestBody m
 
 	model := firstNonEmpty(strings.TrimSpace(provider.Model), strings.TrimSpace(toStringValue(requestBody["model"])))
 	scopeKey := resolveAdvancedProxyClaudeProtocolPreferenceScopeKey(provider, model)
+	forcedProtocol := normalizeAdvancedProxyProtocol(provider.ProxyProtocol)
+	if forcedProtocol != "auto" {
+		forcedFormat := "anthropic"
+		preferenceValue := advancedProxyClaudeProtocolPreferAnthropic
+		switch forcedProtocol {
+		case "responses":
+			forcedFormat = "openai_responses"
+			preferenceValue = advancedProxyClaudeProtocolPreferResponses
+		case "responses_compact":
+			forcedFormat = "openai_responses_compact"
+			preferenceValue = advancedProxyClaudeProtocolPreferResponses
+		case "chat":
+			forcedFormat = "openai_chat"
+			preferenceValue = advancedProxyClaudeProtocolPreferChat
+		case "messages":
+			forcedFormat = "anthropic"
+		}
+		return appendPhase(nil, forcedFormat, "provider_protocol", preferenceValue, scopeKey)
+	}
 
 	if features.HasAnthropicWebSearchTool {
 		if preferenceValue, ok := getAdvancedProxyClaudeProtocolPreference(scopeKey); ok && preferenceValue == advancedProxyClaudeProtocolPreferResponses {
@@ -1190,6 +1214,21 @@ func openAIMessageContentToText(value any) string {
 		return strings.Join(parts, "\n")
 	default:
 		return ""
+	}
+}
+
+func normalizeAnySlice(value any) []any {
+	switch typed := value.(type) {
+	case []any:
+		return typed
+	case []map[string]any:
+		items := make([]any, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, item)
+		}
+		return items
+	default:
+		return nil
 	}
 }
 
@@ -4249,6 +4288,8 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 			return buildOpenAIChatCheckEndpointCandidates(provider.BaseURL)
 		case "openai_responses":
 			return buildResponsesEndpointCandidates(provider.BaseURL)
+		case "openai_responses_compact":
+			return buildResponsesCompactEndpointCandidates(provider.BaseURL)
 		default:
 			return []string{resolveAnthropicMessagesEndpoint(provider.BaseURL)}
 		}
@@ -4291,13 +4332,14 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 		switch phase.apiFormat {
 		case "openai_chat":
 			transformed = anthropicRequestToOpenAIChat(payload, provider)
-		case "openai_responses":
+		case "openai_responses", "openai_responses_compact":
 			transformed = anthropicRequestToOpenAIResponses(payload, provider)
 			applyOpenAIContextAutoCompression(transformed, config)
 		default:
 			transformed = payload
 			applyClaudeContextAutoCompression(transformed, config)
 		}
+		applyAdvancedProxyEffortToRequest(transformed, phase.routeKind, provider)
 		stringProtectionCtx := antiPoisonStringProtectionContext{}
 		if config.AntiPoison.Enabled && config.AntiPoison.StringProtection.Enabled {
 			rawTransformedForProtection, marshalErr := json.Marshal(transformed)
@@ -4541,7 +4583,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 				switch phase.apiFormat {
 				case "openai_chat":
 					validationRoute = "chat"
-				case "openai_responses":
+				case "openai_responses", "openai_responses_compact":
 					validationRoute = "responses"
 				default:
 					validationRoute = "anthropic"
@@ -4593,7 +4635,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 			switch phase.apiFormat {
 			case "openai_chat":
 				responseMap = openAIChatToAnthropic(responseMap, fallbackModel, anthropicThinkingEnabled(requestBody))
-			case "openai_responses":
+			case "openai_responses", "openai_responses_compact":
 				responseMap = openAIResponsesToAnthropic(responseMap, fallbackModel)
 			}
 			advancedProxyRuntime.MarkResult("claude", provider, phase.routeKind, targetURL, true)
@@ -4627,6 +4669,260 @@ func normalizeOpenAIProviderDispatchRoute(apiFormat string) string {
 	default:
 		return ""
 	}
+}
+
+func applyAdvancedProxyEffortToRequest(request map[string]any, protocol string, provider AdvancedProxyProvider) {
+	if request == nil {
+		return
+	}
+	effort := normalizeAdvancedProxyEffort(provider.Effort)
+	switch normalizeAdvancedProxyProtocol(protocol) {
+	case "responses", "responses_compact":
+		reasoning, _ := request["reasoning"].(map[string]any)
+		if reasoning == nil {
+			reasoning = map[string]any{}
+			request["reasoning"] = reasoning
+		}
+		reasoning["effort"] = effort
+		delete(request, "reasoning_effort")
+	case "chat":
+		request["reasoning_effort"] = effort
+	case "messages":
+		outputConfig, _ := request["output_config"].(map[string]any)
+		if outputConfig == nil {
+			outputConfig = map[string]any{}
+			request["output_config"] = outputConfig
+		}
+		outputConfig["effort"] = effort
+	}
+}
+
+func applyAdvancedProxyEffortToRawRequest(rawBody []byte, protocol string, provider AdvancedProxyProvider) []byte {
+	request := map[string]any{}
+	if err := json.Unmarshal(rawBody, &request); err != nil {
+		return rawBody
+	}
+	applyAdvancedProxyEffortToRequest(request, protocol, provider)
+	updated, err := json.Marshal(request)
+	if err != nil {
+		return rawBody
+	}
+	return updated
+}
+
+func convertOpenAIChatRequestToResponses(rawBody []byte, provider AdvancedProxyProvider) ([]byte, error) {
+	chatBody := map[string]any{}
+	if err := json.Unmarshal(rawBody, &chatBody); err != nil {
+		return nil, err
+	}
+	model := firstNonEmpty(strings.TrimSpace(provider.Model), strings.TrimSpace(toStringValue(chatBody["model"])))
+	instructions := make([]string, 0, 2)
+	input := make([]any, 0, 8)
+	messageIndex := 0
+	nextID := func(prefix string) string {
+		messageIndex++
+		return fmt.Sprintf("%s_%d", prefix, messageIndex)
+	}
+	appendMessage := func(message map[string]any) {
+		role := strings.TrimSpace(toStringValue(message["role"]))
+		content := openAIMessageContentToText(message["content"])
+		if role == "system" || role == "developer" {
+			if strings.TrimSpace(content) != "" {
+				instructions = append(instructions, content)
+			}
+			return
+		}
+		if role == "" {
+			role = "user"
+		}
+		if content != "" {
+			input = append(input, map[string]any{
+				"id":   nextID("msg"),
+				"type": "message",
+				"role": role,
+				"content": []any{
+					map[string]any{"type": "input_text", "text": content},
+				},
+			})
+		}
+		if role == "assistant" {
+			if toolCalls, ok := message["tool_calls"].([]any); ok {
+				for _, rawToolCall := range toolCalls {
+					toolCall, _ := rawToolCall.(map[string]any)
+					function, _ := toolCall["function"].(map[string]any)
+					callID := firstNonEmpty(strings.TrimSpace(toStringValue(toolCall["id"])), nextID("call"))
+					name := strings.TrimSpace(toStringValue(function["name"]))
+					if name == "" {
+						continue
+					}
+					input = append(input, map[string]any{
+						"id":        nextID("fc"),
+						"type":      "function_call",
+						"call_id":   callID,
+						"name":      name,
+						"arguments": normalizeChatToolCallArgumentsJSON(function["arguments"], false),
+					})
+				}
+			}
+		}
+		if role == "tool" {
+			callID := strings.TrimSpace(toStringValue(message["tool_call_id"]))
+			if callID != "" {
+				input = append(input, map[string]any{
+					"id":      nextID("fco"),
+					"type":    "function_call_output",
+					"call_id": callID,
+					"output":  content,
+				})
+			}
+		}
+	}
+	if messages, ok := chatBody["messages"].([]any); ok {
+		for _, rawMessage := range messages {
+			if message, ok := rawMessage.(map[string]any); ok {
+				appendMessage(message)
+			}
+		}
+	}
+	request := map[string]any{
+		"model":  model,
+		"input":  input,
+		"stream": truthy(chatBody["stream"]),
+	}
+	if len(instructions) > 0 {
+		request["instructions"] = strings.Join(instructions, "\n\n")
+	}
+	if maxTokens := toIntValue(chatBody["max_tokens"]); maxTokens > 0 {
+		request["max_output_tokens"] = maxTokens
+	}
+	copyOptionalField(chatBody, request, "temperature")
+	copyOptionalField(chatBody, request, "top_p")
+	if effort := strings.TrimSpace(toStringValue(chatBody["reasoning_effort"])); effort != "" {
+		request["reasoning"] = map[string]any{"effort": effort}
+	}
+	if tools := chatBody["tools"]; tools != nil {
+		convertedTools := make([]any, 0)
+		if rawTools, ok := tools.([]any); ok {
+			for _, rawTool := range rawTools {
+				tool, _ := rawTool.(map[string]any)
+				if strings.TrimSpace(toStringValue(tool["type"])) != "function" {
+					continue
+				}
+				function, _ := tool["function"].(map[string]any)
+				name := strings.TrimSpace(toStringValue(function["name"]))
+				if name == "" {
+					continue
+				}
+				convertedTools = append(convertedTools, map[string]any{
+					"type":        "function",
+					"name":        name,
+					"description": toStringValue(function["description"]),
+					"parameters":  function["parameters"],
+				})
+			}
+		}
+		if len(convertedTools) > 0 {
+			request["tools"] = convertedTools
+		}
+	}
+	applyAdvancedProxyEffortToRequest(request, "responses", provider)
+	return json.Marshal(request)
+}
+
+func convertOpenAIRequestToAnthropicMessages(rawBody []byte, provider AdvancedProxyProvider, sourceRoute string) ([]byte, error) {
+	requestBody := map[string]any{}
+	if err := json.Unmarshal(rawBody, &requestBody); err != nil {
+		return nil, err
+	}
+	if sourceRoute == "responses" || sourceRoute == "responses_compact" {
+		converted := openAIResponsesToAnthropicMessages(rawBody, provider)
+		if converted == nil {
+			return nil, fmt.Errorf("responses request cannot be converted to messages")
+		}
+		applyAdvancedProxyEffortToRequest(converted, "messages", provider)
+		return json.Marshal(converted)
+	}
+	model := firstNonEmpty(strings.TrimSpace(provider.Model), strings.TrimSpace(toStringValue(requestBody["model"])))
+	messages := make([]any, 0, 8)
+	systemParts := make([]string, 0, 2)
+	for _, rawMessage := range normalizeAnySlice(requestBody["messages"]) {
+		message, ok := rawMessage.(map[string]any)
+		if !ok {
+			continue
+		}
+		role := strings.TrimSpace(toStringValue(message["role"]))
+		if role == "developer" {
+			role = "system"
+		}
+		if role == "" {
+			continue
+		}
+		content := openAIMessageContentToText(message["content"])
+		if role == "system" {
+			if strings.TrimSpace(content) != "" {
+				systemParts = append(systemParts, content)
+			}
+			continue
+		}
+		if role == "tool" {
+			callID := strings.TrimSpace(toStringValue(message["tool_call_id"]))
+			if callID != "" {
+				messages = append(messages, map[string]any{
+					"role": "user",
+					"content": []any{map[string]any{
+						"type":        "tool_result",
+						"tool_use_id": callID,
+						"content":     content,
+					}},
+				})
+			}
+			continue
+		}
+		if role == "assistant" {
+			blocks := make([]any, 0, 1)
+			if content != "" {
+				blocks = append(blocks, map[string]any{"type": "text", "text": content})
+			}
+			if toolCalls, ok := message["tool_calls"].([]any); ok {
+				for _, rawToolCall := range toolCalls {
+					toolCall, _ := rawToolCall.(map[string]any)
+					function, _ := toolCall["function"].(map[string]any)
+					name := strings.TrimSpace(toStringValue(function["name"]))
+					if name == "" {
+						continue
+					}
+					blocks = append(blocks, map[string]any{
+						"type":  "tool_use",
+						"id":    firstNonEmpty(strings.TrimSpace(toStringValue(toolCall["id"])), fmt.Sprintf("tool_%d", len(blocks)+1)),
+						"name":  name,
+						"input": parseJSONStringMap(toStringValue(function["arguments"])),
+					})
+				}
+			}
+			if len(blocks) > 0 {
+				messages = append(messages, map[string]any{"role": "assistant", "content": blocks})
+			}
+			continue
+		}
+		if content != "" {
+			messages = append(messages, map[string]any{"role": role, "content": content})
+		}
+	}
+	request := map[string]any{
+		"model":      model,
+		"max_tokens": maxInt(4096, toIntValue(requestBody["max_tokens"])),
+		"messages":   messages,
+		"stream":     truthy(requestBody["stream"]),
+	}
+	if system := strings.TrimSpace(toStringValue(requestBody["instructions"])); system != "" {
+		request["system"] = system
+	} else if len(systemParts) > 0 {
+		request["system"] = strings.Join(systemParts, "\n\n")
+	}
+	copyOptionalField(requestBody, request, "temperature")
+	copyOptionalField(requestBody, request, "top_p")
+	applyAdvancedProxyEffortToRequest(request, "messages", provider)
+	return json.Marshal(request)
 }
 
 func normalizeOpenAIProxyRequestForProvider(rawBody []byte, provider AdvancedProxyProvider) ([]byte, string, error) {
@@ -5412,10 +5708,10 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 			}
 		}
 	}()
-	if normalizeClaudeAPIFormat(provider.APIFormat) == "anthropic" {
+	if normalizeClaudeAPIFormat(provider.APIFormat) == "anthropic" && normalizeAdvancedProxyProtocol(provider.ProxyProtocol) == "auto" {
 		return rawProviderAttemptResult{
 			StatusCode: http.StatusBadGateway,
-			Message:    formatAdvancedProxyFailure(appType, routeKind, provider, provider.BaseURL, "provider does not support OpenAI-compatible proxy routes"),
+			Message:    formatAdvancedProxyFailure(appType, routeKind, provider, provider.BaseURL, "provider does not support OpenAI-compatible proxy routes when protocol is auto"),
 			ErrorCode:  "advanced_proxy_error",
 			ErrorType:  "invalid_request_error",
 			ProviderID: strings.TrimSpace(provider.ID),
@@ -5611,6 +5907,7 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 		if len(phase.requestBody) == 0 || strings.TrimSpace(phase.outboundRoute) == "" {
 			return
 		}
+		phase.requestBody = applyAdvancedProxyEffortToRawRequest(phase.requestBody, phase.outboundRoute, provider)
 		phases = append(phases, phase)
 	}
 	buildRouteTraceSnapshot := func(currentIndex int, currentStatus string) []AdvancedProxyRequestRouteStep {
@@ -5637,7 +5934,80 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 		}
 	}
 
-	if routeKind == "responses" {
+	forcedProtocol := normalizeAdvancedProxyProtocol(provider.ProxyProtocol)
+	if forcedProtocol != "auto" {
+		forcedRoute := forcedProtocol
+		forcedBody := normalizedBody
+		forcedModel := resolvedModel
+		responseTransform := ""
+		hostedWebSearch := false
+		var forcedErr error
+
+		switch forcedProtocol {
+		case "responses", "responses_compact":
+			if routeKind == "chat" {
+				forcedBody, forcedErr = convertOpenAIChatRequestToResponses(normalizedBody, provider)
+				responseTransform = "responses_to_chat"
+			}
+		case "chat":
+			if routeKind == "responses" || routeKind == "responses_compact" {
+				fallbackPlan, fallbackErr := buildOpenAIChatFallbackPlanFromResponses(normalizedBody, provider)
+				if fallbackErr != nil {
+					forcedErr = fallbackErr
+				} else {
+					forcedBody = fallbackPlan.ChatBody
+					forcedModel = firstNonEmpty(fallbackPlan.Model, resolvedModel)
+					hostedWebSearch = fallbackPlan.HostedWebSearch
+				}
+				responseTransform = "chat_to_responses"
+			}
+		case "messages":
+			forcedBody, forcedErr = convertOpenAIRequestToAnthropicMessages(normalizedBody, provider, routeKind)
+			if routeKind == "chat" {
+				responseTransform = "messages_to_chat"
+			} else {
+				responseTransform = "messages_to_responses"
+			}
+		default:
+			forcedErr = fmt.Errorf("unsupported forced proxy protocol %q", forcedProtocol)
+		}
+
+		if forcedErr != nil || len(forcedBody) == 0 {
+			if forcedErr == nil {
+				forcedErr = fmt.Errorf("protocol conversion returned an empty request")
+			}
+			message := formatAdvancedProxyFailure(appType, routeKind, provider, provider.BaseURL, fmt.Sprintf("forced %s protocol conversion failed (%s)", forcedProtocol, forcedErr.Error()))
+			appendAdvancedProxyLogf(
+				"[OPENAI_PROXY_FORCED_PROTOCOL_FAIL] app=%s route=%s provider=%s protocol=%s detail=%s",
+				appType,
+				routeKind,
+				providerLabel,
+				forcedProtocol,
+				previewAdvancedProxyText(forcedErr.Error(), 260),
+			)
+			return rawProviderAttemptResult{
+				StatusCode: http.StatusBadGateway,
+				Message:    message,
+				ErrorCode:  "advanced_proxy_error",
+				ErrorType:  "invalid_request_error",
+				ProviderID: strings.TrimSpace(provider.ID),
+				Provider:   providerLabel,
+				TargetURL:  strings.TrimSpace(provider.BaseURL),
+				RouteKind:  routeKind,
+			}
+		}
+		appendPhase(openAIProxyAttemptPhase{
+			outboundRoute:     forcedRoute,
+			requestBody:       forcedBody,
+			resolvedModel:     forcedModel,
+			responseTransform: responseTransform,
+			hostedWebSearch:   hostedWebSearch,
+			preferenceValue:   0,
+			source:            "provider_protocol",
+			antiPoisonCtx:     antiPoisonCtx,
+			stringProtect:     stringProtectionCtx,
+		})
+	} else if routeKind == "responses" {
 		fallbackPlan, fallbackErr := buildOpenAIChatFallbackPlanFromResponses(normalizedBody, provider)
 		if fallbackErr != nil {
 			appendAdvancedProxyLogf(
@@ -6109,25 +6479,7 @@ phaseLoop:
 			attemptStartedAt := time.Now()
 			requestHeaders := buildOpenAIProviderHeaders(provider, phaseModel)
 			if phase.outboundRoute == "messages" {
-				requestHeaders = map[string]string{
-					"Content-Type":      "application/json",
-					"User-Agent":        "AllApiDeck/advanced-proxy",
-					"x-api-key":         provider.APIKey,
-					"anthropic-version": "2023-06-01",
-				}
-				if stream {
-					requestHeaders["Accept"] = "text/event-stream"
-				} else {
-					requestHeaders["Accept"] = "application/json"
-				}
-				if mappedHeaders, _ := buildAdvancedProxyMappedHeaders(provider, phaseModel); len(mappedHeaders) > 0 {
-					for key, value := range mappedHeaders {
-						if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
-							continue
-						}
-						requestHeaders[key] = value
-					}
-				}
+				requestHeaders = buildClaudeProviderHeaders(provider, "anthropic", nil, stream, phaseModel)
 			}
 			var statusCode int
 			var headers http.Header
@@ -6435,6 +6787,62 @@ phaseLoop:
 				Provider:   providerLabel,
 				TargetURL:  targetURL,
 				RouteKind:  routeKind,
+			}
+			if phase.responseTransform == "responses_to_chat" {
+				transformedResult, transformErr := transformOpenAIResponsesResultToChat(result, firstNonEmpty(phaseModel, strings.TrimSpace(provider.Model), ""))
+				if transformErr != nil {
+					if streamBody != nil {
+						_ = streamBody.Close()
+					}
+					lastStatus = http.StatusBadGateway
+					lastMessage = formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, fmt.Sprintf("responses->chat transform failed (%s)", transformErr.Error()))
+					lastErrorCode = "advanced_proxy_error"
+					lastErrorType = "invalid_request_error"
+					if phaseIndex < len(phases)-1 {
+						advanceToNextPhase = true
+						break
+					}
+					return rawProviderAttemptResult{
+						StatusCode: lastStatus,
+						Message:    lastMessage,
+						ErrorCode:  lastErrorCode,
+						ErrorType:  lastErrorType,
+						ProviderID: strings.TrimSpace(provider.ID),
+						Provider:   providerLabel,
+						TargetURL:  targetURL,
+						RouteKind:  routeKind,
+					}
+				}
+				result = transformedResult
+				result.RecordCtx = nil
+			}
+			if phase.responseTransform == "messages_to_chat" {
+				transformedResult, transformErr := transformAnthropicMessagesResultToChat(result, firstNonEmpty(phaseModel, strings.TrimSpace(provider.Model), ""))
+				if transformErr != nil {
+					if streamBody != nil {
+						_ = streamBody.Close()
+					}
+					lastStatus = http.StatusBadGateway
+					lastMessage = formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, fmt.Sprintf("messages->chat transform failed (%s)", transformErr.Error()))
+					lastErrorCode = "advanced_proxy_error"
+					lastErrorType = "invalid_request_error"
+					if phaseIndex < len(phases)-1 {
+						advanceToNextPhase = true
+						break
+					}
+					return rawProviderAttemptResult{
+						StatusCode: lastStatus,
+						Message:    lastMessage,
+						ErrorCode:  lastErrorCode,
+						ErrorType:  lastErrorType,
+						ProviderID: strings.TrimSpace(provider.ID),
+						Provider:   providerLabel,
+						TargetURL:  targetURL,
+						RouteKind:  routeKind,
+					}
+				}
+				result = transformedResult
+				result.RecordCtx = nil
 			}
 			if phase.responseTransform == "chat_to_responses" {
 				transformedResult, transformErr := transformOpenAIChatResultToResponses(result, firstNonEmpty(phaseModel, strings.TrimSpace(provider.Model), ""))
@@ -7144,7 +7552,7 @@ func (a *App) handleAdvancedProxyClaude(writer http.ResponseWriter, request *htt
 				return
 			case "openai_chat":
 				writeAnthropicSSEFromOpenAIChatStreamWithRecord(writer, result.StreamBody, result.Model, anthropicThinkingEnabled(requestBody), result.RecordCtx)
-			case "openai_responses":
+			case "openai_responses", "openai_responses_compact":
 				writeAnthropicSSEFromOpenAIResponsesStreamWithRecord(writer, result.StreamBody, result.Model, result.RecordCtx)
 			default:
 				result.StreamBody.Close()

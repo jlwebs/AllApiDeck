@@ -40,6 +40,7 @@ export function createDesktopConfigDraft(record) {
     endpoint,
     apiKey,
     model: defaultModel || 'gpt-4o-mini',
+    effort: 'high',
     claudeBaseUrl: endpoint,
     claudeApiKeyField: 'ANTHROPIC_AUTH_TOKEN',
     claudeUseAdvancedProxy: false,
@@ -184,6 +185,7 @@ function buildClaudePreview(appName, draft, file) {
     ? PROXY_MANAGED_TOKEN
     : requireField(draft.apiKey, `${appName} API Key`);
   const model = requireField(draft.model, `${appName} 模型`);
+  const effort = requireField(draft.effort, `${appName} Effort`);
   const keyField = draft.claudeApiKeyField === 'ANTHROPIC_API_KEY'
     ? 'ANTHROPIC_API_KEY'
     : 'ANTHROPIC_AUTH_TOKEN';
@@ -200,6 +202,7 @@ function buildClaudePreview(appName, draft, file) {
   next.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = model;
   next.env.ANTHROPIC_DEFAULT_SONNET_MODEL = model;
   next.env.ANTHROPIC_DEFAULT_OPUS_MODEL = model;
+  next.effortLevel = effort;
 
   if (keyField === 'ANTHROPIC_AUTH_TOKEN') {
     delete next.env.ANTHROPIC_API_KEY;
@@ -233,12 +236,14 @@ function buildCodexConfigPreview(appName, draft, file) {
     ? getAdvancedProxyAppBaseUrl('codex', advancedProxySnapshot)
     : requireField(draft.codexBaseUrl, `${appName} Base URL`);
   const model = requireField(draft.model, `${appName} 模型`);
+  const effort = requireField(draft.effort, `${appName} Effort`);
 
   const next = upsertCodexConfigToml(file.content, {
     providerKey,
     providerName,
     baseUrl,
     model,
+    effort,
   });
 
   return buildPreviewFile(file, next);
@@ -248,8 +253,10 @@ function buildGrokBuildPreview(appName, draft, file) {
   const advancedProxySnapshot = getAdvancedProxyLocalSnapshot();
   const useAdvancedProxy = shouldUseAdvancedProxy('grokbuild', appName, draft, advancedProxySnapshot);
   const model = requireField(draft.model, `${appName} model`);
+  const effort = requireField(draft.effort, `${appName} Effort`);
   const next = upsertGrokBuildConfigToml(file.content, {
     model,
+    effort,
     baseUrl: useAdvancedProxy
       ? getAdvancedProxyAppBaseUrl('grokbuild', advancedProxySnapshot)
       : requireField(draft.grokbuildBaseUrl, `${appName} Base URL`),
@@ -277,6 +284,7 @@ function buildOpenCodePreview(appName, draft, file) {
     ? PROXY_MANAGED_TOKEN
     : requireField(draft.apiKey, `${appName} API Key`);
   const model = requireField(draft.model, `${appName} 模型`);
+  const effort = requireField(draft.effort, `${appName} Effort`);
 
   const current = parseStrictJsonObject(file.content, 'OpenCode opencode.json', {
     $schema: 'https://opencode.ai/config.json',
@@ -304,6 +312,9 @@ function buildOpenCodePreview(appName, draft, file) {
     models: {
       [model]: {
         name: model,
+        options: {
+          reasoningEffort: effort,
+        },
       },
     },
   };
@@ -324,6 +335,8 @@ function buildOpenClawPreview(appName, draft, file) {
     ? PROXY_MANAGED_TOKEN
     : requireField(draft.apiKey, `${appName} API Key`);
   const model = requireField(draft.model, `${appName} 模型`);
+  const effort = requireField(draft.effort, `${appName} Effort`);
+  const api = useAdvancedProxy ? 'openai-completions' : (draft.openclawApi || 'openai-completions');
 
   const current = parseLooseJsonObject(file.content, 'OpenClaw openclaw.json', OPENCLAW_DEFAULT_CONFIG);
   const providerKey = resolveProviderKeyForApp('openclaw', draft, current);
@@ -348,7 +361,7 @@ function buildOpenClawPreview(appName, draft, file) {
   next.models.providers[providerKey] = {
     baseUrl,
     apiKey,
-    api: useAdvancedProxy ? 'openai-completions' : (draft.openclawApi || 'openai-completions'),
+    api,
     models: [
       {
         id: model,
@@ -384,6 +397,7 @@ function buildOpenClawPreview(appName, draft, file) {
   };
   next.agents.defaults.models[fullModelName] = {
     alias: providerName,
+    params: buildOpenClawEffortParams(api, effort),
   };
 
   return buildPreviewFile(file, JSON.stringify(next, null, 2));
@@ -591,7 +605,7 @@ function upsertCodexConfigToml(currentText, options) {
 
   text = upsertTomlRootField(text, 'model_provider', quoteTomlString(options.providerKey));
   text = upsertTomlRootField(text, 'model', quoteTomlString(options.model));
-  text = upsertTomlRootField(text, 'model_reasoning_effort', quoteTomlString('high'));
+  text = upsertTomlRootField(text, 'model_reasoning_effort', quoteTomlString(options.effort));
   text = upsertTomlRootField(text, 'disable_response_storage', 'true');
 
   const providerSection = [
@@ -621,6 +635,7 @@ function upsertGrokBuildConfigToml(currentText, options) {
       `name = ${quoteTomlString(options.name)}`,
       `api_key = ${quoteTomlString(options.apiKey)}`,
       `api_backend = ${quoteTomlString(options.apiBackend)}`,
+      `reasoning_effort = ${quoteTomlString(options.effort)}`,
       'context_window = 500000',
     ].join('\n'),
   ];
@@ -840,6 +855,17 @@ function requireField(value, label) {
     throw new Error(`${label} 不能为空`);
   }
   return normalized;
+}
+
+function buildOpenClawEffortParams(api, effort) {
+  if (api === 'anthropic-messages') {
+    return { thinking: effort };
+  }
+  return {
+    extra_body: {
+      reasoning_effort: effort,
+    },
+  };
 }
 
 function ensureTrailingNewline(text) {

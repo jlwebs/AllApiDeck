@@ -698,3 +698,70 @@ func TestConvertResponsesRequestToolChoiceToChat(t *testing.T) {
 		t.Fatalf("expected nil for wrong type, got %#v", result)
 	}
 }
+
+func TestConvertResponsesResponseToChat(t *testing.T) {
+	body, err := convertOpenAIResponsesResponseBodyToChat([]byte(`{"id":"resp_1","created_at":1710000000,"model":"gpt-5.6","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"hello"}]},{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"}]}`), "fallback")
+	if err != nil {
+		t.Fatalf("convert responses response failed: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode converted chat response failed: %v", err)
+	}
+	if got := toStringValue(decoded["object"]); got != "chat.completion" {
+		t.Fatalf("expected chat completion object, got %#v", decoded)
+	}
+	choices, _ := decoded["choices"].([]any)
+	message, _ := choices[0].(map[string]any)["message"].(map[string]any)
+	if got := toStringValue(message["content"]); got != "hello" {
+		t.Fatalf("expected text content, got %#v", message)
+	}
+	toolCalls, _ := message["tool_calls"].([]any)
+	if len(toolCalls) != 1 {
+		t.Fatalf("expected one tool call, got %#v", message)
+	}
+}
+
+func TestConvertAnthropicResponseToChat(t *testing.T) {
+	body, err := convertAnthropicMessagesResponseBodyToChat([]byte(`{"id":"msg_1","model":"claude-sonnet-4-6","content":[{"type":"text","text":"hello"},{"type":"tool_use","id":"tool_1","name":"lookup","input":{"q":"x"}}],"stop_reason":"tool_use","usage":{"input_tokens":2,"output_tokens":3}}`), "fallback")
+	if err != nil {
+		t.Fatalf("convert messages response failed: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode converted chat response failed: %v", err)
+	}
+	choices, _ := decoded["choices"].([]any)
+	choice, _ := choices[0].(map[string]any)
+	if got := toStringValue(choice["finish_reason"]); got != "tool_calls" {
+		t.Fatalf("expected tool_calls finish reason, got %#v", choice)
+	}
+	message, _ := choice["message"].(map[string]any)
+	if calls, _ := message["tool_calls"].([]any); len(calls) != 1 {
+		t.Fatalf("expected one tool call, got %#v", message)
+	}
+}
+
+func TestTransformOpenAIResponsesStreamToChat(t *testing.T) {
+	stream := io.NopCloser(strings.NewReader("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stream_1\",\"model\":\"gpt-5.6\"}}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
+	body, err := io.ReadAll(transformOpenAIResponsesStreamToChatStream(stream, "fallback"))
+	if err != nil {
+		t.Fatalf("read converted responses stream failed: %v", err)
+	}
+	text := string(body)
+	if !strings.Contains(text, `"content":"hello"`) || !strings.Contains(text, `"finish_reason":"stop"`) || !strings.Contains(text, "data: [DONE]") {
+		t.Fatalf("unexpected converted responses stream: %s", text)
+	}
+}
+
+func TestTransformAnthropicMessagesStreamToChat(t *testing.T) {
+	stream := io.NopCloser(strings.NewReader("data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_stream_1\",\"model\":\"claude-sonnet-4-6\"}}\n\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n"))
+	body, err := io.ReadAll(transformAnthropicMessagesStreamToChatStream(stream, "fallback"))
+	if err != nil {
+		t.Fatalf("read converted messages stream failed: %v", err)
+	}
+	text := string(body)
+	if !strings.Contains(text, `"content":"hello"`) || !strings.Contains(text, `"finish_reason":"stop"`) || !strings.Contains(text, "data: [DONE]") {
+		t.Fatalf("unexpected converted messages stream: %s", text)
+	}
+}
