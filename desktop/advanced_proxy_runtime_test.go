@@ -182,6 +182,57 @@ func TestAnthropicRequestToOpenAIResponsesAssignsMessageIds(t *testing.T) {
 	}
 }
 
+func TestAnthropicRequestToOpenAIResponsesPreservesToolResultImages(t *testing.T) {
+	request := anthropicRequestToOpenAIResponses(map[string]any{
+		"model": "gpt-5.4",
+		"messages": []any{
+			map[string]any{
+				"role": "assistant",
+				"content": []any{map[string]any{
+					"type":  "tool_use",
+					"id":    "call_image",
+					"name":  "Read",
+					"input": map[string]any{"file_path": "screenshot.png"},
+				}},
+			},
+			map[string]any{
+				"role": "user",
+				"content": []any{map[string]any{
+					"type":        "tool_result",
+					"tool_use_id": "call_image",
+					"content": []any{
+						map[string]any{"type": "text", "text": "Image dimensions: 640x480."},
+						map[string]any{
+							"type": "image",
+							"source": map[string]any{
+								"type":       "base64",
+								"media_type": "image/png",
+								"data":       "abc123",
+							},
+						},
+					},
+				}},
+			},
+		},
+	}, AdvancedProxyProvider{})
+
+	input, ok := request["input"].([]any)
+	if !ok || len(input) != 2 {
+		t.Fatalf("expected function call and output, got %#v", request["input"])
+	}
+	outputItem, _ := input[1].(map[string]any)
+	output, ok := outputItem["output"].([]map[string]any)
+	if !ok || len(output) != 2 {
+		t.Fatalf("expected structured text + image tool output, got %#v", outputItem["output"])
+	}
+	if output[0]["type"] != "input_text" || output[0]["text"] != "Image dimensions: 640x480." {
+		t.Fatalf("unexpected text tool output: %#v", output[0])
+	}
+	if output[1]["type"] != "input_image" || output[1]["image_url"] != "data:image/png;base64,abc123" {
+		t.Fatalf("unexpected image tool output: %#v", output[1])
+	}
+}
+
 func TestAnthropicRequestToOpenAIResponsesMapsWebSearchTool(t *testing.T) {
 	request := anthropicRequestToOpenAIResponses(map[string]any{
 		"model": "gpt-5.5",

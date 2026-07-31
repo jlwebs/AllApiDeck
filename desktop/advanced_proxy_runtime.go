@@ -1622,6 +1622,59 @@ func anthropicContentValueToText(value any) string {
 	}
 }
 
+func anthropicContentValueToResponsesOutput(value any) any {
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+
+	var blocks []any
+	switch typed := value.(type) {
+	case []any:
+		blocks = typed
+	case map[string]any:
+		blocks = []any{typed}
+	default:
+		return anthropicContentValueToText(value)
+	}
+
+	parts := make([]map[string]any, 0, len(blocks))
+	hasImage := false
+	for _, raw := range blocks {
+		blockMap, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(toStringValue(blockMap["type"])) {
+		case "text":
+			if text := strings.TrimSpace(toStringValue(blockMap["text"])); text != "" {
+				parts = append(parts, map[string]any{"type": "input_text", "text": text})
+			}
+		case "image":
+			if imageURL := anthropicImageSourceToDataURL(blockMap["source"]); imageURL != "" {
+				parts = append(parts, map[string]any{"type": "input_image", "image_url": imageURL})
+				hasImage = true
+			} else if serialized := stringifyJSON(blockMap); serialized != "" {
+				parts = append(parts, map[string]any{"type": "input_text", "text": serialized})
+			}
+		default:
+			if serialized := stringifyJSON(blockMap); serialized != "" {
+				parts = append(parts, map[string]any{"type": "input_text", "text": serialized})
+			}
+		}
+	}
+
+	if !hasImage {
+		textParts := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if text := strings.TrimSpace(toStringValue(part["text"])); text != "" {
+				textParts = append(textParts, text)
+			}
+		}
+		return strings.Join(textParts, "\n")
+	}
+	return parts
+}
+
 func anthropicImageSourceToDataURL(source any) string {
 	sourceMap, ok := source.(map[string]any)
 	if !ok || sourceMap == nil {
@@ -1880,7 +1933,7 @@ func anthropicContentToResponsesPayloads(role string, content any) ([]map[string
 				toolResults = append(toolResults, map[string]any{
 					"type":    "function_call_output",
 					"call_id": strings.TrimSpace(toStringValue(blockMap["tool_use_id"])),
-					"output":  anthropicContentValueToText(blockMap["content"]),
+					"output":  anthropicContentValueToResponsesOutput(blockMap["content"]),
 				})
 			}
 		}
