@@ -2483,6 +2483,7 @@ func writeAnthropicSSEFromOpenAIResponsesStreamWithRecord(writer http.ResponseWr
 	messageStarted := false
 	messageStopped := false
 	messageDeltaSent := false
+	streamFailed := false
 	hasToolUse := false
 	webSearchRequests := 0
 	webSearchAnnotationEvents := 0
@@ -2649,6 +2650,54 @@ func writeAnthropicSSEFromOpenAIResponsesStreamWithRecord(writer http.ResponseWr
 			}
 		}
 		return mapped
+	}
+	emitStreamError := func(source map[string]any) {
+		if streamFailed {
+			return
+		}
+		errorData, _ := source["error"].(map[string]any)
+		code := firstNonEmpty(
+			strings.TrimSpace(toStringValue(errorData["code"])),
+			strings.TrimSpace(toStringValue(source["code"])),
+		)
+		message := firstNonEmpty(
+			strings.TrimSpace(toStringValue(errorData["message"])),
+			strings.TrimSpace(toStringValue(source["message"])),
+			"Upstream Responses stream failed.",
+		)
+		errorType := firstNonEmpty(
+			strings.TrimSpace(toStringValue(errorData["type"])),
+			strings.TrimSpace(toStringValue(source["error_type"])),
+		)
+		switch errorType {
+		case "authentication_error", "permission_error", "not_found_error", "request_too_large", "rate_limit_error", "api_error", "overloaded_error", "invalid_request_error":
+		case "server_error":
+			errorType = "api_error"
+		default:
+			errorType = "invalid_request_error"
+		}
+		observation.markFirstOutput(time.Now())
+		writeEvent("error", map[string]any{
+			"type": "error",
+			"error": map[string]any{
+				"type":    errorType,
+				"message": message,
+			},
+		})
+		streamFailed = true
+		streamPreviewStopReason = "error"
+		streamRecordDetail = summarizeAdvancedProxyStreamResult(
+			"stop_reason=error",
+			"code="+firstNonEmpty(code, "unknown"),
+			"message="+previewAdvancedProxyText(message, 220),
+		)
+		appendAdvancedProxyLogf(
+			"[CLAUDE_PROXY_RESPONSES_STREAM_ERROR] response_id=%s code=%s type=%s message=%s",
+			firstNonEmpty(messageID, "unknown"),
+			firstNonEmpty(code, "unknown"),
+			errorType,
+			previewAdvancedProxyText(message, 260),
+		)
 	}
 	resolveToolKey := func(data map[string]any) string {
 		if itemID := strings.TrimSpace(toStringValue(data["item_id"])); itemID != "" {
@@ -3028,7 +3077,8 @@ func writeAnthropicSSEFromOpenAIResponsesStreamWithRecord(writer http.ResponseWr
 			model = resolvedModel
 		}
 
-		switch strings.TrimSpace(eventName) {
+		resolvedEventName := firstNonEmpty(strings.TrimSpace(eventName), strings.TrimSpace(toStringValue(data["type"])))
+		switch resolvedEventName {
 		case "response.created":
 			if usageMap, ok := responseData["usage"].(map[string]any); ok {
 				usage = responsesUsageToAnthropic(usageMap)
@@ -3150,7 +3200,7 @@ func writeAnthropicSSEFromOpenAIResponsesStreamWithRecord(writer http.ResponseWr
 			}
 			if state, exists := toolStates[key]; exists && state != nil {
 				itemMap, _ := data["item"].(map[string]any)
-				if strings.TrimSpace(toStringValue(itemMap["type"])) == "function_call" || strings.TrimSpace(eventName) == "response.function_call_arguments.done" {
+				if strings.TrimSpace(toStringValue(itemMap["type"])) == "function_call" || resolvedEventName == "response.function_call_arguments.done" {
 					state.ID = firstNonEmpty(
 						strings.TrimSpace(toStringValue(data["call_id"])),
 						strings.TrimSpace(toStringValue(itemMap["call_id"])),
@@ -3235,6 +3285,21 @@ func writeAnthropicSSEFromOpenAIResponsesStreamWithRecord(writer http.ResponseWr
 				incompleteReason = toStringValue(incompleteMap["reason"])
 			}
 			emitMessageStop(mapOpenAIResponsesStopReason(toStringValue(responseData["status"]), hasToolUse, incompleteReason))
+		case "response.incomplete":
+			if usageMap, ok := responseData["usage"].(map[string]any); ok {
+				usage = responsesUsageToAnthropic(usageMap)
+				observation.updateUsage(
+					intPtrValue(toIntValue(usage["input_tokens"])),
+					intPtrValue(toIntValue(usage["output_tokens"])),
+				)
+			}
+			incompleteReason := ""
+			if incompleteMap, ok := responseData["incomplete_details"].(map[string]any); ok {
+				incompleteReason = toStringValue(incompleteMap["reason"])
+			}
+			emitMessageStop(mapOpenAIResponsesStopReason("incomplete", hasToolUse, incompleteReason))
+		case "error", "response.failed":
+			emitStreamError(responseData)
 		}
 	}
 
@@ -3256,6 +3321,9 @@ func writeAnthropicSSEFromOpenAIResponsesStreamWithRecord(writer http.ResponseWr
 	}
 	if len(dataParts) > 0 {
 		processEvent(eventName, dataParts)
+	}
+	if streamFailed {
+		return
 	}
 	if err := scanner.Err(); err != nil {
 		appendAdvancedProxyLogf("responses stream scanner failed: %v", err)

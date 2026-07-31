@@ -29,6 +29,9 @@ function fetchWithRoutes(routes, calls) {
 }
 
 assert.equal(formatNewApiQuotaAmount(9992.39), '$0.020');
+assert.equal(formatNewApiQuotaAmount(-24856), '$-0.050');
+assert.equal(isDisplayableQuotaLabel('$-0.050'), true);
+assert.equal(isDisplayableQuotaLabel('$0.000'), true);
 
 {
   const calls = [];
@@ -72,6 +75,38 @@ assert.equal(formatNewApiQuotaAmount(9992.39), '$0.020');
 
   assert.equal(isDisplayableQuotaLabel(label), true);
   assert.equal(label.startsWith('$'), false);
+}
+
+{
+  const authorizations = [];
+  const apiFetch = async (proxyUrl, options = {}) => {
+    authorizations.push(options?.headers?.Authorization || '');
+    const targetUrl = getTargetUrl(proxyUrl);
+    if (targetUrl === 'https://new-api-negative.example.com/api/usage/token/') {
+      return response(200, {
+        data: {
+          total_available: -24856,
+          total_granted: 2500000000,
+          total_used: 2500024856,
+          unlimited_quota: false,
+        },
+      });
+    }
+    return response(404, {});
+  };
+
+  const label = await fetchQuotaLabelWithBatchLogic({
+    apiFetch,
+    site: {
+      account_info: { access_token: 'new-api-login-token' },
+      tokens: [{ key: 'sk-other-token' }],
+    },
+    siteUrl: 'https://new-api-negative.example.com/v1',
+    apiKey: 'sk-target-token',
+  });
+
+  assert.equal(label, '$-0.050');
+  assert.equal(authorizations[0], 'Bearer sk-target-token');
 }
 
 {

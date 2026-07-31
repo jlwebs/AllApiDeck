@@ -653,6 +653,7 @@ export async function refreshRecordBalance(record, contextMap) {
     apiFetch,
     site,
     siteUrl,
+    apiKey,
   });
   if (!isDisplayableQuotaLabel(label)) {
     throw new Error('批量检测同款余额接口未返回可识别字段');
@@ -702,8 +703,6 @@ function shouldDisplayBalanceValue(value) {
   const text = String(value || '').trim();
   if (!text) return false;
   if (/^(无限|鏃犻檺)/.test(text)) return false;
-  const amount = Number(text.replace(/USD$/i, '').replace(/^\$/, '').replace(/,/g, '').trim());
-  if (Number.isFinite(amount) && amount <= 0) return false;
   return true;
 }
 

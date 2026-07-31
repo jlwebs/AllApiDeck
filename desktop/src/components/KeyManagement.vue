@@ -6517,8 +6517,6 @@ function shouldDisplayBalanceValue(record, value) {
   const text = String(value || '').trim();
   if (!text) return false;
   if (/^无限/.test(text)) return false;
-  const amount = Number(text.replace(/USD$/i, '').replace(/^\$/, '').replace(/,/g, '').trim());
-  if (Number.isFinite(amount) && amount <= 0) return false;
   return true;
 }
 
@@ -6628,7 +6626,7 @@ async function fetchRecordBalanceSnapshot(record) {
       tokens: [{ key: apiKey }],
     };
 
-    const batchSnapshot = await tryFetchBatchCheckQuota(site, siteUrl);
+    const batchSnapshot = await tryFetchBatchCheckQuota(site, siteUrl, apiKey);
     if (batchSnapshot) return batchSnapshot;
 
     throw new Error('余额接口未返回可识别字段');
@@ -6642,11 +6640,12 @@ async function fetchRecordBalanceSnapshot(record) {
   }
 }
 
-async function tryFetchBatchCheckQuota(site, siteUrl) {
+async function tryFetchBatchCheckQuota(site, siteUrl, apiKey) {
   const label = await fetchQuotaLabelWithBatchLogic({
     apiFetch,
     site,
     siteUrl,
+    apiKey,
   });
   if (!isDisplayableQuotaLabel(label)) return null;
   return {

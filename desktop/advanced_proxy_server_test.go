@@ -1850,6 +1850,75 @@ func TestWriteAnthropicSSEFromOpenAIResponsesStreamEmitsStopOnScannerError(t *te
 	}
 }
 
+func TestWriteAnthropicSSEFromOpenAIResponsesStreamSurfacesTopLevelError(t *testing.T) {
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"resp_too_large","model":"gpt-5.6-terra","status":"in_progress"}}`,
+		"",
+		`event: response.in_progress`,
+		`data: {"type":"response.in_progress","response":{"id":"resp_too_large","status":"in_progress"}}`,
+		"",
+		`event: error`,
+		`data: {"type":"error","code":"context_too_large","message":"Your input exceeds the context window of this model. Please adjust your input and try again."}`,
+		"",
+	}, "\n")))
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIResponsesStream(recorder, streamBody, "gpt-5.6-terra")
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `event: error`) {
+		t.Fatalf("expected Anthropic stream error event, got %q", body)
+	}
+	if !strings.Contains(body, `"type":"invalid_request_error"`) {
+		t.Fatalf("expected context failure to map to invalid_request_error, got %q", body)
+	}
+	if !strings.Contains(body, `input exceeds the context window`) {
+		t.Fatalf("expected upstream error message to be preserved, got %q", body)
+	}
+	if strings.Contains(body, `"type":"message_stop"`) {
+		t.Fatalf("expected failed stream not to be reported as a completed message, got %q", body)
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIResponsesStreamSurfacesResponseFailed(t *testing.T) {
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`event: response.failed`,
+		`data: {"type":"response.failed","response":{"id":"resp_failed","status":"failed","error":{"type":"server_error","code":"upstream_failure","message":"The upstream model failed."}}}`,
+		"",
+	}, "\n")))
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIResponsesStream(recorder, streamBody, "gpt-5.6-terra")
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"type":"api_error"`) || !strings.Contains(body, `The upstream model failed.`) {
+		t.Fatalf("expected nested Responses failure to map to Anthropic api_error, got %q", body)
+	}
+	if strings.Contains(body, `"type":"message_stop"`) {
+		t.Fatalf("expected failed response not to emit message_stop, got %q", body)
+	}
+}
+
+func TestWriteAnthropicSSEFromOpenAIResponsesStreamHandlesIncompleteTerminalEvent(t *testing.T) {
+	streamBody := io.NopCloser(strings.NewReader(strings.Join([]string{
+		`event: response.incomplete`,
+		`data: {"type":"response.incomplete","response":{"id":"resp_incomplete","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":9,"output_tokens":5}}}`,
+		"",
+	}, "\n")))
+
+	recorder := httptest.NewRecorder()
+	writeAnthropicSSEFromOpenAIResponsesStream(recorder, streamBody, "gpt-5.6-terra")
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"stop_reason":"max_tokens"`) {
+		t.Fatalf("expected incomplete response to preserve max token stop reason, got %q", body)
+	}
+	if !strings.Contains(body, `"type":"message_stop"`) {
+		t.Fatalf("expected incomplete terminal event to close the Anthropic message, got %q", body)
+	}
+}
+
 func TestWriteAnthropicSSEFromOpenAIChatStreamDoesNotEmitMessageStopOnScannerError(t *testing.T) {
 	streamBody := &failingReadCloser{
 		chunks: [][]byte{

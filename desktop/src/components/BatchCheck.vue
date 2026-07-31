@@ -1688,9 +1688,12 @@ const browserSessionPolling = reactive({
 const browserSessionPendingSiteNames = ref([]);
 let fetchKeysProgressTimer = null;
 
-// 按 siteUrl 缓存余额，确保其为响应式对象
+// 按 siteUrl + API key 缓存余额，确保同站点多 key 互不污染。
 const siteQuotaCache = reactive({});
 const siteQuotaPendingMap = new Map();
+const buildSiteQuotaCacheKey = (siteUrl, apiKey) => (
+  `${String(siteUrl || '').replace(/\/+$/, '')}::${String(apiKey || '').trim()}`
+);
 
 const batchConcurrency = ref(25);
 const modelTimeout = ref(15);
@@ -2469,7 +2472,8 @@ const organizedTreeData = computed(() => {
     const hasSuccess = filteredTasks.some(task => task.status === 'success');
     const hasWarning = filteredTasks.some(task => task.status === 'warning');
     const siteKey = group.siteUrl?.replace(/\/+$/, '') || '';
-    const quota = siteQuotaCache[siteKey];
+    const quotaCacheKey = buildSiteQuotaCacheKey(siteKey, group.apiKey);
+    const quota = siteQuotaCache[quotaCacheKey];
     const quotaStr = (quota && !['获取中...', '无授权', '请求超时', '网络错误'].includes(quota)) 
       ? ` (剩余: ${quota.replace('$', '')} $)` 
       : '';
@@ -2628,10 +2632,11 @@ const hoverQuota = (record) => {
   if (record.quota !== undefined) return;
 
   const siteKey = record.siteUrl?.replace(/\/+$/, '') || '';
+  const quotaCacheKey = buildSiteQuotaCacheKey(siteKey, record.apiKey);
 
-  // 命中缓存：同一 siteUrl 已算过
-  if (siteQuotaCache[siteKey] !== undefined) {
-    record.quota = siteQuotaCache[siteKey];
+  // 命中缓存：同一站点的同一 key 已计算过。
+  if (siteQuotaCache[quotaCacheKey] !== undefined) {
+    record.quota = siteQuotaCache[quotaCacheKey];
     return;
   }
 
@@ -2643,14 +2648,16 @@ const hoverQuota = (record) => {
 const loadQuotaForRecord = async (record, { force = false } = {}) => {
   const siteKey = record?.siteUrl?.replace(/\/+$/, '') || '';
   if (!siteKey) return '';
+  const apiKey = String(record?.apiKey || '').trim();
+  const quotaCacheKey = buildSiteQuotaCacheKey(siteKey, apiKey);
 
-  if (!force && siteQuotaCache[siteKey] !== undefined) {
-    record.quota = siteQuotaCache[siteKey];
-    return siteQuotaCache[siteKey];
+  if (!force && siteQuotaCache[quotaCacheKey] !== undefined) {
+    record.quota = siteQuotaCache[quotaCacheKey];
+    return siteQuotaCache[quotaCacheKey];
   }
 
-  if (!force && siteQuotaPendingMap.has(siteKey)) {
-    return siteQuotaPendingMap.get(siteKey);
+  if (!force && siteQuotaPendingMap.has(quotaCacheKey)) {
+    return siteQuotaPendingMap.get(quotaCacheKey);
   }
 
   const pending = (async () => {
@@ -2658,21 +2665,25 @@ const loadQuotaForRecord = async (record, { force = false } = {}) => {
       apiFetch,
       site: record.accountData,
       siteUrl: siteKey,
+      apiKey,
     });
-    siteQuotaCache[siteKey] = label;
+    siteQuotaCache[quotaCacheKey] = label;
     testResults.value.forEach(r => {
-      if (r.siteUrl?.replace(/\/+$/, '') === siteKey) {
+      if (
+        r.siteUrl?.replace(/\/+$/, '') === siteKey
+        && String(r.apiKey || '').trim() === apiKey
+      ) {
         r.quota = label;
       }
     });
     return label;
   })();
 
-  siteQuotaPendingMap.set(siteKey, pending);
+  siteQuotaPendingMap.set(quotaCacheKey, pending);
   try {
     return await pending;
   } finally {
-    siteQuotaPendingMap.delete(siteKey);
+    siteQuotaPendingMap.delete(quotaCacheKey);
   }
 };
 

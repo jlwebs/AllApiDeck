@@ -268,21 +268,29 @@ async function tryFetchUsageQuotaLabel({ apiFetch, normalizedSiteUrl, auth, sign
 
 export function isDisplayableQuotaLabel(value) {
   const text = String(value || '').trim();
-  return /^\$\d/.test(text) || text === '无限';
+  return /^\$-?\d/.test(text) || text === '无限';
 }
 
-export async function fetchQuotaLabelWithBatchLogic({ apiFetch, site, siteUrl }) {
+export async function fetchQuotaLabelWithBatchLogic({ apiFetch, site, siteUrl, apiKey = '' }) {
   const normalizedSiteUrl = normalizeQuotaBaseUrl(siteUrl);
   const rawId = site?.account_info?.id || site?.id || site?.uid || site?.user_id || '';
   const userId = /^\d+$/.test(String(rawId)) ? String(rawId) : '';
-  const auth = site?.account_info?.access_token || site?.access_token || site?.tokens?.[0]?.key || '';
+  const tokenAuth = String(
+    apiKey
+    || site?.tokens?.[0]?.key
+    || site?.tokens?.[0]?.access_token
+    || site?.customTokens?.[0]?.key
+    || site?.customTokens?.[0]?.access_token
+    || ''
+  ).trim();
+  const accountAuth = String(site?.account_info?.access_token || site?.access_token || tokenAuth).trim();
   const tokenFallbackLabel = formatQuotaLabelFromTokens(site?.tokens);
 
   if (!normalizedSiteUrl) {
     return tokenFallbackLabel || '无站点地址';
   }
 
-  if (!auth) {
+  if (!tokenAuth && !accountAuth) {
     return tokenFallbackLabel || '无授权';
   }
 
@@ -295,14 +303,16 @@ export async function fetchQuotaLabelWithBatchLogic({ apiFetch, site, siteUrl })
     let lastKnownQuotaLabel = '';
     let finalResStatus = 200;
 
-    const usageResult = await tryFetchUsageQuotaLabel({
-      apiFetch,
-      normalizedSiteUrl,
-      auth,
-      signal: controller.signal,
-    });
-    if (usageResult.label) return usageResult.label;
-    if (usageResult.status) finalResStatus = usageResult.status;
+    if (tokenAuth) {
+      const usageResult = await tryFetchUsageQuotaLabel({
+        apiFetch,
+        normalizedSiteUrl,
+        auth: tokenAuth,
+        signal: controller.signal,
+      });
+      if (usageResult.label) return usageResult.label;
+      if (usageResult.status) finalResStatus = usageResult.status;
+    }
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
       let quota = null;
@@ -313,7 +323,7 @@ export async function fetchQuotaLabelWithBatchLogic({ apiFetch, site, siteUrl })
         const proxyUrl = `/api/proxy-get?url=${encodeURIComponent(url)}&uid=${userId}`;
 
         const res = await apiFetch(proxyUrl, {
-          headers: { Authorization: `Bearer ${auth}` },
+          headers: { Authorization: `Bearer ${accountAuth}` },
           signal: controller.signal,
         });
 
