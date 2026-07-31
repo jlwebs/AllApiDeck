@@ -6,12 +6,12 @@
       <main class="usage-main">
         <section class="usage-hero">
           <div>
-            <p class="usage-kicker">Usage</p>
-            <h1>Usage statistics</h1>
-            <p>Inspect requests, tokens, latency, and provider activity in one place.</p>
+            <p class="usage-kicker">{{ t('USAGE_NAV') }}</p>
+            <h1>{{ t('USAGE_TITLE') }}</h1>
+            <p>{{ t('USAGE_DESCRIPTION') }}</p>
           </div>
           <div class="usage-actions">
-            <div class="usage-range-tabs" role="tablist" aria-label="Usage date range">
+            <div class="usage-range-tabs" role="tablist" :aria-label="t('USAGE_DATE_RANGE')">
               <button
                 v-for="tab in rangeTabs"
                 :key="tab.id"
@@ -24,56 +24,56 @@
             </div>
             <button type="button" class="usage-refresh" :disabled="loading" @click="refresh">
               <span :class="{ 'is-spinning': loading }" aria-hidden="true">↻</span>
-              {{ loading ? 'Refreshing…' : 'Refresh' }}
+              {{ loading ? t('USAGE_REFRESHING') : t('USAGE_REFRESH') }}
             </button>
           </div>
         </section>
 
         <div v-if="error" class="usage-error" role="alert">
-          <strong>Usage data could not be loaded.</strong>
+          <strong>{{ t('USAGE_LOAD_FAILED') }}</strong>
           <span>{{ error }}</span>
-          <button type="button" @click="refresh">Try again</button>
+          <button type="button" @click="refresh">{{ t('USAGE_TRY_AGAIN') }}</button>
         </div>
 
         <section class="usage-panel usage-filters">
           <div class="usage-panel-heading">
             <div>
-              <span class="usage-kicker">Filters</span>
-              <h2>Focus your view</h2>
+              <span class="usage-kicker">{{ t('USAGE_FILTERS') }}</span>
+              <h2>{{ t('USAGE_FOCUS_VIEW') }}</h2>
             </div>
-            <button v-if="hasActiveFilters" type="button" class="usage-clear" @click="clearFilters">Clear filters</button>
+            <button v-if="hasActiveFilters" type="button" class="usage-clear" @click="clearFilters">{{ t('USAGE_CLEAR_FILTERS') }}</button>
           </div>
           <div class="usage-filter-grid">
             <label>
-              <span>App</span>
+              <span>{{ t('USAGE_APP') }}</span>
               <select v-model="appFilter">
-                <option value="all">All apps</option>
+                <option value="all">{{ t('USAGE_ALL_APPS') }}</option>
                 <option v-for="option in appOptions" :key="option.value" :value="option.value">{{ option.label }} · {{ option.count }}</option>
               </select>
             </label>
             <label>
-              <span>Provider</span>
+              <span>{{ t('USAGE_PROVIDER') }}</span>
               <select v-model="providerFilter">
-                <option value="all">All providers</option>
+                <option value="all">{{ t('USAGE_ALL_PROVIDERS') }}</option>
                 <option v-for="option in providerOptions" :key="option.value" :value="option.value">{{ option.label }} · {{ option.count }}</option>
               </select>
             </label>
             <label>
-              <span>Model</span>
+              <span>{{ t('USAGE_MODEL') }}</span>
               <select v-model="modelFilter">
-                <option value="all">All models</option>
+                <option value="all">{{ t('USAGE_ALL_MODELS') }}</option>
                 <option v-for="option in modelOptions" :key="option.value" :value="option.value">{{ option.label }} · {{ option.count }}</option>
               </select>
             </label>
             <div class="usage-filter-status">
               <span class="usage-dot" aria-hidden="true"></span>
-              <strong>{{ filteredRows.length }} visible rows</strong>
+              <strong>{{ t('USAGE_VISIBLE_ROWS', { count: filteredRows.length }) }}</strong>
               <small>{{ activeRangeLabel }} · {{ sourceLabel }}</small>
             </div>
           </div>
         </section>
 
-        <section class="usage-metrics" aria-label="Usage summary">
+        <section class="usage-metrics" :aria-label="t('USAGE_SUMMARY')">
           <article v-for="card in metricCards" :key="card.id" class="usage-metric" :class="'usage-metric-' + card.id">
             <span>{{ card.label }}</span>
             <strong :title="card.title">{{ card.value }}</strong>
@@ -84,18 +84,18 @@
         <section class="usage-panel">
           <div class="usage-panel-heading">
             <div>
-              <span class="usage-kicker">Activity</span>
-              <h2>Token trend</h2>
+              <span class="usage-kicker">{{ t('USAGE_ACTIVITY') }}</span>
+              <h2>{{ t('USAGE_TOKEN_TREND') }}</h2>
             </div>
             <div class="usage-peak">
               <strong>{{ formatCompact(trend.maxValue) }}</strong>
-              <span>peak tokens / bucket</span>
+              <span>{{ t('USAGE_PEAK_TOKENS_PER_BUCKET') }}</span>
             </div>
           </div>
 
           <div class="usage-trend-layout">
             <div class="usage-chart-wrap">
-              <svg class="usage-chart" viewBox="0 0 760 230" role="img" aria-label="Token usage trend">
+              <svg class="usage-chart" viewBox="0 0 760 230" role="img" :aria-label="t('USAGE_TOKEN_TREND_ARIA')">
                 <defs>
                   <linearGradient id="usageTrendFill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stop-color="#83b97f" stop-opacity="0.32" />
@@ -113,18 +113,18 @@
                 <polyline v-if="trend.points.length" class="usage-chart-line" :points="trend.linePoints" />
                 <g v-for="point in trend.points" :key="point.key" class="usage-chart-point">
                   <circle :cx="point.x" :cy="point.y" r="4">
-                    <title>{{ point.label }} · {{ formatNumber(point.value) }} tokens</title>
+                    <title>{{ point.label }} · {{ formatNumber(point.value) }} {{ t('USAGE_TOKENS') }}</title>
                   </circle>
                   <text :x="point.x" y="211" text-anchor="middle">{{ point.label }}</text>
                 </g>
               </svg>
-              <div v-if="!trend.points.length" class="usage-chart-empty">No token activity in this range.</div>
+              <div v-if="!trend.points.length" class="usage-chart-empty">{{ t('USAGE_NO_TOKEN_ACTIVITY') }}</div>
             </div>
             <aside class="usage-trend-aside">
-              <div><span>Latest bucket</span><strong>{{ trend.latestLabel || '—' }}</strong></div>
-              <div><span>Latest tokens</span><strong>{{ formatCompact(trend.latestValue) }}</strong></div>
-              <div><span>Range</span><strong>{{ activeRangeLabel }}</strong></div>
-              <p>When proxy records are empty, local Codex session usage is shown as hourly buckets.</p>
+              <div><span>{{ t('USAGE_LATEST_BUCKET') }}</span><strong>{{ trend.latestLabel || '—' }}</strong></div>
+              <div><span>{{ t('USAGE_LATEST_TOKENS') }}</span><strong>{{ formatCompact(trend.latestValue) }}</strong></div>
+              <div><span>{{ t('USAGE_RANGE') }}</span><strong>{{ activeRangeLabel }}</strong></div>
+              <p>{{ t('USAGE_FALLBACK_NOTE') }}</p>
             </aside>
           </div>
         </section>
@@ -132,16 +132,16 @@
         <section class="usage-panel usage-details">
           <div class="usage-panel-heading">
             <div>
-              <span class="usage-kicker">Details</span>
-              <h2>Usage breakdown</h2>
+              <span class="usage-kicker">{{ t('USAGE_DETAILS') }}</span>
+              <h2>{{ t('USAGE_BREAKDOWN') }}</h2>
             </div>
             <div class="usage-details-meta">
-              <span>{{ filteredRows.length }} rows</span>
-              <span v-if="sourceRows.some(row => row.synthetic)" class="usage-session-badge">Codex session fallback</span>
+              <span>{{ t('USAGE_ROWS', { count: filteredRows.length }) }}</span>
+              <span v-if="sourceRows.some(row => row.synthetic)" class="usage-session-badge">{{ t('USAGE_CODEX_SESSION_FALLBACK') }}</span>
             </div>
           </div>
 
-          <div class="usage-data-tabs" role="tablist" aria-label="Usage breakdown tabs">
+          <div class="usage-data-tabs" role="tablist" :aria-label="t('USAGE_BREAKDOWN_TABS')">
             <button
               v-for="tab in usageTabs"
               :key="tab.id"
@@ -156,52 +156,52 @@
           <div v-if="activeTab === 'requests'" class="usage-table-wrap">
             <table class="usage-table">
               <thead>
-                <tr><th>Time</th><th>Provider</th><th>Model</th><th>Input</th><th>Output</th><th>Cost</th><th>Latency</th><th>Status</th><th>Source</th></tr>
+                <tr><th>{{ t('USAGE_TIME') }}</th><th>{{ t('USAGE_PROVIDER') }}</th><th>{{ t('USAGE_MODEL') }}</th><th>{{ t('USAGE_INPUT') }}</th><th>{{ t('USAGE_OUTPUT') }}</th><th>{{ t('USAGE_COST') }}</th><th>{{ t('USAGE_LATENCY') }}</th><th>{{ t('USAGE_STATUS') }}</th><th>{{ t('USAGE_SOURCE') }}</th></tr>
               </thead>
               <tbody>
                 <tr v-for="row in filteredRows" :key="row.id">
                   <td><strong>{{ formatDateTime(row.timestamp) }}</strong><small>{{ formatDateOnly(row.timestamp) }}</small></td>
                   <td><strong>{{ row.provider }}</strong><small>{{ row.appLabel }}</small></td>
                   <td><strong class="usage-model">{{ row.model }}</strong><small v-if="row.route">{{ row.route }}</small></td>
-                  <td><strong>{{ formatNumber(row.inputTokens) }}</strong><small v-if="row.cacheReadTokens">cache-read {{ formatCompact(row.cacheReadTokens) }}</small></td>
-                  <td><strong>{{ formatNumber(row.outputTokens) }}</strong><small v-if="row.reasoningTokens">reasoning {{ formatCompact(row.reasoningTokens) }}</small></td>
+                  <td><strong>{{ formatNumber(row.inputTokens) }}</strong><small v-if="row.cacheReadTokens">{{ t('USAGE_CACHE_READ', { value: formatCompact(row.cacheReadTokens) }) }}</small></td>
+                  <td><strong>{{ formatNumber(row.outputTokens) }}</strong><small v-if="row.reasoningTokens">{{ t('USAGE_REASONING', { value: formatCompact(row.reasoningTokens) }) }}</small></td>
                   <td><span :class="{ 'is-muted': row.cost == null }">{{ formatCost(row.cost) }}</span></td>
                   <td>{{ formatLatency(row.latencyMs) }}</td>
                   <td><span class="usage-status" :class="statusClass(row)">{{ statusLabel(row) }}</span></td>
                   <td><code>{{ row.source }}</code></td>
                 </tr>
-                <tr v-if="!filteredRows.length"><td colspan="9" class="usage-empty">{{ loading ? 'Loading usage data…' : 'No usage records match the current filters.' }}</td></tr>
+                <tr v-if="!filteredRows.length"><td colspan="9" class="usage-empty">{{ loading ? t('USAGE_LOADING_DATA') : t('USAGE_NO_REQUESTS') }}</td></tr>
               </tbody>
             </table>
           </div>
 
           <div v-else-if="activeTab === 'providers'" class="usage-table-wrap">
             <table class="usage-table usage-summary-table">
-              <thead><tr><th>Provider</th><th>Requests</th><th>Total tokens</th><th>Input</th><th>Output</th><th>Success rate</th><th>Average latency</th></tr></thead>
+              <thead><tr><th>{{ t('USAGE_PROVIDER') }}</th><th>{{ t('USAGE_REQUESTS_HEADER') }}</th><th>{{ t('USAGE_TOTAL_TOKENS') }}</th><th>{{ t('USAGE_INPUT') }}</th><th>{{ t('USAGE_OUTPUT') }}</th><th>{{ t('USAGE_SUCCESS_RATE') }}</th><th>{{ t('USAGE_AVERAGE_LATENCY') }}</th></tr></thead>
               <tbody>
                 <tr v-for="item in providerStats" :key="item.key">
                   <td><strong>{{ item.label }}</strong><small>{{ item.appLabels.join(' · ') }}</small></td>
                   <td>{{ formatNumber(item.requests) }}</td><td>{{ formatNumber(item.totalTokens) }}</td><td>{{ formatNumber(item.inputTokens) }}</td><td>{{ formatNumber(item.outputTokens) }}</td><td>{{ formatPercent(item.successRate) }}</td><td>{{ formatLatency(item.averageLatency) }}</td>
                 </tr>
-                <tr v-if="!providerStats.length"><td colspan="7" class="usage-empty">No provider data matches the current filters.</td></tr>
+                <tr v-if="!providerStats.length"><td colspan="7" class="usage-empty">{{ t('USAGE_NO_PROVIDER_DATA') }}</td></tr>
               </tbody>
             </table>
           </div>
 
           <div v-else class="usage-table-wrap">
             <table class="usage-table usage-summary-table">
-              <thead><tr><th>Model</th><th>Requests</th><th>Total tokens</th><th>Input</th><th>Output</th><th>Success rate</th><th>Average latency</th></tr></thead>
+              <thead><tr><th>{{ t('USAGE_MODEL') }}</th><th>{{ t('USAGE_REQUESTS_HEADER') }}</th><th>{{ t('USAGE_TOTAL_TOKENS') }}</th><th>{{ t('USAGE_INPUT') }}</th><th>{{ t('USAGE_OUTPUT') }}</th><th>{{ t('USAGE_SUCCESS_RATE') }}</th><th>{{ t('USAGE_AVERAGE_LATENCY') }}</th></tr></thead>
               <tbody>
                 <tr v-for="item in modelStats" :key="item.key">
                   <td><strong class="usage-model">{{ item.label }}</strong><small>{{ item.providerLabels.join(' · ') }}</small></td>
                   <td>{{ formatNumber(item.requests) }}</td><td>{{ formatNumber(item.totalTokens) }}</td><td>{{ formatNumber(item.inputTokens) }}</td><td>{{ formatNumber(item.outputTokens) }}</td><td>{{ formatPercent(item.successRate) }}</td><td>{{ formatLatency(item.averageLatency) }}</td>
                 </tr>
-                <tr v-if="!modelStats.length"><td colspan="7" class="usage-empty">No model data matches the current filters.</td></tr>
+                <tr v-if="!modelStats.length"><td colspan="7" class="usage-empty">{{ t('USAGE_NO_MODEL_DATA') }}</td></tr>
               </tbody>
             </table>
           </div>
 
-          <p v-if="!summary.costKnown" class="usage-note">Cost is shown as <code>—</code> because the current request record API does not expose provider pricing yet.</p>
+          <p v-if="!summary.costKnown" class="usage-note">{{ t('USAGE_COST_UNAVAILABLE', { dash: '—' }) }}</p>
         </section>
       </main>
     </div>
@@ -210,21 +210,23 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
 import AppHeader from '../components/AppHeader.vue';
 import { getLocalTokenUsageAnalytics, listAdvancedProxyRequestRecords } from '../utils/advancedProxyBridge.js';
 import { getAppliedThemeMode, isDarkThemeMode, THEME_MODE_CHANGE_EVENT } from '../utils/theme.js';
 
-const rangeTabs = [
-  { id: 'today', label: 'Today' },
-  { id: '7d', label: '7 days' },
-  { id: '30d', label: '30 days' },
-  { id: 'all', label: 'All time' },
-];
-const usageTabs = [
-  { id: 'requests', label: 'Request Logs' },
-  { id: 'providers', label: 'Provider Stats' },
-  { id: 'models', label: 'Model Stats' },
-];
+const { t, locale } = useI18n();
+const rangeTabs = computed(() => [
+  { id: 'today', label: t('USAGE_TODAY') },
+  { id: '7d', label: t('USAGE_7_DAYS') },
+  { id: '30d', label: t('USAGE_30_DAYS') },
+  { id: 'all', label: t('USAGE_ALL_TIME') },
+]);
+const usageTabs = computed(() => [
+  { id: 'requests', label: t('USAGE_REQUEST_LOGS') },
+  { id: 'providers', label: t('USAGE_PROVIDER_STATS') },
+  { id: 'models', label: t('USAGE_MODEL_STATS') },
+]);
 const appLabels = { codex: 'Codex', claude: 'Claude', 'claude-desktop': 'Claude Desktop', gemini: 'Gemini', grok: 'Grok', openclaw: 'OpenClaw', opencode: 'OpenCode' };
 const records = ref([]);
 const analytics = ref(null);
@@ -265,7 +267,7 @@ function timestamp(value) {
 function appName(value) {
   const key = text(value).toLowerCase().replace(/_/g, '-');
   if (appLabels[key]) return appLabels[key];
-  if (!key) return 'Unknown app';
+  if (!key) return t('USAGE_UNKNOWN_APP');
   return key.split('-').filter(Boolean).map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
 }
 function usageObject(record) {
@@ -377,8 +379,8 @@ function sessionRows(localAnalytics) {
 const requestRows = computed(() => (Array.isArray(records.value) ? records.value : []).map(normalizeRecord));
 const localRows = computed(() => sessionRows(analytics.value));
 const sourceRows = computed(() => requestRows.value.length ? requestRows.value : localRows.value);
-const activeRangeLabel = computed(() => (rangeTabs.find(item => item.id === range.value) || rangeTabs[1]).label);
-const sourceLabel = computed(() => requestRows.value.length ? 'Proxy request records' : 'Codex local sessions');
+const activeRangeLabel = computed(() => (rangeTabs.value.find(item => item.id === range.value) || rangeTabs.value[1]).label);
+const sourceLabel = computed(() => requestRows.value.length ? t('USAGE_PROXY_REQUEST_RECORDS') : t('USAGE_CODEX_LOCAL_SESSIONS'));
 
 const rangeStart = computed(() => {
   if (range.value === 'all') return 0;
@@ -446,12 +448,12 @@ const summary = computed(() => {
 });
 
 const metricCards = computed(() => [
-  { id: 'requests', label: 'Requests', value: formatCompact(summary.value.requests), title: formatNumber(summary.value.requests), detail: summary.value.rows + ' tracked data points' },
-  { id: 'tokens', label: 'Total tokens', value: formatCompact(summary.value.totalTokens), title: formatNumber(summary.value.totalTokens), detail: 'Input + output + reasoning' },
-  { id: 'input', label: 'Input tokens', value: formatCompact(summary.value.inputTokens), title: formatNumber(summary.value.inputTokens), detail: summary.value.cacheReadTokens ? 'Cache read ' + formatCompact(summary.value.cacheReadTokens) : 'Prompt tokens' },
-  { id: 'output', label: 'Output tokens', value: formatCompact(summary.value.outputTokens), title: formatNumber(summary.value.outputTokens), detail: summary.value.reasoningTokens ? 'Reasoning ' + formatCompact(summary.value.reasoningTokens) : 'Completion tokens' },
-  { id: 'success', label: 'Success rate', value: formatPercent(summary.value.successRate), title: '', detail: formatLatency(summary.value.averageLatency) + ' average latency' },
-  { id: 'cost', label: 'Cost', value: formatCost(summary.value.cost), title: '', detail: summary.value.costKnown ? 'Based on record pricing' : 'Not priced by current API' },
+  { id: 'requests', label: t('USAGE_REQUESTS'), value: formatCompact(summary.value.requests), title: formatNumber(summary.value.requests), detail: t('USAGE_TRACKED_POINTS', { count: summary.value.rows }) },
+  { id: 'tokens', label: t('USAGE_TOTAL_TOKENS_LABEL'), value: formatCompact(summary.value.totalTokens), title: formatNumber(summary.value.totalTokens), detail: t('USAGE_INPUT_OUTPUT_REASONING') },
+  { id: 'input', label: t('USAGE_INPUT_TOKENS'), value: formatCompact(summary.value.inputTokens), title: formatNumber(summary.value.inputTokens), detail: summary.value.cacheReadTokens ? t('USAGE_CACHE_READ_DETAIL', { value: formatCompact(summary.value.cacheReadTokens) }) : t('USAGE_PROMPT_TOKENS') },
+  { id: 'output', label: t('USAGE_OUTPUT_TOKENS'), value: formatCompact(summary.value.outputTokens), title: formatNumber(summary.value.outputTokens), detail: summary.value.reasoningTokens ? t('USAGE_REASONING_DETAIL', { value: formatCompact(summary.value.reasoningTokens) }) : t('USAGE_COMPLETION_TOKENS') },
+  { id: 'success', label: t('USAGE_SUCCESS_RATE'), value: formatPercent(summary.value.successRate), title: '', detail: t('USAGE_AVERAGE_LATENCY_DETAIL', { value: formatLatency(summary.value.averageLatency) }) },
+  { id: 'cost', label: t('USAGE_COST'), value: formatCost(summary.value.cost), title: '', detail: summary.value.costKnown ? t('USAGE_BASED_ON_RECORD_PRICING') : t('USAGE_NOT_PRICED') },
 ]);
 
 function groupedStats(rows, keyName, labelName) {
@@ -534,7 +536,7 @@ const trend = computed(() => {
 
 function formatNumber(value) {
   const parsed = Number(value || 0);
-  return Number.isFinite(parsed) ? new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(parsed) : '0';
+  return Number.isFinite(parsed) ? new Intl.NumberFormat(locale.value || undefined, { maximumFractionDigits: 0 }).format(parsed) : '0';
 }
 function formatCompact(value) {
   const parsed = Number(value || 0);
@@ -560,7 +562,7 @@ function formatLatency(value) {
 }
 function formatDateTime(value) {
   const date = new Date(value);
-  return !value || Number.isNaN(date.getTime()) ? 'Unknown time' : date.toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+  return !value || Number.isNaN(date.getTime()) ? t('USAGE_UNKNOWN_TIME') : date.toLocaleString(locale.value || undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
 }
 function formatDateOnly(value) {
   const date = new Date(value);
@@ -570,7 +572,7 @@ function statusClass(row) {
   return row.success ? 'is-success' : row.statusCode >= 400 ? 'is-error' : 'is-neutral';
 }
 function statusLabel(row) {
-  return row.statusCode ? String(row.statusCode) : row.success ? 'OK' : '—';
+  return row.statusCode ? String(row.statusCode) : row.success ? t('USAGE_OK') : '—';
 }
 function clearFilters() {
   appFilter.value = 'all';
@@ -585,7 +587,7 @@ async function refresh() {
     records.value = Array.isArray(result[0]) ? result[0] : [];
     analytics.value = result[1] && typeof result[1] === 'object' ? result[1] : null;
   } catch (loadError) {
-    error.value = loadError && loadError.message ? loadError.message : 'The local usage bridge returned an error.';
+    error.value = loadError && loadError.message ? loadError.message : t('USAGE_LOCAL_BRIDGE_ERROR');
   } finally {
     loading.value = false;
   }

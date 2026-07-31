@@ -117,6 +117,17 @@
                 <FundProjectionScreenOutlined class="inventory-panel-tab-icon inventory-panel-tab-icon-monitor" />
                 <span class="inventory-panel-tab-label">Monitor</span>
               </button>
+              <span class="inventory-panel-tab-divider" aria-hidden="true"></span>
+              <button
+                type="button"
+                class="inventory-panel-tab"
+                aria-label="用量统计"
+                title="用量统计"
+                @click.stop="openUsagePage"
+              >
+                <BarChartOutlined class="inventory-panel-tab-icon inventory-panel-tab-icon-usage" />
+                <span class="inventory-panel-tab-label">{{ t('USAGE_NAV') }}</span>
+              </button>
             </div>
             </div>
           </div>
@@ -1336,9 +1347,10 @@
 
 <script setup>
 import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { ClockCircleOutlined, DeleteOutlined, DownloadOutlined, EyeInvisibleOutlined, EyeOutlined, FileTextOutlined, FundProjectionScreenOutlined, ImportOutlined, KeyOutlined, MenuFoldOutlined, PlusOutlined, ReloadOutlined, SafetyCertificateOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
+import { BarChartOutlined, ClockCircleOutlined, DeleteOutlined, DownloadOutlined, EyeInvisibleOutlined, EyeOutlined, FileTextOutlined, FundProjectionScreenOutlined, ImportOutlined, KeyOutlined, MenuFoldOutlined, PlusOutlined, ReloadOutlined, SafetyCertificateOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import { ConfigProvider, message, Modal, theme } from 'ant-design-vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
 import AppHeader from './AppHeader.vue';
 import QueueOrbitIcon from './icons/QueueOrbitIcon.vue';
 import AdvancedProxyModal from './AdvancedProxyModal.vue';
@@ -1501,6 +1513,8 @@ const CONSOLE_PROXY_APP_LABELS = {
 const PROXY_MANAGED_TOKEN = 'PROXY_MANAGED';
 const ADVANCED_PROXY_PROVIDER_NAME = 'AllApiDeck Advanced Proxy';
 const route = useRoute();
+const router = useRouter();
+const { t } = useI18n();
 const isWailsRuntime = isProbablyWailsRuntime();
 
 function createManualRecordDraft(record = null) {
@@ -3026,6 +3040,10 @@ function setActiveInventoryPanel(panel) {
     stopAdvancedProxyConsolePolling();
     stopAdvancedProxyConnectionClock();
   }
+}
+
+function openUsagePage() {
+  void router.push('/usage');
 }
 
 function handleMonitorIntervalChange(value) {
