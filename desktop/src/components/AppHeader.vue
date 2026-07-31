@@ -53,6 +53,16 @@
         <span>密钥库</span>
       </button>
 
+      <button
+        type="button"
+        class="spring-pill spring-pill-usage"
+        :class="{ 'spring-pill-active': currentPage === 'usage' }"
+        @click="navigate('/usage')"
+      >
+        <BarChartOutlined />
+        <span>Usage</span>
+      </button>
+
       <div class="spring-utility-cluster" aria-label="工具入口">
         <button
           type="button"

@@ -52,6 +52,12 @@ const routes = [
         component: loadSitesView,
         meta: { keepAlive: true },
       },
+      {
+        path: 'usage',
+        name: 'Usage',
+        component: () => import('../views/Usage.vue'),
+        meta: { keepAlive: true },
+      },
     ],
   },
 ];
