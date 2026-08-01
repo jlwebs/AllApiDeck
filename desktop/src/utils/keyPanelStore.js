@@ -327,10 +327,11 @@ export function persistPanelRecords(records, options = {}) {
       ...record,
       sourceType: record.sourceType || 'auto',
       modelsList: normalizeModels(record.modelsList || record.modelsText),
-      modelsText: normalizeModels(record.modelsList || record.modelsText).join(', '),
+      modelsText: undefined,
       customModels: normalizeModels(record.customModels),
       selectedModel: String(record.selectedModel || '').trim(),
-      quickTestResponseContent: record.quickTestResponseContent || '',
+      quickTestRemark: String(record.quickTestRemark || '').slice(0, 2048),
+      quickTestResponseContent: String(record.quickTestResponseContent || '').slice(0, 16384),
       rowKey: record.rowKey || (record.sourceType === 'manual' ? buildManualRowKey() : buildRowKey(record.siteUrl, record.apiKey)),
     };
     if (normalizedRecord.sourceType === 'manual') {
@@ -340,11 +341,17 @@ export function persistPanelRecords(records, options = {}) {
     }
   });
 
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(autoRecords));
-  localStorage.setItem(MANUAL_STORAGE_KEY, JSON.stringify(manualRecords));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(autoRecords));
+    localStorage.setItem(MANUAL_STORAGE_KEY, JSON.stringify(manualRecords));
+  } catch (error) {
+    console.warn('[KeyPanelStore] persist records failed:', error?.message || String(error));
+    return false;
+  }
   if (broadcast && typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(KEY_MANAGEMENT_SYNC_EVENT));
   }
+  return true;
 }
 
 export function createManualDraft(record = null) {

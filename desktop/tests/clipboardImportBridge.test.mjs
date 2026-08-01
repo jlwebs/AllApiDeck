@@ -55,6 +55,54 @@ assert.equal(sameGroup.groupCreated, false);
 assert.equal(sameGroup.groups.length, 1);
 assert.deepStrictEqual(sameGroup.records[0].groupIds, ['group::test']);
 
+const sameNameBatch = mergeClipboardImportState({
+  existingRecords: [{
+    rowKey: 'same-name-1',
+    siteName: '共享站点',
+    siteUrl: 'https://same-name-one.example',
+    apiKey: 'sk-same-name-one1234567890',
+  }],
+  importedRecords: [
+    {
+      siteName: '共享站点',
+      siteUrl: 'https://same-name-two.example',
+      apiKey: 'sk-same-name-two1234567890',
+    },
+    {
+      siteName: '共享站点',
+      siteUrl: 'https://same-name-three.example',
+      apiKey: 'sk-same-name-three1234567890',
+    },
+  ],
+});
+assert.deepStrictEqual(
+  sameNameBatch.records.map(record => record.siteName),
+  ['共享站点', '共享站点 2', '共享站点 3']
+);
+
+const sameNameWithExistingSuffix = mergeClipboardImportState({
+  existingRecords: [
+    {
+      rowKey: 'same-name-root',
+      siteName: '共享站点',
+      siteUrl: 'https://same-name-root.example',
+      apiKey: 'sk-same-name-root1234567890',
+    },
+    {
+      rowKey: 'same-name-suffix',
+      siteName: '共享站点 2',
+      siteUrl: 'https://same-name-suffix.example',
+      apiKey: 'sk-same-name-suffix1234567890',
+    },
+  ],
+  importedRecords: [{
+    siteName: '共享站点',
+    siteUrl: 'https://same-name-next.example',
+    apiKey: 'sk-same-name-next1234567890',
+  }],
+});
+assert.equal(sameNameWithExistingSuffix.records[2].siteName, '共享站点 3');
+
 const explicitAll = mergeClipboardImportState({
   existingRecords: [],
   existingGroups: [],

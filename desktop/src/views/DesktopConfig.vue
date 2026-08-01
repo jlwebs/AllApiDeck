@@ -176,6 +176,24 @@
                 <a-switch v-model:checked="desktopConfigDraft.openclawUseAdvancedProxy" />
                 <div class="desktop-field-hint">开启后会改写到本地 OpenClaw 代理入口，并切到 openai-completions 协议。</div>
               </a-form-item>
+
+              <a-form-item label="Hermes Base URL">
+                <a-input v-model:value="desktopConfigDraft.hermesBaseUrl" />
+              </a-form-item>
+
+              <a-form-item label="Hermes API Mode">
+                <a-select v-model:value="desktopConfigDraft.hermesApiMode">
+                  <a-select-option value="chat_completions">chat_completions</a-select-option>
+                  <a-select-option value="anthropic_messages">anthropic_messages</a-select-option>
+                  <a-select-option value="codex_responses">codex_responses</a-select-option>
+                  <a-select-option value="bedrock_converse">bedrock_converse</a-select-option>
+                </a-select>
+              </a-form-item>
+
+              <a-form-item label="Hermes 高级代理">
+                <a-switch v-model:checked="desktopConfigDraft.hermesUseAdvancedProxy" />
+                <div class="desktop-field-hint">开启后写入本机 Hermes OpenAI 兼容代理入口，并使用 chat_completions 协议。</div>
+              </a-form-item>
             </div>
           </a-form>
         </section>
@@ -206,7 +224,8 @@ import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
 import grokBuildAppIcon from '../assets/app-icons/grok.svg';
 import opencodeAppIcon from '../assets/app-icons/opencode.svg';
-import openclawAppIcon from '../assets/app-icons/openclaw-fallback.svg';
+import openclawAppIcon from '../assets/app-icons/openclaw.svg';
+import hermesAppIcon from '../assets/app-icons/hermes.png';
 
 const DESKTOP_APP_ICONS = {
   claude: claudeAppIcon,
@@ -214,6 +233,7 @@ const DESKTOP_APP_ICONS = {
   grokbuild: grokBuildAppIcon,
   opencode: opencodeAppIcon,
   openclaw: openclawAppIcon,
+  hermes: hermesAppIcon,
 };
 
 const records = ref([]);
@@ -480,7 +500,7 @@ onMounted(() => {
 
 .desktop-config-layout {
   display: grid;
-  grid-template-columns: 228px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   align-items: stretch;
   min-height: 0;
@@ -514,7 +534,7 @@ onMounted(() => {
 .desktop-app-grid {
   margin-top: 10px;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -585,7 +605,13 @@ onMounted(() => {
 }
 
 .desktop-app-openclaw .desktop-app-logo {
-  background: linear-gradient(135deg, #fff1f2, #ffe4e6);
+  background: #101820;
+  border: 1px solid rgba(0, 229, 204, 0.72);
+  box-shadow: 0 6px 14px rgba(5, 8, 16, 0.22), inset 0 0 0 1px rgba(0, 229, 204, 0.12);
+}
+
+.desktop-app-hermes .desktop-app-logo {
+  background: linear-gradient(135deg, #f5f3ff, #ede9fe);
 }
 
 .desktop-provider-checkbox {
@@ -653,7 +679,7 @@ onMounted(() => {
   }
 
   .desktop-app-grid {
-    grid-template-columns: repeat(5, minmax(104px, 1fr));
+    grid-template-columns: repeat(6, minmax(104px, 1fr));
     overflow-x: auto;
     overflow-y: hidden;
   }

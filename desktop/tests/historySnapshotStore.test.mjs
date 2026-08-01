@@ -184,6 +184,35 @@ try {
   assert.deepStrictEqual(store.getCachedLastResultsSnapshot(), []);
   assert.equal(JSON.parse(localStorage.getItem(store.HISTORY_SNAPSHOT_INDEX_KEY)).count, 0);
 
+  {
+    const portableEnvironment = installEnvironment();
+    const portableStore = await loadFreshStoreModule();
+    const portableSnapshot = [{ id: 'portable-1', updatedAt: 987654321 }];
+    portableEnvironment.localStorage.setItem(
+      portableStore.HISTORY_SNAPSHOT_PORTABLE_KEY,
+      JSON.stringify(portableSnapshot)
+    );
+
+    assert.deepStrictEqual(await portableStore.hydrateLastResultsSnapshotCache(), portableSnapshot);
+    assert.equal(portableEnvironment.localStorage.getItem(portableStore.HISTORY_SNAPSHOT_PORTABLE_KEY), null);
+    assert.deepStrictEqual(await portableStore.loadLastResultsSnapshot(), portableSnapshot);
+  }
+
+  {
+    const duplicateEnvironment = installEnvironment();
+    const writerStore = await loadFreshStoreModule();
+    const indexedDbSnapshot = [{ id: 'indexeddb-1', updatedAt: 111 }];
+    await writerStore.saveLastResultsSnapshot(indexedDbSnapshot);
+    duplicateEnvironment.localStorage.setItem(
+      writerStore.HISTORY_SNAPSHOT_PORTABLE_KEY,
+      JSON.stringify([{ id: 'stale-portable', updatedAt: 1 }])
+    );
+
+    const readerStore = await loadFreshStoreModule();
+    assert.deepStrictEqual(await readerStore.hydrateLastResultsSnapshotCache(), indexedDbSnapshot);
+    assert.equal(duplicateEnvironment.localStorage.getItem(readerStore.HISTORY_SNAPSHOT_PORTABLE_KEY), null);
+  }
+
   console.log('PASS tests/historySnapshotStore.test.mjs');
 } finally {
   globalThis.window = originalWindow;

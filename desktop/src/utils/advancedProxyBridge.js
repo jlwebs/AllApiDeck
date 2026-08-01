@@ -6,6 +6,47 @@ const TAKEOVER_MAP_STORAGE_KEY = 'batch_api_check_advanced_proxy_takeover_map_v1
 const ROUTING_SNAPSHOT_STORAGE_KEY = 'batch_api_check_advanced_proxy_routing_snapshot_v1';
 export const ADVANCED_PROXY_SYNC_EVENT = 'batch-api-check:advanced-proxy-sync';
 export const ADVANCED_PROXY_GLOBAL_QUEUE_SCOPE = 'global';
+export const USAGE_PRELOAD_EVENT = 'batch-api-check:usage-preload';
+
+const USAGE_PRELOAD_TTL_MS = 60 * 1000;
+const usagePreloadState = {
+  records: [],
+  analytics: null,
+  loading: false,
+  progress: 0,
+  stage: 'idle',
+  updatedAt: 0,
+  error: '',
+};
+let usagePreloadPromise = null;
+
+function usagePreloadSnapshot() {
+  return {
+    records: Array.isArray(usagePreloadState.records) ? usagePreloadState.records : [],
+    analytics: usagePreloadState.analytics && typeof usagePreloadState.analytics === 'object'
+      ? usagePreloadState.analytics
+      : null,
+    loading: usagePreloadState.loading === true,
+    progress: Math.max(0, Math.min(100, Math.round(Number(usagePreloadState.progress) || 0))),
+    stage: String(usagePreloadState.stage || 'idle'),
+    updatedAt: Number(usagePreloadState.updatedAt) || 0,
+    error: String(usagePreloadState.error || ''),
+  };
+}
+
+function emitUsagePreloadState() {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(USAGE_PRELOAD_EVENT, { detail: usagePreloadSnapshot() }));
+}
+
+function updateUsagePreloadState(next = {}) {
+  Object.assign(usagePreloadState, next);
+  emitUsagePreloadState();
+}
+
+export function getUsagePreloadSnapshot() {
+  return usagePreloadSnapshot();
+}
 
 export const ADVANCED_PROXY_APPS = [
   { id: 'claude', label: 'Claude', defaultBasePath: '/advanced-proxy/claude', mode: 'anthropic' },
@@ -13,6 +54,7 @@ export const ADVANCED_PROXY_APPS = [
   { id: 'grokbuild', label: 'Grok Build', defaultBasePath: '/advanced-proxy/grokbuild/v1', mode: 'openai' },
   { id: 'opencode', label: 'OpenCode', defaultBasePath: '/advanced-proxy/opencode/v1', mode: 'openai' },
   { id: 'openclaw', label: 'OpenClaw', defaultBasePath: '/advanced-proxy/openclaw/v1', mode: 'openai' },
+  { id: 'hermes', label: 'Hermes', defaultBasePath: '/advanced-proxy/hermes/v1', mode: 'openai' },
 ];
 
 export const ADVANCED_PROXY_EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -76,6 +118,18 @@ export const DEFAULT_ANTI_POISON_STRING_PROTECTION = {
     '保护环境变量式密钥: (?i)\\b[A-Z0-9_]*(KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\\s*=\\s*[^\\s\\\'"`]{8,}',
     '保护疑似私钥块: -----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]{20,}?-----END [A-Z ]*PRIVATE KEY-----',
   ],
+};
+
+export const DEFAULT_ANTI_CANDY = {
+  enabled: false,
+  // Match the observed model set used by the reviewed codexcomp
+  // implementations. Users can still explicitly enter * in the gateway UI.
+  models: ['gpt-5.5', 'gpt-5.6-luna', 'gpt-5.6-terra'],
+  modelsConfigured: false,
+  maxContinue: 3,
+  maxTierN: 0,
+  maxTierNConfigured: false,
+  markerText: 'Continue thinking...',
 };
 
 function isLegacyAntiPoisonFileMentionProtectionRule(rule) {
@@ -151,6 +205,7 @@ export function createDefaultAdvancedProxyConfig() {
       grokbuild: getDefaultQueueSection(true),
       opencode: getDefaultQueueSection(true),
       openclaw: getDefaultQueueSection(true),
+      hermes: getDefaultQueueSection(true),
     },
     claude: {
       ...getDefaultAppSection('claude'),
@@ -161,6 +216,7 @@ export function createDefaultAdvancedProxyConfig() {
     grokbuild: getDefaultAppSection('grokbuild'),
     opencode: getDefaultAppSection('opencode'),
     openclaw: getDefaultAppSection('openclaw'),
+    hermes: getDefaultAppSection('hermes'),
     failover: {
       appType: 'claude',
       enabled: false,
@@ -192,6 +248,7 @@ export function createDefaultAdvancedProxyConfig() {
       cacheInjection: true,
       cacheTtl: '1h',
     },
+    antiCandy: normalizeAntiCandySection(),
     antiPoison: normalizeAntiPoisonSection(),
   };
 }
@@ -433,6 +490,34 @@ function normalizeAntiPoisonSection(input = {}) {
   };
 }
 
+export function normalizeAntiCandySection(input = {}) {
+  const rawModels = Array.isArray(input?.models) ? input.models : [];
+  const seen = new Set();
+  const models = rawModels
+    .map(model => String(model || '').trim())
+    .filter(model => {
+      const key = model.toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  const maxContinue = Number(input?.maxContinue || DEFAULT_ANTI_CANDY.maxContinue);
+  const maxTierN = Number(input?.maxTierN);
+  return {
+    enabled: input?.enabled === true,
+    models: input?.modelsConfigured === true && models.length ? models : [...DEFAULT_ANTI_CANDY.models],
+    modelsConfigured: input?.modelsConfigured === true,
+    maxContinue: Number.isFinite(maxContinue)
+      ? Math.max(1, Math.min(10, maxContinue))
+      : DEFAULT_ANTI_CANDY.maxContinue,
+    maxTierN: input?.maxTierNConfigured === true && Number.isFinite(maxTierN)
+      ? Math.max(0, Math.min(64, maxTierN))
+      : DEFAULT_ANTI_CANDY.maxTierN,
+    maxTierNConfigured: input?.maxTierNConfigured === true,
+    markerText: String(input?.markerText || DEFAULT_ANTI_CANDY.markerText).trim() || DEFAULT_ANTI_CANDY.markerText,
+  };
+}
+
 function getQueueSection(snapshot, scope) {
   const normalizedScope = normalizeQueueScope(scope);
   const defaults = createDefaultAdvancedProxyConfig();
@@ -471,6 +556,10 @@ export function normalizeAdvancedProxyConfig(input) {
       ...defaults.openclaw,
       ...(input?.openclaw || {}),
     },
+    hermes: {
+      ...defaults.hermes,
+      ...(input?.hermes || {}),
+    },
     failover: {
       ...defaults.failover,
       ...(input?.failover || {}),
@@ -487,6 +576,7 @@ export function normalizeAdvancedProxyConfig(input) {
       ...defaults.optimizer,
       ...(input?.optimizer || {}),
     },
+    antiCandy: normalizeAntiCandySection(input?.antiCandy),
     antiPoison: normalizeAntiPoisonSection(input?.antiPoison),
   };
 
@@ -513,6 +603,7 @@ export function normalizeAdvancedProxyConfig(input) {
   next.grokbuild = normalizeAppSection('grokbuild', next.grokbuild, defaults.grokbuild);
   next.opencode = normalizeAppSection('opencode', next.opencode, defaults.opencode);
   next.openclaw = normalizeAppSection('openclaw', next.openclaw, defaults.openclaw);
+  next.hermes = normalizeAppSection('hermes', next.hermes, defaults.hermes);
 
   next.failover.maxRetries = Math.max(0, Math.min(10, Number(next.failover.maxRetries || defaults.failover.maxRetries)));
   next.failover.streamingFirstByteTimeout = Math.max(5, Number(next.failover.streamingFirstByteTimeout || defaults.failover.streamingFirstByteTimeout));
@@ -536,6 +627,7 @@ export function normalizeAdvancedProxyConfig(input) {
   next.highAvailability.dispatchMode = normalizeDispatchMode(next.highAvailability.dispatchMode);
   next.highAvailability.rpm = normalizeRpmSection(next.highAvailability.rpm);
   next.optimizer.cacheTtl = String(next.optimizer.cacheTtl || defaults.optimizer.cacheTtl).trim() || defaults.optimizer.cacheTtl;
+  next.antiCandy = normalizeAntiCandySection(next.antiCandy);
   next.antiPoison = normalizeAntiPoisonSection(next.antiPoison);
 
   if (typeof input?.enabled === 'boolean') {
@@ -760,18 +852,59 @@ export async function getLocalTokenUsageAnalytics() {
   const app = getAppBridge();
   if (!app?.GetLocalTokenUsageAnalytics) {
     return {
-      source: 'codex',
-      sourceLabel: 'Codex',
+      source: 'local_sessions',
+      sourceLabel: 'Local sessions',
       sessionCount: 0,
       totalTokens: 0,
       inputTokens: 0,
       outputTokens: 0,
       reasoningTokens: 0,
+      cacheReadTokens: 0,
       series: [],
+      sessions: [],
       sources: [],
     };
   }
   return app.GetLocalTokenUsageAnalytics();
+}
+
+export function preloadUsageData({ force = false } = {}) {
+  const cacheFresh = usagePreloadState.updatedAt > 0
+    && Date.now() - usagePreloadState.updatedAt < USAGE_PRELOAD_TTL_MS
+    && !usagePreloadState.error
+    && (usagePreloadState.records.length > 0 || usagePreloadState.analytics);
+  if (!force && cacheFresh) return Promise.resolve(usagePreloadSnapshot());
+  if (usagePreloadPromise) return usagePreloadPromise;
+
+  usagePreloadPromise = (async () => {
+    updateUsagePreloadState({ loading: true, progress: 4, stage: 'records', error: '' });
+
+    try {
+      const records = await listAdvancedProxyRequestRecords(120);
+      usagePreloadState.records = Array.isArray(records) ? records : [];
+    } catch (error) {
+      usagePreloadState.error = error?.message || String(error || '');
+    }
+    updateUsagePreloadState({ progress: 34, stage: 'analytics' });
+
+    try {
+      const analytics = await getLocalTokenUsageAnalytics();
+      if (analytics && typeof analytics === 'object') usagePreloadState.analytics = analytics;
+    } catch (error) {
+      if (!usagePreloadState.error) usagePreloadState.error = error?.message || String(error || '');
+    }
+
+    updateUsagePreloadState({
+      loading: false,
+      progress: 100,
+      stage: 'ready',
+      updatedAt: Date.now(),
+    });
+    return usagePreloadSnapshot();
+  })().finally(() => {
+    usagePreloadPromise = null;
+  });
+  return usagePreloadPromise;
 }
 
 export async function listAdvancedProxyActiveConnections() {

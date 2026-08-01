@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -68,5 +69,235 @@ func TestBuildLocalTokenUsageAnalyticsUsesLatestSessionTotal(t *testing.T) {
 	}
 	if analytics.Series[1].Date != secondLocal.Local().Format("2006-01-02") || analytics.Series[1].Hour != secondLocal.Local().Format("15") || analytics.Series[1].TotalTokens != 190 {
 		t.Fatalf("unexpected second series point: %+v", analytics.Series[1])
+	}
+}
+
+func TestBuildLocalTokenUsageAnalyticsMissingDirectoryIsEmpty(t *testing.T) {
+	analytics, err := buildLocalTokenUsageAnalytics(filepath.Join(t.TempDir(), "missing-sessions"))
+	if err != nil {
+		t.Fatalf("missing sessions directory returned error: %v", err)
+	}
+	if analytics.TotalTokens != 0 || len(analytics.Sessions) != 0 {
+		t.Fatalf("unexpected analytics for missing directory: %+v", analytics)
+	}
+}
+
+func TestBuildLocalTokenUsageAnalyticsIncludesArchivedSessions(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	archivedDir := filepath.Join(root, "archived_sessions")
+	if err := os.MkdirAll(archivedDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	contents := strings.Join([]string{
+		`{"timestamp":"2026-07-01T10:00:00Z","type":"session_meta","payload":{"id":"archived"}}`,
+		`{"timestamp":"2026-07-01T10:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(archivedDir, "rollout-archived.jsonl"), []byte(contents), 0644); err != nil {
+		t.Fatal(err)
+	}
+	analytics, err := buildLocalTokenUsageAnalytics(sessionsDir)
+	if err != nil {
+		t.Fatalf("archived sessions returned error: %v", err)
+	}
+	if analytics.TotalTokens != 12 || len(analytics.Sessions) != 1 || analytics.Sessions[0].ID != "archived" {
+		t.Fatalf("archived session was not included: %+v", analytics)
+	}
+}
+
+func TestBuildLocalTokenUsageAnalyticsExtractsModelAndCost(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "sessions", "2026", "08", "01")
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	meta := `{"timestamp":"2026-08-01T09:50:00Z","type":"session_meta","payload":{"id":"model-session"}}`
+	turn := `{"timestamp":"2026-08-01T09:55:00Z","type":"turn_context","payload":{"model":"openai/GPT-5.6-LUNA"}}`
+	usage := `{"timestamp":"2026-08-01T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.6-luna","total_token_usage":{"input_tokens":160,"cached_input_tokens":80,"output_tokens":30,"reasoning_output_tokens":7,"total_tokens":190}}}}`
+	path := filepath.Join(sessionDir, "rollout-model-session.jsonl")
+	if err := os.WriteFile(path, []byte(meta+"\n"+turn+"\n"+usage+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	analytics, err := buildLocalTokenUsageAnalytics(filepath.Join(root, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(analytics.Sessions) != 1 {
+		t.Fatalf("sessions length = %d, want 1", len(analytics.Sessions))
+	}
+	session := analytics.Sessions[0]
+	if session.Model != "gpt-5.6-luna" {
+		t.Fatalf("model = %q, want gpt-5.6-luna", session.Model)
+	}
+	if session.ModelName != "GPT-5.6 Luna" {
+		t.Fatalf("model name = %q, want GPT-5.6 Luna", session.ModelName)
+	}
+	if session.CacheReadTokens != 80 {
+		t.Fatalf("cache read tokens = %d, want 80", session.CacheReadTokens)
+	}
+	if session.Cost == nil {
+		t.Fatal("expected a priced session")
+	}
+	const wantCost = 0.0000536
+	if diff := *session.Cost - wantCost; diff < -1e-12 || diff > 1e-12 {
+		t.Fatalf("cost = %.10f, want %.10f", *session.Cost, wantCost)
+	}
+}
+
+func TestNormalizeCodexModelForPricing(t *testing.T) {
+	tests := map[string]string{
+		"OPENAI/GPT-5.6-LUNA":      "gpt-5.6-luna",
+		"gpt-5.4-2026-03-05":       "gpt-5.4",
+		"gpt-5.4-20260305":         "gpt-5.4",
+		"openai/gpt-5.6-luna:free": "gpt-5.6-luna",
+		"azure/gpt-5.2-codex@fast": "gpt-5.2-codex-fast",
+	}
+	for input, want := range tests {
+		if got := normalizeCodexModel(input); got != want {
+			t.Errorf("normalizeCodexModel(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestCodexPricingResolvesCompatibilitySuffixes(t *testing.T) {
+	catalog := defaultCodexPricingCatalog()
+	for _, model := range []string{
+		"gpt-5.4-low",
+		"gpt-5.4-20260514",
+		"openai.gpt-5.4[1m]",
+		"global.openai.gpt-5.4-v1",
+	} {
+		if _, ok := catalog.resolve(model); !ok {
+			t.Fatalf("expected pricing for %q", model)
+		}
+	}
+}
+
+func TestCodexParserAcceptsCacheReadAliasAndLastUsage(t *testing.T) {
+	var usage codexSessionAnalytics
+	usage.ModelUsages = map[string]codexModelUsage{}
+	usage.ToolCounts = map[string]int{}
+	readCodexAnalyticsLine(`{"timestamp":"2026-08-01T09:59:00Z","type":"session_meta","payload":{"id":"thread-from-meta"}}`, &usage)
+	readCodexAnalyticsLine(`{"timestamp":"2026-08-01T10:00:00Z","type":"turn_context","payload":{"model":"gpt-5.4"}}`, &usage)
+	readCodexAnalyticsLine(`{"timestamp":"2026-08-01T10:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"model_name":"GPT-5.4","last_token_usage":{"input_tokens":100,"cache_read_input_tokens":40,"output_tokens":20,"total_tokens":120}}}}`, &usage)
+	if usage.SessionID != "thread-from-meta" {
+		t.Fatalf("session id = %q, want thread-from-meta", usage.SessionID)
+	}
+	if usage.InputTokens != 100 || usage.CacheReadTokens != 40 || usage.OutputTokens != 20 || usage.TotalTokens != 120 {
+		t.Fatalf("unexpected last usage totals: %+v", usage)
+	}
+	if usage.ModelUsages["gpt-5.4"].CacheReadTokens != 40 {
+		t.Fatalf("cache alias was not tracked: %+v", usage.ModelUsages)
+	}
+}
+
+func TestMergeModelsDevPricingPrefersCanonicalOpenAIEntry(t *testing.T) {
+	input := 0.2
+	output := 1.2
+	cacheRead := 0.02
+	catalog := defaultCodexPricingCatalog()
+	mergeModelsDevPricing(catalog, map[string]modelsDevProvider{
+		"mirror": {Models: map[string]modelsDevModel{
+			"gpt-5.6-luna": {Cost: &modelsDevCost{Input: &input, Output: &output}},
+		}},
+		"openai": {Models: map[string]modelsDevModel{
+			"gpt-5.6-luna": {Cost: &modelsDevCost{Input: &input, Output: &output, CacheRead: &cacheRead}},
+		}},
+	})
+	pricing, ok := catalog.resolve("openai/gpt-5.6-luna")
+	if !ok || pricing.Source != "openai" || pricing.CacheReadPerMillion != cacheRead {
+		t.Fatalf("unexpected pricing: ok=%v pricing=%+v", ok, pricing)
+	}
+}
+
+func TestMergeModelsDevPricingResolvesProviderChannelAliasCaseInsensitively(t *testing.T) {
+	azureInput := 9.0
+	azureOutput := 18.0
+	openAIInput := 0.2
+	openAIOutput := 1.2
+	catalog := defaultCodexPricingCatalog()
+	mergeModelsDevPricing(catalog, map[string]modelsDevProvider{
+		"azure": {Models: map[string]modelsDevModel{
+			"gpt-5.6-luna": {Cost: &modelsDevCost{Input: &azureInput, Output: &azureOutput}},
+		}},
+		"openai": {Models: map[string]modelsDevModel{
+			"gpt-5.6-luna": {Cost: &modelsDevCost{Input: &openAIInput, Output: &openAIOutput}},
+		}},
+	})
+
+	channelPricing, ok := catalog.resolve("AZURE/GPT-5.6-LUNA")
+	if !ok || channelPricing.Source != "azure" || channelPricing.InputPerMillion != azureInput {
+		t.Fatalf("unexpected channel pricing: ok=%v pricing=%+v", ok, channelPricing)
+	}
+	canonicalPricing, ok := catalog.resolve("gPt-5.6-LuNa")
+	if !ok || canonicalPricing.Source != "openai" || canonicalPricing.InputPerMillion != openAIInput {
+		t.Fatalf("unexpected canonical pricing: ok=%v pricing=%+v", ok, canonicalPricing)
+	}
+	dotNamespacePricing, ok := catalog.resolve("OPENAI.GPT-5.6-LUNA")
+	if !ok || dotNamespacePricing.Source != "openai" || dotNamespacePricing.InputPerMillion != openAIInput {
+		t.Fatalf("unexpected dotted namespace pricing: ok=%v pricing=%+v", ok, dotNamespacePricing)
+	}
+}
+
+func TestExplicitPricingChannelTriggersRemoteCatalogAndKeepsChannelUsage(t *testing.T) {
+	var usage codexSessionAnalytics
+	usage.ModelUsages = map[string]codexModelUsage{}
+	usage.ToolCounts = map[string]int{}
+	readCodexAnalyticsLine(`{"timestamp":"2026-08-01T10:00:00Z","type":"turn_context","payload":{"model":"AZURE/GPT-5.6-LUNA"}}`, &usage)
+	readCodexAnalyticsLine(`{"timestamp":"2026-08-01T10:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}}}`, &usage)
+
+	if usage.PricingModel != "azure/gpt-5.6-luna" || usage.ModelUsages["azure/gpt-5.6-luna"].TotalTokens != 110 {
+		t.Fatalf("explicit channel was not retained: %+v", usage)
+	}
+	defaults := defaultCodexPricingCatalog()
+	if !modelNeedsRemotePricing(usage.PricingModel, defaults) {
+		t.Fatal("explicit Azure model should refresh the remote pricing catalog")
+	}
+	defaults["azure/gpt-5.6-luna"] = codexModelPricing{InputPerMillion: 9, OutputPerMillion: 18, Source: "azure"}
+	if modelNeedsRemotePricing(usage.PricingModel, defaults) {
+		t.Fatal("available channel pricing should not request another catalog refresh")
+	}
+}
+
+func TestCodexSessionCostTracksModelSwitches(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "sessions", "2026", "08", "01")
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	lines := []string{
+		`{"timestamp":"2026-08-01T09:50:00Z","type":"session_meta","payload":{"id":"switch-session"}}`,
+		`{"timestamp":"2026-08-01T09:51:00Z","type":"turn_context","payload":{"model":"gpt-5.5"}}`,
+		`{"timestamp":"2026-08-01T09:52:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}}}`,
+		`{"timestamp":"2026-08-01T09:53:00Z","type":"turn_context","payload":{"model":"gpt-5.6-luna"}}`,
+		`{"timestamp":"2026-08-01T09:54:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":160,"cached_input_tokens":40,"output_tokens":30,"total_tokens":190}}}}`,
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "rollout-switch-session.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	analytics, err := buildLocalTokenUsageAnalytics(filepath.Join(root, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(analytics.Sessions) != 1 || analytics.Sessions[0].Model != "Multiple models" {
+		t.Fatalf("unexpected switched session: %+v", analytics.Sessions)
+	}
+	if analytics.Sessions[0].Cost == nil {
+		t.Fatal("expected switched session to have a combined cost")
+	}
+	if len(analytics.Sessions[0].ModelCosts) != 2 {
+		t.Fatalf("model cost breakdown length = %d, want 2: %+v", len(analytics.Sessions[0].ModelCosts), analytics.Sessions[0].ModelCosts)
+	}
+	var breakdownTotal float64
+	for _, modelCost := range analytics.Sessions[0].ModelCosts {
+		if modelCost.Cost <= 0 {
+			t.Fatalf("expected positive cost for %q, got %.10f", modelCost.Model, modelCost.Cost)
+		}
+		breakdownTotal += modelCost.Cost
+	}
+	if breakdownTotal != *analytics.Sessions[0].Cost {
+		t.Fatalf("model cost breakdown = %.10f, combined cost = %.10f", breakdownTotal, *analytics.Sessions[0].Cost)
 	}
 }

@@ -84,6 +84,194 @@ assert.deepStrictEqual(
   ]
 );
 
+function assertExtractionCase(name, rawText, expected) {
+  assert.deepStrictEqual(
+    extractSmartClipboardRecords(rawText).map(record => [record.siteUrl, record.apiKey]),
+    expected,
+    name
+  );
+}
+
+const extractionCases = [
+  [
+    'single-line newapi JSON, key before url',
+    '{"_type":"newapi_channel_conn","key":"sk-enTIKoiyiTiXrLzUe43D3eQZnc2Hu8HagwYJ7VP7SOOZZBKB","url":"https://api.123nhh.com"}',
+    [['https://api.123nhh.com', 'sk-enTIKoiyiTiXrLzUe43D3eQZnc2Hu8HagwYJ7VP7SOOZZBKB']],
+  ],
+  [
+    'single-line JSON, url before key',
+    '{"url":"https://reverse.example/v1","key":"sk-reverse1234567890abcdefghijkl"}',
+    [['https://reverse.example/v1', 'sk-reverse1234567890abcdefghijkl']],
+  ],
+  [
+    'JSON aliases api_key and base_url',
+    '{ "api_key": "sk-alias1234567890abcdefghijkl", "base_url": "https://alias.example/v1" }',
+    [['https://alias.example/v1', 'sk-alias1234567890abcdefghijkl']],
+  ],
+  [
+    'same line key equals baseUrl',
+    'key=sk-inline1234567890abcdefghijkl baseUrl=https://inline.example/v1',
+    [['https://inline.example/v1', 'sk-inline1234567890abcdefghijkl']],
+  ],
+  [
+    'same line url before apiKey',
+    'https://inline-reverse.example/v1 | apiKey: sk-inline-reverse1234567890abcdefghijkl',
+    [['https://inline-reverse.example/v1', 'sk-inline-reverse1234567890abcdefghijkl']],
+  ],
+  [
+    'leading spaces and tabs around fields',
+    '  base_url  :  https://indented.example/v1\n\t\tkey\t:\t sk-indented1234567890abcdefghijkl  ',
+    [['https://indented.example/v1', 'sk-indented1234567890abcdefghijkl']],
+  ],
+  [
+    'blank line between url and key',
+    'https://blank-after.example/v1\n\n\n  sk-blank-after1234567890abcdefghijkl',
+    [['https://blank-after.example/v1', 'sk-blank-after1234567890abcdefghijkl']],
+  ],
+  [
+    'blank line between key and url',
+    'sk-blank-before1234567890abcdefghijkl\n\nendpoint: https://blank-before.example/v1',
+    [['https://blank-before.example/v1', 'sk-blank-before1234567890abcdefghijkl']],
+  ],
+  [
+    'two records without newlines',
+    'url=https://compact-one.example/v1 key=sk-compact-one1234567890abcdef url=https://compact-two.example/v1 key=sk-compact-two1234567890abcdef',
+    [
+      ['https://compact-one.example/v1', 'sk-compact-one1234567890abcdef'],
+      ['https://compact-two.example/v1', 'sk-compact-two1234567890abcdef'],
+    ],
+  ],
+  [
+    'mixed order for adjacent inline records',
+    'key=sk-mixed-one1234567890abcdef url=https://mixed-one.example/v1; url=https://mixed-two.example/v1 key=sk-mixed-two1234567890abcdef',
+    [
+      ['https://mixed-one.example/v1', 'sk-mixed-one1234567890abcdef'],
+      ['https://mixed-two.example/v1', 'sk-mixed-two1234567890abcdef'],
+    ],
+  ],
+  [
+    'multiple urls and keys on one line',
+    'https://same-line-one.example/v1 sk-same-line-one1234567890abcdef https://same-line-two.example/v1 sk-same-line-two1234567890abcdef',
+    [
+      ['https://same-line-one.example/v1', 'sk-same-line-one1234567890abcdef'],
+      ['https://same-line-two.example/v1', 'sk-same-line-two1234567890abcdef'],
+    ],
+  ],
+  [
+    'JSON array of connection objects',
+    '[{"key":"sk-array-one1234567890abcdef","url":"https://array-one.example"},{"url":"https://array-two.example","key":"sk-array-two1234567890abcdef"}]',
+    [
+      ['https://array-one.example', 'sk-array-one1234567890abcdef'],
+      ['https://array-two.example', 'sk-array-two1234567890abcdef'],
+    ],
+  ],
+  [
+    'nested JSON connection object',
+    '{"data":{"connection":{"baseUrl":"https://nested.example/v1","apiKey":"sk-nested1234567890abcdefghijkl"},"models":["ignore-me"]}}',
+    [['https://nested.example/v1', 'sk-nested1234567890abcdefghijkl']],
+  ],
+  [
+    'JSON escaped slashes',
+    '{"url":"https:\\/\\/escaped.example.com\\/v1","key":"sk-escaped1234567890abcdefghijkl"}',
+    [['https://escaped.example.com/v1', 'sk-escaped1234567890abcdefghijkl']],
+  ],
+  [
+    'endpoint and token aliases',
+    '{ endpoint: "https://endpoint.example/v1", token: "sk-endpoint1234567890abcdefghijkl" }',
+    [['https://endpoint.example/v1', 'sk-endpoint1234567890abcdefghijkl']],
+  ],
+  [
+    'api_base_url and access_token aliases',
+    'api_base_url=https://access-token.example/v1\naccess_token=sk-access-token1234567890abcdef',
+    [['https://access-token.example/v1', 'sk-access-token1234567890abcdef']],
+  ],
+  [
+    'markdown link and labeled key',
+    '[接口地址](https://markdown.example/v1)\nAPI Key: sk-markdown1234567890abcdefghijkl',
+    [['https://markdown.example/v1', 'sk-markdown1234567890abcdefghijkl']],
+  ],
+  [
+    'fenced code block',
+    '```text\n  sk-code-block1234567890abcdefghijkl\n  https://code-block.example/v1\n```',
+    [['https://code-block.example/v1', 'sk-code-block1234567890abcdefghijkl']],
+  ],
+  [
+    'Chinese punctuation around values',
+    '接口地址（https://punctuation.example/v1）；密钥：sk-punctuation1234567890abcdef。',
+    [['https://punctuation.example/v1', 'sk-punctuation1234567890abcdef']],
+  ],
+  [
+    'quoted CSV-like pair',
+    '"https://quoted.example/v1", "sk-quoted1234567890abcdefghijkl"',
+    [['https://quoted.example/v1', 'sk-quoted1234567890abcdefghijkl']],
+  ],
+  [
+    'Bearer authorization wrapper',
+    'Authorization: Bearer sk-bearer1234567890abcdefghijkl\nbaseUrl: https://bearer.example/v1',
+    [['https://bearer.example/v1', 'sk-bearer1234567890abcdefghijkl']],
+  ],
+  [
+    'xAI key prefix',
+    'baseUrl=https://xai.example/v1 apiKey=xai-key1234567890abcdefghijkl',
+    [['https://xai.example/v1', 'xai-key1234567890abcdefghijkl']],
+  ],
+  [
+    'Grok key prefix',
+    'gsk_grok1234567890abcdefghijkl https://grok-key.example/v1',
+    [['https://grok-key.example/v1', 'gsk_grok1234567890abcdefghijkl']],
+  ],
+  [
+    'long key without a known prefix',
+    'key=c2stdlNQR3J5UEZzN2FBZ3RMS0xVOE1aTHozdzh3dWJ2Q1dLRUtTSnFVbHhHQlN3Q1hD\nurl=https://generic-key.example/v1',
+    [['https://generic-key.example/v1', 'c2stdlNQR3J5UEZzN2FBZ3RMS0xVOE1aTHozdzh3dWJ2Q1dLRUtTSnFVbHhHQlN3Q1hD']],
+  ],
+  [
+    'base64-like key with padding',
+    'url=https://base64-key.example/v1\nkey=YWJjMTIzNDU2Nzg5MGFiY2RlZg==',
+    [['https://base64-key.example/v1', 'YWJjMTIzNDU2Nzg5MGFiY2RlZg==']],
+  ],
+  [
+    'case-insensitive fields and protocol',
+    'BASE_URL: HTTP://case.example/v1\nKEY: sk-case1234567890abcdefghijkl',
+    [['HTTP://case.example/v1', 'sk-case1234567890abcdefghijkl']],
+  ],
+  [
+    'angle brackets and quoted key',
+    '<https://bracket.example/v1> key: `sk-bracket1234567890abcdefghijkl`',
+    [['https://bracket.example/v1', 'sk-bracket1234567890abcdefghijkl']],
+  ],
+  [
+    'duplicate pair is emitted once',
+    '{"url":"https://duplicate.example/v1","key":"sk-duplicate1234567890abcdefghijkl"}\nhttps://duplicate.example/v1\nsk-duplicate1234567890abcdefghijkl',
+    [['https://duplicate.example/v1', 'sk-duplicate1234567890abcdefghijkl']],
+  ],
+  [
+    'interleaved labels and values',
+    '站点名称\nAPI Base\nhttps://interleaved.example/v1\n认证 Token\nsk-interleaved1234567890abcdef',
+    [['https://interleaved.example/v1', 'sk-interleaved1234567890abcdef']],
+  ],
+  [
+    'base-url and apikey aliases',
+    'base-url=https://hyphen-alias.example/v1\napikey=sk-hyphen-alias1234567890abcdef',
+    [['https://hyphen-alias.example/v1', 'sk-hyphen-alias1234567890abcdef']],
+  ],
+  [
+    'no full data parsing, only scalar key and url extraction',
+    '{"url":"https://scalar-only.example/v1","key":"sk-scalar-only1234567890abcdef","data":{"url":"https://should-not-win.example","key":"not-a-real-key"}}',
+    [['https://scalar-only.example/v1', 'sk-scalar-only1234567890abcdef']],
+  ],
+];
+
+for (const [name, rawText, expected] of extractionCases) {
+  assertExtractionCase(name, rawText, expected);
+}
+
+assert.deepStrictEqual(
+  extractSmartClipboardRecords('notes=abcdefghijklmnopqrstuvwx https://noise-only.example/v1').map(record => [record.siteUrl, record.apiKey]),
+  [],
+  'long prose-like text is not treated as an API key'
+);
+
 const packagePayload = {
   format: 'api-check-key-export-v1',
   records: [{

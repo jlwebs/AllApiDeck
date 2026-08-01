@@ -1,11 +1,12 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import Home from '../views/Home.vue';
-import Batch from '../views/Batch.vue';
 import Layout from '../views/Layout.vue';
 import { applyLanguage, getStoredLanguage, scheduleDomTranslation } from '../i18n/runtime.js';
 
 const loadKeysView = () => import('../views/Keys.vue');
 const loadSitesView = () => import('../views/Sites.vue');
+const loadHomeView = () => import('../views/Home.vue');
+const loadBatchView = () => import('../views/Batch.vue');
+const loadUsageView = () => import('../views/Usage.vue');
 
 const routes = [
   {
@@ -34,11 +35,11 @@ const routes = [
       },
       {
         path: 'single',
-        component: Home,
+        component: loadHomeView,
       },
       {
         path: 'batch',
-        component: Batch,
+        component: loadBatchView,
       },
       {
         path: 'keys',
@@ -52,6 +53,12 @@ const routes = [
         component: loadSitesView,
         meta: { keepAlive: true },
       },
+      {
+        path: 'usage',
+        name: 'Usage',
+        component: () => import('../views/Usage.vue'),
+        meta: { keepAlive: true },
+      },
     ],
   },
 ];
@@ -63,17 +70,20 @@ const router = createRouter({
 
 const runWhenIdle = callback => {
   if (typeof window === 'undefined') return;
+  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  if (connection?.saveData) return;
+  if (Number(navigator.deviceMemory || 8) <= 4 || Number(navigator.hardwareConcurrency || 8) <= 4) return;
   if (typeof window.requestIdleCallback === 'function') {
-    window.requestIdleCallback(callback, { timeout: 1200 });
+    window.requestIdleCallback(callback, { timeout: 4000 });
     return;
   }
-  window.setTimeout(callback, 120);
+  window.setTimeout(callback, 1600);
 };
 
 router.afterEach(to => {
   const language = getStoredLanguage();
   applyLanguage(language, { persist: false, dispatch: true, translateDom: false });
-  scheduleDomTranslation(document.body || document.documentElement);
+  scheduleDomTranslation(document.querySelector('.app-shell') || document.body || document.documentElement);
   const name = String(to?.name || '').trim();
   if (name === 'Sites') {
     runWhenIdle(() => { void loadKeysView(); });

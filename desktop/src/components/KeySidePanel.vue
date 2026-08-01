@@ -455,8 +455,9 @@ const ADVANCED_PROXY_APP_META = {
   codex: { label: 'Codex', className: 'panel-record-avatar-app-codex' },
   opencode: { label: 'OpenCode', className: 'panel-record-avatar-app-opencode' },
   openclaw: { label: 'OpenClaw', className: 'panel-record-avatar-app-openclaw' },
+  hermes: { label: 'Hermes', className: 'panel-record-avatar-app-hermes' },
 };
-const ADVANCED_PROXY_APP_ORDER = ['claude', 'codex', 'opencode', 'openclaw'];
+const ADVANCED_PROXY_APP_ORDER = ['claude', 'codex', 'opencode', 'openclaw', 'hermes'];
 
 const records = ref([]);
 const advancedProxyConfigSnapshot = ref(getAdvancedProxyLocalSnapshot());
@@ -4142,6 +4143,11 @@ onBeforeUnmount(() => {
 .panel-record-avatar-app-openclaw {
   --panel-takeover-color: rgba(196, 128, 255, 0.98);
   --panel-takeover-glow: rgba(164, 94, 235, 0.4);
+}
+
+.panel-record-avatar-app-hermes {
+  --panel-takeover-color: rgba(126, 142, 255, 0.98);
+  --panel-takeover-glow: rgba(101, 116, 235, 0.42);
 }
 
 .panel-record-emoji {

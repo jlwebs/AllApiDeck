@@ -15,7 +15,7 @@
             <div class="advanced-proxy-master-row">
               <div class="advanced-proxy-master-copy">
                 <strong>代理总开关</strong>
-                <small>{{ proxyMasterEnabled ? (enabledAppLabels || '已启用') : '统一接管 Claude / Codex / OpenCode / OpenClaw' }}</small>
+                <small>{{ proxyMasterEnabled ? (enabledAppLabels || '已启用') : '统一接管 Claude / Codex / OpenCode / OpenClaw / Hermes' }}</small>
               </div>
               <a-switch
                 :checked="proxyMasterEnabled"
@@ -44,7 +44,7 @@
                         class="advanced-proxy-master-help-tooltip-image"
                       />
                       <div><code>claude</code> 入口会把 Anthropic Messages 请求转换到上游 Provider 定义的格式。</div>
-                      <div><code>codex</code> / <code>opencode</code> / <code>openclaw</code> 入口会直接代理 OpenAI 兼容请求，并按各自的有效队列执行重试与熔断。</div>
+                      <div><code>codex</code> / <code>opencode</code> / <code>openclaw</code> / <code>hermes</code> 入口会直接代理 OpenAI 兼容请求，并按各自的有效队列执行重试与熔断。</div>
                       <div>接管打开后，本地应用配置会写入本地代理地址；真实反代目标只保存在这里的 Provider 列表中。</div>
                       <div>如果要接管 Codex，请至少准备一条可用的 OpenAI 兼容上游，最好支持 <code>/v1/responses</code>。</div>
                     </div>
@@ -90,6 +90,17 @@
                     </svg>
                   </button>
                 </a-popover>
+                <a-tooltip :title="antiCandyEnabled ? '反糖果降智已开启，点击配置' : '配置反糖果降智'">
+                  <button
+                    type="button"
+                    class="advanced-proxy-master-debug-button advanced-proxy-anti-candy-button"
+                    :class="{ 'advanced-proxy-master-debug-button-active': antiCandyEnabled }"
+                    :aria-label="antiCandyEnabled ? '配置反糖果降智' : '打开反糖果降智配置'"
+                    @click="openAntiCandyPanel"
+                  >
+                    <span aria-hidden="true">🍬</span>
+                  </button>
+                </a-tooltip>
                 <a-tooltip :title="draft.debugLogging ? '调试日志已开启，写入 advanced-proxy.log' : '开启调试日志，写入 advanced-proxy.log'">
                   <button
                     type="button"
@@ -637,6 +648,77 @@
       </section>
     </div>
   </a-drawer>
+
+  <a-drawer
+    :open="antiCandyPanelOpen"
+    title="反糖果降智配置"
+    placement="right"
+    :width="antiPoisonDrawerWidth"
+    :zIndex="1200"
+    class="advanced-proxy-anti-poison-drawer advanced-proxy-anti-candy-drawer"
+    @close="antiCandyPanelOpen = false"
+  >
+    <div class="advanced-proxy-anti-poison-panel">
+      <section class="advanced-proxy-anti-poison-hero-card">
+        <div>
+          <span class="advanced-proxy-anti-poison-kicker">Reasoning Continuation Guard</span>
+          <h3>反糖果降智</h3>
+          <p>检测 Responses 流中可恢复的加密推理截断后，网关会追加有限次续写，再将完整的响应流返回给 Codex。</p>
+        </div>
+        <div class="advanced-proxy-anti-poison-state" :class="{ 'is-active': antiCandyEnabled }">
+          {{ antiCandyEnabled ? '已开启' : '未开启' }}
+        </div>
+      </section>
+
+      <section class="advanced-proxy-anti-poison-card">
+        <div class="advanced-proxy-anti-poison-card-head">
+          <div>
+            <h4>启用与模型规则</h4>
+            <p>默认 <code>*</code> 表示匹配所有模型。可用逗号或换行分隔；支持前缀通配，例如 <code>gpt-5.6-*</code>。</p>
+          </div>
+        </div>
+        <div class="advanced-proxy-anti-poison-settings">
+          <div class="advanced-proxy-anti-poison-setting-row">
+            <div>
+              <strong>反糖果降智开关</strong>
+              <span>仅对 Codex 的流式 Responses 请求生效；协议不具备可续写推理内容时会安全跳过并留痕。</span>
+            </div>
+            <a-switch :checked="antiCandyEnabled" @change="handleAntiCandyEnabledChange" />
+          </div>
+        </div>
+        <label class="advanced-proxy-compact-label">适用模型</label>
+        <a-textarea
+          class="advanced-proxy-anti-poison-textarea"
+          :value="antiCandyModelsText"
+          :disabled="!antiCandyEnabled"
+          :auto-size="{ minRows: 2, maxRows: 5 }"
+          placeholder="gpt-5.5\ngpt-5.6-luna\ngpt-5.6-terra"
+          @change="event => handleAntiCandyModelsChange(event?.target?.value)"
+        />
+      </section>
+
+      <section class="advanced-proxy-anti-poison-card">
+        <div class="advanced-proxy-anti-poison-card-head">
+          <div>
+            <h4>续写边界</h4>
+            <p>限制单次请求可追加的续写次数和检测层级，避免异常上游造成无限续写。</p>
+          </div>
+        </div>
+        <div class="advanced-proxy-anti-candy-fields">
+          <label>
+            <span>最多续写次数</span>
+            <a-input-number :value="antiCandyConfig.maxContinue" :min="1" :max="10" :disabled="!antiCandyEnabled" @change="value => handleAntiCandyFieldChange('maxContinue', value)" />
+          </label>
+          <label>
+            <span>最大推理层级（0=不限）</span>
+            <a-input-number :value="antiCandyConfig.maxTierN" :min="0" :max="64" :disabled="!antiCandyEnabled" @change="handleAntiCandyMaxTierNChange" />
+          </label>
+        </div>
+        <label class="advanced-proxy-compact-label">续写提示</label>
+        <a-input :value="antiCandyConfig.markerText" :disabled="!antiCandyEnabled" @change="event => handleAntiCandyFieldChange('markerText', event?.target?.value)" />
+      </section>
+    </div>
+  </a-drawer>
 </template>
 
 <script setup>
@@ -648,11 +730,21 @@ import claudeAppIcon from '../assets/app-icons/claude.svg';
 import codexAppIcon from '../assets/app-icons/codex.svg';
 import grokBuildAppIcon from '../assets/app-icons/grok.svg';
 import opencodeAppIcon from '../assets/app-icons/opencode.svg';
-import openclawAppIcon from '../assets/app-icons/openclaw-fallback.svg';
+import openclawAppIcon from '../assets/app-icons/openclaw.svg';
+import hermesAppIcon from '../assets/app-icons/hermes.png';
 import DesktopConfigDiffModal from './DesktopConfigDiffModal.vue';
 import QueueOrbitIcon from './icons/QueueOrbitIcon.vue';
 import { applyManagedAppConfigFiles, isDesktopConfigBridgeAvailable, readManagedAppConfigFiles } from '../utils/desktopConfigBridge.js';
-import { buildDesktopConfigPreview, createDesktopConfigDraft } from '../utils/desktopConfigTransform.js';
+import {
+  ADVANCED_PROXY_MODEL_NAME,
+  buildDesktopConfigPreview,
+  createDesktopConfigDraft,
+} from '../utils/desktopConfigTransform.js';
+import {
+  buildDesktopConfigTakeoverRestorePreview,
+  captureDesktopConfigTakeoverBackup,
+  clearDesktopConfigTakeoverBackup,
+} from '../utils/desktopConfigTakeover.js';
 import { loadPanelRecords } from '../utils/keyPanelStore.js';
 import {
   ADVANCED_PROXY_APPS,
@@ -687,6 +779,7 @@ const ADVANCED_PROXY_APP_ICONS = {
   grokbuild: grokBuildAppIcon,
   opencode: opencodeAppIcon,
   openclaw: openclawAppIcon,
+  hermes: hermesAppIcon,
 };
 const DISPATCH_MODE_OPTIONS = [
   { value: 'fixed', label: '固定', description: '按当前队列顺序执行，不额外重排。' },
@@ -717,6 +810,7 @@ const previewOpen = ref(false);
 const masterHelpTooltipOpen = ref(false);
 const antiPoisonTooltipOpen = ref(false);
 const antiPoisonPanelOpen = ref(false);
+const antiCandyPanelOpen = ref(false);
 const antiPoisonPreviewOpen = ref(false);
 const antiPoisonRulesOpen = ref(false);
 const antiPoisonRequestRecords = ref([]);
@@ -731,6 +825,7 @@ const pendingSaveConfig = ref(null);
 const pendingManagedWrites = ref([]);
 const pendingWriteOrder = ref('config-first');
 const pendingSuccessMessage = ref('高级代理配置已更新');
+const pendingTakeover = ref(null);
 const configPreview = ref(EMPTY_PREVIEW);
 const lastEnabledAppIds = ref([]);
 const draft = reactive(normalizeAdvancedProxyConfig({}));
@@ -753,6 +848,9 @@ const unifiedFailoverEnabled = computed(() =>
 );
 const antiPoisonConfig = computed(() => draft?.antiPoison || normalizeAdvancedProxyConfig({}).antiPoison);
 const antiPoisonEnabled = computed(() => antiPoisonConfig.value?.enabled === true);
+const antiCandyConfig = computed(() => draft?.antiCandy || normalizeAdvancedProxyConfig({}).antiCandy);
+const antiCandyEnabled = computed(() => antiCandyConfig.value?.enabled === true);
+const antiCandyModelsText = computed(() => (Array.isArray(antiCandyConfig.value?.models) ? antiCandyConfig.value.models : ['*']).join('\n'));
 const antiPoisonStringProtectionEnabled = computed(() => antiPoisonConfig.value?.stringProtection?.enabled !== false);
 const antiPoisonStringProtectionRulesText = computed(() => {
   const rules = Array.isArray(antiPoisonConfig.value?.stringProtection?.rules)
@@ -1070,8 +1168,10 @@ const appCards = computed(() =>
             ? 'Grok Build 客户端 · OpenAI Compatible 入口'
           : app.id === 'opencode'
             ? 'OpenCode 客户端 · OpenAI Compatible 入口'
-            : app.id === 'openclaw'
+          : app.id === 'openclaw'
               ? 'OpenClaw 客户端 · OpenAI Compatible 入口'
+              : app.id === 'hermes'
+                ? 'Hermes 客户端 · OpenAI Compatible 入口'
           : 'OpenAI Compatible 入口',
       tooltipDetail: app.id === 'claude'
         ? '已支持：Claude 客户端 -> 本地自动探测端口 -> OpenAI 上游。Claude 请求会自动转成 OpenAI 上游请求，并把返回结果转回 Claude 格式。'
@@ -1382,6 +1482,51 @@ function hasMatchingOpenClawProxyProvider(config, expectedBaseUrl) {
   );
 }
 
+function extractHermesProxyProviders(text) {
+  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+  const sectionStart = lines.findIndex(line => /^custom_providers\s*:/.test(line));
+  if (sectionStart < 0) return [];
+  const sectionEnd = lines.findIndex((line, index) => index > sectionStart && /^[^\s#][^:]*\s*:/.test(line));
+  const sectionLines = lines.slice(sectionStart, sectionEnd < 0 ? lines.length : sectionEnd);
+  const blocks = [];
+  let current = null;
+  sectionLines.slice(1).forEach(line => {
+    if (/^\s{2}-\s+/.test(line)) {
+      if (current) blocks.push(current);
+      current = [line];
+    } else if (current) {
+      current.push(line);
+    }
+  });
+  if (current) blocks.push(current);
+  const scalar = value => {
+    const raw = String(value || '').trim().replace(/\s+#.*$/, '');
+    if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+      return raw.slice(1, -1).replace(/\\"/g, '"').replace(/\\'/g, "'");
+    }
+    return raw;
+  };
+  return blocks.map(block => {
+    const nameLine = block[0].match(/^\s{2}-\s+name\s*:\s*(.*)$/)
+      || block.find(line => /^\s{4}name\s*:\s*/.test(line))?.match(/^\s{4}name\s*:\s*(.*)$/);
+    const baseUrlLine = block.find(line => /^\s{4}base_url\s*:\s*/.test(line));
+    const apiKeyLine = block.find(line => /^\s{4}api_key\s*:\s*/.test(line));
+    return {
+      name: scalar(nameLine?.[1] || ''),
+      baseUrl: scalar(baseUrlLine?.replace(/^\s{4}base_url\s*:\s*/, '') || ''),
+      apiKey: scalar(apiKeyLine?.replace(/^\s{4}api_key\s*:\s*/, '') || ''),
+    };
+  });
+}
+
+function hasMatchingHermesProxyProvider(text, expectedBaseUrl) {
+  const expected = normalizeComparableUrl(expectedBaseUrl);
+  return extractHermesProxyProviders(text).some(provider =>
+    normalizeComparableUrl(provider.baseUrl) === expected
+    && isManagedProxyToken(provider.apiKey)
+  );
+}
+
 function detectLocalAdvancedProxyTakeoverState(snapshot, config) {
   const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
   const claudeBaseUrl = normalizeComparableUrl(getAdvancedProxyAppBaseUrl('claude', config));
@@ -1389,6 +1534,7 @@ function detectLocalAdvancedProxyTakeoverState(snapshot, config) {
   const grokBuildBaseUrl = normalizeComparableUrl(getAdvancedProxyAppBaseUrl('grokbuild', config));
   const opencodeBaseUrl = normalizeComparableUrl(getAdvancedProxyAppBaseUrl('opencode', config));
   const openclawBaseUrl = normalizeComparableUrl(getAdvancedProxyAppBaseUrl('openclaw', config));
+  const hermesBaseUrl = normalizeComparableUrl(getAdvancedProxyAppBaseUrl('hermes', config));
 
   const claudeSettings = parseStrictJsonObjectSafe(
     findManagedSnapshotFile(files, 'claude', 'settings')?.content || '',
@@ -1415,6 +1561,7 @@ function detectLocalAdvancedProxyTakeoverState(snapshot, config) {
     findManagedSnapshotFile(files, 'openclaw', 'config')?.content || '',
     { models: { mode: 'merge', providers: {} } }
   );
+  const hermesConfigText = String(findManagedSnapshotFile(files, 'hermes', 'config')?.content || '');
 
   return {
     claude: normalizeComparableUrl(claudeEnv.ANTHROPIC_BASE_URL) === claudeBaseUrl
@@ -1425,6 +1572,7 @@ function detectLocalAdvancedProxyTakeoverState(snapshot, config) {
       && isManagedProxyToken(grokBuildConfig.api_key),
     opencode: hasMatchingOpenCodeProxyProvider(opencodeConfig, opencodeBaseUrl),
     openclaw: hasMatchingOpenClawProxyProvider(openclawConfig, openclawBaseUrl),
+    hermes: hasMatchingHermesProxyProvider(hermesConfigText, hermesBaseUrl),
   };
 }
 
@@ -1663,13 +1811,23 @@ async function saveConfigImmediately(nextConfig, successMessage = '高级代理�
 
 function openPreviewForManagedWrites(nextConfig, desktopPreview, successMessage = '高级代理配置已更新', options = {}) {
   if (!hasConfigChanges(nextConfig)) {
+    if (options.takeover?.enabled && options.takeover?.capturedBackup) {
+      clearDesktopConfigTakeoverBackup(options.takeover.appId);
+    }
     message.info('当前没有需要写入的配置变更');
     return;
   }
 
   const managedWrites = Array.isArray(desktopPreview?.writes) ? desktopPreview.writes : [];
   if (!managedWrites.length) {
-    saveConfigImmediately(nextConfig, successMessage);
+    void saveConfigImmediately(nextConfig, successMessage).then(saved => {
+      if (saved && options.takeover && !options.takeover.enabled) {
+        clearDesktopConfigTakeoverBackup(options.takeover.appId);
+      }
+      if (options.takeover?.enabled && options.takeover?.capturedBackup && !saved) {
+        clearDesktopConfigTakeoverBackup(options.takeover.appId);
+      }
+    });
     return;
   }
 
@@ -1677,6 +1835,7 @@ function openPreviewForManagedWrites(nextConfig, desktopPreview, successMessage 
   pendingManagedWrites.value = managedWrites;
   pendingWriteOrder.value = options.writeOrder === 'managed-first' ? 'managed-first' : 'config-first';
   pendingSuccessMessage.value = successMessage;
+  pendingTakeover.value = options.takeover || null;
   configPreview.value = desktopPreview || EMPTY_PREVIEW;
   previewOpen.value = true;
 }
@@ -1712,10 +1871,11 @@ function getPreferredModelForApp(config, appId, provider = null) {
 
 function createTakeoverDesktopDraft(appId, enabled, config, snapshot = null) {
   const sourceProvider = getCompatibleProviderForApp(config, appId, true);
-  const model = getPreferredModelForApp(config, appId, sourceProvider);
-  if (!model) {
+  const providerModel = getPreferredModelForApp(config, appId, sourceProvider);
+  if (enabled && !providerModel) {
     throw new Error('请先给 Provider 补一个模型，再启用该应用接管');
   }
+  const model = enabled ? ADVANCED_PROXY_MODEL_NAME : (providerModel || ADVANCED_PROXY_MODEL_NAME);
 
   if (!enabled && !sourceProvider) {
     throw new Error(appId === 'claude'
@@ -1761,11 +1921,14 @@ function createTakeoverDesktopDraft(appId, enabled, config, snapshot = null) {
     : 'responses';
   nextDraft.opencodeBaseUrl = appId === 'opencode' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
   nextDraft.openclawBaseUrl = appId === 'openclaw' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
+  nextDraft.hermesBaseUrl = appId === 'hermes' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
+  nextDraft.hermesApiMode = 'chat_completions';
   nextDraft.claudeUseAdvancedProxy = false;
   nextDraft.codexUseAdvancedProxy = false;
   nextDraft.grokbuildUseAdvancedProxy = false;
   nextDraft.opencodeUseAdvancedProxy = false;
   nextDraft.openclawUseAdvancedProxy = false;
+  nextDraft.hermesUseAdvancedProxy = false;
   return nextDraft;
 }
 
@@ -1782,22 +1945,35 @@ async function handleAppTakeoverToggle(appId, value) {
     nextConfig[appId] = {};
   }
   nextConfig[appId].enabled = value;
-  if (value) {
-    nextConfig.enabled = true;
-  }
+  nextConfig.enabled = getEnabledAppIds(nextConfig).length > 0;
 
+  let capturedBackup = false;
   try {
     const snapshot = await readManagedAppConfigFiles([appId]);
-    const desktopDraft = createTakeoverDesktopDraft(appId, value, nextConfig, snapshot);
-    const desktopPreview = buildDesktopConfigPreview(desktopDraft, snapshot);
+    capturedBackup = value ? captureDesktopConfigTakeoverBackup(appId, snapshot) : false;
+    const restorePreview = !value
+      ? buildDesktopConfigTakeoverRestorePreview(appId, snapshot)
+      : null;
+    const desktopDraft = restorePreview
+      ? null
+      : createTakeoverDesktopDraft(appId, value, nextConfig, snapshot);
+    const desktopPreview = restorePreview || buildDesktopConfigPreview(desktopDraft, snapshot);
     if (!desktopPreview.appGroups.length && desktopPreview.errors.length) {
       throw new Error(desktopPreview.errors.join('\n'));
     }
 
     openPreviewForManagedWrites(nextConfig, desktopPreview, `${app?.label || appId} 接管配置已更新`, {
       writeOrder: value ? 'config-first' : 'managed-first',
+      takeover: {
+        appId,
+        enabled: value === true,
+        capturedBackup,
+      },
     });
   } catch (error) {
+    if (capturedBackup) {
+      clearDesktopConfigTakeoverBackup(appId);
+    }
     message.error(error?.message || `${app?.label || appId} 接管预览生成失败`);
   }
 }
@@ -2171,6 +2347,7 @@ async function applyPreview() {
   }
 
   saving.value = true;
+  const takeover = pendingTakeover.value;
   try {
     if (pendingManagedWrites.value.length && pendingWriteOrder.value === 'managed-first') {
       await applyManagedAppConfigFiles(pendingManagedWrites.value);
@@ -2188,8 +2365,16 @@ async function applyPreview() {
     pendingSaveConfig.value = null;
     pendingManagedWrites.value = [];
     pendingWriteOrder.value = 'config-first';
+    pendingTakeover.value = null;
+    if (takeover && !takeover.enabled) {
+      clearDesktopConfigTakeoverBackup(takeover.appId);
+    }
     message.success(pendingSuccessMessage.value || '高级代理配置已更新');
   } catch (error) {
+    if (takeover?.enabled && takeover.capturedBackup) {
+      clearDesktopConfigTakeoverBackup(takeover.appId);
+      cancelPreview();
+    }
     message.error(error?.message || '写入高级代理配置失败');
   } finally {
     saving.value = false;
@@ -2197,10 +2382,15 @@ async function applyPreview() {
 }
 
 function cancelPreview() {
+  const takeover = pendingTakeover.value;
+  if (takeover?.enabled && takeover.capturedBackup) {
+    clearDesktopConfigTakeoverBackup(takeover.appId);
+  }
   previewOpen.value = false;
   pendingSaveConfig.value = null;
   pendingManagedWrites.value = [];
   pendingWriteOrder.value = 'config-first';
+  pendingTakeover.value = null;
   configPreview.value = EMPTY_PREVIEW;
 }
 
@@ -2225,8 +2415,8 @@ function handleAntiPoisonTooltipOpenChange(open) {
   antiPoisonTooltipOpen.value = open;
 }
 
-function openAntiPoisonPanel() {
-  if (!antiPoisonEnabled.value) return;
+function openAntiPoisonPanel(force = false) {
+  if (!force && !antiPoisonEnabled.value) return;
   antiPoisonTooltipOpen.value = false;
   antiPoisonPanelOpen.value = true;
   void reloadAntiPoisonRecordsInternal(false);
@@ -2410,6 +2600,50 @@ function handleAntiPoisonEnabledChange(value) {
   );
 }
 
+function openAntiCandyPanel() {
+  antiPoisonTooltipOpen.value = false;
+  antiCandyPanelOpen.value = true;
+}
+
+async function updateAntiCandyConfig(mutator, successMessage = '反糖果降智配置已更新') {
+  await handleConfigMutation(next => {
+    if (!next.antiCandy || typeof next.antiCandy !== 'object') {
+      next.antiCandy = normalizeAdvancedProxyConfig({}).antiCandy;
+    }
+    mutator(next.antiCandy);
+  }, successMessage);
+}
+
+function handleAntiCandyEnabledChange(value) {
+  void updateAntiCandyConfig(next => {
+    next.enabled = value === true;
+  }, value ? '反糖果降智已开启' : '反糖果降智已关闭');
+}
+
+function handleAntiCandyModelsChange(value) {
+  const models = String(value || '')
+    .split(/[\n,，]/)
+    .map(model => model.trim())
+    .filter(Boolean);
+  void updateAntiCandyConfig(next => {
+    next.models = models.length ? models : ['*'];
+    next.modelsConfigured = true;
+  }, '反糖果适用模型已更新');
+}
+
+function handleAntiCandyFieldChange(field, value) {
+  void updateAntiCandyConfig(next => {
+    next[field] = value;
+  }, '反糖果降智配置已更新');
+}
+
+function handleAntiCandyMaxTierNChange(value) {
+  void updateAntiCandyConfig(next => {
+    next.maxTierN = value;
+    next.maxTierNConfigured = true;
+  }, '反糖果最大推理层级已更新');
+}
+
 function handleAntiPoisonFieldChange(field, value) {
   void updateAntiPoisonConfig(next => {
     next[field] = value;
@@ -2462,6 +2696,9 @@ function resetAntiPoisonPromptsToDefault() {
     };
   }, '防投毒策略已恢复默认', 'reset-default');
 }
+defineExpose({
+  openAntiPoisonPanel: () => openAntiPoisonPanel(true),
+});
 </script>
 
 <style scoped>
@@ -2943,6 +3180,10 @@ function resetAntiPoisonPromptsToDefault() {
   font-size: 12px;
   line-height: 1.55;
 }
+.advanced-proxy-anti-candy-button{font-size:16px;line-height:1}
+.advanced-proxy-anti-candy-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.advanced-proxy-anti-candy-fields label{display:flex;flex-direction:column;gap:7px;color:#475569;font-size:12px;font-weight:650}
+.advanced-proxy-anti-candy-fields :deep(.ant-input-number){width:100%}
 
 .advanced-proxy-anti-poison-rule-summary {
   display: grid;
@@ -3328,7 +3569,7 @@ function resetAntiPoisonPromptsToDefault() {
 
 .advanced-proxy-app-strip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -3607,7 +3848,9 @@ function resetAntiPoisonPromptsToDefault() {
 }
 
 .advanced-proxy-app-icon-shell-openclaw {
-  background: linear-gradient(135deg, #fff1f2, #ffe4e6);
+  background: #101820;
+  border: 1px solid rgba(0, 229, 204, 0.72);
+  box-shadow: 0 6px 14px rgba(5, 8, 16, 0.22), inset 0 0 0 1px rgba(0, 229, 204, 0.12);
 }
 
 .advanced-proxy-app-icon-image {
@@ -3961,7 +4204,7 @@ function resetAntiPoisonPromptsToDefault() {
   }
 
   .advanced-proxy-app-strip {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 6px;
   }
 }

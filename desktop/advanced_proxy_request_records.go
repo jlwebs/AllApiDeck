@@ -1044,6 +1044,8 @@ func buildAdvancedProxyOpenAIInboundEndpoint(appType string, routeKind string) s
 		basePath = advancedProxyOpenCodePath
 	case "openclaw":
 		basePath = advancedProxyOpenClawPath
+	case "hermes":
+		basePath = advancedProxyHermesPath
 	}
 	switch strings.TrimSpace(routeKind) {
 	case "chat":

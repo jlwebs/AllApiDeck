@@ -20,7 +20,7 @@ body::-webkit-scrollbar,
 }
 
 body {
-  font-family: Arial, sans-serif;
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif;
   margin: 0;
   padding: 0;
   box-sizing: border-box;
@@ -32,6 +32,17 @@ body {
   --font-color: #000000;
   --input-background-color: #ffffff;
   --input-border-color: #cccccc;
+  --surface-0: #ffffff;
+  --surface-1: #f8fafc;
+  --surface-2: #f1f5f9;
+  --surface-3: #e2e8f0;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --border-subtle: rgba(100, 116, 139, 0.22);
+  --focus-ring: rgba(37, 99, 235, 0.28);
+  --control-bg: #ffffff;
+  --control-border: #cbd5e1;
 }
 
 body.dark-mode {
@@ -56,6 +67,18 @@ body.gaia-dark {
   --font-color: #d9e5e1;
   --input-background-color: #10181d;
   --input-border-color: #69858e;
+  --surface-0: #0b1217;
+  --surface-1: #101a20;
+  --surface-2: #16232a;
+  --surface-3: #20323a;
+  --text-primary: #eef6f4;
+  --text-secondary: #bfd0d3;
+  --text-muted: #91a5a9;
+  --border-subtle: rgba(137, 169, 178, 0.24);
+  --focus-ring: rgba(111, 162, 177, 0.42);
+  --control-bg: #101a20;
+  --control-border: #526f79;
+  color-scheme: dark;
 }
 
 body.light-mode {
@@ -160,4 +183,394 @@ footer {
 
 input {
   line-height: normal !important;
+}
+
+/* Shared Gaia-dark surface and typography contract. Component styles can still
+   opt into their own accents, but neutral text and controls remain readable. */
+body.gaia-dark,
+body.gaia-dark #app,
+body.gaia-dark .app-shell {
+  color: var(--text-primary);
+}
+
+body.gaia-dark .ant-typography,
+body.gaia-dark .ant-form-item-label > label,
+body.gaia-dark .ant-radio-wrapper,
+body.gaia-dark .ant-checkbox-wrapper,
+body.gaia-dark .ant-list-item,
+body.gaia-dark .ant-empty-description,
+body.gaia-dark .ant-descriptions-item-label,
+body.gaia-dark .ant-descriptions-item-content {
+  color: var(--text-secondary) !important;
+}
+
+body.gaia-dark .ant-typography strong,
+body.gaia-dark .ant-modal-title,
+body.gaia-dark .ant-drawer-title,
+body.gaia-dark .ant-card-head-title,
+body.gaia-dark .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--text-primary) !important;
+}
+
+body.gaia-dark .ant-card,
+body.gaia-dark .ant-modal-content,
+body.gaia-dark .ant-drawer-content,
+body.gaia-dark .ant-popover-inner,
+body.gaia-dark .ant-dropdown-menu,
+body.gaia-dark .ant-select-dropdown,
+body.gaia-dark .ant-picker-dropdown .ant-picker-panel-container,
+body.gaia-dark .ant-tooltip-inner {
+  background: var(--surface-1) !important;
+  border-color: var(--border-subtle) !important;
+  color: var(--text-primary) !important;
+}
+
+body.gaia-dark .ant-card-head,
+body.gaia-dark .ant-modal-header,
+body.gaia-dark .ant-drawer-header,
+body.gaia-dark .ant-table-thead > tr > th {
+  background: var(--surface-2) !important;
+  border-color: var(--border-subtle) !important;
+  color: var(--text-primary) !important;
+}
+
+body.gaia-dark .ant-table,
+body.gaia-dark .ant-table-container,
+body.gaia-dark .ant-table-tbody > tr > td,
+body.gaia-dark .ant-table-thead > tr > th {
+  background: transparent !important;
+  border-color: var(--border-subtle) !important;
+  color: var(--text-secondary) !important;
+}
+
+body.gaia-dark .ant-table-tbody > tr:hover > td,
+body.gaia-dark .ant-table-tbody > tr.ant-table-row-selected > td {
+  background: rgba(91, 132, 144, 0.14) !important;
+}
+
+body.gaia-dark .ant-input,
+body.gaia-dark .ant-input-affix-wrapper,
+body.gaia-dark .ant-input-number,
+body.gaia-dark .ant-input-number-input,
+body.gaia-dark .ant-select-selector,
+body.gaia-dark .ant-picker,
+body.gaia-dark .ant-mention,
+body.gaia-dark textarea {
+  background: var(--control-bg) !important;
+  border-color: var(--control-border) !important;
+  color: var(--text-primary) !important;
+}
+
+body.gaia-dark .ant-input::placeholder,
+body.gaia-dark .ant-input-number-input::placeholder,
+body.gaia-dark .ant-select-selection-placeholder,
+body.gaia-dark textarea::placeholder {
+  color: var(--text-muted) !important;
+}
+
+body.gaia-dark .ant-input-affix-wrapper-focused,
+body.gaia-dark .ant-input:focus,
+body.gaia-dark .ant-input-focused,
+body.gaia-dark .ant-select-focused .ant-select-selector,
+body.gaia-dark .ant-picker-focused,
+body.gaia-dark .ant-input-number-focused {
+  border-color: #79a9b5 !important;
+  box-shadow: 0 0 0 2px var(--focus-ring) !important;
+}
+
+body.gaia-dark .ant-btn-default,
+body.gaia-dark .ant-btn-dashed,
+body.gaia-dark .ant-btn-text {
+  background: var(--surface-2) !important;
+  border-color: var(--border-subtle) !important;
+  color: var(--text-primary) !important;
+}
+
+body.gaia-dark .ant-btn-default:hover,
+body.gaia-dark .ant-btn-dashed:hover,
+body.gaia-dark .ant-btn-text:hover {
+  background: var(--surface-3) !important;
+  border-color: #79a9b5 !important;
+  color: #f5fbfb !important;
+}
+
+body.gaia-dark .ant-btn-primary {
+  background: #4e7884 !important;
+  border-color: #6f9daa !important;
+  color: #f6fbfb !important;
+}
+
+body.gaia-dark .ant-btn-primary:hover {
+  background: #6595a2 !important;
+  border-color: #8dbbc4 !important;
+}
+
+body.gaia-dark .ant-tabs-tab,
+body.gaia-dark .ant-pagination-item,
+body.gaia-dark .ant-pagination-prev,
+body.gaia-dark .ant-pagination-next,
+body.gaia-dark .ant-pagination-jump-prev,
+body.gaia-dark .ant-pagination-jump-next {
+  color: var(--text-muted) !important;
+}
+
+body.gaia-dark .ant-tabs-tab:hover,
+body.gaia-dark .ant-pagination-item a:hover,
+body.gaia-dark .ant-pagination-item-active a {
+  color: #eaf6f6 !important;
+}
+
+body.gaia-dark .ant-pagination-item-active {
+  background: var(--surface-3) !important;
+  border-color: #6f9daa !important;
+}
+
+body.gaia-dark .ant-tree,
+body.gaia-dark .ant-tree .ant-tree-node-content-wrapper,
+body.gaia-dark .ant-tree-title,
+body.gaia-dark .ant-collapse,
+body.gaia-dark .ant-collapse-header,
+body.gaia-dark .ant-collapse-content {
+  color: var(--text-secondary) !important;
+  background: transparent !important;
+  border-color: var(--border-subtle) !important;
+}
+
+body.gaia-dark .ant-dropdown-menu-item:hover,
+body.gaia-dark .ant-select-item-option-active,
+body.gaia-dark .ant-select-item-option-selected {
+  background: rgba(91, 132, 144, 0.2) !important;
+  color: var(--text-primary) !important;
+}
+
+body.gaia-dark .ant-alert {
+  background: rgba(42, 70, 78, 0.42) !important;
+  border-color: rgba(111, 157, 169, 0.34) !important;
+  color: var(--text-secondary) !important;
+}
+
+body.gaia-dark .ant-alert-message {
+  color: var(--text-primary) !important;
+}
+
+/* Standalone windows had intentionally bright light-mode surfaces. Keep their
+   layout, but switch every neutral surface and caption to the dark contract. */
+body.gaia-dark .editor-view,
+body.gaia-dark .desktop-config-view,
+body.gaia-dark .ai-image-view {
+  background: linear-gradient(180deg, #081117, #101d24) !important;
+}
+
+body.gaia-dark .editor-shell,
+body.gaia-dark .desktop-config-shell,
+body.gaia-dark .ai-image-shell {
+  background: linear-gradient(180deg, rgba(16, 26, 32, 0.98), rgba(11, 19, 24, 0.96)) !important;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(190, 222, 230, 0.05) !important;
+}
+
+body.gaia-dark .editor-title,
+body.gaia-dark .desktop-config-window-title,
+body.gaia-dark .ai-image-title,
+body.gaia-dark .ai-image-panel-title,
+body.gaia-dark .ai-image-media-title,
+body.gaia-dark .desktop-panel-title,
+body.gaia-dark .diff-column-header,
+body.gaia-dark .mcp-skill-card-main strong {
+  color: var(--text-primary) !important;
+}
+
+body.gaia-dark .editor-subtitle,
+body.gaia-dark .desktop-config-window-subtitle,
+body.gaia-dark .desktop-panel-hint,
+body.gaia-dark .desktop-field-hint,
+body.gaia-dark .ai-image-subtitle,
+body.gaia-dark .ai-image-panel-hint,
+body.gaia-dark .ai-image-media-hint,
+body.gaia-dark .ai-image-submit-hint,
+body.gaia-dark .ai-image-state-desc,
+body.gaia-dark .diff-meta,
+body.gaia-dark .diff-minimap-title,
+body.gaia-dark .mcp-skill-card-main span,
+body.gaia-dark .mcp-skill-card-main small {
+  color: var(--text-muted) !important;
+}
+
+body.gaia-dark .editor-form-item .ant-form-item-label > label,
+body.gaia-dark .ai-image-mode-label,
+body.gaia-dark .ai-image-size-current,
+body.gaia-dark .ai-image-compression-value,
+body.gaia-dark .ai-image-mask-size {
+  color: var(--text-secondary) !important;
+}
+
+body.gaia-dark .desktop-app-panel,
+body.gaia-dark .desktop-form-panel,
+body.gaia-dark .ai-image-form-panel,
+body.gaia-dark .ai-image-result-panel,
+body.gaia-dark .ai-image-history-panel,
+body.gaia-dark .ai-image-mode-block,
+body.gaia-dark .ai-image-media-block,
+body.gaia-dark .ai-image-misc-collapse,
+body.gaia-dark .diff-column,
+body.gaia-dark .mcp-skill-card {
+  background: linear-gradient(180deg, rgba(24, 37, 44, 0.96), rgba(15, 26, 32, 0.94)) !important;
+  border-color: var(--border-subtle) !important;
+  color: var(--text-secondary) !important;
+}
+
+body.gaia-dark .desktop-app-card,
+body.gaia-dark .ai-image-mode-option,
+body.gaia-dark .ai-image-size-option,
+body.gaia-dark .ai-image-mask-tool,
+body.gaia-dark .ai-image-record-pill,
+body.gaia-dark .ai-image-result-meta-line,
+body.gaia-dark .ai-image-result-prompt,
+body.gaia-dark .ai-image-source-card {
+  background: var(--surface-2) !important;
+  color: var(--text-secondary) !important;
+  box-shadow: inset 0 0 0 1px var(--border-subtle) !important;
+}
+
+body.gaia-dark .desktop-app-card-active,
+body.gaia-dark .ai-image-mode-option-active,
+body.gaia-dark .ai-image-size-option-active,
+body.gaia-dark .ai-image-mask-tool-active {
+  background: linear-gradient(135deg, #385d66, #28464f) !important;
+  color: #f4fbfb !important;
+}
+
+body.gaia-dark .desktop-app-name,
+body.gaia-dark .ai-image-source-meta,
+body.gaia-dark .ai-image-stage-note,
+body.gaia-dark .ai-image-result-prompt {
+  color: var(--text-secondary) !important;
+}
+
+body.gaia-dark .ai-image-stage-frame,
+body.gaia-dark .ai-image-preview-card,
+body.gaia-dark .ai-image-history-card,
+body.gaia-dark .diff-pane,
+body.gaia-dark .diff-row-equal,
+body.gaia-dark .diff-row-empty {
+  background: #0b151b !important;
+}
+
+body.gaia-dark .ai-image-kicker,
+body.gaia-dark .editor-kicker {
+  color: #9fc2ca !important;
+}
+
+body.gaia-dark .ai-image-model-hint,
+body.gaia-dark .ai-image-mode-hint {
+  color: #e0ba77 !important;
+}
+
+body.gaia-dark .ai-image-error-box {
+  background: rgba(86, 34, 40, 0.62) !important;
+  border-color: rgba(226, 122, 132, 0.34) !important;
+  color: #ffc7cb !important;
+}
+
+body.gaia-dark .ai-image-empty-icon {
+  background: linear-gradient(135deg, #25424b, #1a3037) !important;
+  color: #b9d9dd !important;
+}
+
+body.gaia-dark .desktop-app-logo,
+body.gaia-dark .desktop-app-claude .desktop-app-logo,
+body.gaia-dark .desktop-app-codex .desktop-app-logo,
+body.gaia-dark .desktop-app-grokbuild .desktop-app-logo,
+body.gaia-dark .desktop-app-opencode .desktop-app-logo,
+body.gaia-dark .desktop-app-openclaw .desktop-app-logo {
+  background: #20333b !important;
+  border-color: rgba(0, 229, 204, 0.72) !important;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.32), inset 0 0 0 1px rgba(0, 229, 204, 0.16) !important;
+}
+
+body.gaia-dark .request-records-mode-tabs,
+body.gaia-dark .mcp-skill-app-tabs {
+  background: var(--surface-2) !important;
+  border-color: var(--border-subtle) !important;
+  box-shadow: inset 0 1px 0 rgba(190, 222, 230, 0.04) !important;
+}
+
+body.gaia-dark .request-records-mode-tab,
+body.gaia-dark .request-records-toolbar-pill,
+body.gaia-dark .request-records-board-chip,
+body.gaia-dark .mcp-skill-subsection-title {
+  color: var(--text-secondary) !important;
+}
+
+body.gaia-dark .request-records-mode-tab.is-active,
+body.gaia-dark .mcp-skill-app-tab.is-active {
+  background: linear-gradient(180deg, rgba(70, 112, 122, 0.82), rgba(41, 76, 87, 0.76)) !important;
+  color: #f1fbfb !important;
+}
+
+body.gaia-dark .request-records-toolbar-pill,
+body.gaia-dark .request-records-board-chip,
+body.gaia-dark .request-records-toolbar-pill-muted,
+body.gaia-dark .request-records-board-chip-muted,
+body.gaia-dark .mcp-skill-state-pill,
+body.gaia-dark .mcp-skill-app-toggle {
+  background: var(--surface-2) !important;
+  border-color: var(--border-subtle) !important;
+  color: var(--text-muted) !important;
+}
+
+body.gaia-dark .request-records-action-button-refresh,
+body.gaia-dark .mcp-skill-card-button-import {
+  background: linear-gradient(180deg, rgba(56, 98, 106, 0.92), rgba(38, 70, 78, 0.9)) !important;
+  border-color: rgba(130, 183, 193, 0.34) !important;
+  color: #effafa !important;
+}
+
+body.gaia-dark .request-records-action-button-clear {
+  background: rgba(103, 45, 43, 0.72) !important;
+  border-color: rgba(217, 123, 113, 0.32) !important;
+  color: #ffc8c0 !important;
+}
+
+body.gaia-dark .mcp-skill-card-button-disable {
+  background: var(--surface-2) !important;
+  border-color: var(--border-subtle) !important;
+  color: var(--text-secondary) !important;
+}
+
+body.gaia-dark .diff-row-modify {
+  background: rgba(154, 112, 50, 0.2) !important;
+}
+
+body.gaia-dark .diff-row-add {
+  background: rgba(58, 126, 75, 0.22) !important;
+}
+
+body.gaia-dark .diff-row-remove {
+  background: rgba(153, 60, 62, 0.24) !important;
+}
+
+body.gaia-dark .diff-line-number {
+  color: #82999f !important;
+  border-color: var(--border-subtle) !important;
+}
+
+body.gaia-dark .app-render-error-panel {
+  background: var(--surface-1) !important;
+  border-color: var(--border-subtle) !important;
+  color: var(--text-primary) !important;
+}
+
+body.gaia-dark .app-render-error-text {
+  color: var(--text-secondary) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
 }

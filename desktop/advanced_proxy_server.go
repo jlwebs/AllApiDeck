@@ -148,6 +148,57 @@ func appendAdvancedProxyLogf(format string, args ...any) {
 	debugLogf("[ADV_PROXY] %s", message)
 }
 
+const (
+	advancedProxyCandyEvalProviderHeader = "X-AllApiDeck-Provider-ID"
+	advancedProxyCandyEvalRunHeader      = "X-AllApiDeck-Candy-Eval-Run"
+	advancedProxyCandyEvalTargetURL      = "X-AllApiDeck-Candy-Target-Base-URL"
+	advancedProxyCandyEvalTargetKey      = "X-AllApiDeck-Candy-Target-API-Key"
+	advancedProxyCandyEvalTargetName     = "X-AllApiDeck-Candy-Target-Name"
+)
+
+// lockAdvancedProxyCandyEvalProvider keeps a diagnostic run on the exact key
+// selected in the panel.  The bridge accepts only loopback traffic, and the
+// credentials are supplied from a short-lived CODEX_HOME configuration; they
+// are never written to the persistent proxy queue or logs.
+func lockAdvancedProxyCandyEvalProvider(request *http.Request, providers []AdvancedProxyProvider) ([]AdvancedProxyProvider, string) {
+	if request == nil {
+		return providers, ""
+	}
+	providerID := strings.TrimSpace(request.Header.Get(advancedProxyCandyEvalProviderHeader))
+	if providerID == "" {
+		return providers, ""
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(request.Header.Get(advancedProxyCandyEvalTargetURL)), "/")
+	apiKey := strings.TrimSpace(request.Header.Get(advancedProxyCandyEvalTargetKey))
+	if baseURL != "" && apiKey != "" {
+		name := strings.TrimSpace(request.Header.Get(advancedProxyCandyEvalTargetName))
+		return []AdvancedProxyProvider{{
+			ID:          providerID,
+			RowKey:      providerID,
+			Name:        firstNonEmpty(name, "Candy selected key"),
+			BaseURL:     baseURL,
+			APIKey:      apiKey,
+			APIFormat:   "openai_responses",
+			APIKeyField: "ANTHROPIC_AUTH_TOKEN",
+			Enabled:     true,
+		}}, "transient"
+	}
+	for _, provider := range providers {
+		if providerID == strings.TrimSpace(provider.ID) || providerID == strings.TrimSpace(provider.RowKey) {
+			return []AdvancedProxyProvider{provider}, "queue_fallback"
+		}
+	}
+	return nil, "missing_target"
+}
+
+func advancedProxyCandyEvalRunID(provider AdvancedProxyProvider) string {
+	const prefix = "candy_eval:"
+	if value := strings.TrimSpace(provider.SourceType); strings.HasPrefix(value, prefix) {
+		return strings.TrimPrefix(value, prefix)
+	}
+	return ""
+}
+
 func advancedProxyDebugEnabled(config AdvancedProxyConfig) bool {
 	if config.DebugLogging {
 		return true
@@ -4296,6 +4347,7 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 		activeConnectionID = strings.TrimSpace(activeConnectionIDs[0])
 	}
 	failoverActive := config.Failover.Enabled && config.Failover.AutoFailoverEnabled
+	candyEvalRunID := advancedProxyCandyEvalRunID(provider)
 	timeoutSeconds := computeAdvancedProxyTimeoutSeconds(stream, failoverActive, config.Failover)
 	requestFeatures := classifyClaudeRequestFeatures(requestBody)
 	capabilities := resolveAdvancedProxyProviderCapabilities(provider)
@@ -4407,7 +4459,26 @@ func forwardClaudeRequestViaProvider(provider AdvancedProxyProvider, requestBody
 			transformed = payload
 			applyClaudeContextAutoCompression(transformed, config)
 		}
+		requestedEffort := anthropicRequestToReasoningEffort(payload)
 		applyAdvancedProxyEffortToRequest(transformed, phase.routeKind, provider)
+		if candyEvalRunID != "" {
+			outboundEffort := ""
+			if rawTransformed, err := json.Marshal(transformed); err == nil {
+				outboundEffort = advancedProxyRequestEffort(rawTransformed, phase.routeKind)
+			}
+			source := "provider_default"
+			if requestedEffort != "" {
+				source = "claude_cli"
+			}
+			appendAdvancedProxyLogf(
+				"[CANDY_EVAL_EFFORT] run=%s app=claude route=%s requested=%s outbound=%s source=%s",
+				previewAdvancedProxyText(candyEvalRunID, 80),
+				previewAdvancedProxyText(phase.routeKind, 32),
+				previewAdvancedProxyText(firstNonEmpty(requestedEffort, "(none)"), 32),
+				previewAdvancedProxyText(firstNonEmpty(outboundEffort, "(none)"), 32),
+				source,
+			)
+		}
 		stringProtectionCtx := antiPoisonStringProtectionContext{}
 		if config.AntiPoison.Enabled && config.AntiPoison.StringProtection.Enabled {
 			rawTransformedForProtection, marshalErr := json.Marshal(transformed)
@@ -4751,17 +4822,50 @@ func applyAdvancedProxyEffortToRequest(request map[string]any, protocol string, 
 			reasoning = map[string]any{}
 			request["reasoning"] = reasoning
 		}
-		reasoning["effort"] = effort
+		// A caller-supplied Responses effort is authoritative. In particular,
+		// Codex CLI sends model_reasoning_effort on the wire as
+		// reasoning.effort; replacing it with the Provider default silently
+		// changes a selected `max` run to e.g. `high`.
+		if strings.TrimSpace(toStringValue(reasoning["effort"])) == "" {
+			reasoning["effort"] = effort
+		}
 		delete(request, "reasoning_effort")
 	case "chat":
-		request["reasoning_effort"] = effort
+		if strings.TrimSpace(toStringValue(request["reasoning_effort"])) == "" {
+			request["reasoning_effort"] = effort
+		}
 	case "messages":
 		outputConfig, _ := request["output_config"].(map[string]any)
 		if outputConfig == nil {
 			outputConfig = map[string]any{}
 			request["output_config"] = outputConfig
 		}
-		outputConfig["effort"] = effort
+		if callerEffort := anthropicRequestToReasoningEffort(request); callerEffort != "" {
+			outputConfig["effort"] = callerEffort
+			return
+		}
+		if strings.TrimSpace(toStringValue(outputConfig["effort"])) == "" {
+			outputConfig["effort"] = effort
+		}
+	}
+}
+
+func advancedProxyRequestEffort(rawBody []byte, protocol string) string {
+	request := map[string]any{}
+	if err := json.Unmarshal(rawBody, &request); err != nil {
+		return ""
+	}
+	switch normalizeAdvancedProxyProtocol(protocol) {
+	case "responses", "responses_compact":
+		reasoning, _ := request["reasoning"].(map[string]any)
+		return strings.TrimSpace(toStringValue(reasoning["effort"]))
+	case "chat":
+		return strings.TrimSpace(toStringValue(request["reasoning_effort"]))
+	case "messages":
+		outputConfig, _ := request["output_config"].(map[string]any)
+		return strings.TrimSpace(toStringValue(outputConfig["effort"]))
+	default:
+		return ""
 	}
 }
 
@@ -5791,6 +5895,13 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 
 	failoverActive := config.Failover.Enabled && config.Failover.AutoFailoverEnabled
 	timeoutSeconds := computeAdvancedProxyTimeoutSeconds(stream, failoverActive, config.Failover)
+	candyEvalRunID := advancedProxyCandyEvalRunID(provider)
+	if candyEvalRunID != "" && strings.EqualFold(strings.TrimSpace(appType), "codex") && routeKind == "responses" && stream {
+		// A real Codex CLI turn includes its agent/tool context and can take
+		// longer than the normal first-byte budget. A candy run is a protocol
+		// diagnostic, so it must remain a native Responses stream.
+		timeoutSeconds = maxInt(timeoutSeconds, 90)
+	}
 
 	preparedBody, healingContext, prepareErr := prepareOpenAIRequestForEncryptedContentHealing(rawBody, appType)
 	if prepareErr != nil {
@@ -5975,7 +6086,21 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 		if len(phase.requestBody) == 0 || strings.TrimSpace(phase.outboundRoute) == "" {
 			return
 		}
+		requestedEffort := advancedProxyRequestEffort(phase.requestBody, phase.outboundRoute)
 		phase.requestBody = applyAdvancedProxyEffortToRawRequest(phase.requestBody, phase.outboundRoute, provider)
+		if candyEvalRunID != "" && strings.EqualFold(strings.TrimSpace(appType), "codex") && phase.outboundRoute == "responses" {
+			source := "provider_default"
+			if requestedEffort != "" {
+				source = "codex_cli"
+			}
+			appendAdvancedProxyLogf(
+				"[CANDY_EVAL_EFFORT] run=%s app=codex route=responses requested=%s outbound=%s source=%s",
+				previewAdvancedProxyText(candyEvalRunID, 80),
+				previewAdvancedProxyText(firstNonEmpty(requestedEffort, "(none)"), 32),
+				previewAdvancedProxyText(firstNonEmpty(advancedProxyRequestEffort(phase.requestBody, phase.outboundRoute), "(none)"), 32),
+				source,
+			)
+		}
 		phases = append(phases, phase)
 	}
 	buildRouteTraceSnapshot := func(currentIndex int, currentStatus string) []AdvancedProxyRequestRouteStep {
@@ -6457,6 +6582,22 @@ func forwardOpenAIRequestViaProvider(appType string, provider AdvancedProxyProvi
 			antiPoisonCtx: antiPoisonCtx,
 			stringProtect: stringProtectionCtx,
 		})
+	}
+
+	if candyEvalRunID != "" && strings.EqualFold(strings.TrimSpace(appType), "codex") && routeKind == "responses" {
+		lockedPhases := make([]openAIProxyAttemptPhase, 0, 1)
+		for _, phase := range phases {
+			if phase.outboundRoute == "responses" && phase.responseTransform == "" {
+				lockedPhases = append(lockedPhases, phase)
+			}
+		}
+		phases = lockedPhases
+		appendAdvancedProxyLogf(
+			"[CANDY_EVAL_PROTOCOL_LOCK] run=%s app=codex route=responses timeout=%ds phases=%d",
+			previewAdvancedProxyText(candyEvalRunID, 80),
+			timeoutSeconds,
+			len(phases),
+		)
 	}
 
 	if len(phases) == 0 {
@@ -7043,6 +7184,57 @@ phaseLoop:
 			if !stream && stringProtectionCtx.Enabled {
 				result.Body = restoreAntiPoisonStringProtectionInJSONBody(result.Body, &stringProtectionCtx, routeKind, providerLabel, "openai")
 			}
+			antiCandyEligible, antiCandyReason := explainAntiCandyOpenAIRequest(appType, routeKind, stream, phase.requestBody, phaseModel, config.AntiCandy)
+			if strings.EqualFold(strings.TrimSpace(appType), "codex") && strings.TrimSpace(routeKind) == "responses" && stream && result.StreamBody != nil {
+				appendAdvancedProxyLogf(
+					"[ANTI_CANDY_CHECK] run=%s app=%s provider=%s model=%s eligible=%t reason=%s",
+					advancedProxyCandyEvalRunID(provider),
+					appType,
+					providerLabel,
+					previewAdvancedProxyText(phaseModel, 120),
+					antiCandyEligible,
+					antiCandyReason,
+				)
+			}
+			if stream && result.StreamBody != nil && phase.outboundRoute == "responses" && phase.responseTransform == "" && antiCandyEligible {
+				foldedStream, foldStats, foldErr := foldOpenAIResponsesStreamWithAntiCandy(
+					result.StreamBody,
+					appType,
+					provider,
+					targetURL,
+					requestHeaders,
+					phase.requestBody,
+					phaseModel,
+					timeoutSeconds,
+					config.AntiCandy,
+				)
+				if foldErr != nil {
+					appendAdvancedProxyLogf(
+						"[ANTI_CANDY_FOLD_FAIL] app=%s route=%s provider=%s endpoint=%s detail=%s",
+						appType,
+						routeKind,
+						providerLabel,
+						targetURL,
+						previewAdvancedProxyText(foldErr.Error(), 260),
+					)
+					return rawProviderAttemptResult{
+						StatusCode: http.StatusBadGateway,
+						Message:    formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, fmt.Sprintf("anti-candy stream fold failed (%s)", foldErr.Error())),
+						ErrorCode:  "anti_candy_fold_failed",
+						ErrorType:  "server_error",
+						ProviderID: strings.TrimSpace(provider.ID),
+						Provider:   providerLabel,
+						TargetURL:  targetURL,
+						RouteKind:  routeKind,
+					}
+				}
+				result.StreamBody = foldedStream
+				if foldStats.Folded {
+					advancedProxyActiveConnections.update(activeConnectionID, func(connection *AdvancedProxyActiveConnection) {
+						connection.Stage = "anti_candy_folded"
+					})
+				}
+			}
 			if stream && result.StreamBody != nil {
 				observedFormat := "chat"
 				if phase.responseTransform == "chat_to_responses" || routeKind == "responses" || routeKind == "responses_compact" {
@@ -7483,6 +7675,10 @@ func (a *App) handleAdvancedProxyPing(writer http.ResponseWriter, request *http.
 				"enabled":  config.OpenClaw.Enabled,
 				"basePath": config.OpenClaw.BasePath,
 			},
+			"hermes": map[string]any{
+				"enabled":  config.Hermes.Enabled,
+				"basePath": config.Hermes.BasePath,
+			},
 		},
 	})
 }
@@ -7513,6 +7709,24 @@ func (a *App) handleAdvancedProxyClaude(writer http.ResponseWriter, request *htt
 		return
 	}
 	providers := resolveAdvancedProxyEffectiveProviders(config, "claude")
+	if candyRunID, candyTarget, matched := a.findCandyEvalGatewayTarget(request); matched {
+		providers = []AdvancedProxyProvider{{
+			ID:          firstNonEmpty(candyTarget.ProviderID, "candy-claude-"+candyRunID),
+			RowKey:      candyTarget.ProviderID,
+			Name:        firstNonEmpty(candyTarget.ProviderName, "Candy selected key"),
+			BaseURL:     normalizeCandyEvalOpenAIBaseURL(candyTarget.SiteURL),
+			APIKey:      candyTarget.APIKey,
+			APIFormat:   "openai_responses",
+			APIKeyField: "ANTHROPIC_AUTH_TOKEN",
+			Enabled:     true,
+			SourceType:  "candy_eval:" + candyRunID,
+		}}
+		appendAdvancedProxyLogf(
+			"[CANDY_EVAL_TARGET_LOCK] run=%s app=claude source=transient_auth provider=%s",
+			previewAdvancedProxyText(candyRunID, 80),
+			advancedProxyProviderLabel(providers[0]),
+		)
+	}
 	providers = advancedProxyRuntime.OrderProvidersForDispatch(config, "claude", providers)
 	if !config.Enabled || !config.Claude.Enabled || len(providers) == 0 {
 		writeAnthropicProxyError(writer, http.StatusServiceUnavailable, "advanced Claude proxy is disabled or has no providers")
@@ -7732,6 +7946,11 @@ func (a *App) handleAdvancedProxyOpenClaw(writer http.ResponseWriter, request *h
 	a.handleAdvancedProxyOpenAI("openclaw", writer, request)
 }
 
+func (a *App) handleAdvancedProxyHermes(writer http.ResponseWriter, request *http.Request) {
+	appendAdvancedProxyLogf("[OPENAI_PROXY_APP_HANDLER] app=hermes next=handleAdvancedProxyOpenAI path=%s", previewAdvancedProxyText(request.URL.Path, 160))
+	a.handleAdvancedProxyOpenAI("hermes", writer, request)
+}
+
 func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWriter, request *http.Request) {
 	appendAdvancedProxyLogf(
 		"[OPENAI_PROXY_ENTER] app=%s method=%s path=%s remote=%s content_length=%d ua=%s",
@@ -7830,6 +8049,24 @@ func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWrit
 		advancedProxyAppEnabled(config, appType),
 	)
 	providers := resolveAdvancedProxyEffectiveProviders(config, appType)
+	candyEvalRunID := strings.TrimSpace(request.Header.Get(advancedProxyCandyEvalRunHeader))
+	if candyEvalRunID != "" {
+		var lockSource string
+		providers, lockSource = lockAdvancedProxyCandyEvalProvider(request, providers)
+		if lockSource == "missing_target" || len(providers) == 0 {
+			logAbort("candy_eval_lock", http.StatusBadRequest, "candy_eval_target_missing", "糖果测试锁定的 Provider 不存在，且缺少临时目标地址或密钥")
+			writeOpenAIProxyError(writer, http.StatusBadRequest, "糖果测试锁定的 Provider 不存在，且缺少临时目标地址或密钥", "candy_eval_target_missing", "invalid_request_error")
+			return
+		}
+		providers[0].SourceType = "candy_eval:" + candyEvalRunID
+		appendAdvancedProxyLogf(
+			"[CANDY_EVAL_TARGET_LOCK] run=%s app=%s source=%s provider=%s",
+			previewAdvancedProxyText(candyEvalRunID, 80),
+			appType,
+			lockSource,
+			advancedProxyProviderLabel(providers[0]),
+		)
+	}
 	appendAdvancedProxyLogf(
 		"[OPENAI_PROXY_STEP] app=%s stage=resolve_providers route=%s providers=%d",
 		appType,

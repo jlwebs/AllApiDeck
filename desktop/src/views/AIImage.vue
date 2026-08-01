@@ -145,7 +145,7 @@
                     <span class="ai-image-size-current">{{ currentRequestSizeLabel }}</span>
                   </div>
                 </div>
-                <div class="ai-image-model-hint">请求仍然统一走 `/v1/responses`，局部重绘会额外附带蒙版图片。</div>
+                <div class="ai-image-model-hint">{{ imageRequestTransportHint }}</div>
               </a-form-item>
 
               <a-collapse ghost class="ai-image-misc-collapse">
@@ -451,7 +451,9 @@ const maskedRecordKeyLabel = computed(() => maskApiKey(String(targetRecord.value
 const activeItem = computed(() => historyItems.value.find(item => item.id === activeItemId.value) || historyItems.value[0] || null);
 const hasPreferredModel = computed(() => modelOptions.value.some(item => isPreferredImageModel(item.value)));
 const currentRequestSize = computed(() => buildResolvedSize(draft.resolutionPreset, draft.aspectRatio));
-const supportsTransparentBackground = computed(() => draft.outputFormat === 'png' || draft.outputFormat === 'webp');
+const supportsTransparentBackground = computed(() => (
+  (draft.outputFormat === 'png' || draft.outputFormat === 'webp') && !isGptImage2Model(draft.model)
+));
 const supportsOutputCompression = computed(() => draft.outputFormat === 'jpeg' || draft.outputFormat === 'webp');
 const backgroundOptions = computed(() => BACKGROUND_OPTIONS.map(item => ({
   ...item,
@@ -479,6 +481,14 @@ const resultPanelHint = computed(() => {
   if (workflowMode.value === 'reference') return '会把参考图作为 input_image 一起发给 Responses。';
   if (workflowMode.value === 'inpaint') return '在底图上直接涂抹，蒙版会作为 input_image_mask 发送。';
   return '成功返回后会在这里展示最新结果。';
+});
+const imageRequestTransportHint = computed(() => {
+  if (getImageRequestTransport() === 'images') {
+    return '文生图将调用 `/v1/images/generations`，GPT Image 模型返回 base64 图片。';
+  }
+  return workflowMode.value === 'generate'
+    ? '当前将通过 `/v1/responses` 的 image_generation 工具生成图片。'
+    : '当前图生图流程通过 `/v1/responses` 发送输入图片与蒙版。';
 });
 const modelSelectionHint = computed(() => {
   if (modelLoading.value) return '正在加载模型列表...';
@@ -558,6 +568,17 @@ function buildResponsesEndpointCandidates(input) {
   return [`${stripped}/v1/responses`];
 }
 
+function buildImageGenerationsEndpointCandidates(input) {
+  const normalizedInput = normalizeBaseUrl(input);
+  if (!normalizedInput) return [];
+  if (/\/v\d+\/images\/generations$/i.test(normalizedInput)) return [normalizedInput];
+  if (/\/images\/generations$/i.test(normalizedInput)) return [normalizedInput];
+  if (/\/v\d+$/i.test(normalizedInput)) return [`${normalizedInput}/images/generations`];
+  const stripped = stripKnownApiSuffix(normalizedInput);
+  if (/\/v\d+$/i.test(stripped)) return [`${stripped}/images/generations`];
+  return [`${stripped}/v1/images/generations`];
+}
+
 function buildScopeSettingsKey() {
   return `${IMAGE_WINDOW_SETTINGS_PREFIX}:${scopeKey.value || 'global'}`;
 }
@@ -572,6 +593,30 @@ function isCodexModel(model) {
 
 function isPreferredImageModel(model) {
   return /(?:gpt-image|chatgpt-image|dall-e|image)/i.test(String(model || '').trim());
+}
+
+function isGptImageModel(model) {
+  return /(?:^|[\/:_-])gpt-image(?:[-\/:_.]|$)/i.test(String(model || '').trim());
+}
+
+function isGptImage2Model(model) {
+  return /(?:^|[\/:_-])gpt-image-2(?:[-\/:_.]|$)/i.test(String(model || '').trim());
+}
+
+function isDallEModel(model) {
+  return /(?:^|[\/:_-])dall-e(?:[-\/:_.]|$)/i.test(String(model || '').trim());
+}
+
+function isImagesGenerationsModel(model) {
+  return isGptImageModel(model) || isDallEModel(model);
+}
+
+function getImageRequestTransport() {
+  const baseUrl = normalizeBaseUrl(draft.baseUrl);
+  if (/\/images\/generations$/i.test(baseUrl)) return 'images';
+  if (workflowMode.value === 'generate' && isImagesGenerationsModel(draft.model)) return 'images';
+  if (/\/responses$/i.test(baseUrl)) return 'responses';
+  return 'responses';
 }
 
 function normalizeModelCandidates(record, extraModels = []) {
@@ -633,7 +678,7 @@ function parseAspectRatio(value) {
   return { width, height };
 }
 
-function roundToStep(value, step = 8) {
+function roundToStep(value, step = 16) {
   const numeric = Number(value || 0);
   if (!Number.isFinite(numeric) || numeric <= 0) return step;
   return Math.max(step, Math.round(numeric / step) * step);
@@ -811,6 +856,10 @@ function buildResponsesInput(finalPrompt) {
   return [{ role: 'user', content }];
 }
 
+function buildImageApiPrompt(prompt) {
+  return String(prompt || '').trim() || '请生成一张图片。';
+}
+
 function buildImageGenerationTool() {
   const tool = {
     type: 'image_generation',
@@ -944,11 +993,13 @@ function buildHistoryScopeMeta(scopeValue, latestItem, count) {
   };
 }
 
-function toDataUrl(base64) {
+function toDataUrl(base64, format = 'png') {
   const value = String(base64 || '').trim();
   if (!value) return '';
-  if (/^data:/i.test(value)) return value;
-  return `data:image/png;base64,${value}`;
+  if (/^(?:data:|https?:\/\/|blob:)/i.test(value)) return value;
+  const normalizedFormat = String(format || 'png').toLowerCase() === 'jpg' ? 'jpeg' : String(format || 'png').toLowerCase();
+  const mimeType = normalizedFormat === 'jpeg' ? 'image/jpeg' : `image/${normalizedFormat}`;
+  return `data:${mimeType};base64,${value}`;
 }
 
 function updateWindowTitle() {
@@ -1374,6 +1425,64 @@ function buildRequestBody(finalPrompt) {
   };
 }
 
+function buildDallESize(model) {
+  if (/dall-e-2/i.test(String(model || ''))) return '1024x1024';
+  const ratio = parseAspectRatio(draft.aspectRatio) || parseAspectRatio(DEFAULT_ASPECT_RATIO);
+  if (!ratio || ratio.width === ratio.height) return '1024x1024';
+  return ratio.width > ratio.height ? '1792x1024' : '1024x1792';
+}
+
+function buildGptImageSize(model) {
+  if (isGptImage2Model(model)) {
+    const parsed = parseLegacySizeValue(currentRequestSize.value);
+    if (!parsed) return currentRequestSize.value;
+    const longEdge = Math.max(parsed.width, parsed.height);
+    const shortEdge = Math.min(parsed.width, parsed.height);
+    const ratio = shortEdge > 0 ? longEdge / shortEdge : 1;
+    const scale = Math.min(1, 3840 / longEdge, ratio > 3 ? 3 / ratio : 1);
+    const width = Math.max(16, Math.floor((parsed.width * scale) / 16) * 16);
+    const height = Math.max(16, Math.floor((parsed.height * scale) / 16) * 16);
+    return `${width}x${height}`;
+  }
+  const ratio = parseAspectRatio(draft.aspectRatio) || parseAspectRatio(DEFAULT_ASPECT_RATIO);
+  if (!ratio || ratio.width === ratio.height) return '1024x1024';
+  return ratio.width > ratio.height ? '1536x1024' : '1024x1536';
+}
+
+function buildImageGenerationsRequestBody(finalPrompt) {
+  const model = String(draft.model || '').trim();
+  const body = {
+    model,
+    prompt: buildImageApiPrompt(finalPrompt),
+    n: 1,
+  };
+
+  if (isDallEModel(model)) {
+    body.size = buildDallESize(model);
+    body.response_format = 'b64_json';
+    return body;
+  }
+
+  const gptImageSize = buildGptImageSize(model);
+  if (gptImageSize) {
+    body.size = gptImageSize;
+  }
+  if (isGptImageModel(model)) {
+    body.output_format = draft.outputFormat;
+    if (
+      draft.background &&
+      draft.background !== 'auto' &&
+      !(draft.background === 'transparent' && !supportsTransparentBackground.value)
+    ) {
+      body.background = draft.background;
+    }
+    if (supportsOutputCompression.value) {
+      body.output_compression = normalizeOutputCompression(draft.outputCompression);
+    }
+  }
+  return body;
+}
+
 function parseResponsesStreamPayload(responseText) {
   const text = String(responseText || '');
   const events = [];
@@ -1466,10 +1575,64 @@ function parseResponsesPayload(responseText, contentType = '') {
   return JSON.parse(rawText || 'null');
 }
 
+function parseImageGenerationsStreamPayload(responseText) {
+  const data = [];
+  const rawText = String(responseText || '').replace(/\r\n/g, '\n');
+  rawText.split(/\n\s*\n/).forEach(block => {
+    const dataText = block
+      .split('\n')
+      .filter(line => line.startsWith('data:'))
+      .map(line => line.slice(5).trimStart())
+      .join('\n')
+      .trim();
+    if (!dataText || dataText === '[DONE]') return;
+    let payload = null;
+    try {
+      payload = JSON.parse(dataText);
+    } catch {
+      return;
+    }
+    if (Array.isArray(payload?.data)) {
+      payload.data.forEach(item => {
+        if (item && typeof item === 'object') data.push(item);
+      });
+    }
+    if (String(payload?.b64_json || '').trim() || String(payload?.url || '').trim()) {
+      data.push(payload);
+    }
+  });
+  return { data };
+}
+
+function parseImageGenerationsPayload(responseText, contentType = '') {
+  const rawText = String(responseText || '').trim();
+  if (!rawText) return null;
+  if (/text\/event-stream/i.test(String(contentType || '')) || /^event:|^data:/m.test(rawText)) {
+    return parseImageGenerationsStreamPayload(rawText);
+  }
+  return JSON.parse(rawText || 'null');
+}
+
+function extractGeneratedImage(payload) {
+  const imageItems = Array.isArray(payload?.data) ? payload.data : [];
+  for (const item of imageItems) {
+    const base64 = String(item?.b64_json || '').trim();
+    if (base64) return { value: base64, kind: 'base64' };
+    const url = String(item?.url || '').trim();
+    if (url) return { value: url, kind: 'url' };
+  }
+
+  const outputs = Array.isArray(payload?.output) ? payload.output : [];
+  const imageCall = outputs.find(item => item?.type === 'image_generation_call' && String(item?.result || '').trim());
+  const result = String(imageCall?.result || '').trim();
+  return result ? { value: result, kind: /^data:|^https?:\/\//i.test(result) ? 'url' : 'base64' } : null;
+}
+
 function logImageRequestDiagnostic(stage, detail = {}) {
   try {
     logClientDiagnostic('ai-image.request', JSON.stringify({
       stage,
+      transport: String(detail.transport || ''),
       endpoint: String(detail.endpoint || ''),
       status: detail.status,
       contentType: String(detail.contentType || ''),
@@ -1488,8 +1651,10 @@ function logImageRequestDiagnostic(stage, detail = {}) {
   } catch {}
 }
 
-async function requestImageGeneration(requestBody) {
-  const endpoints = buildResponsesEndpointCandidates(draft.baseUrl);
+async function requestImageGeneration(requestBody, transport = getImageRequestTransport()) {
+  const endpoints = transport === 'images'
+    ? buildImageGenerationsEndpointCandidates(draft.baseUrl)
+    : buildResponsesEndpointCandidates(draft.baseUrl);
   const errors = [];
 
   for (const endpoint of endpoints) {
@@ -1499,7 +1664,7 @@ async function requestImageGeneration(requestBody) {
         headers: {
           Authorization: `Bearer ${String(draft.apiKey || '').trim()}`,
           'Content-Type': 'application/json',
-          Accept: 'text/event-stream',
+          Accept: transport === 'images' ? 'application/json' : 'text/event-stream',
         },
         body: JSON.stringify(requestBody),
         timeoutMs: IMAGE_REQUEST_TIMEOUT_MS,
@@ -1509,6 +1674,7 @@ async function requestImageGeneration(requestBody) {
       if (!response.ok) {
         logImageRequestDiagnostic('http_error', {
           endpoint,
+          transport,
           status: response.status,
           contentType,
           responseText,
@@ -1517,11 +1683,14 @@ async function requestImageGeneration(requestBody) {
         errors.push(`${endpoint} -> ${buildErrorMessage(response.status, responseText)}`);
         continue;
       }
-      const payload = parseResponsesPayload(responseText, contentType);
-      return { endpoint, payload };
+      const payload = transport === 'images'
+        ? parseImageGenerationsPayload(responseText, contentType)
+        : parseResponsesPayload(responseText, contentType);
+      return { endpoint, payload, transport };
     } catch (error) {
       logImageRequestDiagnostic('exception', {
         endpoint,
+        transport,
         responseText: error?.stack || error?.message || String(error || ''),
         requestBody,
       });
@@ -1540,10 +1709,13 @@ function validateGenerateRequest() {
     return '请输入 API Key';
   }
   if (!String(draft.model || '').trim()) {
-    return '请先选择一个支持 Responses 生图的模型';
+    return '请先选择一个支持 Images API 或 Responses 生图的模型';
   }
   if (isCodexModel(draft.model)) {
     return '当前选择的是 Codex 专用模型，不支持 AI 绘图。请改选 gpt-image / chatgpt-image / 其他支持 image_generation 的 Responses 模型';
+  }
+  if (workflowMode.value !== 'generate' && (isImagesGenerationsModel(draft.model) || /\/images\/generations$/i.test(normalizeBaseUrl(draft.baseUrl)))) {
+    return 'gpt-image / DALL·E 的 Images API 当前只支持文生图；参考图和局部重绘请切换支持 Responses image_generation 的主模型';
   }
   if (!String(draft.prompt || '').trim()) {
     return '请输入提示词';
@@ -1572,17 +1744,25 @@ async function generateImage() {
 
   try {
     const resolvedSize = currentRequestSize.value;
-    const finalPrompt = buildImagePrompt(draft.prompt, resolvedSize, workflowMode.value);
-    const requestBody = buildRequestBody(finalPrompt);
-    const { endpoint, payload } = await requestImageGeneration(requestBody);
-    const outputs = Array.isArray(payload?.output) ? payload.output : [];
-    const imageCall = outputs.find(item => item?.type === 'image_generation_call' && String(item?.result || '').trim());
-    const base64 = String(imageCall?.result || '').trim();
+    const outputFormat = String(draft.outputFormat || DEFAULT_OUTPUT_FORMAT).trim() || DEFAULT_OUTPUT_FORMAT;
+    const transport = getImageRequestTransport();
+    const finalPrompt = transport === 'images'
+      ? buildImageApiPrompt(draft.prompt)
+      : buildImagePrompt(draft.prompt, resolvedSize, workflowMode.value);
+    const requestBody = transport === 'images'
+      ? buildImageGenerationsRequestBody(finalPrompt)
+      : buildRequestBody(finalPrompt);
+    const { endpoint, payload } = await requestImageGeneration(requestBody, transport);
+    const imageResult = extractGeneratedImage(payload);
+    const imageValue = String(imageResult?.value || '').trim();
+    const imageDataUrl = imageValue ? toDataUrl(imageValue, outputFormat) : '';
 
-    if (!base64) {
+    if (!imageDataUrl) {
       throw new Error(
         [
-          '当前号池/中转站不具备调用 image_generation 工具能力，请更换支持 Responses 生图工具的中转站。',
+          transport === 'images'
+            ? '当前号池/中转站没有返回 Images API 图片数据（data[].b64_json 或 data[].url）。'
+            : '当前号池/中转站不具备调用 image_generation 工具能力，请更换支持 Responses 生图工具的中转站。',
           `命中端点：${endpoint}`,
           `请求模型：${String(draft.model || '').trim()}`,
           buildReadablePayloadErrorDetails(payload),
@@ -1601,7 +1781,7 @@ async function generateImage() {
       aspectRatio: draft.aspectRatio,
       prompt: String(draft.prompt || '').trim(),
       mode: workflowMode.value,
-      base64,
+      base64: imageDataUrl,
       timestamp: Date.now(),
     };
 
