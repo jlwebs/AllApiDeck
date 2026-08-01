@@ -92,11 +92,8 @@ func buildJuiceCodexCommand(ctx context.Context, executable, model, effort, mode
 
 	var command *exec.Cmd
 	if runtime.GOOS == "windows" && (strings.HasSuffix(strings.ToLower(executable), ".cmd") || strings.HasSuffix(strings.ToLower(executable), ".bat")) {
-		commandLine := quoteCandyCommandArg(executable)
-		for _, arg := range args {
-			commandLine += " " + quoteCandyCommandArg(arg)
-		}
-		command = exec.CommandContext(ctx, "cmd.exe", "/d", "/s", "/c", commandLine)
+		cmdArgs := append([]string{"/d", "/c", "call", executable}, args...)
+		command = exec.CommandContext(ctx, "cmd.exe", cmdArgs...)
 	} else {
 		command = exec.CommandContext(ctx, executable, args...)
 	}

@@ -1706,6 +1706,35 @@ func anthropicThinkingToReasoningEffort(raw any) string {
 	}
 }
 
+// Claude clients have used more than one wire shape for reasoning effort.
+// Preserve an explicit value before falling back to legacy thinking budgets.
+func anthropicRequestToReasoningEffort(body map[string]any) string {
+	if body == nil {
+		return ""
+	}
+	if outputConfig, ok := body["output_config"].(map[string]any); ok {
+		if effort := strings.TrimSpace(toStringValue(outputConfig["effort"])); effort != "" {
+			return effort
+		}
+	}
+	if reasoning, ok := body["reasoning"].(map[string]any); ok {
+		if effort := strings.TrimSpace(toStringValue(reasoning["effort"])); effort != "" {
+			return effort
+		}
+	}
+	for _, key := range []string{"reasoning_effort", "effort"} {
+		if effort := strings.TrimSpace(toStringValue(body[key])); effort != "" {
+			return effort
+		}
+	}
+	if thinking, ok := body["thinking"].(map[string]any); ok {
+		if effort := strings.TrimSpace(toStringValue(thinking["effort"])); effort != "" {
+			return effort
+		}
+	}
+	return anthropicThinkingToReasoningEffort(body["thinking"])
+}
+
 func anthropicToolsToOpenAI(raw any) []map[string]any {
 	typed, ok := raw.([]any)
 	if !ok {
@@ -2013,7 +2042,7 @@ func anthropicRequestToOpenAIChat(body map[string]any, provider AdvancedProxyPro
 	if toolChoice := anthropicToolChoiceToOpenAI(body["tool_choice"]); toolChoice != nil {
 		request["tool_choice"] = toolChoice
 	}
-	if effort := anthropicThinkingToReasoningEffort(body["thinking"]); effort != "" {
+	if effort := anthropicRequestToReasoningEffort(body); effort != "" {
 		request["reasoning_effort"] = effort
 	}
 	return request
@@ -2200,7 +2229,7 @@ func anthropicRequestToOpenAIResponses(body map[string]any, provider AdvancedPro
 	if toolChoice := anthropicToolChoiceToResponses(body["tool_choice"]); toolChoice != nil {
 		request["tool_choice"] = toolChoice
 	}
-	if effort := anthropicThinkingToReasoningEffort(body["thinking"]); effort != "" {
+	if effort := anthropicRequestToReasoningEffort(body); effort != "" {
 		request["reasoning"] = map[string]any{"effort": effort}
 	}
 	if maxTokens := toIntValue(body["max_tokens"]); maxTokens > 0 {

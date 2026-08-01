@@ -90,6 +90,17 @@
                     </svg>
                   </button>
                 </a-popover>
+                <a-tooltip :title="antiCandyEnabled ? '反糖果降智已开启，点击配置' : '配置反糖果降智'">
+                  <button
+                    type="button"
+                    class="advanced-proxy-master-debug-button advanced-proxy-anti-candy-button"
+                    :class="{ 'advanced-proxy-master-debug-button-active': antiCandyEnabled }"
+                    :aria-label="antiCandyEnabled ? '配置反糖果降智' : '打开反糖果降智配置'"
+                    @click="openAntiCandyPanel"
+                  >
+                    <span aria-hidden="true">🍬</span>
+                  </button>
+                </a-tooltip>
                 <a-tooltip :title="draft.debugLogging ? '调试日志已开启，写入 advanced-proxy.log' : '开启调试日志，写入 advanced-proxy.log'">
                   <button
                     type="button"
@@ -637,6 +648,77 @@
       </section>
     </div>
   </a-drawer>
+
+  <a-drawer
+    :open="antiCandyPanelOpen"
+    title="反糖果降智配置"
+    placement="right"
+    :width="antiPoisonDrawerWidth"
+    :zIndex="1200"
+    class="advanced-proxy-anti-poison-drawer advanced-proxy-anti-candy-drawer"
+    @close="antiCandyPanelOpen = false"
+  >
+    <div class="advanced-proxy-anti-poison-panel">
+      <section class="advanced-proxy-anti-poison-hero-card">
+        <div>
+          <span class="advanced-proxy-anti-poison-kicker">Reasoning Continuation Guard</span>
+          <h3>反糖果降智</h3>
+          <p>检测 Responses 流中可恢复的加密推理截断后，网关会追加有限次续写，再将完整的响应流返回给 Codex。</p>
+        </div>
+        <div class="advanced-proxy-anti-poison-state" :class="{ 'is-active': antiCandyEnabled }">
+          {{ antiCandyEnabled ? '已开启' : '未开启' }}
+        </div>
+      </section>
+
+      <section class="advanced-proxy-anti-poison-card">
+        <div class="advanced-proxy-anti-poison-card-head">
+          <div>
+            <h4>启用与模型规则</h4>
+            <p>默认 <code>*</code> 表示匹配所有模型。可用逗号或换行分隔；支持前缀通配，例如 <code>gpt-5.6-*</code>。</p>
+          </div>
+        </div>
+        <div class="advanced-proxy-anti-poison-settings">
+          <div class="advanced-proxy-anti-poison-setting-row">
+            <div>
+              <strong>反糖果降智开关</strong>
+              <span>仅对 Codex 的流式 Responses 请求生效；协议不具备可续写推理内容时会安全跳过并留痕。</span>
+            </div>
+            <a-switch :checked="antiCandyEnabled" @change="handleAntiCandyEnabledChange" />
+          </div>
+        </div>
+        <label class="advanced-proxy-compact-label">适用模型</label>
+        <a-textarea
+          class="advanced-proxy-anti-poison-textarea"
+          :value="antiCandyModelsText"
+          :disabled="!antiCandyEnabled"
+          :auto-size="{ minRows: 2, maxRows: 5 }"
+          placeholder="gpt-5.5\ngpt-5.6-luna\ngpt-5.6-terra"
+          @change="event => handleAntiCandyModelsChange(event?.target?.value)"
+        />
+      </section>
+
+      <section class="advanced-proxy-anti-poison-card">
+        <div class="advanced-proxy-anti-poison-card-head">
+          <div>
+            <h4>续写边界</h4>
+            <p>限制单次请求可追加的续写次数和检测层级，避免异常上游造成无限续写。</p>
+          </div>
+        </div>
+        <div class="advanced-proxy-anti-candy-fields">
+          <label>
+            <span>最多续写次数</span>
+            <a-input-number :value="antiCandyConfig.maxContinue" :min="1" :max="10" :disabled="!antiCandyEnabled" @change="value => handleAntiCandyFieldChange('maxContinue', value)" />
+          </label>
+          <label>
+            <span>最大推理层级（0=不限）</span>
+            <a-input-number :value="antiCandyConfig.maxTierN" :min="0" :max="64" :disabled="!antiCandyEnabled" @change="handleAntiCandyMaxTierNChange" />
+          </label>
+        </div>
+        <label class="advanced-proxy-compact-label">续写提示</label>
+        <a-input :value="antiCandyConfig.markerText" :disabled="!antiCandyEnabled" @change="event => handleAntiCandyFieldChange('markerText', event?.target?.value)" />
+      </section>
+    </div>
+  </a-drawer>
 </template>
 
 <script setup>
@@ -728,6 +810,7 @@ const previewOpen = ref(false);
 const masterHelpTooltipOpen = ref(false);
 const antiPoisonTooltipOpen = ref(false);
 const antiPoisonPanelOpen = ref(false);
+const antiCandyPanelOpen = ref(false);
 const antiPoisonPreviewOpen = ref(false);
 const antiPoisonRulesOpen = ref(false);
 const antiPoisonRequestRecords = ref([]);
@@ -765,6 +848,9 @@ const unifiedFailoverEnabled = computed(() =>
 );
 const antiPoisonConfig = computed(() => draft?.antiPoison || normalizeAdvancedProxyConfig({}).antiPoison);
 const antiPoisonEnabled = computed(() => antiPoisonConfig.value?.enabled === true);
+const antiCandyConfig = computed(() => draft?.antiCandy || normalizeAdvancedProxyConfig({}).antiCandy);
+const antiCandyEnabled = computed(() => antiCandyConfig.value?.enabled === true);
+const antiCandyModelsText = computed(() => (Array.isArray(antiCandyConfig.value?.models) ? antiCandyConfig.value.models : ['*']).join('\n'));
 const antiPoisonStringProtectionEnabled = computed(() => antiPoisonConfig.value?.stringProtection?.enabled !== false);
 const antiPoisonStringProtectionRulesText = computed(() => {
   const rules = Array.isArray(antiPoisonConfig.value?.stringProtection?.rules)
@@ -2514,6 +2600,50 @@ function handleAntiPoisonEnabledChange(value) {
   );
 }
 
+function openAntiCandyPanel() {
+  antiPoisonTooltipOpen.value = false;
+  antiCandyPanelOpen.value = true;
+}
+
+async function updateAntiCandyConfig(mutator, successMessage = '反糖果降智配置已更新') {
+  await handleConfigMutation(next => {
+    if (!next.antiCandy || typeof next.antiCandy !== 'object') {
+      next.antiCandy = normalizeAdvancedProxyConfig({}).antiCandy;
+    }
+    mutator(next.antiCandy);
+  }, successMessage);
+}
+
+function handleAntiCandyEnabledChange(value) {
+  void updateAntiCandyConfig(next => {
+    next.enabled = value === true;
+  }, value ? '反糖果降智已开启' : '反糖果降智已关闭');
+}
+
+function handleAntiCandyModelsChange(value) {
+  const models = String(value || '')
+    .split(/[\n,，]/)
+    .map(model => model.trim())
+    .filter(Boolean);
+  void updateAntiCandyConfig(next => {
+    next.models = models.length ? models : ['*'];
+    next.modelsConfigured = true;
+  }, '反糖果适用模型已更新');
+}
+
+function handleAntiCandyFieldChange(field, value) {
+  void updateAntiCandyConfig(next => {
+    next[field] = value;
+  }, '反糖果降智配置已更新');
+}
+
+function handleAntiCandyMaxTierNChange(value) {
+  void updateAntiCandyConfig(next => {
+    next.maxTierN = value;
+    next.maxTierNConfigured = true;
+  }, '反糖果最大推理层级已更新');
+}
+
 function handleAntiPoisonFieldChange(field, value) {
   void updateAntiPoisonConfig(next => {
     next[field] = value;
@@ -3050,6 +3180,10 @@ defineExpose({
   font-size: 12px;
   line-height: 1.55;
 }
+.advanced-proxy-anti-candy-button{font-size:16px;line-height:1}
+.advanced-proxy-anti-candy-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.advanced-proxy-anti-candy-fields label{display:flex;flex-direction:column;gap:7px;color:#475569;font-size:12px;font-weight:650}
+.advanced-proxy-anti-candy-fields :deep(.ant-input-number){width:100%}
 
 .advanced-proxy-anti-poison-rule-summary {
   display: grid;

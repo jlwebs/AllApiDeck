@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -30,6 +33,9 @@ const (
 	candyEvalModeDirect            = "direct"
 	candyEvalModeGateway           = "gateway"
 	candyEvalGatewayProvider       = "allapideck_gateway"
+	candyEvalExecutorCodex         = "codex_cli"
+	candyEvalExecutorClaude        = "claude_cli"
+	candyEvalExecutorRaw           = "raw_request"
 	candyEvalMaxLineBytes          = 4 << 20
 	candyEvalDefaultTests          = 5
 )
@@ -42,6 +48,8 @@ const candyEvalPrompt = `不使用任何外部工具回答以下问题：
 圆形       7      9      8
 五角星形   7      6      4
 `
+
+const candyEvalExpectedAnswer = 21
 
 var candyEvalAnswerPattern = regexp.MustCompile(`(^|[^0-9])21([^0-9]|$)`)
 
@@ -56,6 +64,9 @@ type candyIntelligenceTestEvent struct {
 	Effort                string  `json:"effort,omitempty"`
 	Mode                  string  `json:"mode,omitempty"`
 	GatewayURL            string  `json:"gatewayUrl,omitempty"`
+	Executor              string  `json:"executor,omitempty"`
+	ProviderID            string  `json:"providerId,omitempty"`
+	ProviderName          string  `json:"providerName,omitempty"`
 	Run                   int     `json:"run,omitempty"`
 	TotalRuns             int     `json:"totalRuns,omitempty"`
 	Tests                 int     `json:"tests,omitempty"`
@@ -74,6 +85,16 @@ type candyIntelligenceTestEvent struct {
 	Accuracy              float64 `json:"accuracy,omitempty"`
 	StartedAt             int64   `json:"startedAt,omitempty"`
 	UpdatedAt             int64   `json:"updatedAt"`
+}
+
+// candyEvalTarget is deliberately kept in memory only.  It makes the target
+// selected in the key panel explicit for every test run, instead of silently
+// inheriting the user's normal Codex login or the proxy's active queue.
+type candyEvalTarget struct {
+	SiteURL      string
+	APIKey       string
+	ProviderID   string
+	ProviderName string
 }
 
 type candyEvalStreamState struct {
@@ -105,11 +126,43 @@ func normalizeCandyEvalMode(value string) string {
 	return candyEvalModeDirect
 }
 
+func normalizeCandyEvalExecutor(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case candyEvalExecutorClaude:
+		return candyEvalExecutorClaude
+	case candyEvalExecutorRaw:
+		return candyEvalExecutorRaw
+	default:
+		return candyEvalExecutorCodex
+	}
+}
+
+func candyEvalExecutorLabel(executor string) string {
+	switch normalizeCandyEvalExecutor(executor) {
+	case candyEvalExecutorClaude:
+		return "Claude CLI"
+	case candyEvalExecutorRaw:
+		return "Raw Request"
+	default:
+		return "Codex CLI"
+	}
+}
+
 func candyEvalModeLabel(mode string) string {
 	if normalizeCandyEvalMode(mode) == candyEvalModeGateway {
 		return "代理网关"
 	}
 	return "直连"
+}
+
+// Candy tests must use the same OpenAI URL convention as the quick test. A
+// saved site root such as https://www.cun.ai represents /v1 by default, not
+// /responses directly.
+func normalizeCandyEvalOpenAIBaseURL(siteURL string) string {
+	endpoint := firstNonEmpty(buildResponsesEndpointCandidates(siteURL)...)
+	endpoint = strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	endpoint = strings.TrimSuffix(endpoint, "/responses")
+	return strings.TrimRight(endpoint, "/")
 }
 
 func resolveCandyCodexExecutable() (string, error) {
@@ -125,7 +178,24 @@ func resolveCandyCodexExecutable() (string, error) {
 	return "", errors.New("找不到 codex CLI，请先安装 Codex CLI 并确保它已加入 PATH")
 }
 
+func resolveCandyClaudeExecutable() (string, error) {
+	candidates := []string{"claude"}
+	if runtime.GOOS == "windows" {
+		candidates = []string{"claude.cmd", "claude.exe", "claude"}
+	}
+	for _, candidate := range candidates {
+		if executable, err := exec.LookPath(candidate); err == nil && strings.TrimSpace(executable) != "" {
+			return executable, nil
+		}
+	}
+	return "", errors.New("找不到 Claude CLI，请先安装 Claude Code 并确保它已加入 PATH")
+}
+
 func buildCandyCodexCommand(ctx context.Context, executable, model, effort, mode, gatewayURL string) *exec.Cmd {
+	return buildCandyCodexCommandForTarget(ctx, executable, model, effort, mode, gatewayURL, candyEvalTarget{}, "")
+}
+
+func buildCandyCodexCommandForTarget(ctx context.Context, executable, model, effort, mode, gatewayURL string, target candyEvalTarget, runID string) *exec.Cmd {
 	args := []string{
 		"exec", "--json",
 		"--skip-git-repo-check",
@@ -142,6 +212,26 @@ func buildCandyCodexCommand(ctx context.Context, executable, model, effort, mode
 			"-c", fmt.Sprintf("model_providers.%s.wire_api=responses", candyEvalGatewayProvider),
 			"-c", fmt.Sprintf("model_providers.%s.requires_openai_auth=true", candyEvalGatewayProvider),
 		)
+		if strings.TrimSpace(target.ProviderID) != "" {
+			args = append(args,
+				"-c", fmt.Sprintf(`model_providers.%s.http_headers."X-AllApiDeck-Provider-ID"=%q`, candyEvalGatewayProvider, strings.TrimSpace(target.ProviderID)),
+			)
+		}
+		if strings.TrimSpace(runID) != "" {
+			args = append(args,
+				"-c", fmt.Sprintf(`model_providers.%s.http_headers."X-AllApiDeck-Candy-Eval-Run"=%q`, candyEvalGatewayProvider, strings.TrimSpace(runID)),
+			)
+		}
+	} else if strings.TrimSpace(target.SiteURL) != "" {
+		// Direct tests use the selected row's endpoint and key, never the
+		// operator's existing ~/.codex provider/login settings.
+		args = append(args,
+			"-c", "model_provider=allapideck_candy_target",
+			"-c", "model_providers.allapideck_candy_target.name=AllApiDeck Candy Target",
+			"-c", fmt.Sprintf("model_providers.allapideck_candy_target.base_url=%q", normalizeCandyEvalOpenAIBaseURL(target.SiteURL)),
+			"-c", "model_providers.allapideck_candy_target.wire_api=responses",
+			"-c", "model_providers.allapideck_candy_target.requires_openai_auth=true",
+		)
 	}
 	if normalizedModel := strings.TrimSpace(model); normalizedModel != "" {
 		args = append(args, "-m", normalizedModel)
@@ -149,30 +239,65 @@ func buildCandyCodexCommand(ctx context.Context, executable, model, effort, mode
 
 	var command *exec.Cmd
 	if runtime.GOOS == "windows" && (strings.HasSuffix(strings.ToLower(executable), ".cmd") || strings.HasSuffix(strings.ToLower(executable), ".bat")) {
-		commandLine := quoteCandyCommandArg(executable)
-		for _, arg := range args {
-			commandLine += " " + quoteCandyCommandArg(arg)
-		}
-		command = exec.CommandContext(ctx, "cmd.exe", "/d", "/s", "/c", commandLine)
+		cmdArgs := append([]string{"/d", "/c", "call", executable}, args...)
+		command = exec.CommandContext(ctx, "cmd.exe", cmdArgs...)
 	} else {
 		command = exec.CommandContext(ctx, executable, args...)
 	}
 	command.Stdin = strings.NewReader(candyEvalPrompt)
+	command.Env = candyEvalCommandEnvironment(target)
 	configureBackgroundCmd(command)
 	return command
 }
 
-func quoteCandyCommandArg(value string) string {
-	if value == "" {
-		return `""`
+func candyEvalCommandEnvironment(target candyEvalTarget) []string {
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, item := range os.Environ() {
+		upper := strings.ToUpper(item)
+		if strings.HasPrefix(upper, "CODEX_HOME=") || strings.HasPrefix(upper, "CODEX_API_KEY=") {
+			continue
+		}
+		env = append(env, item)
 	}
-	if !strings.ContainsAny(value, " \t\"&|<>^()") {
-		return value
+	if apiKey := strings.TrimSpace(target.APIKey); apiKey != "" {
+		env = append(env, "CODEX_API_KEY="+apiKey)
 	}
-	return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
+	return env
 }
 
-func (a *App) StartCandyIntelligenceTest(runID, model, effort, mode string) error {
+func prepareCandyEvalCodexHome(target candyEvalTarget, mode, gatewayURL, runID, effort string) (string, func(), error) {
+	home, err := os.MkdirTemp("", "allapideck-candy-codex-")
+	if err != nil {
+		return "", nil, err
+	}
+	// CODEX_HOME makes this run self-contained.  It prevents a test from
+	// reading, modifying, or persisting credentials/configuration in ~/.codex.
+	providerName := "allapideck_candy_target"
+	baseURL := normalizeCandyEvalOpenAIBaseURL(target.SiteURL)
+	if normalizeCandyEvalMode(mode) == candyEvalModeGateway {
+		providerName = candyEvalGatewayProvider
+		baseURL = strings.TrimRight(strings.TrimSpace(gatewayURL), "/")
+	}
+	config := strings.Builder{}
+	fmt.Fprintf(&config, "# transient AllApiDeck candy evaluation configuration\nmodel_provider = %q\nmodel_reasoning_effort = %q\n\n", providerName, normalizeCandyEvalEffort(effort))
+	fmt.Fprintf(&config, "[model_providers.%s]\nname = %q\nbase_url = %q\nwire_api = %q\nrequires_openai_auth = true\n\n", providerName, "AllApiDeck Candy Evaluation", baseURL, "responses")
+	if normalizeCandyEvalMode(mode) == candyEvalModeGateway {
+		fmt.Fprintf(&config, "[model_providers.%s.http_headers]\n", providerName)
+		fmt.Fprintf(&config, "%q = %q\n", "X-AllApiDeck-Provider-ID", strings.TrimSpace(target.ProviderID))
+		fmt.Fprintf(&config, "%q = %q\n", "X-AllApiDeck-Candy-Eval-Run", strings.TrimSpace(runID))
+		fmt.Fprintf(&config, "%q = %q\n", "X-AllApiDeck-Candy-Target-Base-URL", normalizeCandyEvalOpenAIBaseURL(target.SiteURL))
+		fmt.Fprintf(&config, "%q = %q\n", "X-AllApiDeck-Candy-Target-API-Key", strings.TrimSpace(target.APIKey))
+		fmt.Fprintf(&config, "%q = %q\n", "X-AllApiDeck-Candy-Target-Name", strings.TrimSpace(target.ProviderName))
+	}
+	configPath := filepath.Join(home, "config.toml")
+	if err := os.WriteFile(configPath, []byte(config.String()), 0o600); err != nil {
+		_ = os.RemoveAll(home)
+		return "", nil, err
+	}
+	return home, func() { _ = os.RemoveAll(home) }, nil
+}
+
+func (a *App) StartCandyIntelligenceTest(runID, model, effort, mode, siteURL, apiKey, providerID, providerName, executor string) error {
 	if a == nil || a.ctx == nil {
 		return errors.New("桌面运行时不可用，无法启动糖果智力测试")
 	}
@@ -180,16 +305,39 @@ func (a *App) StartCandyIntelligenceTest(runID, model, effort, mode string) erro
 	if runID == "" {
 		return errors.New("糖果智力测试缺少运行标识")
 	}
-	if _, err := resolveCandyCodexExecutable(); err != nil {
-		return err
+	executor = normalizeCandyEvalExecutor(executor)
+	if executor == candyEvalExecutorCodex {
+		if _, err := resolveCandyCodexExecutable(); err != nil {
+			return err
+		}
+	} else if executor == candyEvalExecutorClaude {
+		if _, err := resolveCandyClaudeExecutable(); err != nil {
+			return err
+		}
 	}
 	mode = normalizeCandyEvalMode(mode)
+	target := candyEvalTarget{
+		SiteURL:      strings.TrimSpace(siteURL),
+		APIKey:       strings.TrimSpace(apiKey),
+		ProviderID:   strings.TrimSpace(providerID),
+		ProviderName: strings.TrimSpace(providerName),
+	}
+	if target.APIKey == "" {
+		return errors.New("糖果测试缺少右键选中的 API Key")
+	}
+	if mode == candyEvalModeDirect && target.SiteURL == "" {
+		return errors.New("直连糖果测试缺少右键选中的站点地址")
+	}
 	gatewayURL := ""
 	if mode == candyEvalModeGateway {
 		if err := a.ensureBridgeServer(); err != nil {
 			return fmt.Errorf("启动代理网关失败：%w", err)
 		}
-		gatewayURL = currentBridgeServerURLWithPath(advancedProxyCodexBasePath)
+		gatewayPath := advancedProxyCodexBasePath
+		if executor == candyEvalExecutorClaude {
+			gatewayPath = advancedProxyClaudeBasePath
+		}
+		gatewayURL = currentBridgeServerURLWithPath(gatewayPath)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -203,28 +351,37 @@ func (a *App) StartCandyIntelligenceTest(runID, model, effort, mode string) erro
 		return fmt.Errorf("糖果智力测试已在运行：%s", runID)
 	}
 	a.candyEvalCancels[runID] = cancel
+	if executor == candyEvalExecutorClaude && mode == candyEvalModeGateway {
+		if a.candyEvalGatewayTargets == nil {
+			a.candyEvalGatewayTargets = make(map[string]candyEvalTarget)
+		}
+		a.candyEvalGatewayTargets[runID] = target
+	}
 	a.candyEvalMu.Unlock()
 
 	model = strings.TrimSpace(model)
 	effort = normalizeCandyEvalEffort(effort)
 	startedAt := time.Now().UnixMilli()
 	a.emitCandyIntelligenceTestEvent(candyIntelligenceTestEvent{
-		RunID:      runID,
-		Stage:      candyEvalStageStarting,
-		Kind:       "system",
-		Message:    fmt.Sprintf("正在启动 Codex CLI（链路：%s，模型：%s，思考量：%s）", candyEvalModeLabel(mode), firstNonEmpty(model, "默认模型"), effort),
-		Model:      model,
-		Effort:     effort,
-		Mode:       mode,
-		GatewayURL: gatewayURL,
-		TotalRuns:  candyEvalDefaultTests,
-		Tests:      candyEvalDefaultTests,
-		StartedAt:  startedAt,
+		RunID:        runID,
+		Stage:        candyEvalStageStarting,
+		Kind:         "system",
+		Message:      fmt.Sprintf("正在启动 %s（链路：%s，目标：%s，模型：%s，思考量：%s）", candyEvalExecutorLabel(executor), candyEvalModeLabel(mode), firstNonEmpty(target.ProviderName, target.ProviderID, "右键选中密钥"), firstNonEmpty(model, "默认模型"), effort),
+		Model:        model,
+		Effort:       effort,
+		Mode:         mode,
+		GatewayURL:   gatewayURL,
+		ProviderID:   target.ProviderID,
+		ProviderName: target.ProviderName,
+		Executor:     executor,
+		TotalRuns:    candyEvalDefaultTests,
+		Tests:        candyEvalDefaultTests,
+		StartedAt:    startedAt,
 	})
 
 	go func() {
 		defer a.unregisterCandyIntelligenceTest(runID)
-		a.runCandyIntelligenceTest(ctx, runID, model, effort, mode, gatewayURL, startedAt)
+		a.runCandyIntelligenceTest(ctx, runID, model, effort, mode, gatewayURL, target, executor, startedAt)
 	}()
 	return nil
 }
@@ -262,7 +419,32 @@ func (a *App) cancelAllCandyIntelligenceTests() {
 func (a *App) unregisterCandyIntelligenceTest(runID string) {
 	a.candyEvalMu.Lock()
 	delete(a.candyEvalCancels, strings.TrimSpace(runID))
+	delete(a.candyEvalGatewayTargets, strings.TrimSpace(runID))
 	a.candyEvalMu.Unlock()
+}
+
+// findCandyEvalGatewayTarget identifies an active Claude gateway run without
+// requiring Claude Code to support custom request headers.  The bridge is
+// loopback-only and callers must still present the selected key; the key is
+// used only for an in-memory equality check and is never logged.
+func (a *App) findCandyEvalGatewayTarget(request *http.Request) (string, candyEvalTarget, bool) {
+	if a == nil || request == nil {
+		return "", candyEvalTarget{}, false
+	}
+	candidates := []string{strings.TrimSpace(request.Header.Get("x-api-key"))}
+	if authorization := strings.TrimSpace(request.Header.Get("Authorization")); authorization != "" {
+		candidates = append(candidates, strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer ")))
+	}
+	a.candyEvalMu.Lock()
+	defer a.candyEvalMu.Unlock()
+	for runID, target := range a.candyEvalGatewayTargets {
+		for _, candidate := range candidates {
+			if candidate != "" && target.APIKey != "" && candidate == target.APIKey {
+				return runID, target, true
+			}
+		}
+	}
+	return "", candyEvalTarget{}, false
 }
 
 type candyEvalRunResult struct {
@@ -282,7 +464,15 @@ type candyEvalRunResult struct {
 	row             []string
 }
 
-func (a *App) runCandyIntelligenceTest(ctx context.Context, runID, model, effort, mode, gatewayURL string, startedAt int64) {
+func (a *App) runCandyIntelligenceTest(ctx context.Context, runID, model, effort, mode, gatewayURL string, target candyEvalTarget, executor string, startedAt int64) {
+	switch normalizeCandyEvalExecutor(executor) {
+	case candyEvalExecutorRaw:
+		a.runRawCandyIntelligenceTest(ctx, runID, model, effort, mode, gatewayURL, target, startedAt)
+		return
+	case candyEvalExecutorClaude:
+		a.runClaudeCandyIntelligenceTest(ctx, runID, model, effort, mode, gatewayURL, target, startedAt)
+		return
+	}
 	executable, err := resolveCandyCodexExecutable()
 	if err != nil {
 		a.emitCandyIntelligenceTestEvent(candyIntelligenceTestEvent{
@@ -290,6 +480,13 @@ func (a *App) runCandyIntelligenceTest(ctx context.Context, runID, model, effort
 		})
 		return
 	}
+	codexHome, cleanupCodexHome, err := prepareCandyEvalCodexHome(target, mode, gatewayURL, runID, effort)
+	if err != nil {
+		a.emitCandyIntelligenceTestEvent(candyIntelligenceTestEvent{RunID: runID, Stage: candyEvalStageError, Kind: "error", Message: fmt.Sprintf("创建临时 Codex 配置失败：%v", err), Model: model, Effort: effort, Mode: mode, GatewayURL: gatewayURL, StartedAt: startedAt})
+		return
+	}
+	defer cleanupCodexHome()
+	a.emitCandyIntelligenceTestEvent(candyIntelligenceTestEvent{RunID: runID, Stage: candyEvalStageStreaming, Kind: "target", Message: fmt.Sprintf("已锁定右键选中密钥：%s（%s）；使用独立临时 Codex 配置，结束后自动清理", firstNonEmpty(target.ProviderName, target.ProviderID, "选中密钥"), candyEvalModeLabel(mode)), Model: model, Effort: effort, Mode: mode, GatewayURL: gatewayURL, ProviderID: target.ProviderID, ProviderName: target.ProviderName, TotalRuns: candyEvalDefaultTests, Tests: candyEvalDefaultTests, StartedAt: startedAt})
 
 	totalRuns := candyEvalDefaultTests
 	rows := make([][]string, 0, totalRuns)
@@ -305,7 +502,7 @@ func (a *App) runCandyIntelligenceTest(ctx context.Context, runID, model, effort
 			return
 		}
 
-		result := a.runCandyEvalOne(ctx, executable, runID, runIndex, totalRuns, model, effort, mode, gatewayURL, startedAt)
+		result := a.runCandyEvalOne(ctx, executable, runID, runIndex, totalRuns, model, effort, mode, gatewayURL, target, codexHome, startedAt)
 		if result.canceled {
 			a.emitCandyIntelligenceTestEvent(candyIntelligenceTestEvent{
 				RunID: runID, Stage: candyEvalStageCanceled, Kind: "system", Message: "糖果智力测试已取消", Model: model, Effort: effort, Mode: mode, GatewayURL: gatewayURL, Run: runIndex, TotalRuns: totalRuns, Tests: totalRuns, StartedAt: startedAt,
@@ -385,10 +582,16 @@ func (a *App) runCandyIntelligenceTest(ctx context.Context, runID, model, effort
 	})
 }
 
-func (a *App) runCandyEvalOne(ctx context.Context, executable, runID string, runIndex, totalRuns int, model, effort, mode, gatewayURL string, startedAt int64) candyEvalRunResult {
+func (a *App) runCandyEvalOne(ctx context.Context, executable, runID string, runIndex, totalRuns int, model, effort, mode, gatewayURL string, target candyEvalTarget, codexHome string, startedAt int64) candyEvalRunResult {
 	started := time.Now()
 	result := candyEvalRunResult{}
-	command := buildCandyCodexCommand(ctx, executable, model, effort, mode, gatewayURL)
+	command := buildCandyCodexCommandForTarget(ctx, executable, model, effort, mode, gatewayURL, target, runID)
+	command.Env = append(command.Env, "CODEX_HOME="+codexHome)
+	stopLiveProxyStatus := func() {}
+	if normalizeCandyEvalMode(mode) == candyEvalModeGateway {
+		stopLiveProxyStatus = a.startCandyEvalLiveProxyStatus(ctx, runID, runIndex, totalRuns, model, effort, mode, gatewayURL, startedAt)
+	}
+	defer stopLiveProxyStatus()
 	stdout, stdoutWriter := io.Pipe()
 	stderr, stderrWriter := io.Pipe()
 	command.Stdout = stdoutWriter
@@ -423,6 +626,9 @@ func (a *App) runCandyEvalOne(ctx context.Context, executable, runID string, run
 	_ = stderrWriter.Close()
 	<-stdoutDone
 	<-stderrDone
+	if normalizeCandyEvalMode(mode) == candyEvalModeGateway {
+		a.emitCandyEvalProxyTrace(runID, runIndex, totalRuns, model, effort, mode, gatewayURL, startedAt)
+	}
 
 	result.elapsedSeconds = time.Since(started).Seconds()
 	if ctx.Err() != nil {
@@ -466,6 +672,133 @@ func (a *App) runCandyEvalOne(ctx context.Context, executable, runID string, run
 		map[bool]string{true: "✓", false: "✗"}[correct],
 	}
 	return result
+}
+
+func (a *App) emitCandyEvalProxyTrace(runID string, runIndex, totalRuns int, model, effort, mode, gatewayURL string, startedAt int64) {
+	raw, err := os.ReadFile(resolveAdvancedProxyLogPath())
+	if err != nil {
+		return
+	}
+	needle := "run=" + strings.TrimSpace(runID)
+	if needle == "run=" {
+		return
+	}
+	lines := strings.Split(string(raw), "\n")
+	matched := make([]string, 0, 4)
+	for index := len(lines) - 1; index >= 0 && len(matched) < 6; index-- {
+		line := strings.TrimSpace(lines[index])
+		if line == "" || !strings.Contains(line, needle) {
+			continue
+		}
+		if strings.Contains(line, "[CANDY_EVAL_TARGET_LOCK]") || strings.Contains(line, "[CANDY_EVAL_PROTOCOL_LOCK]") || strings.Contains(line, "[CANDY_EVAL_EFFORT]") || strings.Contains(line, "[ANTI_CANDY_") {
+			matched = append(matched, line)
+		}
+	}
+	for index := len(matched) - 1; index >= 0; index-- {
+		line := matched[index]
+		message := compactCandyEvalText(line, 1000)
+		if strings.Contains(line, "eligible=false") && strings.Contains(line, "model_not_allowed") {
+			message = "反降智未执行：当前模型不在反降智白名单中（model_not_allowed）。"
+		} else if strings.Contains(line, "[ANTI_CANDY_FOLD]") {
+			message = "反降智已触发并完成续写：" + message
+		} else if strings.Contains(line, "[ANTI_CANDY_RESULT]") {
+			message = "反降智已检查，但本轮未命中截断条件：" + message
+		} else if strings.Contains(line, "[CANDY_EVAL_EFFORT]") {
+			message = "糖果诊断已确认实际出站推理强度：" + message
+		} else if strings.Contains(line, "[CANDY_EVAL_TARGET_LOCK]") {
+			message = "高级代理已锁定右键选中的 Provider：" + message
+		} else if strings.Contains(line, "[CANDY_EVAL_PROTOCOL_LOCK]") {
+			message = "糖果诊断已锁定 Responses 协议并延长首次响应等待：" + message
+		}
+		a.emitCandyIntelligenceTestEvent(candyIntelligenceTestEvent{RunID: runID, Stage: candyEvalStageStreaming, Kind: "anti-candy", Message: message, Model: model, Effort: effort, Mode: mode, GatewayURL: gatewayURL, Run: runIndex, TotalRuns: totalRuns, Tests: totalRuns, StartedAt: startedAt})
+	}
+}
+
+// startCandyEvalLiveProxyStatus keeps one mutable tail line in the candy panel
+// while Codex is waiting on the gateway. codexcomp exposes this as round logs;
+// our desktop runner mirrors it so a long upstream wait is observable instead
+// of looking like a stalled CLI process.
+func (a *App) startCandyEvalLiveProxyStatus(ctx context.Context, runID string, runIndex, totalRuns int, model, effort, mode, gatewayURL string, startedAt int64) func() {
+	stop := make(chan struct{})
+	runStartedAt := time.Now()
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		currentStep := "等待 Codex CLI 发起 Responses 请求"
+		stepStartedAt := runStartedAt
+		lastLine := ""
+		emit := func() {
+			a.emitCandyIntelligenceTestEvent(candyIntelligenceTestEvent{
+				RunID: runID, Stage: candyEvalStageStreaming, Kind: "anti-candy-live",
+				Message: fmt.Sprintf("反降智实时步骤：%s（本步骤 %.1fs，累计 %.1fs）", currentStep, time.Since(stepStartedAt).Seconds(), time.Since(runStartedAt).Seconds()),
+				Model:   model, Effort: effort, Mode: mode, GatewayURL: gatewayURL,
+				Run: runIndex, TotalRuns: totalRuns, Tests: totalRuns, StartedAt: startedAt,
+			})
+		}
+		emit()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-stop:
+				return
+			case <-ticker.C:
+				if line := latestCandyEvalProxyStep(runID); line != "" && line != lastLine {
+					lastLine = line
+					currentStep = describeCandyEvalProxyStep(line)
+					stepStartedAt = time.Now()
+				}
+				emit()
+			}
+		}
+	}()
+	return func() { close(stop) }
+}
+
+func latestCandyEvalProxyStep(runID string) string {
+	raw, err := os.ReadFile(resolveAdvancedProxyLogPath())
+	if err != nil {
+		return ""
+	}
+	needle := "run=" + strings.TrimSpace(runID)
+	if needle == "run=" {
+		return ""
+	}
+	lines := strings.Split(string(raw), "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		line := strings.TrimSpace(lines[index])
+		if strings.Contains(line, needle) && (strings.Contains(line, "[ANTI_CANDY_STEP]") || strings.Contains(line, "[ANTI_CANDY_") || strings.Contains(line, "[CANDY_EVAL_")) {
+			return line
+		}
+	}
+	return ""
+}
+
+func describeCandyEvalProxyStep(line string) string {
+	switch {
+	case strings.Contains(line, "[CANDY_EVAL_EFFORT]"):
+		return "已确认实际出站推理强度：" + compactCandyEvalText(line, 240)
+	case strings.Contains(line, "[CANDY_EVAL_TARGET_LOCK]"):
+		return "已锁定右键选中的 Provider，准备建立上游请求"
+	case strings.Contains(line, "[CANDY_EVAL_PROTOCOL_LOCK]"):
+		return "已锁定 Responses 协议，等待首轮响应终止事件"
+	case strings.Contains(line, "stage=round_wait"):
+		return "第 1 轮：正在接收上游 SSE，等待 response.completed / response.incomplete"
+	case strings.Contains(line, "stage=round_received"):
+		return "第 1 轮：已收到完整 SSE，正在解析 518n-2 截断指纹"
+	case strings.Contains(line, "stage=continuation_request"):
+		return "已命中截断：已重放 encrypted reasoning，正在等待续写轮终止事件"
+	case strings.Contains(line, "stage=continuation_received"):
+		return "续写轮已返回，正在解析 reasoning token 并决定继续或收尾"
+	case strings.Contains(line, "[ANTI_CANDY_FOLD]"):
+		return "续写与折叠已完成，正在等待 Codex CLI 解析最终回答"
+	case strings.Contains(line, "[ANTI_CANDY_RESULT]"):
+		return "已检查反降智条件，本轮未命中截断"
+	case strings.Contains(line, "[ANTI_CANDY_CHECK]"):
+		return "已收到首轮响应，正在检查模型、协议与截断资格"
+	default:
+		return compactCandyEvalText(line, 360)
+	}
 }
 
 func candyEvalErrorRow(runIndex int, message string) []string {

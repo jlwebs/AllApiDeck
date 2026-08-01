@@ -230,6 +230,66 @@ func TestFoldAntiCandyResponsesStreamLeavesNormalResponseUntouched(t *testing.T)
 	}
 }
 
+func TestFoldAntiCandyRetriesZeroReasoningContinuation(t *testing.T) {
+	baseBody := []byte(`{"model":"gpt-5.5","stream":true,"input":[{"type":"message","role":"user","content":"solve it"}]}`)
+	firstReasoning := map[string]any{"type": "reasoning", "id": "rs_1", "encrypted_content": "enc-1"}
+	thirdReasoning := map[string]any{"type": "reasoning", "id": "rs_2", "encrypted_content": "enc-2"}
+	discardedMessage := map[string]any{"type": "message", "id": "msg_discard", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "discarded"}}}
+	finalMessage := map[string]any{"type": "message", "id": "msg_final", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "final"}}}
+	firstRaw := strings.Join([]string{
+		antiCandyTestSSEEvent("response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": 0, "item": firstReasoning}),
+		antiCandyTestSSEEvent("response.completed", map[string]any{"type": "response.completed", "response": map[string]any{"id": "resp_1", "status": "completed", "output": []any{firstReasoning}, "usage": map[string]any{"output_tokens_details": map[string]any{"reasoning_tokens": 516}}}}),
+		"data: [DONE]\n\n",
+	}, "")
+	zeroReasoningRaw := strings.Join([]string{
+		antiCandyTestSSEEvent("response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": 0, "item": discardedMessage}),
+		antiCandyTestSSEEvent("response.completed", map[string]any{"type": "response.completed", "response": map[string]any{"id": "resp_2", "status": "completed", "output": []any{discardedMessage}, "usage": map[string]any{"output_tokens_details": map[string]any{"reasoning_tokens": 0}}}}),
+		"data: [DONE]\n\n",
+	}, "")
+	finalRaw := strings.Join([]string{
+		antiCandyTestSSEEvent("response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": 0, "item": thirdReasoning}),
+		antiCandyTestSSEEvent("response.output_item.done", map[string]any{"type": "response.output_item.done", "output_index": 1, "item": finalMessage}),
+		antiCandyTestSSEEvent("response.completed", map[string]any{"type": "response.completed", "response": map[string]any{"id": "resp_3", "status": "completed", "output": []any{thirdReasoning, finalMessage}, "usage": map[string]any{"output_tokens_details": map[string]any{"reasoning_tokens": 100}}}}),
+		"data: [DONE]\n\n",
+	}, "")
+
+	continuations := 0
+	folded, stats, err := foldAntiCandyResponsesStreamBytes([]byte(firstRaw), baseBody, AntiCandyConfig{Enabled: true, Models: []string{"gpt-5.5"}, MaxContinue: 3, MaxTierN: 0, MaxTierNConfigured: true}, func([]byte) (int, http.Header, []byte, error) {
+		continuations++
+		if continuations == 1 {
+			return http.StatusOK, nil, []byte(zeroReasoningRaw), nil
+		}
+		return http.StatusOK, nil, []byte(finalRaw), nil
+	})
+	if err != nil {
+		t.Fatalf("fold returned error: %v", err)
+	}
+	if stats.Continuations != 2 || stats.Rounds != 3 {
+		t.Fatalf("zero-reasoning continuation was not retried: %+v", stats)
+	}
+	if strings.Contains(string(folded), "discarded") || !strings.Contains(string(folded), "final") {
+		t.Fatalf("folded response did not discard empty continuation: %s", folded)
+	}
+}
+
+func TestDefaultAntiCandyTierLimitIsUnlimited(t *testing.T) {
+	defaults := defaultAntiCandyConfig()
+	if defaults.MaxTierN != 0 || defaults.MaxTierNConfigured {
+		t.Fatalf("unexpected default tier limit: %+v", defaults)
+	}
+	if got := strings.Join(defaults.Models, ","); got != "gpt-5.5,gpt-5.6-luna,gpt-5.6-terra" {
+		t.Fatalf("unexpected default model scope: %s", got)
+	}
+	legacy := sanitizeAntiCandyConfig(AntiCandyConfig{MaxTierN: 6})
+	if legacy.MaxTierN != 0 {
+		t.Fatalf("legacy implicit tier limit = %d, want unlimited", legacy.MaxTierN)
+	}
+	explicit := sanitizeAntiCandyConfig(AntiCandyConfig{MaxTierN: 6, MaxTierNConfigured: true})
+	if explicit.MaxTierN != 6 {
+		t.Fatalf("explicit tier limit = %d, want 6", explicit.MaxTierN)
+	}
+}
+
 func antiCandyTestSSEEvent(eventType string, payload map[string]any) string {
 	encoded, _ := json.Marshal(payload)
 	return "event: " + eventType + "\ndata: " + string(encoded) + "\n\n"

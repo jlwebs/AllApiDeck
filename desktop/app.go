@@ -63,10 +63,15 @@ type App struct {
 	clipboardImportSequence         atomic.Uint64
 	clipboardImportDispatchOverride func(clipboardImportEventRequest) (clipboardImportResult, error)
 
-	candyEvalMu       sync.Mutex
-	candyEvalCancels  map[string]context.CancelFunc
-	juiceEvalMu       sync.Mutex
-	juiceEvalSessions map[string]*juiceEvalSession
+	candyEvalMu      sync.Mutex
+	candyEvalCancels map[string]context.CancelFunc
+	// Claude CLI cannot attach the private candy-evaluation headers that the
+	// Codex and raw executors use.  Active Claude gateway runs are therefore
+	// matched in-memory by the API key it presents to the loopback bridge.
+	// This map is never persisted and is removed when the run ends.
+	candyEvalGatewayTargets map[string]candyEvalTarget
+	juiceEvalMu             sync.Mutex
+	juiceEvalSessions       map[string]*juiceEvalSession
 }
 
 func NewApp(mode launchMode, recordKey string, panelStart panelStartMode) *App {

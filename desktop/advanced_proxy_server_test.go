@@ -43,6 +43,40 @@ type delayedReadCloser struct {
 	index  int
 }
 
+func TestApplyAdvancedProxyEffortPreservesExplicitCallerEffort(t *testing.T) {
+	provider := AdvancedProxyProvider{Effort: "high"}
+	request := map[string]any{
+		"reasoning": map[string]any{"effort": "max"},
+	}
+	applyAdvancedProxyEffortToRequest(request, "responses", provider)
+	reasoning, _ := request["reasoning"].(map[string]any)
+	if got := toStringValue(reasoning["effort"]); got != "max" {
+		t.Fatalf("explicit Responses effort was overwritten: got %q, want max", got)
+	}
+}
+
+func TestApplyAdvancedProxyEffortUsesProviderDefaultWhenMissing(t *testing.T) {
+	provider := AdvancedProxyProvider{Effort: "xhigh"}
+	request := map[string]any{"model": "test-model"}
+	applyAdvancedProxyEffortToRequest(request, "responses", provider)
+	reasoning, _ := request["reasoning"].(map[string]any)
+	if got := toStringValue(reasoning["effort"]); got != "xhigh" {
+		t.Fatalf("missing Responses effort was not filled from provider: got %q, want xhigh", got)
+	}
+}
+
+func TestApplyAdvancedProxyEffortPreservesExplicitClaudeEffort(t *testing.T) {
+	provider := AdvancedProxyProvider{Effort: "high"}
+	request := map[string]any{
+		"thinking": map[string]any{"type": "enabled", "effort": "max"},
+	}
+	applyAdvancedProxyEffortToRequest(request, "messages", provider)
+	outputConfig, _ := request["output_config"].(map[string]any)
+	if got := toStringValue(outputConfig["effort"]); got != "max" {
+		t.Fatalf("explicit Claude effort was overwritten: got %q, want max", got)
+	}
+}
+
 func (d *delayedReadCloser) Read(p []byte) (int, error) {
 	if d.index >= len(d.chunks) {
 		return 0, io.EOF

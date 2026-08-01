@@ -71,8 +71,10 @@ export namespace main {
 	export class AntiCandyConfig {
 	    enabled: boolean;
 	    models: string[];
+	    modelsConfigured: boolean;
 	    maxContinue: number;
 	    maxTierN: number;
+	    maxTierNConfigured: boolean;
 	    markerText: string;
 	
 	    static createFrom(source: any = {}) {
@@ -83,8 +85,10 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
 	        this.models = source["models"];
+	        this.modelsConfigured = source["modelsConfigured"];
 	        this.maxContinue = source["maxContinue"];
 	        this.maxTierN = source["maxTierN"];
+	        this.maxTierNConfigured = source["maxTierNConfigured"];
 	        this.markerText = source["markerText"];
 	    }
 	}

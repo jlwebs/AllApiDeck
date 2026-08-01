@@ -349,6 +349,12 @@ function appName(value) {
   if (!key) return t('USAGE_UNKNOWN_APP');
   return key.split('-').filter(Boolean).map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
 }
+function normalizeUsageModelKey(value) {
+  return text(value).toLowerCase();
+}
+function normalizeUsageProviderKey(value) {
+  return text(value).toLowerCase();
+}
 function usageObject(record) {
   if (record && record.usage && typeof record.usage === 'object') return record.usage;
   if (record && record.tokenUsage && typeof record.tokenUsage === 'object') return record.tokenUsage;
@@ -369,9 +375,10 @@ function normalizeModelCosts(value) {
     const tokens = nullableNumber(item && (item.tokens ?? item.tokenCount ?? item.totalTokens));
     const costKnown = item && typeof item.costKnown === 'boolean' ? item.costKnown : cost !== null;
     if (!model || (cost === null && tokens === null)) return;
-    const key = model.toLowerCase();
+    const key = normalizeUsageModelKey(model);
     const current = map.get(key) || {
       model: model,
+      modelKey: key,
       modelName: text(item && (item.modelName || item.name)) || model,
       cost: 0,
       tokens: 0,
@@ -411,10 +418,11 @@ function normalizeRecord(record, index) {
     id: text(record && record.id) || ['request', recordedAt || Date.now(), index].join('-'),
     timestamp: recordedAt,
     provider: provider,
-    providerKey: provider,
+    providerKey: normalizeUsageProviderKey(provider),
     appType: appType,
     appLabel: appLabel,
     model: model,
+    modelKey: normalizeUsageModelKey(model),
     inputTokens: inputTokens,
     outputTokens: outputTokens,
     reasoningTokens: reasoningTokens,
@@ -439,6 +447,7 @@ function buildLocalSessionRow(session, index) {
   const appLabel = appName(appType);
   const sourceLabel = text(session && session.sourceLabel) || appLabel;
   const provider = text(session && session.provider) || sourceLabel + ' (Session)';
+  const model = text(session && (session.modelName || session.model)) || '—';
   const inputTokens = firstNumber(session && session.inputTokens);
   const outputTokens = firstNumber(session && session.outputTokens);
   const reasoningTokens = firstNumber(session && session.reasoningTokens);
@@ -449,10 +458,11 @@ function buildLocalSessionRow(session, index) {
     id: text(session && session.id) || [appType + '-session', recordedAt, index].join('-'),
     timestamp: recordedAt,
     provider: provider,
-    providerKey: provider,
+    providerKey: normalizeUsageProviderKey(provider),
     appType: appType,
     appLabel: appLabel,
-    model: text(session && (session.modelName || session.model)) || '—',
+    model: model,
+    modelKey: normalizeUsageModelKey(model),
     inputTokens: inputTokens,
     outputTokens: outputTokens,
     reasoningTokens: reasoningTokens,
@@ -564,11 +574,11 @@ function filterOptions(rows, valueKey, labelKey) {
 }
 const appOptions = computed(() => filterOptions(rowsInRange.value, 'appType', 'appLabel'));
 const providerOptions = computed(() => filterOptions(rowsInRange.value, 'providerKey', 'provider'));
-const modelOptions = computed(() => filterOptions(rowsInRange.value, 'model', 'model'));
+const modelOptions = computed(() => filterOptions(rowsInRange.value, 'modelKey', 'model'));
 const filteredRows = computed(() => rowsInRange.value.filter(row => (
   (appFilter.value === 'all' || row.appType === appFilter.value)
   && (providerFilter.value === 'all' || row.providerKey === providerFilter.value)
-  && (modelFilter.value === 'all' || row.model === modelFilter.value)
+  && (modelFilter.value === 'all' || row.modelKey === modelFilter.value)
 )));
 const hasActiveFilters = computed(() => appFilter.value !== 'all' || providerFilter.value !== 'all' || modelFilter.value !== 'all');
 
@@ -615,8 +625,8 @@ function mergeModelCosts(existing, additions) {
     const tokens = nullableNumber(item && (item.tokens ?? item.tokenCount ?? item.totalTokens));
     const costKnown = item && typeof item.costKnown === 'boolean' ? item.costKnown : cost !== null;
     if (!model || (cost === null && tokens === null)) return;
-    const key = model.toLowerCase();
-    const current = map.get(key) || { model, modelName: text(item && (item.modelName || item.name)) || model, cost: 0, tokens: 0, costKnown: false };
+    const key = normalizeUsageModelKey(model);
+    const current = map.get(key) || { model, modelKey: key, modelName: text(item && (item.modelName || item.name)) || model, cost: 0, tokens: 0, costKnown: false };
     if (cost !== null) current.cost += cost;
     if (tokens !== null) current.tokens += tokens;
     current.costKnown = current.costKnown || costKnown;
@@ -695,7 +705,7 @@ function groupedStats(rows, keyName, labelName) {
   })).sort((left, right) => right.totalTokens - left.totalTokens || right.requests - left.requests || left.label.localeCompare(right.label));
 }
 const providerStats = computed(() => groupedStats(filteredRows.value, 'providerKey', 'provider'));
-const modelStats = computed(() => groupedStats(filteredRows.value, 'model', 'model'));
+const modelStats = computed(() => groupedStats(filteredRows.value, 'modelKey', 'model'));
 
 const trend = computed(() => {
   const buckets = new Map();

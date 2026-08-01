@@ -122,9 +122,13 @@ export const DEFAULT_ANTI_POISON_STRING_PROTECTION = {
 
 export const DEFAULT_ANTI_CANDY = {
   enabled: false,
-  models: ['gpt-5.5'],
+  // Match the observed model set used by the reviewed codexcomp
+  // implementations. Users can still explicitly enter * in the gateway UI.
+  models: ['gpt-5.5', 'gpt-5.6-luna', 'gpt-5.6-terra'],
+  modelsConfigured: false,
   maxContinue: 3,
-  maxTierN: 6,
+  maxTierN: 0,
+  maxTierNConfigured: false,
   markerText: 'Continue thinking...',
 };
 
@@ -498,16 +502,18 @@ export function normalizeAntiCandySection(input = {}) {
       return true;
     });
   const maxContinue = Number(input?.maxContinue || DEFAULT_ANTI_CANDY.maxContinue);
-  const maxTierN = Number(input?.maxTierN || DEFAULT_ANTI_CANDY.maxTierN);
+  const maxTierN = Number(input?.maxTierN);
   return {
     enabled: input?.enabled === true,
-    models: models.length ? models : [...DEFAULT_ANTI_CANDY.models],
+    models: input?.modelsConfigured === true && models.length ? models : [...DEFAULT_ANTI_CANDY.models],
+    modelsConfigured: input?.modelsConfigured === true,
     maxContinue: Number.isFinite(maxContinue)
       ? Math.max(1, Math.min(10, maxContinue))
       : DEFAULT_ANTI_CANDY.maxContinue,
-    maxTierN: Number.isFinite(maxTierN)
-      ? Math.max(1, Math.min(64, maxTierN))
+    maxTierN: input?.maxTierNConfigured === true && Number.isFinite(maxTierN)
+      ? Math.max(0, Math.min(64, maxTierN))
       : DEFAULT_ANTI_CANDY.maxTierN,
+    maxTierNConfigured: input?.maxTierNConfigured === true,
     markerText: String(input?.markerText || DEFAULT_ANTI_CANDY.markerText).trim() || DEFAULT_ANTI_CANDY.markerText,
   };
 }

@@ -212,6 +212,55 @@ func TestMergeModelsDevPricingPrefersCanonicalOpenAIEntry(t *testing.T) {
 	}
 }
 
+func TestMergeModelsDevPricingResolvesProviderChannelAliasCaseInsensitively(t *testing.T) {
+	azureInput := 9.0
+	azureOutput := 18.0
+	openAIInput := 0.2
+	openAIOutput := 1.2
+	catalog := defaultCodexPricingCatalog()
+	mergeModelsDevPricing(catalog, map[string]modelsDevProvider{
+		"azure": {Models: map[string]modelsDevModel{
+			"gpt-5.6-luna": {Cost: &modelsDevCost{Input: &azureInput, Output: &azureOutput}},
+		}},
+		"openai": {Models: map[string]modelsDevModel{
+			"gpt-5.6-luna": {Cost: &modelsDevCost{Input: &openAIInput, Output: &openAIOutput}},
+		}},
+	})
+
+	channelPricing, ok := catalog.resolve("AZURE/GPT-5.6-LUNA")
+	if !ok || channelPricing.Source != "azure" || channelPricing.InputPerMillion != azureInput {
+		t.Fatalf("unexpected channel pricing: ok=%v pricing=%+v", ok, channelPricing)
+	}
+	canonicalPricing, ok := catalog.resolve("gPt-5.6-LuNa")
+	if !ok || canonicalPricing.Source != "openai" || canonicalPricing.InputPerMillion != openAIInput {
+		t.Fatalf("unexpected canonical pricing: ok=%v pricing=%+v", ok, canonicalPricing)
+	}
+	dotNamespacePricing, ok := catalog.resolve("OPENAI.GPT-5.6-LUNA")
+	if !ok || dotNamespacePricing.Source != "openai" || dotNamespacePricing.InputPerMillion != openAIInput {
+		t.Fatalf("unexpected dotted namespace pricing: ok=%v pricing=%+v", ok, dotNamespacePricing)
+	}
+}
+
+func TestExplicitPricingChannelTriggersRemoteCatalogAndKeepsChannelUsage(t *testing.T) {
+	var usage codexSessionAnalytics
+	usage.ModelUsages = map[string]codexModelUsage{}
+	usage.ToolCounts = map[string]int{}
+	readCodexAnalyticsLine(`{"timestamp":"2026-08-01T10:00:00Z","type":"turn_context","payload":{"model":"AZURE/GPT-5.6-LUNA"}}`, &usage)
+	readCodexAnalyticsLine(`{"timestamp":"2026-08-01T10:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}}}`, &usage)
+
+	if usage.PricingModel != "azure/gpt-5.6-luna" || usage.ModelUsages["azure/gpt-5.6-luna"].TotalTokens != 110 {
+		t.Fatalf("explicit channel was not retained: %+v", usage)
+	}
+	defaults := defaultCodexPricingCatalog()
+	if !modelNeedsRemotePricing(usage.PricingModel, defaults) {
+		t.Fatal("explicit Azure model should refresh the remote pricing catalog")
+	}
+	defaults["azure/gpt-5.6-luna"] = codexModelPricing{InputPerMillion: 9, OutputPerMillion: 18, Source: "azure"}
+	if modelNeedsRemotePricing(usage.PricingModel, defaults) {
+		t.Fatal("available channel pricing should not request another catalog refresh")
+	}
+}
+
 func TestCodexSessionCostTracksModelSwitches(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "sessions", "2026", "08", "01")

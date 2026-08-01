@@ -958,7 +958,10 @@
         v-if="rowContextMenu.open && (rowContextMenu.record || rowContextMenu.records.length)"
         ref="rowContextMenuRef"
         class="key-row-context-menu"
-        :class="{ 'key-row-context-menu-dark': isDarkMode }"
+        :class="{
+          'key-row-context-menu-dark': isDarkMode,
+          'key-row-context-menu-opens-left': rowContextMenu.submenuDirection === 'left',
+        }"
         :style="{ left: `${rowContextMenu.x}px`, top: `${rowContextMenu.y}px` }"
         @mouseleave="closeRowContextSubmenus"
       >
@@ -1019,7 +1022,7 @@
             @mouseenter="openRowContextProxyConfigSubmenu"
           >
             <span>Test &amp;&amp; Proxy配置</span>
-            <span class="key-row-context-submenu-arrow">›</span>
+            <span class="key-row-context-submenu-arrow">{{ getRowContextSubmenuArrow() }}</span>
           </button>
           <div
             v-if="rowContextMenu.proxyConfigSubmenuOpen"
@@ -1035,7 +1038,7 @@
                 @mouseenter="openRowContextEffortSubmenu"
               >
                 <span>Effort（{{ getRowContextEffortLabel() }}）</span>
-                <span class="key-row-context-submenu-arrow">›</span>
+                <span class="key-row-context-submenu-arrow">{{ getRowContextSubmenuArrow() }}</span>
               </button>
               <div
                 v-if="rowContextMenu.effortSubmenuOpen"
@@ -1064,7 +1067,7 @@
                 @mouseenter="openRowContextProtocolSubmenu"
               >
                 <span>代理使用协议（{{ getRowContextProtocolLabel() }}）</span>
-                <span class="key-row-context-submenu-arrow">›</span>
+                <span class="key-row-context-submenu-arrow">{{ getRowContextSubmenuArrow() }}</span>
               </button>
               <div
                 v-if="rowContextMenu.protocolSubmenuOpen"
@@ -1112,7 +1115,7 @@
           @mouseenter="openRowContextGroupSubmenu"
         >
           <span>{{ rowContextMenu.batch ? `批量分配到分组（${rowContextMenu.records.length}）` : '分配到分组' }}</span>
-          <span class="key-row-context-submenu-arrow">›</span>
+          <span class="key-row-context-submenu-arrow">{{ getRowContextSubmenuArrow() }}</span>
         </button>
 
         <div
@@ -1209,8 +1212,16 @@
               <strong>{{ getCandyEvalModeLabel(candyEvalMode) }}</strong>
             </div>
             <div class="candy-eval-summary-item">
+              <span class="candy-eval-summary-label">执行器</span>
+              <strong>{{ getCandyEvalExecutorLabel(candyEvalExecutor) }}</strong>
+            </div>
+            <div class="candy-eval-summary-item">
               <span class="candy-eval-summary-label">模型</span>
               <strong>{{ candyEvalModel || '默认模型' }}</strong>
+            </div>
+            <div class="candy-eval-summary-item">
+              <span class="candy-eval-summary-label">锁定密钥</span>
+              <strong>{{ candyEvalProviderName || '右键选中记录' }}</strong>
             </div>
             <div class="candy-eval-summary-item">
               <span class="candy-eval-summary-label">思考量</span>
@@ -1222,18 +1233,54 @@
             </div>
           </div>
 
-          <div v-if="!candyEvalMode && !candyEvalStage" class="candy-eval-mode-picker">
+          <div v-if="!candyEvalExecutor && !candyEvalStage" class="candy-eval-mode-picker">
             <div class="candy-eval-mode-picker-heading">
-              <div class="candy-eval-section-title">请选择测试链路</div>
-              <div class="candy-eval-mode-picker-hint">两种方式会使用同一个模型和思考量，仅请求路径不同。</div>
+              <div class="candy-eval-section-title">先选择测试执行器</div>
+              <div class="candy-eval-mode-picker-hint">执行器的系统提示、协议和重连策略不同；选定后再选直连或高级代理。</div>
+            </div>
+            <div class="candy-eval-mode-grid">
+              <button type="button" class="candy-eval-mode-card candy-eval-mode-card-gateway" @click="selectCandyEvalExecutor('codex_cli')">
+                <span class="candy-eval-mode-card-icon"><SafetyCertificateOutlined /></span>
+                <span class="candy-eval-mode-card-copy">
+                  <strong>Codex CLI</strong>
+                  <span>最贴近 Codex 实际链路，可观察其 Responses 流与重连行为。</span>
+                  <small>隔离临时 CODEX_HOME</small>
+                </span>
+                <span class="candy-eval-mode-card-arrow">›</span>
+              </button>
+              <button type="button" class="candy-eval-mode-card candy-eval-mode-card-direct" @click="selectCandyEvalExecutor('claude_cli')">
+                <span class="candy-eval-mode-card-icon"><ThunderboltOutlined /></span>
+                <span class="candy-eval-mode-card-copy">
+                  <strong>Claude CLI</strong>
+                  <span>用于对照 Agent 系统提示和 Anthropic Messages 协议差异。</span>
+                  <small>隔离临时 CLAUDE_CONFIG_DIR</small>
+                </span>
+                <span class="candy-eval-mode-card-arrow">›</span>
+              </button>
+              <button type="button" class="candy-eval-mode-card" @click="selectCandyEvalExecutor('raw_request')">
+                <span class="candy-eval-mode-card-icon"><FileTextOutlined /></span>
+                <span class="candy-eval-mode-card-copy">
+                  <strong>Raw Request</strong>
+                  <span>直接发送 Responses API 请求，不带 Agent 系统提示，是协议基准。</span>
+                  <small>保留 SSE 终止事件对照</small>
+                </span>
+                <span class="candy-eval-mode-card-arrow">›</span>
+              </button>
+            </div>
+          </div>
+
+          <div v-else-if="!candyEvalMode && !candyEvalStage" class="candy-eval-mode-picker">
+            <div class="candy-eval-mode-picker-heading">
+              <div class="candy-eval-section-title">{{ getCandyEvalExecutorLabel(candyEvalExecutor) }}：请选择测试链路</div>
+              <div class="candy-eval-mode-picker-hint">两种方式使用同一个右键选中密钥、模型和思考量。</div>
             </div>
             <div class="candy-eval-mode-grid">
               <button type="button" class="candy-eval-mode-card candy-eval-mode-card-gateway" @click="startCandyEvalWithMode('gateway')">
                 <span class="candy-eval-mode-card-icon"><SafetyCertificateOutlined /></span>
                 <span class="candy-eval-mode-card-copy">
-                  <strong>代理网关测试</strong>
-                  <span>经过 AllApiDeck 高级代理，启用反降智、故障转移等网关逻辑。</span>
-                  <small>{{ getCandyEvalGatewayPreviewUrl() }}</small>
+                  <strong>高级代理测试</strong>
+                  <span>严格锁定右键选中的 Provider；Codex 路径可验证反降智留痕。</span>
+                  <small>{{ getCandyEvalGatewayPreviewUrl(candyEvalExecutor) }}</small>
                 </span>
                 <span class="candy-eval-mode-card-arrow">›</span>
               </button>
@@ -1241,7 +1288,7 @@
                 <span class="candy-eval-mode-card-icon"><ThunderboltOutlined /></span>
                 <span class="candy-eval-mode-card-copy">
                   <strong>直连测试</strong>
-                  <span>Codex CLI 直接访问当前账号配置的上游，不经过本地代理网关。</span>
+                  <span>直接请求右键选中站点，不经过本地高级代理。</span>
                   <small>不经过本地高级代理</small>
                 </span>
                 <span class="candy-eval-mode-card-arrow">›</span>
@@ -1260,7 +1307,7 @@
             </div>
 
             <div ref="candyEvalStreamRef" class="candy-eval-stream" aria-live="polite">
-              <div v-if="!candyEvalEvents.length" class="candy-eval-empty">等待 Codex CLI 返回进展…</div>
+              <div v-if="!candyEvalEvents.length" class="candy-eval-empty">等待 {{ getCandyEvalExecutorLabel(candyEvalExecutor) }} 返回进展…</div>
               <div
                 v-for="(event, index) in candyEvalEvents"
                 :key="`${event.updatedAt || event.receivedAt || index}-${index}`"
@@ -1324,7 +1371,7 @@
           <section class="anti-candy-info-section">
             <h4>这个开关解决什么问题？</h4>
             <p>
-              它主要用于缓解 GPT 5.5、5.6-luna 和 terra 系列模型常见的“516 降智”问题：思维链在关键位置被截断后，模型会提前结束思考，导致原本应该答对的问题答错。
+              它用于缓解推理链在关键位置被截断后提前结束思考的问题。默认仅对白名单中的 <code>gpt-5.5</code> 生效；若测试的是 5.6-luna、terra 或其他模型，必须先在高级代理的反降智模型白名单中显式加入该模型（或匹配通配符）。
             </p>
           </section>
 
@@ -1338,7 +1385,7 @@
           <section class="anti-candy-info-section">
             <h4>什么时候建议开启？</h4>
             <p>
-              可以先在 API Key 面板对目标记录右键，运行“糖果智力测试”。如果测试不能全部答对，再开启这个特性；如果测试表现正常，可以保持关闭。
+              可以先在 API Key 面板对目标记录右键，运行“糖果智力测试”。高级代理测试结束后，面板会显示 Provider 锁定与反降智检查/续写留痕；若显示 <code>model_not_allowed</code>，说明该模型尚未加入白名单。
             </p>
           </section>
 
@@ -2085,6 +2132,11 @@ const candyEvalModalOpen = ref(false);
 const candyEvalRunId = ref('');
 const candyEvalModel = ref('');
 const candyEvalEffort = ref('');
+const candyEvalSiteUrl = ref('');
+const candyEvalApiKey = ref('');
+const candyEvalProviderId = ref('');
+const candyEvalProviderName = ref('');
+const candyEvalExecutor = ref('');
 const candyEvalMode = ref('');
 const candyEvalGatewayUrl = ref('');
 const candyEvalStage = ref('');
@@ -2132,6 +2184,7 @@ const rowContextMenu = reactive({
   proxyConfigSubmenuOpen: false,
   effortSubmenuOpen: false,
   protocolSubmenuOpen: false,
+  submenuDirection: 'right',
 });
 const advancedProxyEffortOptions = ADVANCED_PROXY_EFFORT_OPTIONS;
 const advancedProxyProtocolOptions = ADVANCED_PROXY_PROTOCOL_OPTIONS;
@@ -4428,6 +4481,7 @@ function closeRowContextMenu() {
   rowContextMenu.proxyConfigSubmenuOpen = false;
   rowContextMenu.effortSubmenuOpen = false;
   rowContextMenu.protocolSubmenuOpen = false;
+  rowContextMenu.submenuDirection = 'right';
 }
 
 function normalizeRowKeyValue(value) {
@@ -4503,6 +4557,10 @@ async function openRowContextMenu(record, event) {
   rowContextMenu.protocolSubmenuOpen = false;
   const anchorX = Number(event.clientX) || 0;
   const anchorY = Number(event.clientY) || 0;
+  // Decide once from the click location, then make every nested level inherit
+  // it. This prevents level 2/3 from flipping back over the parent menu.
+  const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 0;
+  rowContextMenu.submenuDirection = viewportWidth > 0 && anchorX >= viewportWidth / 2 ? 'left' : 'right';
   const initialPosition = resolveContextMenuPosition(anchorX, anchorY, 224, 360);
   rowContextMenu.x = initialPosition.x;
   rowContextMenu.y = initialPosition.y;
@@ -4718,6 +4776,10 @@ function openRowContextGroupSubmenu() {
   rowContextMenu.groupSubmenuOpen = true;
 }
 
+function getRowContextSubmenuArrow() {
+  return rowContextMenu.submenuDirection === 'left' ? '‹' : '›';
+}
+
 function closeRowContextGroupSubmenu() {
   rowContextMenu.groupSubmenuOpen = false;
 }
@@ -4840,9 +4902,25 @@ function getCandyEvalModeLabel(mode) {
   }
 }
 
-function getCandyEvalGatewayPreviewUrl() {
+function getCandyEvalExecutorLabel(executor) {
+  switch (String(executor || '').trim()) {
+    case 'codex_cli': return 'Codex CLI';
+    case 'claude_cli': return 'Claude CLI';
+    case 'raw_request': return 'Raw Request';
+    default: return '待选择';
+  }
+}
+
+function selectCandyEvalExecutor(executor) {
+  if (candyEvalRunning.value || candyEvalMode.value) return;
+  const normalized = String(executor || '').trim();
+  if (!['codex_cli', 'claude_cli', 'raw_request'].includes(normalized)) return;
+  candyEvalExecutor.value = normalized;
+}
+
+function getCandyEvalGatewayPreviewUrl(executor = candyEvalExecutor.value) {
   try {
-    return getAdvancedProxyAppBaseUrl('codex', advancedProxyConfigSnapshot.value);
+    return getAdvancedProxyAppBaseUrl(String(executor || '').trim() === 'claude_cli' ? 'claude' : 'codex', advancedProxyConfigSnapshot.value);
   } catch {
     return '本地 AllApiDeck 高级代理';
   }
@@ -4882,17 +4960,43 @@ function handleCandyEvalProgressEvent(payload) {
   const eventRunId = String(event.runId || '').trim();
   if (!eventRunId || eventRunId !== candyEvalRunId.value) return;
 
+  const eventKind = String(event.kind || 'event').trim() || 'event';
+  const eventMessage = String(event.message || '').trim();
+  const isRawTextDelta = eventKind === 'raw-event' && eventMessage === 'Raw SSE：response.output_text.delta';
+  const isLiveAntiCandyStep = eventKind === 'anti-candy-live';
   const normalizedEvent = {
     ...event,
-    kind: String(event.kind || 'event').trim() || 'event',
-    message: String(event.message || '').trim(),
-    text: String(event.text || '').trim(),
+    kind: eventKind,
+    message: eventMessage,
+    // Never trim a streaming delta: leading/trailing whitespace can be part
+    // of the model answer and each delta is appended to the previous one.
+    text: isRawTextDelta ? String(event.text || '') : String(event.text || '').trim(),
     receivedAt: Date.now(),
   };
   if (!normalizedEvent.message && !normalizedEvent.text && event.raw) {
     normalizedEvent.message = String(event.raw).trim();
   }
-  if (normalizedEvent.message || normalizedEvent.text) {
+  const streamKey = isRawTextDelta && normalizedEvent.text
+    ? `raw-delta:${eventRunId}:${Number(event.run || 0)}`
+    : (isLiveAntiCandyStep ? `anti-candy-live:${eventRunId}:${Number(event.run || 0)}` : '');
+  const previousEvent = candyEvalEvents.value[candyEvalEvents.value.length - 1];
+  const liveEventIndex = isLiveAntiCandyStep
+    ? candyEvalEvents.value.findIndex(item => item?.streamKey === streamKey)
+    : -1;
+  if (liveEventIndex >= 0) {
+    const [previousLiveEvent] = candyEvalEvents.value.splice(liveEventIndex, 1);
+    candyEvalEvents.value.push({
+      ...previousLiveEvent,
+      ...normalizedEvent,
+      streamKey,
+      receivedAt: normalizedEvent.receivedAt,
+    });
+  } else if (streamKey && previousEvent?.streamKey === streamKey) {
+    previousEvent.text += normalizedEvent.text;
+    previousEvent.updatedAt = normalizedEvent.updatedAt || normalizedEvent.receivedAt;
+    previousEvent.receivedAt = normalizedEvent.receivedAt;
+  } else if (normalizedEvent.message || normalizedEvent.text) {
+    if (streamKey) normalizedEvent.streamKey = streamKey;
     candyEvalEvents.value.push(normalizedEvent);
     if (candyEvalEvents.value.length > 240) candyEvalEvents.value.splice(0, candyEvalEvents.value.length - 240);
   }
@@ -4902,7 +5006,10 @@ function handleCandyEvalProgressEvent(payload) {
   if (String(event.model || '').trim()) candyEvalModel.value = String(event.model).trim();
   if (String(event.effort || '').trim()) candyEvalEffort.value = String(event.effort).trim();
   if (String(event.mode || '').trim()) candyEvalMode.value = String(event.mode).trim();
+  if (String(event.executor || '').trim()) candyEvalExecutor.value = String(event.executor).trim();
   if (String(event.gatewayUrl || '').trim()) candyEvalGatewayUrl.value = String(event.gatewayUrl).trim();
+  if (String(event.providerId || '').trim()) candyEvalProviderId.value = String(event.providerId).trim();
+  if (String(event.providerName || '').trim()) candyEvalProviderName.value = String(event.providerName).trim();
   if (String(event.finalText || '').trim()) candyEvalFinalText.value = String(event.finalText).trim();
   const totalRuns = Number(event.totalRuns || event.tests || 0);
   const run = Number(event.run || 0);
@@ -5110,7 +5217,7 @@ async function submitJuiceEvalFollowup() {
 
 async function startCandyEvalWithMode(mode) {
   const normalizedMode = String(mode || '').trim().toLowerCase() === 'gateway' ? 'gateway' : 'direct';
-  if (!candyEvalRunId.value || candyEvalRunning.value || candyEvalMode.value) return;
+  if (!candyEvalRunId.value || candyEvalRunning.value || candyEvalMode.value || !candyEvalExecutor.value) return;
 
   candyEvalMode.value = normalizedMode;
   candyEvalGatewayUrl.value = '';
@@ -5131,20 +5238,30 @@ async function startCandyEvalWithMode(mode) {
       stage: 'error',
       kind: 'error',
       mode: normalizedMode,
-      message: '糖果智力测试需要在桌面版 EXE 中运行，当前页面没有本地 Codex CLI 接口。',
+      message: '糖果智力测试需要在桌面版 EXE 中运行，当前页面没有本地测试执行器接口。',
     });
     return;
   }
 
   try {
-    await StartCandyIntelligenceTest(candyEvalRunId.value, candyEvalModel.value, candyEvalEffort.value, normalizedMode);
+    await StartCandyIntelligenceTest(
+      candyEvalRunId.value,
+      candyEvalModel.value,
+      candyEvalEffort.value,
+      normalizedMode,
+      candyEvalSiteUrl.value,
+      candyEvalApiKey.value,
+      candyEvalProviderId.value,
+      candyEvalProviderName.value,
+      candyEvalExecutor.value,
+    );
   } catch (error) {
     handleCandyEvalProgressEvent({
       runId: candyEvalRunId.value,
       stage: 'error',
       kind: 'error',
       mode: normalizedMode,
-      message: error?.message || '启动本地 Codex CLI 失败',
+      message: error?.message || `启动 ${getCandyEvalExecutorLabel(candyEvalExecutor.value)} 失败`,
     });
   }
 }
@@ -5166,6 +5283,11 @@ async function handleRowContextCandyTest() {
   candyEvalRunId.value = `candy-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   candyEvalModel.value = model;
   candyEvalEffort.value = effort;
+  candyEvalSiteUrl.value = String(record?.siteUrl || provider?.baseUrl || '').trim();
+  candyEvalApiKey.value = String(record?.apiKey || provider?.apiKey || '').trim();
+  candyEvalProviderId.value = String(provider?.id || provider?.rowKey || record?.rowKey || '').trim();
+  candyEvalProviderName.value = String(record?.siteName || provider?.name || candyEvalProviderId.value || '').trim();
+  candyEvalExecutor.value = '';
   candyEvalMode.value = '';
   candyEvalGatewayUrl.value = '';
   candyEvalStage.value = '';
@@ -8781,6 +8903,7 @@ function persistMeta() {
 .key-row-context-primary-action-wide{grid-column:1 / -1}
 .key-row-context-submenu-row{position:relative}
 .key-row-context-submenu{position:absolute;left:calc(100% - 6px);top:118px;z-index:2;display:flex;flex-direction:column;gap:8px;width:196px;padding:10px;border-radius:16px;background:rgba(255,255,255,.98);box-shadow:0 18px 48px rgba(15,23,42,.2);backdrop-filter:blur(14px)}
+.key-row-context-menu-opens-left .key-row-context-submenu{left:auto;right:calc(100% - 6px)}
 .key-row-context-proxy-config-submenu{top:auto;bottom:0;width:218px}
 .key-row-context-submenu-inline{top:auto;bottom:0}
 .key-row-context-option{display:flex;align-items:center;justify-content:space-between;gap:10px}

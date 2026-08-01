@@ -80,6 +80,40 @@ func TestMergeClaudeLocalTokenUsageAnalyticsIncludesModelTokenSplit(t *testing.T
 	}
 }
 
+func TestMergeClaudeLocalTokenUsageAnalyticsCalculatesCaseInsensitivePricing(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "project", "session-claude.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	contents := `{"type":"assistant","timestamp":"2026-08-01T09:01:00Z","sessionId":"session-claude","message":{"id":"msg-1","role":"assistant","model":"OPENAI/GPT-5.6-LUNA","usage":{"input_tokens":100,"cache_creation_input_tokens":20,"cache_read_input_tokens":30,"output_tokens":10}}}` + "\n"
+	if err := os.WriteFile(path, []byte(contents), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	analytics := LocalTokenUsageAnalytics{}
+	if err := mergeClaudeLocalTokenUsageAnalyticsWithPricing(&analytics, filepath.Join(root, "project"), defaultCodexPricingCatalog()); err != nil {
+		t.Fatal(err)
+	}
+	if len(analytics.Sessions) != 1 {
+		t.Fatalf("session count = %d, want 1", len(analytics.Sessions))
+	}
+	session := analytics.Sessions[0]
+	if session.Cost == nil {
+		t.Fatal("expected a priced Claude session")
+	}
+	const wantCost = 0.0000376
+	if diff := *session.Cost - wantCost; diff < -1e-12 || diff > 1e-12 {
+		t.Fatalf("cost = %.10f, want %.10f", *session.Cost, wantCost)
+	}
+	if len(session.ModelCosts) != 1 || !session.ModelCosts[0].CostKnown {
+		t.Fatalf("expected one known model cost: %+v", session.ModelCosts)
+	}
+	if session.ModelCosts[0].Model != "gpt-5.6-luna" {
+		t.Fatalf("model cost key = %q, want gpt-5.6-luna", session.ModelCosts[0].Model)
+	}
+}
+
 func TestMergeClaudeLocalTokenUsageAnalyticsCreatesSeparateSources(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "project", "session-claude.jsonl")

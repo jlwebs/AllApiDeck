@@ -18,23 +18,25 @@ const (
 )
 
 type claudeSessionAnalytics struct {
-	StartedAt       time.Time
-	UpdatedAt       time.Time
-	SessionID       string
-	InputTokens     int64
-	CacheReadTokens int64
-	OutputTokens    int64
-	TotalTokens     int64
-	Model           string
-	ModelUsages     map[string]claudeModelUsage
-	TurnCount       int
+	StartedAt           time.Time
+	UpdatedAt           time.Time
+	SessionID           string
+	InputTokens         int64
+	CacheCreationTokens int64
+	CacheReadTokens     int64
+	OutputTokens        int64
+	TotalTokens         int64
+	Model               string
+	ModelUsages         map[string]claudeModelUsage
+	TurnCount           int
 }
 
 type claudeModelUsage struct {
-	InputTokens     int64
-	CacheReadTokens int64
-	OutputTokens    int64
-	TotalTokens     int64
+	InputTokens         int64
+	CacheCreationTokens int64
+	CacheReadTokens     int64
+	OutputTokens        int64
+	TotalTokens         int64
 }
 
 type claudeSessionJSONLine struct {
@@ -201,19 +203,25 @@ func readClaudeAnalyticsLine(line string, usage *claudeSessionAnalytics, seenMes
 	}
 
 	usage.InputTokens += inputTokens
+	usage.CacheCreationTokens += cacheCreationTokens
 	usage.CacheReadTokens += cacheReadTokens
 	usage.OutputTokens += outputTokens
 	usage.TotalTokens += inputTokens + cacheReadTokens + outputTokens
-	modelUsage := usage.ModelUsages[model]
+	modelKey := normalizeCodexModelPreservingNamespace(model)
+	if modelKey == "" {
+		modelKey = strings.ToLower(model)
+	}
+	modelUsage := usage.ModelUsages[modelKey]
 	modelUsage.InputTokens += inputTokens
+	modelUsage.CacheCreationTokens += cacheCreationTokens
 	modelUsage.CacheReadTokens += cacheReadTokens
 	modelUsage.OutputTokens += outputTokens
 	modelUsage.TotalTokens += inputTokens + cacheReadTokens + outputTokens
-	usage.ModelUsages[model] = modelUsage
+	usage.ModelUsages[modelKey] = modelUsage
 	usage.TurnCount++
 	if usage.Model == "" {
 		usage.Model = model
-	} else if usage.Model != model {
+	} else if normalizeCodexModel(usage.Model) != normalizeCodexModel(modelKey) {
 		usage.Model = "Multiple models"
 	}
 }
@@ -232,6 +240,10 @@ func parseClaudeSessionTimestamp(value string) time.Time {
 }
 
 func mergeClaudeLocalTokenUsageAnalytics(analytics *LocalTokenUsageAnalytics, projectsDir string) error {
+	return mergeClaudeLocalTokenUsageAnalyticsWithPricing(analytics, projectsDir, nil)
+}
+
+func mergeClaudeLocalTokenUsageAnalyticsWithPricing(analytics *LocalTokenUsageAnalytics, projectsDir string, pricing codexPricingCatalog) error {
 	if analytics == nil {
 		return nil
 	}
@@ -263,7 +275,8 @@ func mergeClaudeLocalTokenUsageAnalytics(analytics *LocalTokenUsageAnalytics, pr
 			OutputTokens:    session.OutputTokens,
 			CacheReadTokens: session.CacheReadTokens,
 			TotalTokens:     session.TotalTokens,
-			ModelCosts:      calculateClaudeSessionModelCosts(session),
+			Cost:            calculateClaudeSessionCost(session, pricing),
+			ModelCosts:      calculateClaudeSessionModelCostsWithPricing(session, pricing),
 		})
 		analytics.SessionCount++
 		analytics.TotalTurns += session.TurnCount
@@ -273,7 +286,7 @@ func mergeClaudeLocalTokenUsageAnalytics(analytics *LocalTokenUsageAnalytics, pr
 		analytics.TotalTokens += session.TotalTokens
 	}
 
-	mergeClaudeSeries(analytics, sessions)
+	mergeClaudeSeries(analytics, sessions, pricing)
 	analytics.TotalTurns = maxInt(analytics.TotalTurns, 0)
 	if analytics.SessionCount > 0 {
 		analytics.AvgTurns = float64(analytics.TotalTurns) / float64(analytics.SessionCount)
@@ -282,7 +295,7 @@ func mergeClaudeLocalTokenUsageAnalytics(analytics *LocalTokenUsageAnalytics, pr
 	return nil
 }
 
-func mergeClaudeSeries(analytics *LocalTokenUsageAnalytics, sessions []claudeSessionAnalytics) {
+func mergeClaudeSeries(analytics *LocalTokenUsageAnalytics, sessions []claudeSessionAnalytics, pricing codexPricingCatalog) {
 	series := map[string]*LocalTokenUsageSeriesPoint{}
 	for _, existing := range analytics.Series {
 		appType := strings.TrimSpace(existing.AppType)
@@ -329,7 +342,13 @@ func mergeClaudeSeries(analytics *LocalTokenUsageAnalytics, sessions []claudeSes
 				point.Model = "Multiple models"
 			}
 		}
-		point.ModelCosts = mergeClaudeModelCosts(point.ModelCosts, calculateClaudeSessionModelCosts(session))
+		if cost := calculateClaudeSessionCost(session, pricing); cost != nil {
+			if point.Cost == nil {
+				point.Cost = new(float64)
+			}
+			*point.Cost += *cost
+		}
+		point.ModelCosts = mergeClaudeModelCosts(point.ModelCosts, calculateClaudeSessionModelCostsWithPricing(session, pricing))
 	}
 	analytics.Series = make([]LocalTokenUsageSeriesPoint, 0, len(series))
 	for _, point := range series {
@@ -347,6 +366,10 @@ func mergeClaudeSeries(analytics *LocalTokenUsageAnalytics, sessions []claudeSes
 }
 
 func calculateClaudeSessionModelCosts(session claudeSessionAnalytics) []LocalTokenUsageModelCost {
+	return calculateClaudeSessionModelCostsWithPricing(session, nil)
+}
+
+func calculateClaudeSessionModelCostsWithPricing(session claudeSessionAnalytics, pricing codexPricingCatalog) []LocalTokenUsageModelCost {
 	if session.TotalTokens <= 0 {
 		return nil
 	}
@@ -355,11 +378,17 @@ func calculateClaudeSessionModelCosts(session claudeSessionAnalytics) []LocalTok
 		if model == "" || model == "Multiple models" {
 			return nil
 		}
-		return []LocalTokenUsageModelCost{{
+		item := LocalTokenUsageModelCost{
 			Model:     model,
 			ModelName: model,
 			Tokens:    session.TotalTokens,
-		}}
+		}
+		if modelPricing, ok := pricing.resolve(model); ok {
+			inputTokens := maxInt64(0, session.InputTokens-session.CacheCreationTokens)
+			item.Cost = calculateClaudeModelCost(inputTokens, session.CacheReadTokens, session.CacheCreationTokens, session.OutputTokens, modelPricing)
+			item.CostKnown = true
+		}
+		return []LocalTokenUsageModelCost{item}
 	}
 
 	modelCosts := make([]LocalTokenUsageModelCost, 0, len(session.ModelUsages))
@@ -368,11 +397,17 @@ func calculateClaudeSessionModelCosts(session claudeSessionAnalytics) []LocalTok
 		if model == "" || usage.TotalTokens <= 0 {
 			continue
 		}
-		modelCosts = append(modelCosts, LocalTokenUsageModelCost{
-			Model:     model,
-			ModelName: model,
+		item := LocalTokenUsageModelCost{
+			Model:     normalizeCodexModel(model),
+			ModelName: normalizeCodexModel(model),
 			Tokens:    usage.TotalTokens,
-		})
+		}
+		if modelPricing, ok := pricing.resolve(model); ok {
+			inputTokens := maxInt64(0, usage.InputTokens-usage.CacheCreationTokens)
+			item.Cost = calculateClaudeModelCost(inputTokens, usage.CacheReadTokens, usage.CacheCreationTokens, usage.OutputTokens, modelPricing)
+			item.CostKnown = true
+		}
+		modelCosts = append(modelCosts, item)
 	}
 	sort.SliceStable(modelCosts, func(left, right int) bool {
 		if modelCosts[left].Tokens != modelCosts[right].Tokens {
@@ -383,13 +418,38 @@ func calculateClaudeSessionModelCosts(session claudeSessionAnalytics) []LocalTok
 	return modelCosts
 }
 
+func calculateClaudeModelCost(inputTokens, cacheReadTokens, cacheCreationTokens, outputTokens int64, pricing codexModelPricing) float64 {
+	return (float64(inputTokens)*pricing.InputPerMillion +
+		float64(cacheReadTokens)*pricing.CacheReadPerMillion +
+		float64(cacheCreationTokens)*pricing.CacheWritePerMillion +
+		float64(outputTokens)*pricing.OutputPerMillion) / 1_000_000
+}
+
+func calculateClaudeSessionCost(session claudeSessionAnalytics, pricing codexPricingCatalog) *float64 {
+	modelCosts := calculateClaudeSessionModelCostsWithPricing(session, pricing)
+	if len(modelCosts) == 0 {
+		return nil
+	}
+	var totalCost float64
+	for _, modelCost := range modelCosts {
+		if !modelCost.CostKnown {
+			return nil
+		}
+		totalCost += modelCost.Cost
+	}
+	return &totalCost
+}
+
 func mergeClaudeModelCosts(existing, additions []LocalTokenUsageModelCost) []LocalTokenUsageModelCost {
 	if len(additions) == 0 {
 		return existing
 	}
 	merged := make(map[string]LocalTokenUsageModelCost, len(existing)+len(additions))
 	for _, item := range existing {
-		key := strings.ToLower(strings.TrimSpace(item.Model))
+		key := normalizeCodexModel(item.Model)
+		if key == "" {
+			key = strings.ToLower(strings.TrimSpace(item.Model))
+		}
 		if key == "" {
 			continue
 		}
@@ -399,7 +459,10 @@ func mergeClaudeModelCosts(existing, additions []LocalTokenUsageModelCost) []Loc
 		merged[key] = item
 	}
 	for _, item := range additions {
-		key := strings.ToLower(strings.TrimSpace(item.Model))
+		key := normalizeCodexModel(item.Model)
+		if key == "" {
+			key = strings.ToLower(strings.TrimSpace(item.Model))
+		}
 		if key == "" {
 			continue
 		}

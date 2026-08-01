@@ -138,11 +138,13 @@ type AntiPoisonConfig struct {
 }
 
 type AntiCandyConfig struct {
-	Enabled     bool     `json:"enabled"`
-	Models      []string `json:"models"`
-	MaxContinue int      `json:"maxContinue"`
-	MaxTierN    int      `json:"maxTierN"`
-	MarkerText  string   `json:"markerText"`
+	Enabled            bool     `json:"enabled"`
+	Models             []string `json:"models"`
+	ModelsConfigured   bool     `json:"modelsConfigured"`
+	MaxContinue        int      `json:"maxContinue"`
+	MaxTierN           int      `json:"maxTierN"`
+	MaxTierNConfigured bool     `json:"maxTierNConfigured"`
+	MarkerText         string   `json:"markerText"`
 }
 
 type AdvancedProxyConfig struct {
@@ -323,11 +325,18 @@ func defaultContextAutoCompressionConfig() ContextAutoCompressionConfig {
 
 func defaultAntiCandyConfig() AntiCandyConfig {
 	return AntiCandyConfig{
-		Enabled:     false,
-		Models:      []string{"gpt-5.5"},
-		MaxContinue: 3,
-		MaxTierN:    6,
-		MarkerText:  "Continue thinking...",
+		Enabled: false,
+		// Keep the automatic scope aligned with the two independently reviewed
+		// codexcomp implementations. The UI remains fully configurable, but an
+		// implicit all-model rule can regress models that do not exhibit the
+		// 518n-2 truncation fingerprint (notably Sol).
+		Models:           []string{"gpt-5.5", "gpt-5.6-luna", "gpt-5.6-terra"},
+		ModelsConfigured: false,
+		MaxContinue:      3,
+		// codexcomp's --max-n defaults to 0, meaning no artificial tier cap.
+		MaxTierN:           0,
+		MaxTierNConfigured: false,
+		MarkerText:         "Continue thinking...",
 	}
 }
 
@@ -527,7 +536,13 @@ func sanitizeAntiCandyConfig(config AntiCandyConfig) AntiCandyConfig {
 		seen[key] = struct{}{}
 		models = append(models, model)
 	}
-	if len(models) == 0 {
+	// Previous builds had a hidden gpt-5.5-only default. Since there was no
+	// UI to intentionally configure it, migrate those configurations to the
+	// transparent all-model policy. Explicit edits from the new UI set the
+	// marker and are preserved exactly.
+	if !config.ModelsConfigured {
+		models = append([]string(nil), defaults.Models...)
+	} else if len(models) == 0 {
 		models = append([]string(nil), defaults.Models...)
 	}
 	config.Models = models
@@ -536,10 +551,15 @@ func sanitizeAntiCandyConfig(config AntiCandyConfig) AntiCandyConfig {
 	} else {
 		config.MaxContinue = clampInt(config.MaxContinue, 1, 10)
 	}
-	if config.MaxTierN <= 0 {
+	// Keep existing persisted values as explicit user choices. Configurations
+	// created before this marker used 6 implicitly, so migrate them to the
+	// documented unlimited default instead of silently preserving a hidden cap.
+	if !config.MaxTierNConfigured {
+		config.MaxTierN = defaults.MaxTierN
+	} else if config.MaxTierN < 0 {
 		config.MaxTierN = defaults.MaxTierN
 	} else {
-		config.MaxTierN = clampInt(config.MaxTierN, 1, 64)
+		config.MaxTierN = clampInt(config.MaxTierN, 0, 64)
 	}
 	config.MarkerText = strings.TrimSpace(config.MarkerText)
 	if config.MarkerText == "" {

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const antiCandyReasoningStep = 518
@@ -71,22 +72,39 @@ func antiCandyModelAllowed(config AntiCandyConfig, model string) bool {
 }
 
 func shouldApplyAntiCandyToOpenAIRequest(appType string, routeKind string, stream bool, rawBody []byte, model string, config AntiCandyConfig) bool {
+	apply, _ := explainAntiCandyOpenAIRequest(appType, routeKind, stream, rawBody, model, config)
+	return apply
+}
+
+func explainAntiCandyOpenAIRequest(appType string, routeKind string, stream bool, rawBody []byte, model string, config AntiCandyConfig) (bool, string) {
 	config = sanitizeAntiCandyConfig(config)
-	if !config.Enabled || !stream || !strings.EqualFold(strings.TrimSpace(appType), "codex") || strings.TrimSpace(routeKind) != "responses" {
-		return false
+	if !config.Enabled {
+		return false, "disabled"
+	}
+	if !stream {
+		return false, "not_streaming"
+	}
+	if !strings.EqualFold(strings.TrimSpace(appType), "codex") {
+		return false, "not_codex"
+	}
+	if strings.TrimSpace(routeKind) != "responses" {
+		return false, "not_responses"
 	}
 	if !antiCandyModelAllowed(config, model) {
-		return false
+		return false, "model_not_allowed"
 	}
 	body := map[string]any{}
 	if err := json.Unmarshal(rawBody, &body); err != nil {
-		return false
+		return false, "invalid_json"
 	}
 	if _, ok := body["previous_response_id"]; ok && strings.TrimSpace(toStringValue(body["previous_response_id"])) != "" {
-		return false
+		return false, "continuation_request"
 	}
 	_, ok := body["input"].([]any)
-	return ok
+	if !ok {
+		return false, "input_not_array"
+	}
+	return true, "eligible"
 }
 
 func foldOpenAIResponsesStreamWithAntiCandy(
@@ -101,15 +119,34 @@ func foldOpenAIResponsesStreamWithAntiCandy(
 	config AntiCandyConfig,
 ) (io.ReadCloser, antiCandyFoldStats, error) {
 	defer streamBody.Close()
+	foldStartedAt := time.Now()
+	appendAdvancedProxyLogf(
+		"[ANTI_CANDY_STEP] run=%s app=%s stage=round_wait round=1 detail=waiting_upstream_terminal",
+		advancedProxyCandyEvalRunID(provider),
+		appType,
+	)
 	rawInitial, err := io.ReadAll(io.LimitReader(streamBody, 16*1024*1024))
 	if err != nil {
 		return nil, antiCandyFoldStats{}, err
 	}
+	appendAdvancedProxyLogf(
+		"[ANTI_CANDY_STEP] run=%s app=%s stage=round_received round=1 bytes=%d elapsed_ms=%d",
+		advancedProxyCandyEvalRunID(provider),
+		appType,
+		len(rawInitial),
+		time.Since(foldStartedAt).Milliseconds(),
+	)
 	if !shouldApplyAntiCandyToOpenAIRequest(appType, "responses", true, baseBody, model, config) {
 		return io.NopCloser(bytes.NewReader(rawInitial)), antiCandyFoldStats{}, nil
 	}
 
 	continuation := func(rawBody []byte) (int, http.Header, []byte, error) {
+		continuationStartedAt := time.Now()
+		appendAdvancedProxyLogf(
+			"[ANTI_CANDY_STEP] run=%s app=%s stage=continuation_request round=next detail=waiting_upstream_terminal",
+			advancedProxyCandyEvalRunID(provider),
+			appType,
+		)
 		status, headers, body, nextStream, _, requestErr := performRawUpstreamRequest(
 			http.MethodPost,
 			targetURL,
@@ -125,6 +162,15 @@ func foldOpenAIResponsesStreamWithAntiCandy(
 			defer nextStream.Close()
 			body, requestErr = io.ReadAll(io.LimitReader(nextStream, 16*1024*1024))
 		}
+		appendAdvancedProxyLogf(
+			"[ANTI_CANDY_STEP] run=%s app=%s stage=continuation_received round=next status=%d bytes=%d elapsed_ms=%d error=%t",
+			advancedProxyCandyEvalRunID(provider),
+			appType,
+			status,
+			len(body),
+			time.Since(continuationStartedAt).Milliseconds(),
+			requestErr != nil,
+		)
 		return status, headers, body, requestErr
 	}
 
@@ -134,13 +180,23 @@ func foldOpenAIResponsesStreamWithAntiCandy(
 	}
 	if stats.Folded {
 		appendAdvancedProxyLogf(
-			"[ANTI_CANDY_FOLD] app=%s provider=%s model=%s rounds=%d continuations=%d stopped=%s",
+			"[ANTI_CANDY_FOLD] run=%s app=%s provider=%s model=%s rounds=%d continuations=%d stopped=%s",
+			advancedProxyCandyEvalRunID(provider),
 			appType,
 			advancedProxyProviderLabel(provider),
 			previewAdvancedProxyText(model, 120),
 			stats.Rounds,
 			stats.Continuations,
 			firstNonEmpty(stats.StoppedReason, "completed"),
+		)
+	} else {
+		appendAdvancedProxyLogf(
+			"[ANTI_CANDY_RESULT] run=%s app=%s provider=%s model=%s folded=false stopped=%s",
+			advancedProxyCandyEvalRunID(provider),
+			appType,
+			advancedProxyProviderLabel(provider),
+			previewAdvancedProxyText(model, 120),
+			firstNonEmpty(stats.StoppedReason, "not_triggered"),
 		)
 	}
 	return io.NopCloser(bytes.NewReader(folded)), stats, nil
@@ -187,15 +243,21 @@ func foldAntiCandyResponsesStreamBytes(initialRaw []byte, baseBody []byte, confi
 		antiCandySumUsage(billedUsage, round.Usage)
 
 		tierN := antiCandyTierN(round.Usage)
-		canContinue := antiCandyRoundCanContinue(round, tierN, config)
+		// The reference implementation does not accept a continuation that
+		// immediately returns zero reasoning tokens. Retry it (within the same
+		// continuation budget), otherwise a transient empty continuation can
+		// defeat the very fold we just detected.
+		zeroReasoningRetry := stats.Folded && tierN == 0 && len(round.ReasoningItems) == 0 && round.HasTerminal && round.TerminalType != "response.failed"
+		canContinue := zeroReasoningRetry || antiCandyRoundCanContinue(round, tierN, config)
 		metadata := map[string]any{
-			"round":            len(rounds),
-			"input_tokens":     antiCandyNumber(round.Usage["input_tokens"]),
-			"output_tokens":    antiCandyNumber(round.Usage["output_tokens"]),
-			"total_tokens":     antiCandyNumber(round.Usage["total_tokens"]),
-			"reasoning_tokens": antiCandyNumberFromDetails(round.Usage, "output_tokens_details", "reasoning_tokens"),
-			"tier_n":           tierN,
-			"continued":        false,
+			"round":                len(rounds),
+			"input_tokens":         antiCandyNumber(round.Usage["input_tokens"]),
+			"output_tokens":        antiCandyNumber(round.Usage["output_tokens"]),
+			"total_tokens":         antiCandyNumber(round.Usage["total_tokens"]),
+			"reasoning_tokens":     antiCandyNumberFromDetails(round.Usage, "output_tokens_details", "reasoning_tokens"),
+			"tier_n":               tierN,
+			"continued":            false,
+			"zero_reasoning_retry": zeroReasoningRetry,
 		}
 		if cached := antiCandyNumberFromDetails(round.Usage, "input_tokens_details", "cached_tokens"); cached > 0 {
 			metadata["cached_tokens"] = cached
@@ -241,7 +303,7 @@ func antiCandyRoundCanContinue(round *antiCandyRound, tierN int, config AntiCand
 	if round == nil || !round.HasTerminal || round.TerminalType == "response.failed" {
 		return false
 	}
-	if tierN < 1 || tierN > config.MaxTierN || !antiCandyRoundHasEncryptedReasoning(round) {
+	if tierN < 1 || (config.MaxTierN > 0 && tierN > config.MaxTierN) || !antiCandyRoundHasEncryptedReasoning(round) {
 		return false
 	}
 	return true

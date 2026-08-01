@@ -290,8 +290,8 @@ export function StartBridgeImportSession() {
   return window['go']['main']['App']['StartBridgeImportSession']();
 }
 
-export function StartCandyIntelligenceTest(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['StartCandyIntelligenceTest'](arg1, arg2, arg3, arg4);
+export function StartCandyIntelligenceTest(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9) {
+  return window['go']['main']['App']['StartCandyIntelligenceTest'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
 }
 
 export function StartJuiceValueTest(arg1, arg2, arg3, arg4) {

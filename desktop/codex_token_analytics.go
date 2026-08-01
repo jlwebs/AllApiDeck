@@ -128,6 +128,7 @@ type codexSessionAnalytics struct {
 	CacheReadTokens int64
 	TotalTokens     int64
 	Model           string
+	PricingModel    string
 	ModelUsages     map[string]codexModelUsage
 	PreviousTotals  *codexTokenUsagePayload
 	ToolCounts      map[string]int
@@ -172,26 +173,106 @@ type codexTokenUsagePayload struct {
 
 func (a *App) GetLocalTokenUsageAnalytics() (LocalTokenUsageAnalytics, error) {
 	sessionsDir := resolveCodexSessionsDir()
-	analytics, err := buildLocalTokenUsageAnalyticsWithPricing(sessionsDir, defaultCodexPricingCatalog())
+	codexSessions, err := collectCodexSessionAnalytics(sessionsDir)
+	if err != nil {
+		return LocalTokenUsageAnalytics{}, err
+	}
+	claudeProjectsDir := resolveClaudeProjectsDir()
+	claudeSessions, err := collectClaudeSessionAnalytics(claudeProjectsDir)
+	if err != nil {
+		return LocalTokenUsageAnalytics{}, err
+	}
+
+	pricing := defaultCodexPricingCatalog()
+	analytics, err := buildLocalTokenUsageAnalyticsWithPricing(sessionsDir, pricing)
 	if err != nil {
 		return analytics, err
 	}
-	if analyticsNeedsRemotePricing(analytics) {
-		analytics, err = buildLocalTokenUsageAnalyticsWithPricing(sessionsDir, loadCodexPricingCatalog())
+	if analyticsNeedsRemotePricing(analytics) || codexSessionsNeedRemotePricing(codexSessions, pricing) || claudeSessionsNeedRemotePricing(claudeSessions, pricing) {
+		pricing = loadCodexPricingCatalog()
+		analytics, err = buildLocalTokenUsageAnalyticsWithPricing(sessionsDir, pricing)
 		if err != nil {
 			return analytics, err
 		}
 	}
-	if err := mergeClaudeLocalTokenUsageAnalytics(&analytics, resolveClaudeProjectsDir()); err != nil {
+	if err := mergeClaudeLocalTokenUsageAnalyticsWithPricing(&analytics, claudeProjectsDir, pricing); err != nil {
 		return analytics, err
 	}
 	return analytics, nil
+}
+
+func codexSessionsNeedRemotePricing(sessions []codexSessionAnalytics, pricing codexPricingCatalog) bool {
+	for _, session := range sessions {
+		if len(session.ModelUsages) > 0 {
+			for model, usage := range session.ModelUsages {
+				if usage.TotalTokens > 0 && modelNeedsRemotePricing(model, pricing) {
+					return true
+				}
+			}
+			continue
+		}
+		if session.TotalTokens > 0 && modelNeedsRemotePricing(firstNonEmpty(session.PricingModel, session.Model), pricing) {
+			return true
+		}
+	}
+	return false
 }
 
 func analyticsNeedsRemotePricing(analytics LocalTokenUsageAnalytics) bool {
 	for _, session := range analytics.Sessions {
 		model := strings.TrimSpace(session.Model)
 		if session.TotalTokens > 0 && model != "" && !isPlaceholderCodexModel(model) && session.Cost == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func modelNeedsRemotePricing(model string, pricing codexPricingCatalog) bool {
+	model = strings.TrimSpace(model)
+	if isPlaceholderCodexModel(model) {
+		return false
+	}
+	if isExplicitPricingChannelModel(model) {
+		for _, candidate := range codexPricingChannelCandidates(model) {
+			if _, ok := pricing[candidate]; ok {
+				return false
+			}
+		}
+		return true
+	}
+	_, ok := pricing.resolve(model)
+	return !ok
+}
+
+func isExplicitPricingChannelModel(raw string) bool {
+	model := strings.ToLower(strings.TrimSpace(raw))
+	if strings.Contains(model, "/") {
+		return true
+	}
+	for _, prefix := range []string{
+		"openai.", "anthropic.", "google.", "azure.", "azure-openai.", "xai.", "deepseek.",
+		"moonshot.", "moonshotai.", "alibaba.", "zai.", "minimax.", "bedrock.",
+		"amazon-bedrock.", "vertex.", "google-vertex.", "global.",
+	} {
+		if strings.HasPrefix(model, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func claudeSessionsNeedRemotePricing(sessions []claudeSessionAnalytics, pricing codexPricingCatalog) bool {
+	for _, session := range sessions {
+		if len(session.ModelUsages) > 0 {
+			for model, usage := range session.ModelUsages {
+				if usage.TotalTokens > 0 && modelNeedsRemotePricing(model, pricing) {
+					return true
+				}
+			}
+			continue
+		}
+		if session.TotalTokens > 0 && modelNeedsRemotePricing(session.Model, pricing) {
 			return true
 		}
 	}
@@ -502,6 +583,7 @@ func readCodexAnalyticsLine(line string, usage *codexSessionAnalytics) {
 	if entry.Type == "turn_context" {
 		if model := firstCodexModel(entry.Payload.Model, entry.Payload.ModelName, entry.Payload.Info.Model, entry.Payload.Info.ModelName); model != "" {
 			usage.Model = normalizeCodexModel(model)
+			usage.PricingModel = normalizeCodexModelPreservingNamespace(model)
 		}
 		return
 	}
@@ -529,6 +611,7 @@ func readCodexAnalyticsLine(line string, usage *codexSessionAnalytics) {
 	}
 	if model := firstCodexModel(entry.Payload.Info.Model, entry.Payload.Info.ModelName, entry.Payload.Model, entry.Payload.ModelName); model != "" {
 		usage.Model = normalizeCodexModel(model)
+		usage.PricingModel = normalizeCodexModelPreservingNamespace(model)
 	}
 	current := codexModelUsage{
 		InputTokens:     tokenUsage.InputTokens,
@@ -579,7 +662,7 @@ func readCodexAnalyticsLine(line string, usage *codexSessionAnalytics) {
 		delta.CacheReadTokens = delta.InputTokens
 	}
 	if delta.TotalTokens > 0 || delta.InputTokens > 0 || delta.OutputTokens > 0 {
-		model := usage.Model
+		model := firstNonEmpty(usage.PricingModel, usage.Model)
 		if model == "" {
 			model = "unknown"
 		}
@@ -640,15 +723,19 @@ type modelsDevCost struct {
 }
 
 type modelsDevModel struct {
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	Modalities struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	ReleaseDate string `json:"release_date"`
+	Status      string `json:"status"`
+	Modalities  struct {
 		Output []string `json:"output"`
 	} `json:"modalities"`
 	Cost *modelsDevCost `json:"cost"`
 }
 
 type modelsDevProvider struct {
+	ID     string                    `json:"id"`
+	Name   string                    `json:"name"`
 	Models map[string]modelsDevModel `json:"models"`
 }
 
@@ -689,6 +776,13 @@ func defaultCodexPricingCatalog() codexPricingCatalog {
 		"gpt-5.6-luna":        {DisplayName: "GPT-5.6 Luna", InputPerMillion: 0.2, OutputPerMillion: 1.2, CacheReadPerMillion: 0.02, CacheWritePerMillion: 0.25, Source: "builtin"},
 		"gpt-5.6-sol":         {DisplayName: "GPT-5.6 Sol", InputPerMillion: 5, OutputPerMillion: 30, CacheReadPerMillion: 0.5, CacheWritePerMillion: 6.25, Source: "builtin"},
 		"gpt-5.6-terra":       {DisplayName: "GPT-5.6 Terra", InputPerMillion: 2, OutputPerMillion: 12, CacheReadPerMillion: 0.2, CacheWritePerMillion: 2.5, Source: "builtin"},
+		"claude-haiku-4-5":    {DisplayName: "Claude Haiku 4.5", InputPerMillion: 1, OutputPerMillion: 5, CacheReadPerMillion: 0.1, CacheWritePerMillion: 1.25, Source: "builtin"},
+		"claude-sonnet-4":     {DisplayName: "Claude Sonnet 4", InputPerMillion: 3, OutputPerMillion: 15, CacheReadPerMillion: 0.3, CacheWritePerMillion: 3.75, Source: "builtin"},
+		"claude-sonnet-4-5":   {DisplayName: "Claude Sonnet 4.5", InputPerMillion: 3, OutputPerMillion: 15, CacheReadPerMillion: 0.3, CacheWritePerMillion: 3.75, Source: "builtin"},
+		"claude-sonnet-4-6":   {DisplayName: "Claude Sonnet 4.6", InputPerMillion: 3, OutputPerMillion: 15, CacheReadPerMillion: 0.3, CacheWritePerMillion: 3.75, Source: "builtin"},
+		"claude-opus-4":       {DisplayName: "Claude Opus 4", InputPerMillion: 15, OutputPerMillion: 75, CacheReadPerMillion: 1.5, CacheWritePerMillion: 18.75, Source: "builtin"},
+		"claude-opus-4-5":     {DisplayName: "Claude Opus 4.5", InputPerMillion: 5, OutputPerMillion: 25, CacheReadPerMillion: 0.5, CacheWritePerMillion: 6.25, Source: "builtin"},
+		"claude-opus-4-6":     {DisplayName: "Claude Opus 4.6", InputPerMillion: 5, OutputPerMillion: 25, CacheReadPerMillion: 0.5, CacheWritePerMillion: 6.25, Source: "builtin"},
 	}
 }
 
@@ -727,6 +821,7 @@ func loadCodexPricingCatalog() codexPricingCatalog {
 
 func mergeModelsDevPricing(catalog codexPricingCatalog, payload map[string]modelsDevProvider) {
 	for providerID, provider := range payload {
+		providerID = normalizePricingChannel(firstNonEmpty(strings.TrimSpace(provider.ID), providerID))
 		for modelID, model := range provider.Models {
 			if !isTextCodexPricingModel(modelID, model) {
 				continue
@@ -751,14 +846,99 @@ func mergeModelsDevPricing(catalog codexPricingCatalog, payload map[string]model
 			if model.Cost.CacheWrite != nil {
 				candidate.CacheWritePerMillion = *model.Cost.CacheWrite
 			}
-			existing, ok := catalog[normalized]
-			if candidate.DisplayName == "" && ok {
-				candidate.DisplayName = existing.DisplayName
+			for _, channel := range pricingChannelAliases(providerID) {
+				if channelKey := pricingChannelModelKey(channel, modelID, normalized); channelKey != "" {
+					mergeCodexPricingEntry(catalog, channelKey, candidate)
+				}
 			}
-			if !ok || (providerID == "openai" && existing.Source != "openai") {
-				catalog[normalized] = candidate
-			}
+			mergeCodexPricingEntry(catalog, normalized, candidate)
 		}
+	}
+}
+
+func normalizePricingChannel(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func pricingChannelAliases(channel string) []string {
+	normalized := normalizePricingChannel(channel)
+	if normalized == "" {
+		return nil
+	}
+	aliases := []string{normalized}
+	switch normalized {
+	case "amazon-bedrock":
+		aliases = append(aliases, "bedrock", "aws")
+	case "google-vertex":
+		aliases = append(aliases, "vertex")
+	case "azure":
+		aliases = append(aliases, "azure-openai")
+	}
+	return aliases
+}
+
+func normalizeCodexModelPreservingNamespace(raw string) string {
+	name := strings.ToLower(strings.TrimSpace(raw))
+	if colon := strings.IndexByte(name, ':'); colon >= 0 {
+		name = name[:colon]
+	}
+	name = strings.ReplaceAll(name, "@", "-")
+	name = strings.TrimSpace(strings.TrimSuffix(name, "[1m]"))
+	return name
+}
+
+func pricingChannelModelKey(providerID, modelID, normalized string) string {
+	channel := normalizePricingChannel(providerID)
+	model := normalizeCodexModelPreservingNamespace(modelID)
+	if model == "" {
+		model = normalized
+	}
+	if channel == "" || model == "" {
+		return ""
+	}
+	return channel + "/" + model
+}
+
+func pricingProviderRank(source string) int {
+	switch normalizePricingChannel(source) {
+	case "openai":
+		return 0
+	case "anthropic":
+		return 1
+	case "google":
+		return 2
+	case "xai":
+		return 3
+	case "deepseek":
+		return 4
+	case "moonshotai":
+		return 5
+	case "alibaba", "alibaba-cn":
+		return 6
+	case "zai":
+		return 7
+	case "minimax", "minimax-cn":
+		return 8
+	case "builtin":
+		return 1000
+	default:
+		return 100
+	}
+}
+
+func mergeCodexPricingEntry(catalog codexPricingCatalog, key string, candidate codexModelPricing) {
+	key = strings.ToLower(strings.TrimSpace(key))
+	if key == "" {
+		return
+	}
+	existing, ok := catalog[key]
+	if candidate.DisplayName == "" && ok {
+		candidate.DisplayName = existing.DisplayName
+	}
+	candidateRank := pricingProviderRank(candidate.Source)
+	existingRank := pricingProviderRank(existing.Source)
+	if !ok || candidateRank < existingRank || (candidateRank == existingRank && candidate.Source < existing.Source) {
+		catalog[key] = candidate
 	}
 }
 
@@ -791,6 +971,11 @@ func isTextCodexPricingModel(modelID string, model modelsDevModel) bool {
 }
 
 func (catalog codexPricingCatalog) resolve(model string) (codexModelPricing, bool) {
+	for _, candidate := range codexPricingChannelCandidates(model) {
+		if pricing, ok := catalog[candidate]; ok {
+			return pricing, true
+		}
+	}
 	for _, candidate := range codexModelPricingCandidates(model) {
 		if pricing, ok := catalog[candidate]; ok {
 			return pricing, true
@@ -799,13 +984,95 @@ func (catalog codexPricingCatalog) resolve(model string) (codexModelPricing, boo
 	return codexModelPricing{}, false
 }
 
+func codexPricingChannelCandidates(raw string) []string {
+	cleaned := normalizeCodexModelPreservingNamespace(raw)
+	if isPlaceholderCodexModel(cleaned) {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	candidates := make([]string, 0, 5)
+	appendCandidate := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			return
+		}
+		if _, ok := seen[candidate]; ok {
+			return
+		}
+		seen[candidate] = struct{}{}
+		candidates = append(candidates, candidate)
+	}
+	appendCandidate(cleaned)
+	channel, explicit := pricingChannelFromModel(cleaned)
+	if !explicit {
+		return candidates
+	}
+	model := normalizeCodexPricingModel(raw)
+	if model == "" {
+		return candidates
+	}
+	for _, alias := range pricingChannelAliases(channel) {
+		appendCandidate(alias + "/" + model)
+	}
+	return candidates
+}
+
+func pricingChannelFromModel(model string) (string, bool) {
+	model = normalizePricingChannel(model)
+	if slash := strings.IndexByte(model, '/'); slash > 0 {
+		return model[:slash], true
+	}
+	for _, prefix := range []struct {
+		prefix  string
+		channel string
+	}{
+		{"global.openai.", "openai"},
+		{"openai.", "openai"},
+		{"anthropic.", "anthropic"},
+		{"google.", "google"},
+		{"azure.", "azure"},
+		{"azure-openai.", "azure"},
+		{"xai.", "xai"},
+		{"deepseek.", "deepseek"},
+		{"moonshot.", "moonshotai"},
+		{"moonshotai.", "moonshotai"},
+		{"alibaba.", "alibaba"},
+		{"zai.", "zai"},
+		{"minimax.", "minimax"},
+		{"bedrock.", "amazon-bedrock"},
+		{"amazon-bedrock.", "amazon-bedrock"},
+		{"vertex.", "google-vertex"},
+		{"google-vertex.", "google-vertex"},
+	} {
+		if strings.HasPrefix(model, prefix.prefix) {
+			return prefix.channel, true
+		}
+	}
+	return "", false
+}
+
+func normalizeCodexPricingModel(raw string) string {
+	model := normalizeCodexModel(raw)
+	for {
+		next := firstNonEmpty(
+			stripKnownCodexNamespace(model),
+			stripCodexModelDateSuffix(model),
+			stripCodexReasoningSuffix(model),
+		)
+		if next == "" || next == model {
+			return model
+		}
+		model = next
+	}
+}
+
 func codexSessionDisplayModel(session codexSessionAnalytics) string {
 	if len(session.ModelUsages) > 1 {
 		return "Multiple models"
 	}
 	for model := range session.ModelUsages {
 		if model != "unknown" {
-			return model
+			return normalizeCodexModel(model)
 		}
 	}
 	return session.Model
