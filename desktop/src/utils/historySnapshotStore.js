@@ -5,6 +5,7 @@ const HISTORY_LATEST_KEY = 'latest';
 export const HISTORY_SNAPSHOT_SYNC_EVENT = 'batch-api-check:history-snapshot-sync';
 export const HISTORY_SNAPSHOT_INDEX_KEY = 'api_check_last_results_index_v1';
 export const HISTORY_SNAPSHOT_LEGACY_KEY = 'api_check_last_results';
+export const HISTORY_SNAPSHOT_PORTABLE_KEY = 'batch_api_check_portable_history_snapshot_v1';
 
 let cachedSnapshot = [];
 let cachedSnapshotRaw = '';
@@ -74,6 +75,24 @@ function readLegacySnapshotRaw() {
     return String(window.localStorage.getItem(HISTORY_SNAPSHOT_LEGACY_KEY) || '').trim();
   } catch {
     return '';
+  }
+}
+
+function readPortableSnapshotRaw() {
+  if (typeof window === 'undefined' || !window.localStorage) return '';
+  try {
+    return String(window.localStorage.getItem(HISTORY_SNAPSHOT_PORTABLE_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function removeLocalSnapshotKey(key) {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // ignore cleanup failures
   }
 }
 
@@ -179,6 +198,7 @@ export async function hydrateLastResultsSnapshotCache() {
   hydrationPromise = (async () => {
     let rawJson = '';
     let recordUpdatedAt = 0;
+    const portableRawJson = readPortableSnapshotRaw();
     try {
       const record = await readLatestSnapshotRecord();
       rawJson = String(record?.rawJson || '').trim();
@@ -190,6 +210,29 @@ export async function hydrateLastResultsSnapshotCache() {
       appendHistorySnapshotLog('history.snapshot', 'hydrate read failed, falling back to legacy storage');
     }
 
+    if (rawJson && portableRawJson) {
+      removeLocalSnapshotKey(HISTORY_SNAPSHOT_PORTABLE_KEY);
+      appendHistorySnapshotLog('history.snapshot', `hydrate removed duplicate portable snapshot rawLength=${portableRawJson.length}`);
+    }
+
+    if (!rawJson && portableRawJson) {
+      try {
+        const portableParsed = JSON.parse(portableRawJson);
+        if (Array.isArray(portableParsed)) {
+          await writeLatestSnapshotRecord(portableRawJson, portableParsed);
+          rawJson = portableRawJson;
+          recordUpdatedAt = Date.now();
+          removeLocalSnapshotKey(HISTORY_SNAPSHOT_PORTABLE_KEY);
+          appendHistorySnapshotLog('history.snapshot', `hydrate migrated portable snapshot count=${portableParsed.length}`);
+        } else {
+          removeLocalSnapshotKey(HISTORY_SNAPSHOT_PORTABLE_KEY);
+        }
+      } catch {
+        removeLocalSnapshotKey(HISTORY_SNAPSHOT_PORTABLE_KEY);
+        appendHistorySnapshotLog('history.snapshot', 'hydrate removed invalid portable snapshot');
+      }
+    }
+
     if (!rawJson) {
       rawJson = readLegacySnapshotRaw();
       if (rawJson) {
@@ -198,6 +241,7 @@ export async function hydrateLastResultsSnapshotCache() {
           if (Array.isArray(legacyParsed)) {
             appendHistorySnapshotLog('history.snapshot', `hydrate migrating legacy snapshot count=${legacyParsed.length}`);
             await writeLatestSnapshotRecord(rawJson, legacyParsed);
+            removeLocalSnapshotKey(HISTORY_SNAPSHOT_LEGACY_KEY);
           }
         } catch {
           // ignore migration failures
@@ -257,6 +301,8 @@ export async function saveLastResultsSnapshot(results) {
 
   try {
     await writeLatestSnapshotRecord(rawJson, snapshot);
+    removeLocalSnapshotKey(HISTORY_SNAPSHOT_LEGACY_KEY);
+    removeLocalSnapshotKey(HISTORY_SNAPSHOT_PORTABLE_KEY);
   } catch (error) {
     console.warn('[HistorySnapshot] indexeddb save failed:', error?.message || String(error));
     appendHistorySnapshotLog('history.snapshot', `save indexeddb failed ${error?.message || String(error)}`);

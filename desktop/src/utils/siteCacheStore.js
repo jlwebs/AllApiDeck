@@ -6,6 +6,7 @@ export const SITE_CACHE_MODEL_PROBE_CONTEXT_KEY = 'api_check_site_cache_model_pr
 export const SITE_CACHE_SYNC_EVENT = 'batch-api-check:site-cache-sync';
 export const SITE_CACHE_PROFILE_RECOVERY_PENDING_KEY = 'api_check_site_cache_profile_recovery_pending_v1';
 export const SITE_CACHE_PROFILE_RECOVERY_EVENT = 'batch-api-check:site-cache-profile-recovery';
+export const SITE_CACHE_TREE_MAX_SERIALIZED_LENGTH = 256 * 1024;
 
 function safeJsonParse(raw, fallback) {
   try {
@@ -53,6 +54,82 @@ function sanitizeCachedTreeNodes(nodes) {
       }
       return nextNode;
     });
+}
+
+function normalizeCachedModelList(values) {
+  const dedupe = new Set();
+  const append = value => {
+    if (Array.isArray(value)) {
+      value.forEach(append);
+      return;
+    }
+    const model = String(value || '').trim();
+    if (model) dedupe.add(model);
+  };
+  append(values);
+  return Array.from(dedupe);
+}
+
+function collectCachedTreeModelsByToken(nodes, bucket = new Map()) {
+  (Array.isArray(nodes) ? nodes : []).forEach(node => {
+    const nodeKey = String(node?.key || '').trim();
+    if (nodeKey.startsWith('token|')) {
+      const tokenKey = String(nodeKey.split('|')[2] || '').trim();
+      if (tokenKey) {
+        const models = (Array.isArray(node?.children) ? node.children : [])
+          .map(child => {
+            const title = String(child?.title || '').trim();
+            if (title) return title;
+            const childKey = String(child?.key || '').trim();
+            return childKey.includes('|') ? String(childKey.split('|').slice(2).join('|') || '').trim() : '';
+          })
+          .filter(Boolean);
+        if (models.length > 0) {
+          bucket.set(tokenKey, normalizeCachedModelList([...(bucket.get(tokenKey) || []), ...models]));
+        }
+      }
+    }
+    if (Array.isArray(node?.children) && node.children.length > 0) {
+      collectCachedTreeModelsByToken(node.children, bucket);
+    }
+  });
+  return bucket;
+}
+
+function getSerializedLength(value) {
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return Number.MAX_SAFE_INTEGER;
+  }
+}
+
+export function compactSiteCacheRecord(record, options = {}) {
+  if (!record || typeof record !== 'object') return record;
+  const { forceDropTree = false } = options;
+  const cachedTreeNodes = Array.isArray(record.cachedTreeNodes) ? record.cachedTreeNodes : [];
+  if (!forceDropTree && getSerializedLength(cachedTreeNodes) <= SITE_CACHE_TREE_MAX_SERIALIZED_LENGTH) {
+    return record;
+  }
+
+  const modelsByToken = collectCachedTreeModelsByToken(cachedTreeNodes);
+  const mergeModels = (tokens, source) => normalizeTokenList(tokens, source).map(token => ({
+    ...token,
+    models: normalizeCachedModelList([
+      token?.models,
+      token?.model,
+      token?.selectedModel,
+      token?.modelsText,
+      modelsByToken.get(token.key) || [],
+    ]),
+  }));
+
+  return {
+    ...record,
+    tokens: mergeModels(record.tokens, 'remote'),
+    customTokens: mergeModels(record.customTokens, 'manual'),
+    cachedTreeNodes: [],
+  };
 }
 
 function getStorage(storageType) {
@@ -160,7 +237,7 @@ export function normalizeSiteCacheRecord(record) {
   const customTokens = normalizeTokenList(record.customTokens, 'manual');
   const now = Date.now();
 
-  return {
+  const normalized = {
     siteCacheKey,
     siteName,
     siteUrl,
@@ -190,38 +267,59 @@ export function normalizeSiteCacheRecord(record) {
     lastImportSource: String(record.lastImportSource || record._lastImportSource || '').trim(),
     lastRefreshAt: Number(record.lastRefreshAt || 0),
   };
+  return compactSiteCacheRecord(normalized);
 }
 
 function loadRecordsFromStorage(storageKey, storageType = 'persistent') {
   const storage = getStorage(storageType);
   if (!storage) return [];
-  const parsed = safeJsonParse(storage.getItem(storageKey) || '[]', []);
+  const raw = storage.getItem(storageKey) || '[]';
+  const parsed = safeJsonParse(raw, []);
   if (!Array.isArray(parsed)) return [];
-  return parsed
+  const normalized = parsed
     .map(item => normalizeSiteCacheRecord(item))
     .filter(Boolean)
     .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0));
+  const normalizedRaw = JSON.stringify(normalized);
+  if (normalizedRaw.length + 1024 < raw.length) {
+    try {
+      storage.setItem(storageKey, normalizedRaw);
+    } catch (error) {
+      console.warn('[SiteCache] compacted cache rewrite failed:', error?.message || String(error));
+    }
+  }
+  return normalized;
 }
 
 function persistRecordsToStorage(storageKey, records, storageType = 'persistent', options = {}) {
   const { broadcast = true } = options;
   const storage = getStorage(storageType);
   if (!storage) return [];
-  const normalized = (Array.isArray(records) ? records : [])
+  let persistedRecords = (Array.isArray(records) ? records : [])
     .map(item => normalizeSiteCacheRecord(item))
     .filter(Boolean)
     .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0));
-  storage.setItem(storageKey, JSON.stringify(normalized));
+  try {
+    storage.setItem(storageKey, JSON.stringify(persistedRecords));
+  } catch (error) {
+    persistedRecords = persistedRecords.map(record => compactSiteCacheRecord(record, { forceDropTree: true }));
+    try {
+      storage.setItem(storageKey, JSON.stringify(persistedRecords));
+      console.warn('[SiteCache] storage quota reached; persisted without cached tree nodes');
+    } catch (fallbackError) {
+      console.warn('[SiteCache] persist failed:', fallbackError?.message || error?.message || String(fallbackError || error));
+    }
+  }
   if (broadcast && typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(SITE_CACHE_SYNC_EVENT, {
       detail: {
-        count: normalized.length,
+        count: persistedRecords.length,
         storageType,
         updatedAt: Date.now(),
       },
     }));
   }
-  return normalized;
+  return persistedRecords;
 }
 
 function buildCacheCandidate(site, importSource, refreshedAt, now) {

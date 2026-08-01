@@ -1403,6 +1403,10 @@ import {
   HISTORY_SNAPSHOT_SYNC_EVENT,
   getCachedLastResultsSnapshotRaw,
 } from '../utils/historySnapshotStore.js';
+import {
+  applyPortableLocalStorageSnapshot,
+  snapshotPortableLocalStorage,
+} from '../utils/portableSnapshot.js';
 import { ExportTextFile, OpenAIImageWindow, OpenModelProbeWindow } from '../../wailsjs/go/main/App.js';
 import {
   buildSiteCacheKey,
@@ -4949,7 +4953,10 @@ onMounted(() => {
     syncThemeState();
     refreshManualSidebarBridgeReady();
     if (!manualSidebarBridgeReady.value && typeof window !== 'undefined') {
-      manualSidebarBridgeProbeTimer = window.setInterval(refreshManualSidebarBridgeReady, 250);
+      manualSidebarBridgeProbeTimer = window.setInterval(() => {
+        if (document.visibilityState === 'hidden') return;
+        refreshManualSidebarBridgeReady();
+      }, 1000);
     }
     refreshManagedRecordsFromStorage();
     ensureDefaultPublicKeySeededOnce();
@@ -5057,26 +5064,6 @@ const getPortableErrorMessage = (error, fallback) => {
   return String(error).trim() || fallback;
 };
 
-const snapshotPortableLocalStorage = () => {
-  const snapshot = {};
-  for (let index = 0; index < localStorage.length; index += 1) {
-    const key = localStorage.key(index);
-    if (!key) continue;
-    snapshot[key] = localStorage.getItem(key);
-  }
-  return snapshot;
-};
-
-const applyPortableLocalStorageSnapshot = (snapshot) => {
-  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
-    throw new Error('invalid_localstorage_snapshot');
-  }
-  localStorage.clear();
-  Object.entries(snapshot).forEach(([key, value]) => {
-    localStorage.setItem(key, value == null ? '' : String(value));
-  });
-};
-
 const packagePortableData = async () => {
   const packer = window?.go?.main?.App?.PackagePortableData;
   if (typeof packer !== 'function') {
@@ -5085,7 +5072,7 @@ const packagePortableData = async () => {
   }
   portablePacking.value = true;
   try {
-    const snapshotJson = JSON.stringify(snapshotPortableLocalStorage());
+    const snapshotJson = JSON.stringify(await snapshotPortableLocalStorage());
     const result = await packer(snapshotJson);
     portableSettingsMeta.value = `封包完成：${result?.backupDir || 'backup'}，localStorage ${Number(result?.localStorageKeyCount || 0)} 项`;
     message.success('已完成本地绿色化封包');
@@ -5106,7 +5093,7 @@ const unpackPortableData = async () => {
   try {
     const result = await unpacker();
     const parsedSnapshot = JSON.parse(String(result?.localStorageJson || '{}'));
-    applyPortableLocalStorageSnapshot(parsedSnapshot);
+    await applyPortableLocalStorageSnapshot(parsedSnapshot);
     portableSettingsMeta.value = `解包完成：${result?.backupDir || 'backup'}，已恢复 ${Number(result?.localStorageKeyCount || 0)} 项本地数据`;
     message.success('已从 backup 解包恢复本程序数据，页面即将刷新');
     setTimeout(() => {
@@ -7475,6 +7462,11 @@ function persistRecords() {
   schedulePersistRecords();
 }
 
+function truncatePersistedText(value, maxLength) {
+  const text = String(value || '');
+  return text.length > maxLength ? text.slice(0, maxLength) : text;
+}
+
 function createPersistRecordsSnapshot() {
   const autoRecords = [];
   const manualRecords = [];
@@ -7483,9 +7475,11 @@ function createPersistRecordsSnapshot() {
       ...record,
       sourceType: record.sourceType || 'auto',
       modelsList: normalizeModels(record.modelsList || record.modelsText),
+      modelsText: undefined,
       customModels: normalizeCustomModels(record.customModels),
       selectedModel: String(record.selectedModel || '').trim(),
-      quickTestResponseContent: record.quickTestResponseContent || '',
+      quickTestRemark: truncatePersistedText(record.quickTestRemark, 2048),
+      quickTestResponseContent: truncatePersistedText(record.quickTestResponseContent, 16384),
       groupIds: normalizeRecordGroupIds(record.groupIds),
       groupSelectedModels: normalizeGroupSelectedModels(record.groupSelectedModels),
       rowKey: record.rowKey || (record.sourceType === 'manual' ? buildManualRowKey() : buildRowKey(record.siteUrl, record.apiKey)),
@@ -7507,8 +7501,13 @@ function flushPersistRecords() {
   const snapshot = createPersistRecordsSnapshot();
   const signature = `${snapshot.autoJson}\n${snapshot.manualJson}`;
   if (signature === lastPersistedRecordsSnapshot) return;
-  localStorage.setItem(STORAGE_KEY, snapshot.autoJson);
-  localStorage.setItem(MANUAL_STORAGE_KEY, snapshot.manualJson);
+  try {
+    localStorage.setItem(STORAGE_KEY, snapshot.autoJson);
+    localStorage.setItem(MANUAL_STORAGE_KEY, snapshot.manualJson);
+  } catch (error) {
+    console.warn('[KeyManagement] persist records failed:', error?.message || String(error));
+    return;
+  }
   lastPersistedRecordsSnapshot = signature;
   void syncAdvancedProxyProviderSnapshotsFromKeys();
 }
