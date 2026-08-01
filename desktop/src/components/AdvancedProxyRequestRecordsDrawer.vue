@@ -942,7 +942,8 @@ import codexAppIcon from '../assets/app-icons/codex.svg';
 import geminiAppIcon from '../assets/app-icons/gemini.svg';
 import grokAppIcon from '../assets/app-icons/grok.svg';
 import opencodeAppIcon from '../assets/app-icons/opencode.svg';
-import openclawAppIcon from '../assets/app-icons/openclaw-fallback.svg';
+import openclawAppIcon from '../assets/app-icons/openclaw.svg';
+import hermesAppIcon from '../assets/app-icons/hermes.png';
 import { tr } from '../i18n/runtime.js';
 
 const props = defineProps({
@@ -1037,6 +1038,7 @@ const DEFAULT_TERMINAL_PROVIDERS = [
   { id: 'grok', label: 'Grok', total: 0 },
   { id: 'opencode', label: 'OpenCode', total: 0 },
   { id: 'openclaw', label: 'OpenClaw', total: 0 },
+  { id: 'hermes', label: 'Hermes', total: 0 },
   { id: 'gemini', label: 'Gemini', total: 0 },
 ];
 const activitySectionTabs = [
@@ -1067,6 +1069,7 @@ const TERMINAL_PROVIDER_ICONS = {
   claude: claudeAppIcon,
   opencode: opencodeAppIcon,
   openclaw: openclawAppIcon,
+  hermes: hermesAppIcon,
   gemini: geminiAppIcon,
   grok: grokAppIcon,
 };
@@ -2205,6 +2208,8 @@ function formatAppName(value) {
       return 'OpenCode';
     case 'openclaw':
       return 'OpenClaw';
+    case 'hermes':
+      return 'Hermes';
     default:
       return normalizeText(value) || '-';
   }
@@ -2617,6 +2622,7 @@ function normalizeManagedApps(apps = {}) {
     gemini: Boolean(apps?.gemini),
     opencode: Boolean(apps?.opencode),
     openclaw: Boolean(apps?.openclaw),
+    hermes: Boolean(apps?.hermes),
   };
 }
 
@@ -2720,6 +2726,7 @@ function getManagedAppIcon(appId) {
   if (id === 'gemini') return geminiAppIcon;
   if (id === 'opencode') return opencodeAppIcon;
   if (id === 'openclaw') return openclawAppIcon;
+  if (id === 'hermes') return hermesAppIcon;
   return codexAppIcon;
 }
 

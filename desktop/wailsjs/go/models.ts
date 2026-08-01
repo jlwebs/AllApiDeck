@@ -68,6 +68,26 @@ export namespace main {
 	        this.basePath = source["basePath"];
 	    }
 	}
+	export class AntiCandyConfig {
+	    enabled: boolean;
+	    models: string[];
+	    maxContinue: number;
+	    maxTierN: number;
+	    markerText: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AntiCandyConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.models = source["models"];
+	        this.maxContinue = source["maxContinue"];
+	        this.maxTierN = source["maxTierN"];
+	        this.markerText = source["markerText"];
+	    }
+	}
 	export class AntiPoisonStringProtectionConfig {
 	    enabled: boolean;
 	    rules: string[];
@@ -415,6 +435,7 @@ export namespace main {
 	    grokbuild: AdvancedProxyQueueConfig;
 	    opencode: AdvancedProxyQueueConfig;
 	    openclaw: AdvancedProxyQueueConfig;
+	    hermes: AdvancedProxyQueueConfig;
 	
 	    static createFrom(source: any = {}) {
 	        return new AdvancedProxyQueuesConfig(source);
@@ -428,6 +449,7 @@ export namespace main {
 	        this.grokbuild = this.convertValues(source["grokbuild"], AdvancedProxyQueueConfig);
 	        this.opencode = this.convertValues(source["opencode"], AdvancedProxyQueueConfig);
 	        this.openclaw = this.convertValues(source["openclaw"], AdvancedProxyQueueConfig);
+	        this.hermes = this.convertValues(source["hermes"], AdvancedProxyQueueConfig);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -461,11 +483,13 @@ export namespace main {
 	    grokbuild: AdvancedProxyAppConfig;
 	    opencode: AdvancedProxyAppConfig;
 	    openclaw: AdvancedProxyAppConfig;
+	    hermes: AdvancedProxyAppConfig;
 	    failover: AppFailoverConfig;
 	    highAvailability: HighAvailabilityConfig;
 	    rectifier: RectifierConfig;
 	    optimizer: OptimizerConfig;
 	    antiPoison: AntiPoisonConfig;
+	    antiCandy: AntiCandyConfig;
 	    updatedAt: string;
 	
 	    static createFrom(source: any = {}) {
@@ -486,11 +510,13 @@ export namespace main {
 	        this.grokbuild = this.convertValues(source["grokbuild"], AdvancedProxyAppConfig);
 	        this.opencode = this.convertValues(source["opencode"], AdvancedProxyAppConfig);
 	        this.openclaw = this.convertValues(source["openclaw"], AdvancedProxyAppConfig);
+	        this.hermes = this.convertValues(source["hermes"], AdvancedProxyAppConfig);
 	        this.failover = this.convertValues(source["failover"], AppFailoverConfig);
 	        this.highAvailability = this.convertValues(source["highAvailability"], HighAvailabilityConfig);
 	        this.rectifier = this.convertValues(source["rectifier"], RectifierConfig);
 	        this.optimizer = this.convertValues(source["optimizer"], OptimizerConfig);
 	        this.antiPoison = this.convertValues(source["antiPoison"], AntiPoisonConfig);
+	        this.antiCandy = this.convertValues(source["antiCandy"], AntiCandyConfig);
 	        this.updatedAt = source["updatedAt"];
 	    }
 	
@@ -774,6 +800,7 @@ export namespace main {
 		    return a;
 		}
 	}
+	
 	
 	
 	
@@ -1310,6 +1337,7 @@ export namespace main {
 	    }
 	}
 	export class LocalTokenUsageSource {
+	    cacheReadTokens: number;
 	    source: string;
 	    sourceLabel: string;
 	    sessionCount: number;
@@ -1324,6 +1352,7 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.cacheReadTokens = source["cacheReadTokens"];
 	        this.source = source["source"];
 	        this.sourceLabel = source["sourceLabel"];
 	        this.sessionCount = source["sessionCount"];
@@ -1333,7 +1362,88 @@ export namespace main {
 	        this.reasoningTokens = source["reasoningTokens"];
 	    }
 	}
+	export class LocalTokenUsageSession {
+	    id: string;
+	    timestamp: string;
+	    appType?: string;
+	    source?: string;
+	    sourceLabel?: string;
+	    model?: string;
+	    modelName?: string;
+	    modelCosts?: LocalTokenUsageModelCost[];
+	    inputTokens: number;
+	    outputTokens: number;
+	    reasoningTokens: number;
+	    cacheReadTokens: number;
+	    totalTokens: number;
+	    cost?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LocalTokenUsageSession(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.timestamp = source["timestamp"];
+	        this.appType = source["appType"];
+	        this.source = source["source"];
+	        this.sourceLabel = source["sourceLabel"];
+	        this.model = source["model"];
+	        this.modelName = source["modelName"];
+	        this.modelCosts = this.convertValues(source["modelCosts"], LocalTokenUsageModelCost);
+	        this.inputTokens = source["inputTokens"];
+	        this.outputTokens = source["outputTokens"];
+	        this.reasoningTokens = source["reasoningTokens"];
+	        this.cacheReadTokens = source["cacheReadTokens"];
+	        this.totalTokens = source["totalTokens"];
+	        this.cost = source["cost"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class LocalTokenUsageModelCost {
+	    model: string;
+	    modelName?: string;
+	    cost: number;
+	    tokens?: number;
+	    costKnown: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new LocalTokenUsageModelCost(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.model = source["model"];
+	        this.modelName = source["modelName"];
+	        this.cost = source["cost"];
+	        this.tokens = source["tokens"];
+	        this.costKnown = source["costKnown"];
+	    }
+	}
 	export class LocalTokenUsageSeriesPoint {
+	    cacheReadTokens: number;
+	    appType?: string;
+	    model?: string;
+	    modelCosts?: LocalTokenUsageModelCost[];
+	    cost?: number;
 	    date: string;
 	    hour?: string;
 	    source: string;
@@ -1350,6 +1460,11 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.cacheReadTokens = source["cacheReadTokens"];
+	        this.appType = source["appType"];
+	        this.model = source["model"];
+	        this.modelCosts = this.convertValues(source["modelCosts"], LocalTokenUsageModelCost);
+	        this.cost = source["cost"];
 	        this.date = source["date"];
 	        this.hour = source["hour"];
 	        this.source = source["source"];
@@ -1360,8 +1475,27 @@ export namespace main {
 	        this.outputTokens = source["outputTokens"];
 	        this.reasoningTokens = source["reasoningTokens"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class LocalTokenUsageAnalytics {
+	    cacheReadTokens: number;
 	    source: string;
 	    sourceLabel: string;
 	    sessionsPath: string;
@@ -1371,6 +1505,7 @@ export namespace main {
 	    outputTokens: number;
 	    reasoningTokens: number;
 	    series: LocalTokenUsageSeriesPoint[];
+	    sessions: LocalTokenUsageSession[];
 	    sources: LocalTokenUsageSource[];
 	    sessionSeries: LocalSessionSeriesPoint[];
 	    toolCalls: LocalToolCallSeriesPoint[];
@@ -1386,6 +1521,7 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.cacheReadTokens = source["cacheReadTokens"];
 	        this.source = source["source"];
 	        this.sourceLabel = source["sourceLabel"];
 	        this.sessionsPath = source["sessionsPath"];
@@ -1395,6 +1531,7 @@ export namespace main {
 	        this.outputTokens = source["outputTokens"];
 	        this.reasoningTokens = source["reasoningTokens"];
 	        this.series = this.convertValues(source["series"], LocalTokenUsageSeriesPoint);
+	        this.sessions = this.convertValues(source["sessions"], LocalTokenUsageSession);
 	        this.sources = this.convertValues(source["sources"], LocalTokenUsageSource);
 	        this.sessionSeries = this.convertValues(source["sessionSeries"], LocalSessionSeriesPoint);
 	        this.toolCalls = this.convertValues(source["toolCalls"], LocalToolCallSeriesPoint);
@@ -1423,6 +1560,8 @@ export namespace main {
 		    return a;
 		}
 	}
+	
+	
 	
 	
 	
@@ -1601,6 +1740,7 @@ export namespace main {
 	    appId: string;
 	    fileId: string;
 	    content: string;
+	    exists?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ManagedAppConfigWrite(source);
@@ -1611,6 +1751,7 @@ export namespace main {
 	        this.appId = source["appId"];
 	        this.fileId = source["fileId"];
 	        this.content = source["content"];
+	        this.exists = source["exists"];
 	    }
 	}
 	export class ManagedAppConfigApplyRequest {

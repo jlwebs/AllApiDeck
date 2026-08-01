@@ -1,11 +1,71 @@
 <template>
   <header class="spring-header" :class="{ 'spring-header-gaia': isDarkMode }">
-    <button type="button" class="spring-brand" @click="navigate('/keys')">
-      <span class="spring-brand-mark">
-        <img :src="appLogo" alt="" class="spring-brand-icon" />
-      </span>
-      <span class="spring-brand-title">All API Deck</span>
-    </button>
+    <div class="spring-brand-cluster">
+      <button type="button" class="spring-brand" @click="navigate('/keys')">
+        <span class="spring-brand-mark">
+          <img :src="appLogo" alt="" class="spring-brand-icon" />
+        </span>
+        <span class="spring-brand-title">All API Deck</span>
+      </button>
+
+      <a-popover
+        trigger="click"
+        placement="bottomLeft"
+        overlay-class-name="spring-github-popover"
+        :open="githubPopoverOpen"
+        @openChange="handleGithubPopoverOpenChange"
+      >
+        <template #content>
+          <div class="spring-github-popover-content">
+            <div class="spring-github-popover-head">
+              <span class="spring-github-popover-icon"><GithubOutlined /></span>
+              <span class="spring-github-popover-copy">
+                <strong>All API Deck</strong>
+                <small>GitHub / 版本通道</small>
+              </span>
+              <span
+                class="spring-github-popover-status"
+                :class="{ 'is-update': hasUpdate, 'is-loading': loadingUpdateInfo }"
+              >
+                {{ loadingUpdateInfo ? '检查中…' : (hasUpdate ? '有新版本' : '已是最新') }}
+              </span>
+            </div>
+
+            <div class="spring-github-popover-version-grid">
+              <div>
+                <span>当前版本</span>
+                <strong>{{ currentTagLabel }}</strong>
+              </div>
+              <div v-if="updateInfo?.latestTag">
+                <span>最新版本</span>
+                <strong>{{ updateInfo.latestTag }}</strong>
+              </div>
+            </div>
+
+            <div v-if="updateInfoError" class="spring-github-popover-error">
+              {{ updateInfoError }}
+            </div>
+
+            <div class="spring-github-popover-actions">
+              <button type="button" class="spring-github-popover-action" @click.stop="openGithubUpdateDetails">
+                版本详情
+              </button>
+              <button type="button" class="spring-github-popover-action spring-github-popover-action-primary" @click.stop="openReleasePage">
+                GitHub Release
+              </button>
+            </div>
+          </div>
+        </template>
+
+        <button type="button" class="spring-github-anchor" aria-label="GitHub 与版本信息">
+          <span class="spring-github-anchor-icon">
+            <span v-if="hasAppUpdate" class="spring-github-update-dot" aria-hidden="true"></span>
+            <GithubOutlined />
+          </span>
+          <span class="spring-github-version">{{ currentTagLabel }}</span>
+        </button>
+      </a-popover>
+    </div>
 
     <nav class="spring-toolbar">
       <div class="spring-nav-pair" aria-label="导入与站点">
@@ -54,56 +114,92 @@
       </button>
 
       <div class="spring-utility-cluster" aria-label="工具入口">
-        <button
-          type="button"
-          class="spring-utility-button"
+        <a-tooltip
           title="会话"
-          aria-label="会话"
-          @click="$emit('request-records', 'sessions')"
+          placement="bottom"
+          :arrow-point-at-center="true"
+          overlay-class-name="spring-menu-tooltip"
         >
-          <ProfileOutlined />
-        </button>
-        <button
-          type="button"
-          class="spring-utility-button"
+          <button
+            type="button"
+            class="spring-utility-button"
+            aria-label="会话"
+            @click="$emit('request-records', 'sessions')"
+          >
+            <ProfileOutlined />
+          </button>
+        </a-tooltip>
+        <a-tooltip
           title="统计"
-          aria-label="统计"
-          @click="$emit('request-records', 'records')"
+          placement="bottom"
+          :arrow-point-at-center="true"
+          overlay-class-name="spring-menu-tooltip"
         >
-          <BarChartOutlined />
-        </button>
-        <button
-          type="button"
-          class="spring-utility-button"
+          <button
+            type="button"
+            class="spring-utility-button"
+            aria-label="统计"
+            @click="$emit('request-records', 'records')"
+          >
+            <BarChartOutlined />
+          </button>
+        </a-tooltip>
+        <a-tooltip
           title="MCP"
-          aria-label="MCP"
-          @click="$emit('request-records', 'mcp')"
+          placement="bottom"
+          :arrow-point-at-center="true"
+          overlay-class-name="spring-menu-tooltip"
         >
-          <InboxOutlined />
-        </button>
-        <button
-          type="button"
-          class="spring-utility-button"
+          <button
+            type="button"
+            class="spring-utility-button"
+            aria-label="MCP"
+            @click="$emit('request-records', 'mcp')"
+          >
+            <InboxOutlined />
+          </button>
+        </a-tooltip>
+        <a-tooltip
           title="Skill"
-          aria-label="Skill"
-          @click="$emit('request-records', 'skills')"
+          placement="bottom"
+          :arrow-point-at-center="true"
+          overlay-class-name="spring-menu-tooltip"
         >
-          <FireOutlined />
-        </button>
+          <button
+            type="button"
+            class="spring-utility-button"
+            aria-label="Skill"
+            @click="$emit('request-records', 'skills')"
+          >
+            <FireOutlined />
+          </button>
+        </a-tooltip>
       </div>
 
-      <button
+      <a-tooltip
         v-if="showSettings"
-        type="button"
-        class="spring-pill spring-pill-icon-only"
         title="设置"
-        aria-label="设置"
-        @click="$emit('settings')"
+        placement="bottom"
+        :arrow-point-at-center="true"
+        overlay-class-name="spring-menu-tooltip"
       >
-        <SettingOutlined />
-      </button>
+        <button
+          type="button"
+          class="spring-pill spring-pill-icon-only"
+          aria-label="设置"
+          @click="$emit('settings')"
+        >
+          <SettingOutlined />
+        </button>
+      </a-tooltip>
 
-      <a-tooltip v-if="showExperimental" :title="advancedProxyTooltip">
+      <a-tooltip
+        v-if="showExperimental"
+        :title="advancedProxyTooltip"
+        placement="bottom"
+        :arrow-point-at-center="true"
+        overlay-class-name="spring-menu-tooltip"
+      >
         <button
           type="button"
           class="spring-pill spring-pill-icon-only"
@@ -114,11 +210,9 @@
         </button>
       </a-tooltip>
 
-      <button type="button" class="spring-pill spring-pill-ghost spring-pill-github" @click="openUpdateModal">
-        <span v-if="hasAppUpdate" class="spring-pill-update-dot" aria-hidden="true"></span>
-        <GithubOutlined />
-        <span>{{ versionButtonLabel }}</span>
-      </button>
+      <div v-if="$slots['toolbar-end']" class="spring-toolbar-slot">
+        <slot name="toolbar-end" />
+      </div>
     </nav>
   </header>
 
@@ -262,6 +356,7 @@ const appUpdateDownloadEventName = 'app:update-download-progress';
 const router = useRouter();
 const hasAppUpdate = ref(false);
 const updateModalOpen = ref(false);
+const githubPopoverOpen = ref(false);
 const loadingUpdateInfo = ref(false);
 const updateActionLoading = ref(false);
 const updateInfo = ref(null);
@@ -391,8 +486,6 @@ const currentTagLabel = computed(() => {
   return currentVersion ? `v${currentVersion}` : 'dev';
 });
 
-const versionButtonLabel = computed(() => currentTagLabel.value);
-
 const hasCompatibleAsset = computed(() => Boolean(updateInfo.value?.latestTag || updateInfo.value?.latestVersion));
 
 const hasUpdate = computed(() => {
@@ -434,6 +527,18 @@ const updatePrimaryActionText = computed(() => {
 });
 
 const releasePageUrl = computed(() => String(updateInfo.value?.htmlUrl || getAppGithubUrl()).trim());
+
+function formatUpdateInfoError(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/github_release_http_403|\b403\b/i.test(text)) {
+    return 'GitHub 更新信息暂不可用';
+  }
+  if (/cannot read properties of undefined/i.test(text)) {
+    return '暂时无法获取版本信息，请稍后重试';
+  }
+  return text;
+}
 
 const releaseNotesText = computed(() => {
   const body = String(updateInfo.value?.body || '').trim();
@@ -553,6 +658,18 @@ const closeUpdateModal = () => {
   updateModalOpen.value = false;
 };
 
+function handleGithubPopoverOpenChange(open) {
+  githubPopoverOpen.value = Boolean(open);
+  if (githubPopoverOpen.value && !updateInfo.value && !loadingUpdateInfo.value) {
+    void loadUpdateModalState();
+  }
+}
+
+async function openGithubUpdateDetails() {
+  githubPopoverOpen.value = false;
+  await openUpdateModal();
+}
+
 const handleUpdateDownloadEvent = payload => {
   downloadSnapshot.value = normalizeDownloadSnapshot(payload);
 };
@@ -573,7 +690,7 @@ async function loadUpdateModalState() {
     updateInfo.value = startupInfo;
     downloadSnapshot.value = normalizeDownloadSnapshot(snapshot);
     hasAppUpdate.value = Boolean(startupStatus?.hasUpdate);
-    updateInfoError.value = startupStatus?.error || (!startupInfo ? '获取最新版本信息失败' : '');
+    updateInfoError.value = formatUpdateInfoError(startupStatus?.error || (!startupInfo ? '获取最新版本信息失败' : ''));
   } catch (error) {
     const startupStatus = getStartupUpdateStatus();
     const startupPayload = getStartupLatestReleasePayload();
@@ -583,7 +700,7 @@ async function loadUpdateModalState() {
       updateInfo.value = startupInfo;
       hasAppUpdate.value = Boolean(startupStatus?.hasUpdate);
     }
-    updateInfoError.value = startupStatus?.error || error?.message || '获取最新版本信息失败';
+    updateInfoError.value = formatUpdateInfoError(startupStatus?.error || (startupInfo ? '' : '暂时无法获取版本信息，请稍后重试'));
     try {
       if (typeof WailsApp.GetAppUpdateDownloadSnapshot === 'function') {
         const snapshot = await WailsApp.GetAppUpdateDownloadSnapshot();
@@ -687,6 +804,14 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
 }
 
+.spring-brand-cluster {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding-right: 36px;
+  flex: 0 0 auto;
+}
+
 .spring-brand-mark {
   width: 30px;
   height: 30px;
@@ -712,6 +837,81 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.spring-github-anchor {
+  position: absolute;
+  top: -5px;
+  right: 0;
+  z-index: 3;
+  width: 32px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 1px;
+  color: #526b50;
+  background: transparent;
+  cursor: pointer;
+  transition: transform 0.18s ease, color 0.18s ease;
+}
+
+.spring-github-anchor-icon {
+  position: relative;
+  width: 25px;
+  height: 25px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  transition: color 0.18s ease, filter 0.18s ease;
+}
+
+.spring-github-anchor-icon :deep(.anticon) {
+  font-size: 13px;
+}
+
+.spring-github-version {
+  color: #71816c;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 10px;
+  white-space: nowrap;
+}
+
+.spring-github-anchor:hover {
+  color: #263f2a;
+  transform: translateY(-1px) scale(1.04);
+}
+
+.spring-github-anchor:hover .spring-github-anchor-icon {
+  filter: drop-shadow(0 2px 3px rgba(87, 107, 73, 0.24));
+}
+
+.spring-github-anchor:hover .spring-github-version {
+  color: #3e5b3f;
+}
+
+.spring-github-anchor:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.spring-github-update-dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #c9473f;
+  box-shadow:
+    0 0 0 2px rgba(255, 252, 247, 0.96),
+    0 2px 6px rgba(156, 44, 36, 0.24);
+}
+
 .spring-toolbar {
   display: inline-flex;
   align-items: center;
@@ -719,6 +919,33 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 4px;
   min-width: 0;
+}
+
+.spring-toolbar-slot {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+:deep(.spring-menu-tooltip) {
+  pointer-events: none;
+}
+
+:deep(.spring-menu-tooltip .ant-tooltip-inner) {
+  max-width: min(420px, calc(100vw - 24px));
+  padding: 9px 16px;
+  border-radius: 14px;
+  background: #20221f !important;
+  color: #f8faf4 !important;
+  box-shadow: 0 14px 30px rgba(20, 24, 20, 0.28);
+  font-size: 14px;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+:deep(.spring-menu-tooltip .ant-tooltip-arrow::before) {
+  background: #20221f !important;
 }
 
 .spring-pill {
@@ -822,28 +1049,6 @@ onBeforeUnmount(() => {
   box-shadow: 0 8px 18px rgba(96, 122, 77, 0.12);
 }
 
-.spring-pill-ghost {
-  background: rgba(255, 255, 255, 0.5);
-}
-
-.spring-pill-github {
-  position: relative;
-  min-width: 86px;
-}
-
-.spring-pill-update-dot {
-  position: absolute;
-  top: 4px;
-  right: 7px;
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: #c9473f;
-  box-shadow:
-    0 0 0 2px rgba(255, 252, 247, 0.95),
-    0 2px 6px rgba(156, 44, 36, 0.22);
-}
-
 .spring-pill-icon-only {
   width: 32px;
   min-width: 32px;
@@ -931,6 +1136,168 @@ onBeforeUnmount(() => {
   color: #28412c;
   background: rgba(239, 246, 226, 0.84);
   transform: translateY(-1px);
+}
+
+:deep(.spring-github-popover .ant-popover-inner) {
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgba(77, 104, 73, 0.14);
+  border-radius: 16px;
+  background: rgba(255, 253, 247, 0.98);
+  box-shadow: 0 16px 34px rgba(46, 65, 43, 0.18);
+}
+
+:deep(.spring-github-popover .ant-popover-inner-content) {
+  padding: 0;
+}
+
+.spring-github-popover-content {
+  width: 246px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 13px;
+  color: #314735;
+}
+
+.spring-github-popover-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.spring-github-popover-icon {
+  width: 29px;
+  height: 29px;
+  flex: 0 0 29px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  color: #eef6e6;
+  background: linear-gradient(145deg, #344e39, #1f3426);
+  box-shadow: 0 5px 12px rgba(52, 78, 57, 0.2);
+}
+
+.spring-github-popover-icon :deep(.anticon) {
+  font-size: 16px;
+}
+
+.spring-github-popover-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.spring-github-popover-copy strong {
+  color: #243c28;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.spring-github-popover-copy small {
+  color: #72816c;
+  font-size: 10px;
+}
+
+.spring-github-popover-status {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #39703d;
+  background: rgba(224, 242, 216, 0.9);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.spring-github-popover-status.is-update {
+  color: #a04432;
+  background: rgba(255, 232, 220, 0.94);
+}
+
+.spring-github-popover-status.is-loading {
+  color: #6b7b66;
+  background: rgba(235, 240, 231, 0.94);
+}
+
+.spring-github-popover-version-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.spring-github-popover-version-grid > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 1px solid rgba(114, 141, 97, 0.12);
+  border-radius: 11px;
+  background: rgba(242, 248, 236, 0.76);
+}
+
+.spring-github-popover-version-grid span {
+  color: #7a8974;
+  font-size: 10px;
+}
+
+.spring-github-popover-version-grid strong {
+  overflow: hidden;
+  color: #334b36;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spring-github-popover-error {
+  padding: 7px 9px;
+  border: 1px solid rgba(204, 87, 74, 0.16);
+  border-radius: 10px;
+  color: #9e3d33;
+  background: rgba(255, 240, 237, 0.86);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.spring-github-popover-actions {
+  display: flex;
+  gap: 7px;
+}
+
+.spring-github-popover-action {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(114, 141, 97, 0.16);
+  border-radius: 9px;
+  color: #4d644b;
+  background: rgba(248, 251, 245, 0.9);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.spring-github-popover-action:hover {
+  color: #263f2a;
+  background: rgba(229, 241, 218, 0.96);
+  transform: translateY(-1px);
+}
+
+.spring-github-popover-action-primary {
+  color: #edf7e7;
+  border-color: #415d44;
+  background: linear-gradient(135deg, #48684b, #2f4b34);
+}
+
+.spring-github-popover-action-primary:hover {
+  color: #fff;
+  background: linear-gradient(135deg, #557b58, #37573c);
 }
 
 .spring-update-modal {
@@ -1140,6 +1507,22 @@ onBeforeUnmount(() => {
   color: #edf7df;
 }
 
+:deep(body.dark-mode) .spring-github-anchor {
+  color: #d8e8ce;
+}
+
+:deep(body.dark-mode) .spring-github-anchor-icon {
+  background: transparent;
+}
+
+:deep(body.dark-mode) .spring-github-anchor:hover .spring-github-anchor-icon {
+  color: #f7fcf1;
+}
+
+:deep(body.dark-mode) .spring-github-version {
+  color: #a9bba0;
+}
+
 :deep(body.dark-mode) .spring-brand-title,
 :deep(body.dark-mode) .spring-pill {
   color: #eef6e6;
@@ -1175,7 +1558,7 @@ onBeforeUnmount(() => {
   color: #f7fcf1;
 }
 
-:deep(body.dark-mode) .spring-pill-update-dot {
+:deep(body.dark-mode) .spring-github-update-dot {
   box-shadow:
     0 0 0 2px rgba(28, 38, 31, 0.96),
     0 2px 6px rgba(0, 0, 0, 0.28);
@@ -1236,6 +1619,68 @@ onBeforeUnmount(() => {
   color: #f3c0ba;
 }
 
+:deep(body.dark-mode) .spring-github-popover .ant-popover-inner {
+  border-color: rgba(138, 169, 125, 0.18);
+  background: rgba(22, 32, 25, 0.98);
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.32);
+}
+
+:deep(body.dark-mode) .spring-github-popover-content {
+  color: #d8e8ce;
+}
+
+:deep(body.dark-mode) .spring-github-popover-icon {
+  color: #eef6e6;
+  background: linear-gradient(145deg, #56795b, #304936);
+}
+
+:deep(body.dark-mode) .spring-github-popover-copy strong,
+:deep(body.dark-mode) .spring-github-popover-version-grid strong {
+  color: #eef6e6;
+}
+
+:deep(body.dark-mode) .spring-github-popover-copy small,
+:deep(body.dark-mode) .spring-github-popover-version-grid span {
+  color: #a9bba0;
+}
+
+:deep(body.dark-mode) .spring-github-popover-status {
+  color: #c8e3bf;
+  background: rgba(62, 101, 63, 0.55);
+}
+
+:deep(body.dark-mode) .spring-github-popover-status.is-update {
+  color: #f1b29f;
+  background: rgba(119, 58, 48, 0.56);
+}
+
+:deep(body.dark-mode) .spring-github-popover-status.is-loading {
+  color: #b6c6b0;
+  background: rgba(72, 87, 69, 0.58);
+}
+
+:deep(body.dark-mode) .spring-github-popover-version-grid > div {
+  border-color: rgba(138, 169, 125, 0.16);
+  background: rgba(35, 51, 38, 0.78);
+}
+
+:deep(body.dark-mode) .spring-github-popover-action {
+  border-color: rgba(138, 169, 125, 0.18);
+  color: #c8d8c1;
+  background: rgba(39, 56, 42, 0.86);
+}
+
+:deep(body.dark-mode) .spring-github-popover-action:hover {
+  color: #f7fcf1;
+  background: rgba(74, 103, 70, 0.72);
+}
+
+:deep(body.dark-mode) .spring-github-popover-action-primary {
+  color: #edf7e7;
+  border-color: #628265;
+  background: linear-gradient(135deg, #527557, #36563d);
+}
+
 :deep(body.gaia-dark) .spring-header {
   border-color: rgba(101, 129, 138, 0.2);
   background:
@@ -1259,6 +1704,22 @@ onBeforeUnmount(() => {
   background: linear-gradient(160deg, #243841, #15242b);
   color: #eef6f4;
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+}
+
+:deep(body.gaia-dark) .spring-github-anchor {
+  color: #d9e9e9;
+}
+
+:deep(body.gaia-dark) .spring-github-anchor-icon {
+  background: transparent;
+}
+
+:deep(body.gaia-dark) .spring-github-anchor:hover .spring-github-anchor-icon {
+  color: #f4faf8;
+}
+
+:deep(body.gaia-dark) .spring-github-version {
+  color: #93a8ad;
 }
 
 :deep(body.gaia-dark) .spring-brand-title,
@@ -1318,7 +1779,7 @@ onBeforeUnmount(() => {
   color: rgba(137, 159, 168, 0.72);
 }
 
-:deep(body.gaia-dark) .spring-pill-update-dot {
+:deep(body.gaia-dark) .spring-github-update-dot {
   box-shadow:
     0 0 0 2px rgba(11, 18, 23, 0.96),
     0 3px 8px rgba(0, 0, 0, 0.3);
@@ -1362,6 +1823,68 @@ onBeforeUnmount(() => {
   background: rgba(74, 28, 27, 0.88);
   border-color: rgba(180, 88, 80, 0.3);
   color: #efc1bc;
+}
+
+:deep(body.gaia-dark) .spring-github-popover .ant-popover-inner {
+  border-color: rgba(95, 121, 129, 0.24);
+  background: rgba(10, 18, 23, 0.98);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.42);
+}
+
+:deep(body.gaia-dark) .spring-github-popover-content {
+  color: #d9e9e9;
+}
+
+:deep(body.gaia-dark) .spring-github-popover-icon {
+  color: #eef6f4;
+  background: linear-gradient(145deg, #35525c, #1d3038);
+}
+
+:deep(body.gaia-dark) .spring-github-popover-copy strong,
+:deep(body.gaia-dark) .spring-github-popover-version-grid strong {
+  color: #eef6f4;
+}
+
+:deep(body.gaia-dark) .spring-github-popover-copy small,
+:deep(body.gaia-dark) .spring-github-popover-version-grid span {
+  color: #93a8ad;
+}
+
+:deep(body.gaia-dark) .spring-github-popover-status {
+  color: #c5e2de;
+  background: rgba(43, 84, 77, 0.56);
+}
+
+:deep(body.gaia-dark) .spring-github-popover-status.is-update {
+  color: #f0beb1;
+  background: rgba(111, 56, 48, 0.58);
+}
+
+:deep(body.gaia-dark) .spring-github-popover-status.is-loading {
+  color: #afc2c5;
+  background: rgba(56, 74, 79, 0.64);
+}
+
+:deep(body.gaia-dark) .spring-github-popover-version-grid > div {
+  border-color: rgba(95, 121, 129, 0.22);
+  background: rgba(20, 34, 41, 0.86);
+}
+
+:deep(body.gaia-dark) .spring-github-popover-action {
+  border-color: rgba(95, 121, 129, 0.24);
+  color: #bfd0d3;
+  background: rgba(24, 40, 47, 0.9);
+}
+
+:deep(body.gaia-dark) .spring-github-popover-action:hover {
+  color: #f4faf8;
+  background: rgba(55, 83, 91, 0.88);
+}
+
+:deep(body.gaia-dark) .spring-github-popover-action-primary {
+  color: #eef6f4;
+  border-color: #64828a;
+  background: linear-gradient(135deg, #476772, #2d4650);
 }
 
 @media (max-width: 680px) {
@@ -1475,7 +1998,7 @@ onBeforeUnmount(() => {
   color: rgba(137, 159, 168, 0.72);
 }
 
-.spring-header-gaia .spring-pill-update-dot {
+.spring-header-gaia .spring-github-update-dot {
   box-shadow:
     0 0 0 2px rgba(11, 18, 23, 0.96),
     0 3px 8px rgba(0, 0, 0, 0.3);

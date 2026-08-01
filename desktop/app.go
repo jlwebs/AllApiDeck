@@ -62,6 +62,11 @@ type App struct {
 	clipboardImportEventsOff        func()
 	clipboardImportSequence         atomic.Uint64
 	clipboardImportDispatchOverride func(clipboardImportEventRequest) (clipboardImportResult, error)
+
+	candyEvalMu       sync.Mutex
+	candyEvalCancels  map[string]context.CancelFunc
+	juiceEvalMu       sync.Mutex
+	juiceEvalSessions map[string]*juiceEvalSession
 }
 
 func NewApp(mode launchMode, recordKey string, panelStart panelStartMode) *App {
@@ -111,6 +116,8 @@ func (a *App) shutdown(ctx context.Context) {
 	_ = ctx
 	debugLogf("shutdown begin")
 	a.stopClipboardImportResultListener()
+	a.cancelAllCandyIntelligenceTests()
+	a.cancelAllJuiceValueTests()
 	a.stopWindowMonitor()
 	a.stopPanelAutoController()
 	a.stopPanelSignalWatcher()

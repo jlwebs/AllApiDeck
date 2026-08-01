@@ -483,6 +483,8 @@ body.gaia-dark .desktop-app-grokbuild .desktop-app-logo,
 body.gaia-dark .desktop-app-opencode .desktop-app-logo,
 body.gaia-dark .desktop-app-openclaw .desktop-app-logo {
   background: #20333b !important;
+  border-color: rgba(0, 229, 204, 0.72) !important;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.32), inset 0 0 0 1px rgba(0, 229, 204, 0.16) !important;
 }
 
 body.gaia-dark .request-records-mode-tabs,

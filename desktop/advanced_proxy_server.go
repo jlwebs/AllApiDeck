@@ -7043,6 +7043,45 @@ phaseLoop:
 			if !stream && stringProtectionCtx.Enabled {
 				result.Body = restoreAntiPoisonStringProtectionInJSONBody(result.Body, &stringProtectionCtx, routeKind, providerLabel, "openai")
 			}
+			if stream && result.StreamBody != nil && phase.outboundRoute == "responses" && phase.responseTransform == "" && shouldApplyAntiCandyToOpenAIRequest(appType, routeKind, true, phase.requestBody, phaseModel, config.AntiCandy) {
+				foldedStream, foldStats, foldErr := foldOpenAIResponsesStreamWithAntiCandy(
+					result.StreamBody,
+					appType,
+					provider,
+					targetURL,
+					requestHeaders,
+					phase.requestBody,
+					phaseModel,
+					timeoutSeconds,
+					config.AntiCandy,
+				)
+				if foldErr != nil {
+					appendAdvancedProxyLogf(
+						"[ANTI_CANDY_FOLD_FAIL] app=%s route=%s provider=%s endpoint=%s detail=%s",
+						appType,
+						routeKind,
+						providerLabel,
+						targetURL,
+						previewAdvancedProxyText(foldErr.Error(), 260),
+					)
+					return rawProviderAttemptResult{
+						StatusCode: http.StatusBadGateway,
+						Message:    formatAdvancedProxyFailure(appType, routeKind, provider, targetURL, fmt.Sprintf("anti-candy stream fold failed (%s)", foldErr.Error())),
+						ErrorCode:  "anti_candy_fold_failed",
+						ErrorType:  "server_error",
+						ProviderID: strings.TrimSpace(provider.ID),
+						Provider:   providerLabel,
+						TargetURL:  targetURL,
+						RouteKind:  routeKind,
+					}
+				}
+				result.StreamBody = foldedStream
+				if foldStats.Folded {
+					advancedProxyActiveConnections.update(activeConnectionID, func(connection *AdvancedProxyActiveConnection) {
+						connection.Stage = "anti_candy_folded"
+					})
+				}
+			}
 			if stream && result.StreamBody != nil {
 				observedFormat := "chat"
 				if phase.responseTransform == "chat_to_responses" || routeKind == "responses" || routeKind == "responses_compact" {
@@ -7483,6 +7522,10 @@ func (a *App) handleAdvancedProxyPing(writer http.ResponseWriter, request *http.
 				"enabled":  config.OpenClaw.Enabled,
 				"basePath": config.OpenClaw.BasePath,
 			},
+			"hermes": map[string]any{
+				"enabled":  config.Hermes.Enabled,
+				"basePath": config.Hermes.BasePath,
+			},
 		},
 	})
 }
@@ -7730,6 +7773,11 @@ func (a *App) handleAdvancedProxyOpenCode(writer http.ResponseWriter, request *h
 func (a *App) handleAdvancedProxyOpenClaw(writer http.ResponseWriter, request *http.Request) {
 	appendAdvancedProxyLogf("[OPENAI_PROXY_APP_HANDLER] app=openclaw next=handleAdvancedProxyOpenAI path=%s", previewAdvancedProxyText(request.URL.Path, 160))
 	a.handleAdvancedProxyOpenAI("openclaw", writer, request)
+}
+
+func (a *App) handleAdvancedProxyHermes(writer http.ResponseWriter, request *http.Request) {
+	appendAdvancedProxyLogf("[OPENAI_PROXY_APP_HANDLER] app=hermes next=handleAdvancedProxyOpenAI path=%s", previewAdvancedProxyText(request.URL.Path, 160))
+	a.handleAdvancedProxyOpenAI("hermes", writer, request)
 }
 
 func (a *App) handleAdvancedProxyOpenAI(appType string, writer http.ResponseWriter, request *http.Request) {

@@ -14,6 +14,7 @@ const OPENCLAW_DEFAULT_CONFIG = {
 
 const PROXY_MANAGED_TOKEN = 'PROXY_MANAGED';
 const ADVANCED_PROXY_PROVIDER_NAME = 'AllApiDeck Advanced Proxy';
+export const ADVANCED_PROXY_MODEL_NAME = 'AllApiDeck-mix';
 
 export const DESKTOP_CONFIG_APPS = [
   { id: 'claude', label: 'Claude' },
@@ -21,6 +22,7 @@ export const DESKTOP_CONFIG_APPS = [
   { id: 'grokbuild', label: 'Grok Build' },
   { id: 'opencode', label: 'OpenCode' },
   { id: 'openclaw', label: 'OpenClaw' },
+  { id: 'hermes', label: 'Hermes' },
 ];
 
 export function createDesktopConfigDraft(record) {
@@ -55,6 +57,9 @@ export function createDesktopConfigDraft(record) {
     openclawBaseUrl: smartOpenAIBaseUrl,
     openclawUseAdvancedProxy: false,
     openclawApi: 'openai-completions',
+    hermesBaseUrl: smartOpenAIBaseUrl,
+    hermesUseAdvancedProxy: false,
+    hermesApiMode: 'chat_completions',
   };
 }
 
@@ -125,6 +130,13 @@ export function detectProviderKeyFromSnapshotFile(appId, draft, fileContent) {
         forceCustomProviderKey: false,
       }, parseStrictJsonObject(fileContent, 'OpenClaw config.json', structuredClone(OPENCLAW_DEFAULT_CONFIG)));
     }
+
+    if (appId === 'hermes') {
+      return resolveProviderKeyForApp(appId, {
+        ...draft,
+        forceCustomProviderKey: false,
+      }, fileContent);
+    }
   } catch {
     return '';
   }
@@ -136,11 +148,11 @@ export function inferProviderKeyFromSnapshot(snapshot, draft, selectedApps = [])
   const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
   const preferredApps = Array.isArray(selectedApps) && selectedApps.length
     ? selectedApps
-    : ['codex', 'opencode', 'openclaw'];
+    : ['codex', 'opencode', 'openclaw', 'hermes'];
   const uniqueKeys = [];
 
   preferredApps.forEach(appId => {
-    if (!['codex', 'opencode', 'openclaw'].includes(appId)) return;
+    if (!['codex', 'opencode', 'openclaw', 'hermes'].includes(appId)) return;
     const fileId = appId === 'codex' ? 'config' : 'config';
     const snapshotFile = findSnapshotFile(files, appId, fileId);
     const providerKey = detectProviderKeyFromSnapshotFile(appId, draft, snapshotFile?.content || '');
@@ -170,6 +182,8 @@ function buildAppFilePreview(appId, appName, draft, snapshotFiles) {
       return [buildOpenCodePreview(appName, draft, findSnapshotFile(snapshotFiles, 'opencode', 'config'))];
     case 'openclaw':
       return [buildOpenClawPreview(appName, draft, findSnapshotFile(snapshotFiles, 'openclaw', 'config'))];
+    case 'hermes':
+      return [buildHermesPreview(appName, draft, findSnapshotFile(snapshotFiles, 'hermes', 'config'))];
     default:
       throw new Error(`Unsupported app: ${appId}`);
   }
@@ -184,7 +198,9 @@ function buildClaudePreview(appName, draft, file) {
   const apiKey = useAdvancedProxy
     ? PROXY_MANAGED_TOKEN
     : requireField(draft.apiKey, `${appName} API Key`);
-  const model = requireField(draft.model, `${appName} 模型`);
+  const model = useAdvancedProxy
+    ? ADVANCED_PROXY_MODEL_NAME
+    : requireField(draft.model, `${appName} 模型`);
   const effort = requireField(draft.effort, `${appName} Effort`);
   const keyField = draft.claudeApiKeyField === 'ANTHROPIC_API_KEY'
     ? 'ANTHROPIC_API_KEY'
@@ -235,7 +251,9 @@ function buildCodexConfigPreview(appName, draft, file) {
   const baseUrl = useAdvancedProxy
     ? getAdvancedProxyAppBaseUrl('codex', advancedProxySnapshot)
     : requireField(draft.codexBaseUrl, `${appName} Base URL`);
-  const model = requireField(draft.model, `${appName} 模型`);
+  const model = useAdvancedProxy
+    ? ADVANCED_PROXY_MODEL_NAME
+    : requireField(draft.model, `${appName} 模型`);
   const effort = requireField(draft.effort, `${appName} Effort`);
 
   const next = upsertCodexConfigToml(file.content, {
@@ -252,7 +270,9 @@ function buildCodexConfigPreview(appName, draft, file) {
 function buildGrokBuildPreview(appName, draft, file) {
   const advancedProxySnapshot = getAdvancedProxyLocalSnapshot();
   const useAdvancedProxy = shouldUseAdvancedProxy('grokbuild', appName, draft, advancedProxySnapshot);
-  const model = requireField(draft.model, `${appName} model`);
+  const model = useAdvancedProxy
+    ? ADVANCED_PROXY_MODEL_NAME
+    : requireField(draft.model, `${appName} model`);
   const effort = requireField(draft.effort, `${appName} Effort`);
   const next = upsertGrokBuildConfigToml(file.content, {
     model,
@@ -283,7 +303,9 @@ function buildOpenCodePreview(appName, draft, file) {
   const apiKey = useAdvancedProxy
     ? PROXY_MANAGED_TOKEN
     : requireField(draft.apiKey, `${appName} API Key`);
-  const model = requireField(draft.model, `${appName} 模型`);
+  const model = useAdvancedProxy
+    ? ADVANCED_PROXY_MODEL_NAME
+    : requireField(draft.model, `${appName} 模型`);
   const effort = requireField(draft.effort, `${appName} Effort`);
 
   const current = parseStrictJsonObject(file.content, 'OpenCode opencode.json', {
@@ -334,7 +356,9 @@ function buildOpenClawPreview(appName, draft, file) {
   const apiKey = useAdvancedProxy
     ? PROXY_MANAGED_TOKEN
     : requireField(draft.apiKey, `${appName} API Key`);
-  const model = requireField(draft.model, `${appName} 模型`);
+  const model = useAdvancedProxy
+    ? ADVANCED_PROXY_MODEL_NAME
+    : requireField(draft.model, `${appName} 模型`);
   const effort = requireField(draft.effort, `${appName} Effort`);
   const api = useAdvancedProxy ? 'openai-completions' : (draft.openclawApi || 'openai-completions');
 
@@ -401,6 +425,35 @@ function buildOpenClawPreview(appName, draft, file) {
   };
 
   return buildPreviewFile(file, JSON.stringify(next, null, 2));
+}
+
+function buildHermesPreview(appName, draft, file) {
+  const advancedProxySnapshot = getAdvancedProxyLocalSnapshot();
+  const useAdvancedProxy = shouldUseAdvancedProxy('hermes', appName, draft, advancedProxySnapshot);
+  const providerKey = resolveProviderKeyForApp('hermes', draft, file.content);
+  const baseUrl = useAdvancedProxy
+    ? getAdvancedProxyAppBaseUrl('hermes', advancedProxySnapshot)
+    : requireField(draft.hermesBaseUrl, `${appName} Base URL`);
+  const apiKey = useAdvancedProxy
+    ? PROXY_MANAGED_TOKEN
+    : requireField(draft.apiKey, `${appName} API Key`);
+  const model = requireField(
+    useAdvancedProxy ? ADVANCED_PROXY_MODEL_NAME : draft.model,
+    `${appName} 模型`,
+  );
+  const apiMode = useAdvancedProxy
+    ? 'chat_completions'
+    : normalizeHermesApiMode(draft.hermesApiMode);
+
+  const next = patchHermesConfigYaml(file.content, {
+    providerKey,
+    baseUrl,
+    apiKey,
+    apiMode,
+    model,
+  });
+
+  return buildPreviewFile(file, next);
 }
 
 function shouldUseAdvancedProxy(appId, appName, draft, advancedProxySnapshot) {
@@ -620,6 +673,174 @@ function upsertCodexConfigToml(currentText, options) {
   text = `${text.trim()}\n\n${providerSection}\n`;
 
   return ensureTrailingNewline(text.replace(/\n{3,}/g, '\n\n').trim());
+}
+
+const HERMES_PROVIDER_KNOWN_FIELDS = new Set([
+  'name',
+  'base_url',
+  'baseUrl',
+  'api_key',
+  'apiKey',
+  'api_mode',
+  'apiMode',
+  'model',
+  'models',
+]);
+
+function normalizeHermesApiMode(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['chat_completions', 'anthropic_messages', 'codex_responses', 'bedrock_converse'].includes(normalized)
+    ? normalized
+    : 'chat_completions';
+}
+
+function quoteHermesYamlString(value) {
+  return JSON.stringify(String(value ?? ''));
+}
+
+function isHermesTopLevelKeyLine(line) {
+  return /^[^\s#][^:]*:\s*(?:#.*)?$/.test(String(line || ''));
+}
+
+function findHermesTopLevelSectionRange(lines, key) {
+  const headerPattern = new RegExp(`^${escapeRegExp(key)}\\s*:`);
+  const start = lines.findIndex(line => headerPattern.test(String(line || '')) && isHermesTopLevelKeyLine(line));
+  if (start < 0) return null;
+
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (isHermesTopLevelKeyLine(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+  return { start, end };
+}
+
+function replaceHermesTopLevelSection(rawText, key, buildSection) {
+  const lines = String(rawText || '').replace(/\r\n/g, '\n').split('\n');
+  const range = findHermesTopLevelSectionRange(lines, key);
+  const replacement = buildSection(range ? lines.slice(range.start, range.end) : null);
+  if (range) {
+    return [...lines.slice(0, range.start), ...replacement, ...lines.slice(range.end)].join('\n');
+  }
+
+  const trimmed = lines.join('\n').replace(/\n+$/g, '');
+  return trimmed ? `${trimmed}\n\n${replacement.join('\n')}` : replacement.join('\n');
+}
+
+function parseHermesYamlScalar(value) {
+  const raw = String(value || '').trim().replace(/\s+#.*$/, '');
+  if (!raw) return '';
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    return raw.slice(1, -1).replace(/\\"/g, '"').replace(/\\'/g, "'");
+  }
+  return raw;
+}
+
+function getHermesProviderBlockName(block) {
+  const inlineName = String(block[0] || '').match(/^\s{2}-\s+name\s*:\s*(.*)$/);
+  if (inlineName) return parseHermesYamlScalar(inlineName[1]);
+  const nameLine = block.find(line => /^\s{4}name\s*:\s*/.test(line));
+  return nameLine ? parseHermesYamlScalar(nameLine.replace(/^\s{4}name\s*:\s*/, '')) : '';
+}
+
+function getHermesProviderBlocks(sectionLines) {
+  const blocks = [];
+  let current = null;
+  sectionLines.forEach((line, index) => {
+    if (index === 0) return;
+    if (/^\s{2}-\s+/.test(line)) {
+      if (current) blocks.push(current);
+      current = [line];
+      return;
+    }
+    if (current) current.push(line);
+  });
+  if (current) blocks.push(current);
+  return blocks;
+}
+
+function extractHermesUnknownProviderChunks(block) {
+  const chunks = [];
+  for (let index = 1; index < block.length; index += 1) {
+    const fieldMatch = block[index].match(/^\s{4}([A-Za-z0-9_.-]+)\s*:/);
+    if (!fieldMatch || HERMES_PROVIDER_KNOWN_FIELDS.has(fieldMatch[1])) continue;
+    const start = index;
+    index += 1;
+    while (index < block.length && !/^\s{4}[A-Za-z0-9_.-]+\s*:/.test(block[index])) {
+      index += 1;
+    }
+    chunks.push(block.slice(start, index));
+    index -= 1;
+  }
+  return chunks;
+}
+
+function buildHermesProviderBlock(options, existingBlock = null) {
+  const providerKey = requireField(options.providerKey, 'Hermes Provider Key');
+  const model = requireField(options.model, 'Hermes 模型');
+  const lines = [
+    `  - name: ${quoteHermesYamlString(providerKey)}`,
+    `    base_url: ${quoteHermesYamlString(options.baseUrl)}`,
+    `    api_key: ${quoteHermesYamlString(options.apiKey)}`,
+    `    api_mode: ${quoteHermesYamlString(normalizeHermesApiMode(options.apiMode))}`,
+    `    model: ${quoteHermesYamlString(model)}`,
+    '    models:',
+    `      ${quoteHermesYamlString(model)}: {}`,
+  ];
+  if (existingBlock) {
+    extractHermesUnknownProviderChunks(existingBlock).forEach(chunk => lines.push(...chunk));
+  }
+  return lines;
+}
+
+function patchHermesCustomProvidersSection(sectionLines, options) {
+  const header = sectionLines?.[0] || 'custom_providers:';
+  const existingBlocks = sectionLines ? getHermesProviderBlocks(sectionLines) : [];
+  const matchingBlock = existingBlocks.find(block => getHermesProviderBlockName(block) === options.providerKey) || null;
+  const nextBlocks = existingBlocks.map(block => (
+    block === matchingBlock ? buildHermesProviderBlock(options, block) : block
+  ));
+  if (!matchingBlock) {
+    nextBlocks.push(buildHermesProviderBlock(options));
+  }
+  return [header, ...nextBlocks.flatMap((block, index) => index === 0 ? block : ['', ...block])];
+}
+
+function extractHermesUnknownModelChunks(sectionLines) {
+  const chunks = [];
+  for (let index = 1; index < sectionLines.length; index += 1) {
+    const fieldMatch = sectionLines[index].match(/^\s{2}([A-Za-z0-9_.-]+)\s*:/);
+    if (!fieldMatch || fieldMatch[1] === 'default' || fieldMatch[1] === 'provider') continue;
+    const start = index;
+    index += 1;
+    while (index < sectionLines.length && !/^\s{2}[A-Za-z0-9_.-]+\s*:/.test(sectionLines[index])) {
+      index += 1;
+    }
+    chunks.push(sectionLines.slice(start, index));
+    index -= 1;
+  }
+  return chunks;
+}
+
+function patchHermesModelSection(sectionLines, options) {
+  const lines = [
+    'model:',
+    `  default: ${quoteHermesYamlString(options.model)}`,
+    `  provider: ${quoteHermesYamlString(options.providerKey)}`,
+  ];
+  if (sectionLines) {
+    extractHermesUnknownModelChunks(sectionLines).forEach(chunk => lines.push(...chunk));
+  }
+  return lines;
+}
+
+function patchHermesConfigYaml(rawText, options) {
+  let next = replaceHermesTopLevelSection(rawText, 'custom_providers', section =>
+    patchHermesCustomProvidersSection(section, options));
+  next = replaceHermesTopLevelSection(next, 'model', section => patchHermesModelSection(section, options));
+  return ensureTrailingNewline(next.replace(/\n{3,}/g, '\n\n').trim());
 }
 
 function upsertGrokBuildConfigToml(currentText, options) {
@@ -906,6 +1127,9 @@ function resolveProviderKeyForApp(appId, draft, source) {
   if (appId === 'openclaw') {
     return extractOpenClawProviderKey(source, draft) || fallback;
   }
+  if (appId === 'hermes') {
+    return extractHermesProviderKey(source) || fallback;
+  }
   return fallback;
 }
 
@@ -960,6 +1184,25 @@ function extractOpenClawProviderKey(config, draft) {
   }
 
   return sanitizeProviderKey(keys[0]);
+}
+
+function extractHermesProviderKey(text) {
+  const source = String(text || '').replace(/\r\n/g, '\n');
+  const modelSection = findHermesTopLevelSectionRange(source.split('\n'), 'model');
+  if (modelSection) {
+    const lines = source.split('\n').slice(modelSection.start, modelSection.end);
+    const providerLine = lines.find(line => /^\s{2}provider\s*:\s*/.test(line));
+    const provider = providerLine
+      ? parseHermesYamlScalar(providerLine.replace(/^\s{2}provider\s*:\s*/, ''))
+      : '';
+    if (provider) return sanitizeProviderKey(provider);
+  }
+
+  const customSection = findHermesTopLevelSectionRange(source.split('\n'), 'custom_providers');
+  if (!customSection) return '';
+  const blocks = getHermesProviderBlocks(source.split('\n').slice(customSection.start, customSection.end));
+  const firstName = blocks.map(getHermesProviderBlockName).find(Boolean);
+  return firstName ? sanitizeProviderKey(firstName) : '';
 }
 
 function normalizeComparableUrl(value) {

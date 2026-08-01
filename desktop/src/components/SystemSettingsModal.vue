@@ -150,6 +150,18 @@
             />
           </a-space>
 
+          <a-divider />
+          <div class="anti-candy-row">
+            <div class="context-compression-copy">
+              <span>反糖果降智</span>
+              <small>检测 Responses 的 518n-2 推理截断后自动续写；只对 Codex、流式请求和已配置模型生效。当前默认最多续写 {{ antiCandyDraft.maxContinue }} 次。</small>
+            </div>
+            <a-switch
+              :checked="antiCandyDraft.enabled"
+              @update:checked="handleAntiCandyEnabledChange"
+            />
+          </div>
+
           <p class="settings-section-title settings-section-title-spaced settings-section-title-row">
             <b>User-Agent 映射</b>
             <a-tooltip trigger="hover" placement="topLeft" overlayClassName="settings-info-tooltip">
@@ -291,7 +303,7 @@ import PanelSdkSettings from './PanelSdkSettings.vue';
 import { isProbablyWailsRuntime } from '../utils/runtimeApi.js';
 import { isDesktopLogBridgeAvailable, listDesktopLogFiles, readDesktopLogFile } from '../utils/desktopLogBridge.js';
 import { isChromeProfileAuthBridgeAvailable } from '../utils/profileAuthBridge.js';
-import { getAdvancedProxyConfig, setAdvancedProxyConfig } from '../utils/advancedProxyBridge.js';
+import { getAdvancedProxyConfig, normalizeAntiCandySection, setAdvancedProxyConfig } from '../utils/advancedProxyBridge.js';
 import {
   getOutboundProxyConfig,
   loadContextAutoCompressionConfig,
@@ -368,6 +380,7 @@ const selectedDesktopLogPath = ref('');
 const selectedDesktopLogContent = ref('');
 const userAgentMappings = ref(loadUserAgentMappings());
 const contextAutoCompressionDraft = reactive(loadContextAutoCompressionConfig());
+const antiCandyDraft = reactive(normalizeAntiCandySection({}));
 const themeMode = ref(getStoredThemeMode());
 const themeModeOptions = THEME_MODE_OPTIONS;
 const languageMode = ref(getStoredLanguage());
@@ -435,6 +448,7 @@ watch(() => props.open, open => {
   languageMode.value = getStoredLanguage();
   userAgentMappings.value = loadUserAgentMappings();
   Object.assign(contextAutoCompressionDraft, loadContextAutoCompressionConfig());
+  void loadAntiCandyDraft();
   void loadProxyDraft();
   if (isWailsRuntime) {
     void loadDesktopLogs();
@@ -566,6 +580,35 @@ async function saveContextAutoCompressionDraft() {
       contextAutoCompression: normalized,
     });
   } catch {}
+}
+
+async function loadAntiCandyDraft() {
+  try {
+    const config = await getAdvancedProxyConfig();
+    Object.assign(antiCandyDraft, normalizeAntiCandySection(config?.antiCandy));
+  } catch {
+    Object.assign(antiCandyDraft, normalizeAntiCandySection({}));
+  }
+}
+
+async function saveAntiCandyDraft() {
+  const normalized = normalizeAntiCandySection(antiCandyDraft);
+  Object.assign(antiCandyDraft, normalized);
+  try {
+    const config = await getAdvancedProxyConfig();
+    await setAdvancedProxyConfig({
+      ...config,
+      antiCandy: normalized,
+    });
+  } catch (error) {
+    message.error(error?.message || '保存反糖果降智设置失败');
+    await loadAntiCandyDraft();
+  }
+}
+
+function handleAntiCandyEnabledChange(checked) {
+  antiCandyDraft.enabled = Boolean(checked);
+  void saveAntiCandyDraft();
 }
 
 function handleContextAutoCompressionEnabledChange(checked) {
@@ -866,6 +909,14 @@ async function loadDesktopLogs() {
   color: #8c8c8c;
   font-size: 12px;
   line-height: 1.6;
+}
+
+.anti-candy-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
 }
 
 .settings-log-head {

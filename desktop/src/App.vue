@@ -26,6 +26,7 @@ import {
   applyAdvancedProxyVersionedDefaultParameters,
   getAdvancedProxyConfig,
   hasAdvancedProxyVersionedDefaultMismatch,
+  preloadUsageData,
   setAdvancedProxyConfig,
 } from './utils/advancedProxyBridge.js';
 import { installSidebarRoutingDiagnostics, logClientDiagnostic } from './utils/clientDiagnostics.js';
@@ -124,6 +125,16 @@ const themeMode = ref(getStoredThemeMode());
       }
     };
 
+    const scheduleUsagePreload = () => {
+      if (typeof window === 'undefined') return;
+      const run = () => { void preloadUsageData(); };
+      if (typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(run, { timeout: 6000 });
+      } else {
+        window.setTimeout(run, 2200);
+      }
+    };
+
     const maybePromptAdvancedProxyVersionDefaults = async () => {
       const currentVersion = String(getCurrentAppVersion() || '').trim();
       if (!currentVersion || currentVersion === '0.0.0') {
@@ -195,6 +206,7 @@ const themeMode = ref(getStoredThemeMode());
 
       if (mode === '' || mode === 'main') {
         void maybePromptAdvancedProxyVersionDefaults();
+        scheduleUsagePreload();
       }
     });
 

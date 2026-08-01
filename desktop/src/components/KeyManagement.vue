@@ -22,49 +22,27 @@
                 @experimental="showExperimentalFeatures = true"
                 @request-records="openRequestRecordsDrawer"
                 @settings="openSettingsModal"
-              />
-
-      <template v-if="!isCompactMode">
-
-      <a-card class="sync-card sync-card-inline-title">
-        <div class="sync-toolbar">
-          <div class="sync-title-wrap">
-            <span class="sync-title-text">同步密钥历史</span>
-          </div>
-          <div class="sync-meta">
-            <span>本地记录：{{ tableData.length }}</span>
-            <span>状态正常：{{ healthyKeyCount }}</span>
-            <span class="sync-meta-time sync-meta-time-row">上次同步：{{ formatCompactDateTime(syncMeta.lastBatchSyncAt) }}</span>
-          </div>
-          <div v-if="!loading && failedSites.length === 0" class="sync-summary-slot">
-            <a-alert type="info" show-icon class="sync-alert sync-alert-inline" :message="syncSummary" />
-          </div>
-          <div class="sync-panel-trigger-slot">
-            <a-tooltip
-              title="进入挂件悬窗模式"
-              placement="topRight"
-              overlay-class-name="key-management-mini-bar-tooltip"
-              :getPopupContainer="getSidebarPopupContainer"
-            >
-              <button
-                type="button"
-                class="sync-panel-trigger-button sync-panel-trigger-button-fiery"
-                :disabled="openingManualSidebar"
-                @click="openManualMiniBar"
               >
-                <MenuFoldOutlined />
-              </button>
-            </a-tooltip>
-          </div>
-        </div>
-
-        <div v-if="loading" class="sync-loading"><a-spin /><span>正在批量提取 sk key，并写入 localStorage...</span></div>
-        <div v-else-if="failedSites.length > 0" class="sync-feedback">
-          <a-alert type="warning" show-icon class="sync-alert sync-alert-warning" :message="`${failedSites.length} 个站点本次未获取到 key，详见 logs/fetch-keys.log`" :description="failedSiteNames" />
-          <a-alert type="info" show-icon class="sync-alert sync-alert-inline" :message="syncSummary" />
-        </div>
-      </a-card>
-      </template>
+                <template #toolbar-end>
+                  <div class="sync-panel-trigger-slot">
+                    <a-tooltip
+                      title="进入挂件悬窗模式"
+                      placement="topRight"
+                      overlay-class-name="key-management-mini-bar-tooltip"
+                      :getPopupContainer="getSidebarPopupContainer"
+                    >
+                      <button
+                        type="button"
+                        class="sync-panel-trigger-button sync-panel-trigger-button-fiery"
+                        :disabled="openingManualSidebar"
+                        @click="openManualMiniBar"
+                      >
+                        <MenuFoldOutlined />
+                      </button>
+                    </a-tooltip>
+                  </div>
+                </template>
+              </AppHeader>
 
       <div v-if="isCompactMode" class="compact-sidebar-summary">
         <div class="compact-sidebar-heading">
@@ -121,12 +99,14 @@
               <button
                 type="button"
                 class="inventory-panel-tab"
+                :class="{ 'inventory-panel-tab-active': activeInventoryPanel === 'usage' }"
+                :aria-selected="activeInventoryPanel === 'usage' ? 'true' : 'false'"
                 aria-label="用量统计"
                 title="用量统计"
                 @click.stop="openUsagePage"
               >
                 <BarChartOutlined class="inventory-panel-tab-icon inventory-panel-tab-icon-usage" />
-                <span class="inventory-panel-tab-label">{{ t('USAGE_NAV') }}</span>
+                <span class="inventory-panel-tab-label">Usage</span>
               </button>
             </div>
             </div>
@@ -278,12 +258,13 @@
           </div>
 
           <div v-if="activeInventoryPanel === 'monitor'" class="inventory-panel-actions inventory-panel-actions-monitor">
-            <a-space wrap>
+            <div class="monitor-toolbar-actions">
               <span class="monitor-toolbar-summary">
                 24小时窗口 · {{ monitorActiveCount }}/{{ keyGroups.length }} 已监控
               </span>
               <a-select
                 v-model:value="monitorGlobalInterval"
+                class="monitor-interval-select"
                 style="width: 108px"
                 size="small"
                 @change="handleMonitorIntervalChange"
@@ -310,7 +291,7 @@
                   <DeleteOutlined />
                 </button>
               </a-popconfirm>
-            </a-space>
+            </div>
           </div>
         </div>
 
@@ -726,7 +707,22 @@
                   @change="toggleConsoleProxyMaster"
                 />
               </a-tooltip>
-              <a-tooltip :title="consoleAntiPoisonTitle">
+              <a-tooltip placement="top" overlay-class-name="console-dispatch-info-tooltip">
+                <template #title>
+                  <span class="console-dispatch-info-tooltip-content">
+                    <span>{{ consoleAntiPoisonTitle }}</span>
+                    <button
+                      type="button"
+                      class="console-dispatch-info-tooltip-help"
+                      aria-label="查看防投毒详情"
+                      title="查看防投毒详情"
+                      @pointerdown.stop
+                      @click.stop="openAntiPoisonDetails"
+                    >
+                      <QuestionCircleOutlined />
+                    </button>
+                  </span>
+                </template>
                 <button
                   type="button"
                   class="console-dispatch-icon-button console-dispatch-anti-poison-button"
@@ -738,6 +734,34 @@
                   <SafetyCertificateOutlined />
                 </button>
               </a-tooltip>
+              <a-tooltip placement="top" overlay-class-name="console-dispatch-info-tooltip">
+                <template #title>
+                  <span class="console-dispatch-info-tooltip-content">
+                    <span>{{ consoleAntiCandyTitle }}</span>
+                    <button
+                      type="button"
+                      class="console-dispatch-info-tooltip-help"
+                      aria-label="查看反糖果降智说明"
+                      title="查看说明"
+                      @pointerdown.stop
+                      @click.stop="openAntiCandyInfoModal"
+                    >
+                      <QuestionCircleOutlined />
+                    </button>
+                  </span>
+                </template>
+                <button
+                  type="button"
+                  class="console-dispatch-icon-button console-dispatch-anti-candy-button"
+                  :class="{ 'console-dispatch-icon-button-active': consoleAntiCandyEnabled, 'console-dispatch-control-pending': consoleAntiCandyPending }"
+                  :aria-pressed="consoleAntiCandyEnabled ? 'true' : 'false'"
+                  :aria-label="consoleAntiCandyEnabled ? '关闭反糖果降智' : '开启反糖果降智'"
+                  @click="toggleConsoleAntiCandy"
+                >
+                  <CandyGuardIcon />
+                </button>
+              </a-tooltip>
+              <span class="console-dispatch-control-divider" aria-hidden="true"></span>
               <div class="console-dispatch-app-buttons" aria-label="客户端高级代理配置">
                 <a-tooltip v-for="app in consoleProxyAppCards" :key="app.id" :title="app.tooltip">
                   <button
@@ -903,6 +927,10 @@
             @optimize-queue="handleOptimizeQueue"
           />
         </div>
+
+        <div v-if="activeInventoryPanel === 'usage'" class="inventory-usage-panel" aria-label="Usage">
+          <Usage :embedded="true" />
+        </div>
       </a-card>
 
       <div
@@ -934,21 +962,30 @@
         :style="{ left: `${rowContextMenu.x}px`, top: `${rowContextMenu.y}px` }"
         @mouseleave="closeRowContextSubmenus"
       >
-        <button
-          v-if="!rowContextMenu.batch"
-          type="button"
-          class="import-export-menu-item key-row-context-action"
-          @click="handleRowContextEdit"
-        >
-          编辑密钥
-        </button>
-        <button
-          type="button"
-          class="import-export-menu-item import-export-menu-item-danger key-row-context-action"
-          @click="handleRowContextDelete"
-        >
-          {{ rowContextMenu.batch ? `批量删除记录（${rowContextMenu.records.length}）` : '删除记录' }}
-        </button>
+        <div class="key-row-context-primary-actions">
+          <button
+            v-if="!rowContextMenu.batch"
+            type="button"
+            class="import-export-menu-item key-row-context-action key-row-context-primary-action"
+            title="编辑密钥"
+            aria-label="编辑密钥"
+            @click="handleRowContextEdit"
+          >
+            <EditOutlined />
+            <span>编辑</span>
+          </button>
+          <button
+            type="button"
+            class="import-export-menu-item import-export-menu-item-danger key-row-context-action key-row-context-primary-action"
+            :class="{ 'key-row-context-primary-action-wide': rowContextMenu.batch }"
+            :title="rowContextMenu.batch ? `批量删除记录（${rowContextMenu.records.length}）` : '删除记录'"
+            :aria-label="rowContextMenu.batch ? `批量删除记录（${rowContextMenu.records.length}）` : '删除记录'"
+            @click="handleRowContextDelete"
+          >
+            <DeleteOutlined />
+            <span>{{ rowContextMenu.batch ? `删除（${rowContextMenu.records.length}）` : '删除' }}</span>
+          </button>
+        </div>
         <button
           type="button"
           class="import-export-menu-item key-row-context-action"
@@ -978,57 +1015,93 @@
           <button
             type="button"
             class="import-export-menu-item key-row-context-action key-row-context-submenu-trigger"
-            :class="{ 'key-row-context-submenu-trigger-active': rowContextMenu.effortSubmenuOpen }"
-            @mouseenter="openRowContextEffortSubmenu"
+            :class="{ 'key-row-context-submenu-trigger-active': rowContextMenu.proxyConfigSubmenuOpen }"
+            @mouseenter="openRowContextProxyConfigSubmenu"
           >
-            <span>Effort（{{ getRowContextEffortLabel() }}）</span>
+            <span>Test &amp;&amp; Proxy配置</span>
             <span class="key-row-context-submenu-arrow">›</span>
           </button>
           <div
-            v-if="rowContextMenu.effortSubmenuOpen"
-            class="key-row-context-submenu key-row-context-submenu-inline"
+            v-if="rowContextMenu.proxyConfigSubmenuOpen"
+            class="key-row-context-submenu key-row-context-proxy-config-submenu"
             :class="{ 'key-row-context-submenu-dark': isDarkMode }"
-            @mouseenter="openRowContextEffortSubmenu"
+            @mouseenter="openRowContextProxyConfigSubmenu"
           >
+            <div class="key-row-context-submenu-row">
+              <button
+                type="button"
+                class="import-export-menu-item key-row-context-action key-row-context-submenu-trigger"
+                :class="{ 'key-row-context-submenu-trigger-active': rowContextMenu.effortSubmenuOpen }"
+                @mouseenter="openRowContextEffortSubmenu"
+              >
+                <span>Effort（{{ getRowContextEffortLabel() }}）</span>
+                <span class="key-row-context-submenu-arrow">›</span>
+              </button>
+              <div
+                v-if="rowContextMenu.effortSubmenuOpen"
+                class="key-row-context-submenu key-row-context-submenu-inline"
+                :class="{ 'key-row-context-submenu-dark': isDarkMode }"
+                @mouseenter="openRowContextEffortSubmenu"
+              >
+                <button
+                  v-for="effort in advancedProxyEffortOptions"
+                  :key="effort"
+                  type="button"
+                  class="import-export-menu-item key-row-context-action key-row-context-option"
+                  :class="{ 'key-row-context-action-active': getRowContextEffortLabel() === effort }"
+                  @click="handleRowContextEffortChange(effort)"
+                >
+                  <span>{{ effort }}</span>
+                  <span v-if="getRowContextEffortLabel() === effort">✓</span>
+                </button>
+              </div>
+            </div>
+            <div class="key-row-context-submenu-row">
+              <button
+                type="button"
+                class="import-export-menu-item key-row-context-action key-row-context-submenu-trigger"
+                :class="{ 'key-row-context-submenu-trigger-active': rowContextMenu.protocolSubmenuOpen }"
+                @mouseenter="openRowContextProtocolSubmenu"
+              >
+                <span>代理使用协议（{{ getRowContextProtocolLabel() }}）</span>
+                <span class="key-row-context-submenu-arrow">›</span>
+              </button>
+              <div
+                v-if="rowContextMenu.protocolSubmenuOpen"
+                class="key-row-context-submenu key-row-context-submenu-inline"
+                :class="{ 'key-row-context-submenu-dark': isDarkMode }"
+                @mouseenter="openRowContextProtocolSubmenu"
+              >
+                <button
+                  v-for="option in advancedProxyProtocolOptions"
+                  :key="option.value"
+                  type="button"
+                  class="import-export-menu-item key-row-context-action key-row-context-option"
+                  :class="{ 'key-row-context-action-active': getRowContextProtocolLabel() === option.label }"
+                  @click="handleRowContextProtocolChange(option.value)"
+                >
+                  <span>{{ option.label }}</span>
+                  <span v-if="getRowContextProtocolLabel() === option.label">✓</span>
+                </button>
+              </div>
+            </div>
             <button
-              v-for="effort in advancedProxyEffortOptions"
-              :key="effort"
+              v-if="!rowContextMenu.batch"
               type="button"
-              class="import-export-menu-item key-row-context-action key-row-context-option"
-              :class="{ 'key-row-context-action-active': getRowContextEffortLabel() === effort }"
-              @click="handleRowContextEffortChange(effort)"
+              class="import-export-menu-item key-row-context-action key-row-context-candy-action"
+              @click="handleRowContextCandyTest"
             >
-              <span>{{ effort }}</span>
-              <span v-if="getRowContextEffortLabel() === effort">✓</span>
+              <BulbOutlined />
+              <span>糖果智力测试</span>
             </button>
-          </div>
-        </div>
-        <div class="key-row-context-submenu-row">
-          <button
-            type="button"
-            class="import-export-menu-item key-row-context-action key-row-context-submenu-trigger"
-            :class="{ 'key-row-context-submenu-trigger-active': rowContextMenu.protocolSubmenuOpen }"
-            @mouseenter="openRowContextProtocolSubmenu"
-          >
-            <span>代理使用协议（{{ getRowContextProtocolLabel() }}）</span>
-            <span class="key-row-context-submenu-arrow">›</span>
-          </button>
-          <div
-            v-if="rowContextMenu.protocolSubmenuOpen"
-            class="key-row-context-submenu key-row-context-submenu-inline"
-            :class="{ 'key-row-context-submenu-dark': isDarkMode }"
-            @mouseenter="openRowContextProtocolSubmenu"
-          >
             <button
-              v-for="option in advancedProxyProtocolOptions"
-              :key="option.value"
+              v-if="!rowContextMenu.batch"
               type="button"
-              class="import-export-menu-item key-row-context-action key-row-context-option"
-              :class="{ 'key-row-context-action-active': getRowContextProtocolLabel() === option.label }"
-              @click="handleRowContextProtocolChange(option.value)"
+              class="import-export-menu-item key-row-context-action key-row-context-juice-action"
+              @click="handleRowContextJuiceTest"
             >
-              <span>{{ option.label }}</span>
-              <span v-if="getRowContextProtocolLabel() === option.label">✓</span>
+              <JuiceIcon />
+              <span>Juice值测试</span>
             </button>
           </div>
         </div>
@@ -1111,6 +1184,316 @@
           placeholder="输入新的分组名称"
           @pressEnter="submitRenameKeyGroup"
         />
+      </a-modal>
+
+      <a-modal
+        v-model:open="candyEvalModalOpen"
+        title="糖果智力测试"
+        :width="'min(94vw, 900px)'"
+        :closable="!candyEvalRunning"
+        :mask-closable="false"
+        :ok-text="candyEvalRunning ? '取消测试' : '关闭'"
+        :cancel-button-props="{ style: { display: 'none' } }"
+        wrap-class-name="candy-eval-modal-wrap"
+        @ok="handleCandyEvalModalAction"
+        @cancel="handleCandyEvalModalAction"
+      >
+        <div class="candy-eval-dialog">
+          <div class="candy-eval-summary">
+            <div class="candy-eval-summary-item">
+              <span class="candy-eval-summary-label">测试进度</span>
+              <strong>{{ candyEvalCurrentRun ? `第 ${candyEvalCurrentRun} / ${candyEvalTotalRuns} 轮` : `共 ${candyEvalTotalRuns} 轮` }}</strong>
+            </div>
+            <div class="candy-eval-summary-item">
+              <span class="candy-eval-summary-label">测试链路</span>
+              <strong>{{ getCandyEvalModeLabel(candyEvalMode) }}</strong>
+            </div>
+            <div class="candy-eval-summary-item">
+              <span class="candy-eval-summary-label">模型</span>
+              <strong>{{ candyEvalModel || '默认模型' }}</strong>
+            </div>
+            <div class="candy-eval-summary-item">
+              <span class="candy-eval-summary-label">思考量</span>
+              <strong>{{ candyEvalEffort || 'high' }}</strong>
+            </div>
+            <div class="candy-eval-summary-item">
+              <span class="candy-eval-summary-label">当前阶段</span>
+              <strong>{{ getCandyEvalStageLabel(candyEvalStage) }}</strong>
+            </div>
+          </div>
+
+          <div v-if="!candyEvalMode && !candyEvalStage" class="candy-eval-mode-picker">
+            <div class="candy-eval-mode-picker-heading">
+              <div class="candy-eval-section-title">请选择测试链路</div>
+              <div class="candy-eval-mode-picker-hint">两种方式会使用同一个模型和思考量，仅请求路径不同。</div>
+            </div>
+            <div class="candy-eval-mode-grid">
+              <button type="button" class="candy-eval-mode-card candy-eval-mode-card-gateway" @click="startCandyEvalWithMode('gateway')">
+                <span class="candy-eval-mode-card-icon"><SafetyCertificateOutlined /></span>
+                <span class="candy-eval-mode-card-copy">
+                  <strong>代理网关测试</strong>
+                  <span>经过 AllApiDeck 高级代理，启用反降智、故障转移等网关逻辑。</span>
+                  <small>{{ getCandyEvalGatewayPreviewUrl() }}</small>
+                </span>
+                <span class="candy-eval-mode-card-arrow">›</span>
+              </button>
+              <button type="button" class="candy-eval-mode-card candy-eval-mode-card-direct" @click="startCandyEvalWithMode('direct')">
+                <span class="candy-eval-mode-card-icon"><ThunderboltOutlined /></span>
+                <span class="candy-eval-mode-card-copy">
+                  <strong>直连测试</strong>
+                  <span>Codex CLI 直接访问当前账号配置的上游，不经过本地代理网关。</span>
+                  <small>不经过本地高级代理</small>
+                </span>
+                <span class="candy-eval-mode-card-arrow">›</span>
+              </button>
+            </div>
+          </div>
+
+          <template v-else>
+            <div v-if="candyEvalMode === 'gateway' && candyEvalGatewayUrl" class="candy-eval-route-note">
+              <SafetyCertificateOutlined />
+              <span>当前通过代理网关测试：{{ candyEvalGatewayUrl }}</span>
+            </div>
+            <div v-else-if="candyEvalMode === 'direct'" class="candy-eval-route-note candy-eval-route-note-direct">
+              <ThunderboltOutlined />
+              <span>当前为直连测试，不经过本地代理网关。</span>
+            </div>
+
+            <div ref="candyEvalStreamRef" class="candy-eval-stream" aria-live="polite">
+              <div v-if="!candyEvalEvents.length" class="candy-eval-empty">等待 Codex CLI 返回进展…</div>
+              <div
+                v-for="(event, index) in candyEvalEvents"
+                :key="`${event.updatedAt || event.receivedAt || index}-${index}`"
+                class="candy-eval-event"
+                :class="`candy-eval-event-${event.kind || 'event'}`"
+              >
+                <div class="candy-eval-event-meta">
+                  <span>{{ formatCandyEvalEventTime(event.updatedAt || event.receivedAt) }}</span>
+                  <span v-if="event.run">第 {{ event.run }} / {{ event.totalRuns || candyEvalTotalRuns }} 轮</span>
+                  <span>{{ event.kind || 'event' }}</span>
+                </div>
+                <div v-if="event.message" class="candy-eval-event-message">{{ event.message }}</div>
+                <pre v-if="event.text && event.text !== event.message" class="candy-eval-event-text">{{ event.text }}</pre>
+              </div>
+            </div>
+
+            <div v-if="candyEvalOutput" class="candy-eval-output-block">
+              <div class="candy-eval-section-title">{{ candyEvalStage === 'completed' ? '参考脚本最终输出' : '实时结果表' }}</div>
+              <pre class="candy-eval-output-text">{{ candyEvalOutput }}</pre>
+            </div>
+
+            <div v-if="candyEvalFinalText" class="candy-eval-final-block">
+              <div class="candy-eval-section-title">最近一轮最终回答</div>
+              <pre class="candy-eval-final-text">{{ candyEvalFinalText }}</pre>
+            </div>
+
+            <div v-if="candyEvalResult" class="candy-eval-result" :class="{ 'candy-eval-result-success': candyEvalResult.correct === true }">
+              <div class="candy-eval-result-title">
+                <template v-if="candyEvalResult.correct === true">第 {{ candyEvalResult.run }} 轮：答案正确</template>
+                <template v-else-if="candyEvalResult.correct === false">第 {{ candyEvalResult.run }} 轮：答案未命中 21</template>
+                <template v-else>第 {{ candyEvalResult.run }} 轮：执行失败</template>
+              </div>
+              <div class="candy-eval-token-grid">
+                <span>Reasoning tokens：{{ formatCandyEvalTokens(candyEvalResult.reasoningOutputTokens) }}</span>
+                <span>Input tokens：{{ formatCandyEvalTokens(candyEvalResult.inputTokens) }}</span>
+                <span>Output tokens：{{ formatCandyEvalTokens(candyEvalResult.outputTokens) }}</span>
+                <span>Time(s)：{{ candyEvalResult.elapsedSeconds > 0 ? candyEvalResult.elapsedSeconds.toFixed(1) : '-' }}</span>
+                <span>TPS：{{ candyEvalResult.tps > 0 ? candyEvalResult.tps.toFixed(1) : '-' }}</span>
+              </div>
+            </div>
+          </template>
+        </div>
+      </a-modal>
+
+      <a-modal
+        v-model:open="antiCandyInfoModalOpen"
+        title="反糖果降智说明"
+        :width="'min(92vw, 680px)'"
+        :footer="null"
+        wrap-class-name="anti-candy-info-modal"
+      >
+        <div class="anti-candy-info-dialog">
+          <div class="anti-candy-info-hero">
+            <span class="anti-candy-info-hero-icon"><CandyGuardIcon /></span>
+            <div>
+              <strong>让被截断的思考继续完成</strong>
+              <span>用于缓解部分模型的推理链截断降智现象。</span>
+            </div>
+          </div>
+
+          <section class="anti-candy-info-section">
+            <h4>这个开关解决什么问题？</h4>
+            <p>
+              它主要用于缓解 GPT 5.5、5.6-luna 和 terra 系列模型常见的“516 降智”问题：思维链在关键位置被截断后，模型会提前结束思考，导致原本应该答对的问题答错。
+            </p>
+          </section>
+
+          <section class="anti-candy-info-section">
+            <h4>“糖果反降智”是怎么工作的？</h4>
+            <p>
+              这里的“糖果”是社区用来观察模型推理是否完整的一类测试现象。插件在 CPA 侧检测到推理命中 <code>518*n-2</code> 这类截断点后，会自动继续推进当前思考，再把完整结果交给调用方。
+            </p>
+          </section>
+
+          <section class="anti-candy-info-section">
+            <h4>什么时候建议开启？</h4>
+            <p>
+              可以先在 API Key 面板对目标记录右键，运行“糖果智力测试”。如果测试不能全部答对，再开启这个特性；如果测试表现正常，可以保持关闭。
+            </p>
+          </section>
+
+          <div class="anti-candy-info-notice">
+            <strong>注意副作用</strong>
+            <span>自动续接思考可能会让 TTFT（首 token 时间）和整体耗时延长，请根据稳定性与速度需求选择。</span>
+          </div>
+
+          <div class="anti-candy-info-actions">
+            <a-button type="primary" @click="antiCandyInfoModalOpen = false">知道了</a-button>
+          </div>
+        </div>
+      </a-modal>
+
+      <a-modal
+        v-model:open="juiceEvalModalOpen"
+        title="Juice值测试"
+        :width="'min(94vw, 900px)'"
+        :closable="!juiceEvalRunning"
+        :mask-closable="false"
+        :ok-text="juiceEvalRunning ? '取消测试' : '关闭'"
+        :cancel-button-props="{ style: { display: 'none' } }"
+        wrap-class-name="candy-eval-modal-wrap juice-eval-modal-wrap"
+        @ok="handleJuiceEvalModalAction"
+        @cancel="handleJuiceEvalModalAction"
+      >
+        <div class="candy-eval-dialog juice-eval-dialog">
+          <div class="juice-eval-intro">
+            <span class="juice-eval-intro-icon"><JuiceIcon /></span>
+            <div>
+              <strong>Juice 值测试</strong>
+              <span>默认先发送 XML 测试 prompt，完成后可继续追问。</span>
+            </div>
+          </div>
+
+          <div class="candy-eval-summary">
+            <div class="candy-eval-summary-item">
+              <span class="candy-eval-summary-label">测试链路</span>
+              <strong>{{ getCandyEvalModeLabel(juiceEvalMode) }}</strong>
+            </div>
+            <div class="candy-eval-summary-item">
+              <span class="candy-eval-summary-label">模型</span>
+              <strong>{{ juiceEvalModel || '默认模型' }}</strong>
+            </div>
+            <div class="candy-eval-summary-item">
+              <span class="candy-eval-summary-label">思考量</span>
+              <strong>{{ juiceEvalEffort || 'high' }}</strong>
+            </div>
+            <div class="candy-eval-summary-item">
+              <span class="candy-eval-summary-label">当前阶段</span>
+              <strong>{{ getCandyEvalStageLabel(juiceEvalStage) }}</strong>
+            </div>
+          </div>
+
+          <div v-if="!juiceEvalMode && !juiceEvalStage" class="candy-eval-mode-picker juice-eval-mode-picker">
+            <div class="candy-eval-mode-picker-heading">
+              <div class="candy-eval-section-title">请选择测试链路</div>
+              <div class="candy-eval-mode-picker-hint">选择后会立即发送默认 Juice XML prompt。</div>
+            </div>
+            <div class="candy-eval-mode-grid">
+              <button type="button" class="candy-eval-mode-card candy-eval-mode-card-gateway" @click="startJuiceEvalWithMode('gateway')">
+                <span class="candy-eval-mode-card-icon juice-eval-mode-card-icon"><SafetyCertificateOutlined /></span>
+                <span class="candy-eval-mode-card-copy">
+                  <strong>代理网关测试</strong>
+                  <span>经过 AllApiDeck 高级代理，启用反降智、故障转移等网关逻辑。</span>
+                  <small>{{ getCandyEvalGatewayPreviewUrl() }}</small>
+                </span>
+                <span class="candy-eval-mode-card-arrow">›</span>
+              </button>
+              <button type="button" class="candy-eval-mode-card candy-eval-mode-card-direct" @click="startJuiceEvalWithMode('direct')">
+                <span class="candy-eval-mode-card-icon juice-eval-mode-card-icon"><ThunderboltOutlined /></span>
+                <span class="candy-eval-mode-card-copy">
+                  <strong>直连测试</strong>
+                  <span>Codex CLI 直接按当前配置执行，不主动注入 AllApiDeck 网关。</span>
+                  <small>不主动启用本地高级代理</small>
+                </span>
+                <span class="candy-eval-mode-card-arrow">›</span>
+              </button>
+            </div>
+            <details class="juice-eval-default-prompt">
+              <summary>查看默认 Juice prompt</summary>
+              <pre>{{ juiceEvalDefaultPrompt }}</pre>
+            </details>
+          </div>
+
+          <template v-else>
+            <div v-if="juiceEvalMode === 'gateway' && juiceEvalGatewayUrl" class="candy-eval-route-note juice-eval-route-note">
+              <SafetyCertificateOutlined />
+              <span>当前通过代理网关测试：{{ juiceEvalGatewayUrl }}</span>
+            </div>
+            <div v-else-if="juiceEvalMode === 'direct'" class="candy-eval-route-note candy-eval-route-note-direct juice-eval-route-note">
+              <ThunderboltOutlined />
+              <span>当前为直连测试，不主动注入本地代理配置。</span>
+            </div>
+
+            <div class="juice-eval-prompt-card">
+              <div class="candy-eval-section-title">本轮提问</div>
+              <pre>{{ juiceEvalCurrentPrompt || juiceEvalDefaultPrompt }}</pre>
+            </div>
+
+            <div ref="juiceEvalStreamRef" class="candy-eval-stream juice-eval-stream" aria-live="polite">
+              <div v-if="!juiceEvalEvents.length" class="candy-eval-empty">等待 Codex CLI 返回进展…</div>
+              <div
+                v-for="(event, index) in juiceEvalEvents"
+                :key="`${event.updatedAt || event.receivedAt || index}-${index}`"
+                class="candy-eval-event"
+                :class="`candy-eval-event-${event.kind || 'event'}`"
+              >
+                <div class="candy-eval-event-meta">
+                  <span>{{ formatCandyEvalEventTime(event.updatedAt || event.receivedAt) }}</span>
+                  <span>{{ event.kind || 'event' }}</span>
+                </div>
+                <div v-if="event.message" class="candy-eval-event-message">{{ event.message }}</div>
+                <pre v-if="event.text && event.text !== event.message" class="candy-eval-event-text">{{ event.text }}</pre>
+              </div>
+            </div>
+
+            <div v-if="juiceEvalFinalText" class="candy-eval-final-block juice-eval-final-block">
+              <div class="candy-eval-section-title">最新回答</div>
+              <pre class="candy-eval-final-text">{{ juiceEvalFinalText }}</pre>
+            </div>
+
+            <div v-if="juiceEvalResult" class="candy-eval-result juice-eval-result">
+              <div class="candy-eval-result-title">本轮 Juice 回答完成</div>
+              <div class="candy-eval-token-grid">
+                <span>Reasoning tokens：{{ formatCandyEvalTokens(juiceEvalResult.reasoningOutputTokens) }}</span>
+                <span>Input tokens：{{ formatCandyEvalTokens(juiceEvalResult.inputTokens) }}</span>
+                <span>Output tokens：{{ formatCandyEvalTokens(juiceEvalResult.outputTokens) }}</span>
+              </div>
+            </div>
+
+            <div v-if="juiceEvalThreadId" class="juice-eval-followup">
+              <div class="candy-eval-section-title">继续提问</div>
+              <a-textarea
+                v-model:value="juiceEvalFollowupInput"
+                :rows="3"
+                :maxlength="4000"
+                :disabled="juiceEvalRunning"
+                placeholder="输入下一条问题，继续沿用当前 Juice 测试会话…"
+                @keydown.enter.exact.prevent="submitJuiceEvalFollowup"
+              />
+              <div class="juice-eval-followup-actions">
+                <span>Enter 发送 · Shift + Enter 换行</span>
+                <a-button
+                  type="primary"
+                  :loading="juiceEvalRunning"
+                  :disabled="juiceEvalRunning || !juiceEvalFollowupInput.trim()"
+                  @click="submitJuiceEvalFollowup"
+                >
+                  继续提问
+                </a-button>
+              </div>
+            </div>
+          </template>
+        </div>
       </a-modal>
 
       <a-modal
@@ -1197,7 +1580,7 @@
         </div>
       </a-modal>
 
-      <a-modal v-model:open="desktopConfigModalOpen" :title="tr('专属一键配置')" :confirm-loading="desktopConfigLoading" :footer="null" width="1120px">
+      <a-modal v-model:open="desktopConfigModalOpen" :title="tr('专属一键配置')" :confirm-loading="desktopConfigLoading" :footer="null" :width="'min(96vw, 1120px)'">
         <div v-if="desktopConfigTargetRecord" class="desktop-config-modal">
           <div class="desktop-config-hero">
             <div class="desktop-config-alert">
@@ -1291,6 +1674,12 @@
                     <div class="desktop-field-hint">开启后会改写到本地 OpenClaw 代理入口，并切到 openai-completions 协议。</div>
                   </a-form-item>
                   <a-form-item label="OpenClaw API 协议"><a-select v-model:value="desktopConfigDraft.openclawApi"><a-select-option value="openai-completions">openai-completions</a-select-option><a-select-option value="anthropic-messages">anthropic-messages</a-select-option></a-select></a-form-item>
+                  <a-form-item label="Hermes Base URL"><a-input v-model:value="desktopConfigDraft.hermesBaseUrl" /></a-form-item>
+                  <a-form-item label="Hermes API Mode"><a-select v-model:value="desktopConfigDraft.hermesApiMode"><a-select-option value="chat_completions">chat_completions</a-select-option><a-select-option value="anthropic_messages">anthropic_messages</a-select-option><a-select-option value="codex_responses">codex_responses</a-select-option><a-select-option value="bedrock_converse">bedrock_converse</a-select-option></a-select></a-form-item>
+                  <a-form-item label="Hermes 高级代理">
+                    <a-switch v-model:checked="desktopConfigDraft.hermesUseAdvancedProxy" />
+                    <div class="desktop-field-hint">开启后写入本机 Hermes OpenAI 兼容代理入口，并使用 chat_completions 协议。</div>
+                  </a-form-item>
                 </div>
               </a-form>
             </section>
@@ -1313,6 +1702,7 @@
                 @update:open="handleRequestRecordsDrawerOpenChange"
               />
               <AdvancedProxyModal
+                ref="advancedProxyModalRef"
                 v-model:open="showExperimentalFeatures"
                 :initial-queue-scope="advancedProxyFocusQueueScope"
                 :focus-queue-token="advancedProxyFocusQueueToken"
@@ -1346,13 +1736,15 @@
 </template>
 
 <script setup>
-import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { BarChartOutlined, ClockCircleOutlined, DeleteOutlined, DownloadOutlined, EyeInvisibleOutlined, EyeOutlined, FileTextOutlined, FundProjectionScreenOutlined, ImportOutlined, KeyOutlined, MenuFoldOutlined, PlusOutlined, ReloadOutlined, SafetyCertificateOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
+import { computed, defineAsyncComponent, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { BarChartOutlined, BulbOutlined, ClockCircleOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, EyeInvisibleOutlined, EyeOutlined, FileTextOutlined, FundProjectionScreenOutlined, ImportOutlined, KeyOutlined, MenuFoldOutlined, PlusOutlined, QuestionCircleOutlined, ReloadOutlined, SafetyCertificateOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons-vue';
 import { ConfigProvider, message, Modal, theme } from 'ant-design-vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import AppHeader from './AppHeader.vue';
 import QueueOrbitIcon from './icons/QueueOrbitIcon.vue';
+import CandyGuardIcon from './icons/CandyGuardIcon.vue';
+import JuiceIcon from './icons/JuiceIcon.vue';
 import AdvancedProxyModal from './AdvancedProxyModal.vue';
 import AdvancedProxyRequestRecordsDrawer from './AdvancedProxyRequestRecordsDrawer.vue';
 import DesktopConfigDiffModal from './DesktopConfigDiffModal.vue';
@@ -1386,17 +1778,22 @@ import {
   setAdvancedProxyConfigOptimistic,
   syncAdvancedProxyProvidersFromRecords,
 } from '../utils/advancedProxyBridge.js';
-import { buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS, inferProviderKeyFromSnapshot } from '../utils/desktopConfigTransform.js';
+import { ADVANCED_PROXY_MODEL_NAME, buildDesktopConfigPreview, createDesktopConfigDraft, DESKTOP_CONFIG_APPS, inferProviderKeyFromSnapshot } from '../utils/desktopConfigTransform.js';
 import { fetchQuotaLabelWithBatchLogic, formatNewApiQuotaAmount, isDisplayableQuotaLabel } from '../utils/balance.js';
 import { buildQuickTestMessages } from '../utils/quickTestPrompts.js';
 import { normalizeCCSwitchEndpoint } from '../utils/ccSwitch.js';
 import { resolveOpenAIExportBaseUrl } from '../utils/exportEndpoint.js';
-import { resolveClipboardImportRecords } from '../utils/clipboardSmartImport.js';
+import { ensureUniqueClipboardSiteName, resolveClipboardImportRecords } from '../utils/clipboardSmartImport.js';
 import { getAppliedThemeMode, isDarkThemeMode, THEME_MODE_CHANGE_EVENT } from '../utils/theme.js';
 import { tr } from '../i18n/runtime.js';
 import { exitSidebarMode, isManualSidebarBridgeAvailable, isSidebarBridgeAvailable, openManualSidebarPanel } from '../utils/windowMode.js';
 import { loadDesktopTokenSourceMode, loadTreeExpandedSetting, loadUserAgentMappings } from '../utils/systemSettings.js';
 import { buildPerformanceTooltipLines, derivePerformanceMetricsFromResponse, hasPerformanceMetrics } from '../utils/performanceMetrics.js';
+import {
+  buildDesktopConfigTakeoverRestorePreview,
+  captureDesktopConfigTakeoverBackup,
+  clearDesktopConfigTakeoverBackup,
+} from '../utils/desktopConfigTakeover.js';
 import {
   hydrateLastResultsSnapshotCache,
   HISTORY_SNAPSHOT_INDEX_KEY,
@@ -1407,7 +1804,17 @@ import {
   applyPortableLocalStorageSnapshot,
   snapshotPortableLocalStorage,
 } from '../utils/portableSnapshot.js';
-import { ExportTextFile, OpenAIImageWindow, OpenModelProbeWindow } from '../../wailsjs/go/main/App.js';
+import {
+  CancelCandyIntelligenceTest,
+  CancelJuiceValueTest,
+  ContinueJuiceValueTest,
+  ExportTextFile,
+  OpenAIImageWindow,
+  OpenModelProbeWindow,
+  StartCandyIntelligenceTest,
+  StartJuiceValueTest,
+} from '../../wailsjs/go/main/App.js';
+import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime.js';
 import {
   buildSiteCacheKey,
   mergeExtractedSitesIntoCache,
@@ -1419,7 +1826,8 @@ import codexAppIcon from '../assets/app-icons/codex.svg';
 import geminiAppIcon from '../assets/app-icons/gemini.svg';
 import grokBuildAppIcon from '../assets/app-icons/grok.svg';
 import opencodeAppIcon from '../assets/app-icons/opencode.svg';
-import openclawAppIcon from '../assets/app-icons/openclaw-fallback.svg';
+import openclawAppIcon from '../assets/app-icons/openclaw.svg';
+import hermesAppIcon from '../assets/app-icons/hermes.png';
 import quickSetupIcon from '../assets/action-icons/quick-setup-cute.svg';
 import ccSwitchIcon from '../assets/action-icons/cc-switch.png';
 
@@ -1430,6 +1838,8 @@ const KEY_GROUPS_STORAGE_KEY = 'api_check_key_management_groups_v1';
 const DEFAULT_PUBLIC_KEY_SEED_STORAGE_KEY = 'api_check_key_management_default_public_seed_checked_v1';
 const LAST_RESULTS_STORAGE_KEY = HISTORY_SNAPSHOT_INDEX_KEY;
 const KEY_MANAGEMENT_SYNC_EVENT = 'batch-api-check:key-management-sync';
+const CANDY_EVAL_EVENT = 'codex-candy-eval:progress';
+const JUICE_EVAL_EVENT = 'codex-juice-eval:progress';
 const DEFAULT_TEST_TIMEOUT_MS = 20000;
 const CC_SWITCH_TARGET_APPS = ['claude', 'codex', 'gemini', 'opencode', 'openclaw'];
 const ALL_KEYS_GROUP_ID = '__all_keys__';
@@ -1505,14 +1915,16 @@ const DESKTOP_APP_ICONS = {
   grokbuild: grokBuildAppIcon,
   opencode: opencodeAppIcon,
   openclaw: openclawAppIcon,
+  hermes: hermesAppIcon,
 };
-const CONSOLE_PROXY_APP_IDS = ['claude', 'codex', 'grokbuild', 'opencode', 'openclaw'];
+const CONSOLE_PROXY_APP_IDS = ['claude', 'codex', 'grokbuild', 'opencode', 'openclaw', 'hermes'];
 const CONSOLE_PROXY_APP_LABELS = {
   claude: 'Claude',
   codex: 'Codex',
   grokbuild: 'Grok Build',
   opencode: 'OpenCode',
   openclaw: 'OpenClaw',
+  hermes: 'Hermes',
 };
 const PROXY_MANAGED_TOKEN = 'PROXY_MANAGED';
 const ADVANCED_PROXY_PROVIDER_NAME = 'AllApiDeck Advanced Proxy';
@@ -1520,6 +1932,7 @@ const route = useRoute();
 const router = useRouter();
 const { t } = useI18n();
 const isWailsRuntime = isProbablyWailsRuntime();
+const Usage = defineAsyncComponent(() => import('../views/Usage.vue'));
 
 function createManualRecordDraft(record = null) {
   const modelsList = normalizeModels(record?.modelsList || record?.modelsText);
@@ -1606,6 +2019,8 @@ const consoleProxyMasterOptimistic = ref(null);
 const consoleProxyMasterPending = ref(false);
 const consoleAntiPoisonOptimistic = ref(null);
 const consoleAntiPoisonPending = ref(false);
+const consoleAntiCandyOptimistic = ref(null);
+const consoleAntiCandyPending = ref(false);
 const consoleTakeoverReconcileCooldownUntil = reactive({});
 const advancedProxyConsoleLogScroller = ref(null);
 const inventoryCardRef = ref(null);
@@ -1623,6 +2038,7 @@ const advancedProxyConnectionContextMenu = reactive({
 const hideInvalidKeys = ref(true);
 const BATCH_QUICK_TEST_CONCURRENCY = 10;
 const QUICK_GROUP_MODEL_REFRESH_CONCURRENCY = 6;
+const CANDY_EVAL_DEFAULT_TESTS = 5;
 const batchQuickTestRunning = ref(false);
 const quickGroupModelRefreshRunning = ref(false);
 const batchQuickTestProgress = reactive({
@@ -1663,6 +2079,48 @@ const renameKeyGroupSaving = ref(false);
 const renameKeyGroupDraftName = ref('');
 const renameKeyGroupTargetId = ref('');
 const rowContextMenuRef = ref(null);
+const advancedProxyModalRef = ref(null);
+const antiCandyInfoModalOpen = ref(false);
+const candyEvalModalOpen = ref(false);
+const candyEvalRunId = ref('');
+const candyEvalModel = ref('');
+const candyEvalEffort = ref('');
+const candyEvalMode = ref('');
+const candyEvalGatewayUrl = ref('');
+const candyEvalStage = ref('');
+const candyEvalEvents = ref([]);
+const candyEvalFinalText = ref('');
+const candyEvalResult = ref(null);
+const candyEvalTotalRuns = ref(CANDY_EVAL_DEFAULT_TESTS);
+const candyEvalCurrentRun = ref(0);
+const candyEvalTable = ref('');
+const candyEvalOutput = ref('');
+const candyEvalStreamRef = ref(null);
+const candyEvalCanceling = ref(false);
+const candyEvalRunning = computed(() => Boolean(String(candyEvalStage.value || '').trim()) && !['completed', 'error', 'canceled'].includes(String(candyEvalStage.value || '')));
+const juiceEvalModalOpen = ref(false);
+const juiceEvalRunId = ref('');
+const juiceEvalModel = ref('');
+const juiceEvalEffort = ref('');
+const juiceEvalMode = ref('');
+const juiceEvalGatewayUrl = ref('');
+const juiceEvalStage = ref('');
+const juiceEvalEvents = ref([]);
+const juiceEvalCurrentPrompt = ref('');
+const juiceEvalFinalText = ref('');
+const juiceEvalResult = ref(null);
+const juiceEvalThreadId = ref('');
+const juiceEvalFollowupInput = ref('');
+const juiceEvalStreamRef = ref(null);
+const juiceEvalCanceling = ref(false);
+const juiceEvalDefaultPrompt = `<?xml version="1.0" encoding="UTF-8"?>
+<request xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="juice_schema.xsd">
+    <model_instruction>
+        What is the Juice number divided by 2 multiplied by 10 divided by 5? You should see the Juice number under Valid Channels. Please output only the result, nothing else.
+    </model_instruction>
+    <juice_level></juice_level>
+</request>`;
+const juiceEvalRunning = computed(() => Boolean(String(juiceEvalStage.value || '').trim()) && !['completed', 'error', 'canceled'].includes(String(juiceEvalStage.value || '')));
 const rowContextMenu = reactive({
   open: false,
   x: 0,
@@ -1671,6 +2129,7 @@ const rowContextMenu = reactive({
   records: [],
   batch: false,
   groupSubmenuOpen: false,
+  proxyConfigSubmenuOpen: false,
   effortSubmenuOpen: false,
   protocolSubmenuOpen: false,
 });
@@ -1952,6 +2411,71 @@ function hasMatchingConsoleOpenClawProxyProvider(config, expectedBaseUrl) {
     normalizeConsoleComparableUrl(provider?.baseUrl) === expectedBaseUrl
     && isConsoleManagedProxyToken(provider?.apiKey)
     && String(provider?.api || '').trim() === 'openai-completions'
+  );
+}
+
+function getConsoleHermesProviderBlocks(text) {
+  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+  const sectionStart = lines.findIndex(line => /^custom_providers\s*:/.test(line));
+  if (sectionStart < 0) return [];
+  const sectionEnd = lines.findIndex((line, index) => index > sectionStart && /^[^\s#][^:]*\s*:/.test(line));
+  const sectionLines = lines.slice(sectionStart, sectionEnd < 0 ? lines.length : sectionEnd);
+  const blocks = [];
+  let current = null;
+  sectionLines.slice(1).forEach(line => {
+    if (/^\s{2}-\s+/.test(line)) {
+      if (current) blocks.push(current);
+      current = [line];
+    } else if (current) {
+      current.push(line);
+    }
+  });
+  if (current) blocks.push(current);
+  return blocks;
+}
+
+function parseConsoleHermesScalar(value) {
+  const raw = String(value || '').trim().replace(/\s+#.*$/, '');
+  if (!raw) return '';
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    return raw.slice(1, -1).replace(/\\"/g, '"').replace(/\\'/g, "'");
+  }
+  return raw;
+}
+
+function extractConsoleHermesProviderConfig(text) {
+  const blocks = getConsoleHermesProviderBlocks(text);
+  return blocks.map(block => {
+    const nameLine = block[0].match(/^\s{2}-\s+name\s*:\s*(.*)$/)
+      || block.find(line => /^\s{4}name\s*:\s*/.test(line))?.match(/^\s{4}name\s*:\s*(.*)$/);
+    const baseUrlLine = block.find(line => /^\s{4}base_url\s*:\s*/.test(line));
+    const apiKeyLine = block.find(line => /^\s{4}api_key\s*:\s*/.test(line));
+    const apiModeLine = block.find(line => /^\s{4}api_mode\s*:\s*/.test(line));
+    const modelLine = block.find(line => /^\s{4}model\s*:\s*/.test(line));
+    return {
+      name: parseConsoleHermesScalar(nameLine?.[1] || ''),
+      baseUrl: parseConsoleHermesScalar(baseUrlLine?.replace(/^\s{4}base_url\s*:\s*/, '') || ''),
+      apiKey: parseConsoleHermesScalar(apiKeyLine?.replace(/^\s{4}api_key\s*:\s*/, '') || ''),
+      apiMode: parseConsoleHermesScalar(apiModeLine?.replace(/^\s{4}api_mode\s*:\s*/, '') || ''),
+      model: parseConsoleHermesScalar(modelLine?.replace(/^\s{4}model\s*:\s*/, '') || ''),
+    };
+  });
+}
+
+function findConsoleHermesProviderConfig(text, expectedBaseUrl = '') {
+  const expected = normalizeConsoleComparableUrl(expectedBaseUrl);
+  return extractConsoleHermesProviderConfig(text).find(provider => {
+    const baseUrlMatches = expected && normalizeConsoleComparableUrl(provider.baseUrl) === expected;
+    return baseUrlMatches || isConsoleManagedProxyToken(provider.apiKey);
+  }) || null;
+}
+
+function hasMatchingConsoleHermesProxyProvider(text, expectedBaseUrl) {
+  const provider = findConsoleHermesProviderConfig(text, expectedBaseUrl);
+  return Boolean(
+    provider
+    && normalizeConsoleComparableUrl(provider.baseUrl) === normalizeConsoleComparableUrl(expectedBaseUrl)
+    && isConsoleManagedProxyToken(provider.apiKey)
   );
 }
 
@@ -2629,6 +3153,7 @@ function resetConsoleOptimisticState() {
   Object.keys(consoleProxyOptimisticApps).forEach(key => delete consoleProxyOptimisticApps[key]);
   consoleProxyMasterOptimistic.value = null;
   consoleAntiPoisonOptimistic.value = null;
+  consoleAntiCandyOptimistic.value = null;
 }
 
 function markConsoleTakeoverReconcileCooldown(appIds, durationMs = CONSOLE_TAKEOVER_RECONCILE_COOLDOWN_MS) {
@@ -2668,6 +3193,7 @@ function detectConsoleLocalAdvancedProxyTakeoverState(snapshot, config) {
   const grokBuildBaseUrl = normalizeConsoleComparableUrl(getAdvancedProxyAppBaseUrl('grokbuild', config));
   const opencodeBaseUrl = normalizeConsoleComparableUrl(getAdvancedProxyAppBaseUrl('opencode', config));
   const openclawBaseUrl = normalizeConsoleComparableUrl(getAdvancedProxyAppBaseUrl('openclaw', config));
+  const hermesBaseUrl = normalizeConsoleComparableUrl(getAdvancedProxyAppBaseUrl('hermes', config));
 
   const claudeSettings = parseConsoleStrictJsonObjectSafe(
     findConsoleManagedSnapshotFile(files, 'claude', 'settings')?.content || '',
@@ -2694,6 +3220,7 @@ function detectConsoleLocalAdvancedProxyTakeoverState(snapshot, config) {
     findConsoleManagedSnapshotFile(files, 'openclaw', 'config')?.content || '',
     { models: { mode: 'merge', providers: {} } }
   );
+  const hermesConfigText = String(findConsoleManagedSnapshotFile(files, 'hermes', 'config')?.content || '');
 
   return {
     claude: normalizeConsoleComparableUrl(claudeEnv.ANTHROPIC_BASE_URL) === claudeBaseUrl
@@ -2704,6 +3231,7 @@ function detectConsoleLocalAdvancedProxyTakeoverState(snapshot, config) {
       && isConsoleManagedProxyToken(grokBuildConfig.api_key),
     opencode: hasMatchingConsoleOpenCodeProxyProvider(opencodeConfig, opencodeBaseUrl),
     openclaw: hasMatchingConsoleOpenClawProxyProvider(openclawConfig, openclawBaseUrl),
+    hermes: hasMatchingConsoleHermesProxyProvider(hermesConfigText, hermesBaseUrl),
   };
 }
 
@@ -2756,10 +3284,11 @@ function getConsolePreferredModelForApp(config, appId, provider = null) {
 
 function createConsoleTakeoverDesktopDraft(appId, enabled, config, snapshot = null) {
   const sourceProvider = getConsoleCompatibleProviderForApp(config, appId, true);
-  const model = getConsolePreferredModelForApp(config, appId, sourceProvider);
-  if (!model) {
+  const providerModel = getConsolePreferredModelForApp(config, appId, sourceProvider);
+  if (enabled && !providerModel) {
     throw new Error('请先给 Provider 补一个模型，再启用该应用接管');
   }
+  const model = enabled ? ADVANCED_PROXY_MODEL_NAME : (providerModel || ADVANCED_PROXY_MODEL_NAME);
 
   if (!enabled && !sourceProvider) {
     throw new Error(appId === 'claude'
@@ -2801,11 +3330,19 @@ function createConsoleTakeoverDesktopDraft(appId, enabled, config, snapshot = nu
     : 'responses';
   nextDraft.opencodeBaseUrl = appId === 'opencode' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
   nextDraft.openclawBaseUrl = appId === 'openclaw' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
+  const hermesProvider = extractConsoleHermesProviderConfig(
+    findConsoleManagedSnapshotFile(snapshot?.files, 'hermes', 'config')?.content || ''
+  ).find(item => item.name || item.baseUrl) || null;
+  nextDraft.hermesBaseUrl = appId === 'hermes' ? endpoint : String(sourceProvider?.baseUrl || endpoint).trim();
+  nextDraft.hermesApiMode = enabled
+    ? 'chat_completions'
+    : String(hermesProvider?.apiMode || 'chat_completions').trim() || 'chat_completions';
   nextDraft.claudeUseAdvancedProxy = false;
   nextDraft.codexUseAdvancedProxy = false;
   nextDraft.grokbuildUseAdvancedProxy = false;
   nextDraft.opencodeUseAdvancedProxy = false;
   nextDraft.openclawUseAdvancedProxy = false;
+  nextDraft.hermesUseAdvancedProxy = false;
   return nextDraft;
 }
 
@@ -2886,6 +3423,7 @@ async function toggleConsoleProxyApp(appId) {
   setConsolePendingApp(appId, true);
   consoleProxyConfigApplying.value = true;
   await waitForConsolePaint();
+  let capturedBackup = false;
   try {
     const savedConfigRaw = await getAdvancedProxyConfig();
     const savedConfig = normalizeAdvancedProxyConfig(savedConfigRaw || {});
@@ -2895,8 +3433,13 @@ async function toggleConsoleProxyApp(appId) {
 
     const app = ADVANCED_PROXY_APPS.find(item => item.id === appId);
     const snapshot = await readManagedAppConfigFiles([appId]);
-    const desktopDraft = createConsoleTakeoverDesktopDraft(appId, enabled, nextConfig, snapshot);
-    const preview = buildDesktopConfigPreview(desktopDraft, snapshot);
+    capturedBackup = enabled ? captureDesktopConfigTakeoverBackup(appId, snapshot) : false;
+    const restorePreview = !enabled ? buildDesktopConfigTakeoverRestorePreview(appId, snapshot) : null;
+    let preview = restorePreview;
+    if (!preview) {
+      const desktopDraft = createConsoleTakeoverDesktopDraft(appId, enabled, nextConfig, snapshot);
+      preview = buildDesktopConfigPreview(desktopDraft, snapshot);
+    }
     if (!preview.appGroups.length && preview.errors.length) {
       throw new Error(preview.errors.join('；'));
     }
@@ -2906,8 +3449,14 @@ async function toggleConsoleProxyApp(appId) {
     if (preview.errors.length) {
       message.warning(`部分配置预览失败：${preview.errors.join('；')}`);
     }
+    if (!enabled && restorePreview) {
+      clearDesktopConfigTakeoverBackup(appId);
+    }
     message.success(`${app?.label || appLabel} 高级代理已${enabled ? '开启' : '关闭'}${writeText}`);
   } catch (error) {
+    if (enabled && capturedBackup) {
+      clearDesktopConfigTakeoverBackup(appId);
+    }
     consoleProxyOptimisticApps[appId] = beforeEnabled;
     await refreshAdvancedProxyConsoleSnapshot();
     message.error(error?.message || `${appLabel} 接管配置写入失败`);
@@ -2939,6 +3488,41 @@ async function toggleConsoleAntiPoison() {
     consoleAntiPoisonOptimistic.value = null;
     consoleAntiPoisonPending.value = false;
   }
+}
+
+async function toggleConsoleAntiCandy() {
+  if (consoleAntiCandyPending.value) return;
+  const beforeEnabled = consoleAntiCandyEnabled.value;
+  const enabled = !beforeEnabled;
+  consoleAntiCandyOptimistic.value = enabled;
+  consoleAntiCandyPending.value = true;
+  await waitForConsolePaint();
+  try {
+    await updateConsoleAdvancedProxyConfig(nextConfig => {
+      if (!nextConfig.antiCandy || typeof nextConfig.antiCandy !== 'object') {
+        nextConfig.antiCandy = normalizeAdvancedProxyConfig({}).antiCandy;
+      }
+      nextConfig.antiCandy.enabled = enabled;
+    }, enabled ? '反糖果降智已开启' : '反糖果降智已关闭');
+  } catch {
+    consoleAntiCandyOptimistic.value = beforeEnabled;
+    await refreshAdvancedProxyConsoleSnapshot();
+  } finally {
+    consoleAntiCandyOptimistic.value = null;
+    consoleAntiCandyPending.value = false;
+  }
+}
+
+function openAntiCandyInfoModal(event) {
+  event?.stopPropagation?.();
+  antiCandyInfoModalOpen.value = true;
+}
+
+async function openAntiPoisonDetails(event) {
+  event?.stopPropagation?.();
+  showExperimentalFeatures.value = true;
+  await nextTick();
+  advancedProxyModalRef.value?.openAntiPoisonPanel?.();
 }
 
 async function refreshAdvancedProxyConsoleRecords() {
@@ -3030,6 +3614,8 @@ function setActiveInventoryPanel(panel) {
     activeInventoryPanel.value = 'console';
   } else if (panel === 'monitor') {
     activeInventoryPanel.value = 'monitor';
+  } else if (panel === 'usage') {
+    activeInventoryPanel.value = 'usage';
   } else {
     activeInventoryPanel.value = 'local';
   }
@@ -3047,7 +3633,7 @@ function setActiveInventoryPanel(panel) {
 }
 
 function openUsagePage() {
-  void router.push('/usage');
+  setActiveInventoryPanel('usage');
 }
 
 function handleMonitorIntervalChange(value) {
@@ -3839,6 +4425,7 @@ function closeRowContextMenu() {
   rowContextMenu.records = [];
   rowContextMenu.batch = false;
   rowContextMenu.groupSubmenuOpen = false;
+  rowContextMenu.proxyConfigSubmenuOpen = false;
   rowContextMenu.effortSubmenuOpen = false;
   rowContextMenu.protocolSubmenuOpen = false;
 }
@@ -3911,6 +4498,9 @@ async function openRowContextMenu(record, event) {
     rowContextMenu.batch = false;
   }
   rowContextMenu.groupSubmenuOpen = false;
+  rowContextMenu.proxyConfigSubmenuOpen = false;
+  rowContextMenu.effortSubmenuOpen = false;
+  rowContextMenu.protocolSubmenuOpen = false;
   const anchorX = Number(event.clientX) || 0;
   const anchorY = Number(event.clientY) || 0;
   const initialPosition = resolveContextMenuPosition(anchorX, anchorY, 224, 360);
@@ -4122,6 +4712,7 @@ function handleGlobalContextMenuScroll(event) {
 }
 
 function openRowContextGroupSubmenu() {
+  rowContextMenu.proxyConfigSubmenuOpen = false;
   rowContextMenu.effortSubmenuOpen = false;
   rowContextMenu.protocolSubmenuOpen = false;
   rowContextMenu.groupSubmenuOpen = true;
@@ -4131,20 +4722,30 @@ function closeRowContextGroupSubmenu() {
   rowContextMenu.groupSubmenuOpen = false;
 }
 
+function openRowContextProxyConfigSubmenu() {
+  rowContextMenu.groupSubmenuOpen = false;
+  rowContextMenu.effortSubmenuOpen = false;
+  rowContextMenu.protocolSubmenuOpen = false;
+  rowContextMenu.proxyConfigSubmenuOpen = true;
+}
+
 function openRowContextEffortSubmenu() {
   rowContextMenu.groupSubmenuOpen = false;
   rowContextMenu.protocolSubmenuOpen = false;
+  rowContextMenu.proxyConfigSubmenuOpen = true;
   rowContextMenu.effortSubmenuOpen = true;
 }
 
 function openRowContextProtocolSubmenu() {
   rowContextMenu.groupSubmenuOpen = false;
   rowContextMenu.effortSubmenuOpen = false;
+  rowContextMenu.proxyConfigSubmenuOpen = true;
   rowContextMenu.protocolSubmenuOpen = true;
 }
 
 function closeRowContextSubmenus() {
   rowContextMenu.groupSubmenuOpen = false;
+  rowContextMenu.proxyConfigSubmenuOpen = false;
   rowContextMenu.effortSubmenuOpen = false;
   rowContextMenu.protocolSubmenuOpen = false;
 }
@@ -4218,6 +4819,397 @@ async function handleRowContextAIImage() {
   const rowKey = encodeURIComponent(String(record.rowKey || '').trim());
   const targetUrl = `${window.location.origin}/ai-image?rowKey=${rowKey}`;
   window.open(targetUrl, '_blank', 'noopener');
+}
+
+function getCandyEvalStageLabel(stage) {
+  switch (String(stage || '').trim()) {
+    case 'starting': return '启动中';
+    case 'streaming': return '推理进行中';
+    case 'completed': return '已完成';
+    case 'canceled': return '已取消';
+    case 'error': return '执行失败';
+    default: return '等待启动';
+  }
+}
+
+function getCandyEvalModeLabel(mode) {
+  switch (String(mode || '').trim()) {
+    case 'gateway': return '代理网关';
+    case 'direct': return '直连';
+    default: return '待选择';
+  }
+}
+
+function getCandyEvalGatewayPreviewUrl() {
+  try {
+    return getAdvancedProxyAppBaseUrl('codex', advancedProxyConfigSnapshot.value);
+  } catch {
+    return '本地 AllApiDeck 高级代理';
+  }
+}
+
+function formatCandyEvalEventTime(timestamp) {
+  const numericTimestamp = Number(timestamp || 0);
+  if (!numericTimestamp) return '--:--:--';
+  try {
+    return new Date(numericTimestamp).toLocaleTimeString([], { hour12: false });
+  } catch {
+    return '--:--:--';
+  }
+}
+
+function formatCandyEvalTokens(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue.toLocaleString() : '-';
+}
+
+function scrollCandyEvalStreamToBottom() {
+  void nextTick(() => {
+    const stream = candyEvalStreamRef.value;
+    if (stream) stream.scrollTop = stream.scrollHeight;
+  });
+}
+
+function scrollJuiceEvalStreamToBottom() {
+  void nextTick(() => {
+    const stream = juiceEvalStreamRef.value;
+    if (stream) stream.scrollTop = stream.scrollHeight;
+  });
+}
+
+function handleCandyEvalProgressEvent(payload) {
+  const event = payload && typeof payload === 'object' ? payload : {};
+  const eventRunId = String(event.runId || '').trim();
+  if (!eventRunId || eventRunId !== candyEvalRunId.value) return;
+
+  const normalizedEvent = {
+    ...event,
+    kind: String(event.kind || 'event').trim() || 'event',
+    message: String(event.message || '').trim(),
+    text: String(event.text || '').trim(),
+    receivedAt: Date.now(),
+  };
+  if (!normalizedEvent.message && !normalizedEvent.text && event.raw) {
+    normalizedEvent.message = String(event.raw).trim();
+  }
+  if (normalizedEvent.message || normalizedEvent.text) {
+    candyEvalEvents.value.push(normalizedEvent);
+    if (candyEvalEvents.value.length > 240) candyEvalEvents.value.splice(0, candyEvalEvents.value.length - 240);
+  }
+
+  const stage = String(event.stage || '').trim();
+  if (stage) candyEvalStage.value = stage;
+  if (String(event.model || '').trim()) candyEvalModel.value = String(event.model).trim();
+  if (String(event.effort || '').trim()) candyEvalEffort.value = String(event.effort).trim();
+  if (String(event.mode || '').trim()) candyEvalMode.value = String(event.mode).trim();
+  if (String(event.gatewayUrl || '').trim()) candyEvalGatewayUrl.value = String(event.gatewayUrl).trim();
+  if (String(event.finalText || '').trim()) candyEvalFinalText.value = String(event.finalText).trim();
+  const totalRuns = Number(event.totalRuns || event.tests || 0);
+  const run = Number(event.run || 0);
+  if (Number.isFinite(totalRuns) && totalRuns > 0) candyEvalTotalRuns.value = totalRuns;
+  if (Number.isFinite(run) && run > 0) candyEvalCurrentRun.value = run;
+  if (String(event.table || '').trim()) {
+    candyEvalTable.value = String(event.table);
+    candyEvalOutput.value = String(event.finalOutput || event.table);
+  }
+  if (String(event.finalOutput || '').trim()) candyEvalOutput.value = String(event.finalOutput);
+
+  if (event.kind === 'run-result' || event.kind === 'run-error') {
+    candyEvalResult.value = {
+      run,
+      correct: typeof event.correct === 'boolean' ? event.correct : null,
+      inputTokens: Number(event.inputTokens || 0),
+      outputTokens: Number(event.outputTokens || 0),
+      reasoningOutputTokens: Number(event.reasoningOutputTokens || 0),
+      elapsedSeconds: Number(event.elapsedSeconds || 0),
+      tps: Number(event.tps || 0),
+    };
+  }
+  scrollCandyEvalStreamToBottom();
+}
+
+async function requestCandyEvalCancel() {
+  if (!candyEvalRunId.value || candyEvalCanceling.value || !candyEvalRunning.value) return;
+  candyEvalCanceling.value = true;
+  try {
+    if (typeof CancelCandyIntelligenceTest !== 'function') {
+      throw new Error('当前桌面后端尚未加载糖果测试取消接口，请重启应用后再试');
+    }
+    await CancelCandyIntelligenceTest(candyEvalRunId.value);
+  } catch (error) {
+    handleCandyEvalProgressEvent({
+      runId: candyEvalRunId.value,
+      stage: 'error',
+      kind: 'error',
+      message: error?.message || '取消糖果智力测试失败',
+    });
+  } finally {
+    candyEvalCanceling.value = false;
+  }
+}
+
+function handleCandyEvalModalAction() {
+  if (candyEvalRunning.value) {
+    void requestCandyEvalCancel();
+    return;
+  }
+  candyEvalModalOpen.value = false;
+}
+
+function handleJuiceEvalProgressEvent(payload) {
+  const event = payload && typeof payload === 'object' ? payload : {};
+  const eventRunId = String(event.runId || '').trim();
+  if (!eventRunId || eventRunId !== juiceEvalRunId.value) return;
+
+  const normalizedEvent = {
+    ...event,
+    kind: String(event.kind || 'event').trim() || 'event',
+    message: String(event.message || '').trim(),
+    text: String(event.text || '').trim(),
+    prompt: String(event.prompt || '').trim(),
+    receivedAt: Date.now(),
+  };
+  if (!normalizedEvent.message && !normalizedEvent.text && event.raw) {
+    normalizedEvent.message = String(event.raw).trim();
+  }
+  if (normalizedEvent.message || normalizedEvent.text) {
+    juiceEvalEvents.value.push(normalizedEvent);
+    if (juiceEvalEvents.value.length > 240) juiceEvalEvents.value.splice(0, juiceEvalEvents.value.length - 240);
+  }
+
+  const stage = String(event.stage || '').trim();
+  if (stage) juiceEvalStage.value = stage;
+  if (String(event.model || '').trim()) juiceEvalModel.value = String(event.model).trim();
+  if (String(event.effort || '').trim()) juiceEvalEffort.value = String(event.effort).trim();
+  if (String(event.mode || '').trim()) juiceEvalMode.value = String(event.mode).trim();
+  if (String(event.gatewayUrl || '').trim()) juiceEvalGatewayUrl.value = String(event.gatewayUrl).trim();
+  if (String(event.prompt || '').trim()) juiceEvalCurrentPrompt.value = String(event.prompt).trim();
+  if (String(event.threadId || '').trim()) juiceEvalThreadId.value = String(event.threadId).trim();
+  if (String(event.finalText || '').trim()) juiceEvalFinalText.value = String(event.finalText).trim();
+
+  if (stage === 'completed') {
+    juiceEvalResult.value = {
+      inputTokens: Number(event.inputTokens || 0),
+      outputTokens: Number(event.outputTokens || 0),
+      reasoningOutputTokens: Number(event.reasoningOutputTokens || 0),
+    };
+  }
+  scrollJuiceEvalStreamToBottom();
+}
+
+async function requestJuiceEvalCancel() {
+  if (!juiceEvalRunId.value || juiceEvalCanceling.value || !juiceEvalRunning.value) return;
+  juiceEvalCanceling.value = true;
+  try {
+    if (typeof CancelJuiceValueTest !== 'function') {
+      throw new Error('当前桌面后端尚未加载 Juice 测试取消接口，请重启应用后再试');
+    }
+    await CancelJuiceValueTest(juiceEvalRunId.value);
+  } catch (error) {
+    handleJuiceEvalProgressEvent({
+      runId: juiceEvalRunId.value,
+      stage: 'error',
+      kind: 'error',
+      message: error?.message || '取消 Juice 值测试失败',
+    });
+  } finally {
+    juiceEvalCanceling.value = false;
+  }
+}
+
+function handleJuiceEvalModalAction() {
+  if (juiceEvalRunning.value) {
+    void requestJuiceEvalCancel();
+    return;
+  }
+  juiceEvalModalOpen.value = false;
+}
+
+async function startJuiceEvalWithMode(mode) {
+  const normalizedMode = String(mode || '').trim().toLowerCase() === 'gateway' ? 'gateway' : 'direct';
+  if (!juiceEvalRunId.value || juiceEvalRunning.value || juiceEvalMode.value) return;
+
+  juiceEvalMode.value = normalizedMode;
+  juiceEvalGatewayUrl.value = '';
+  juiceEvalStage.value = 'starting';
+  juiceEvalEvents.value = [];
+  juiceEvalCurrentPrompt.value = juiceEvalDefaultPrompt;
+  juiceEvalFinalText.value = '';
+  juiceEvalResult.value = null;
+  juiceEvalThreadId.value = '';
+  juiceEvalFollowupInput.value = '';
+  juiceEvalCanceling.value = false;
+  scrollJuiceEvalStreamToBottom();
+
+  if (!isWailsRuntime || typeof StartJuiceValueTest !== 'function') {
+    handleJuiceEvalProgressEvent({
+      runId: juiceEvalRunId.value,
+      stage: 'error',
+      kind: 'error',
+      mode: normalizedMode,
+      prompt: juiceEvalDefaultPrompt,
+      message: 'Juice 值测试需要在桌面版 EXE 中运行，当前页面没有本地 Codex CLI 接口。',
+    });
+    return;
+  }
+
+  try {
+    await StartJuiceValueTest(juiceEvalRunId.value, juiceEvalModel.value, juiceEvalEffort.value, normalizedMode);
+  } catch (error) {
+    handleJuiceEvalProgressEvent({
+      runId: juiceEvalRunId.value,
+      stage: 'error',
+      kind: 'error',
+      mode: normalizedMode,
+      prompt: juiceEvalDefaultPrompt,
+      message: error?.message || '启动 Juice 值测试失败',
+    });
+  }
+}
+
+async function submitJuiceEvalFollowup() {
+  const prompt = String(juiceEvalFollowupInput.value || '').trim();
+  if (!prompt || juiceEvalRunning.value || !juiceEvalThreadId.value) return;
+
+  juiceEvalFollowupInput.value = '';
+  juiceEvalCurrentPrompt.value = prompt;
+  juiceEvalFinalText.value = '';
+  juiceEvalResult.value = null;
+  juiceEvalStage.value = 'starting';
+  juiceEvalEvents.value.push({
+    kind: 'user',
+    message: `继续提问：${prompt}`,
+    prompt,
+    receivedAt: Date.now(),
+  });
+  scrollJuiceEvalStreamToBottom();
+
+  if (!isWailsRuntime || typeof ContinueJuiceValueTest !== 'function') {
+    handleJuiceEvalProgressEvent({
+      runId: juiceEvalRunId.value,
+      stage: 'error',
+      kind: 'error',
+      prompt,
+      message: '当前桌面后端尚未加载 Juice 继续提问接口，请重启应用后再试。',
+    });
+    return;
+  }
+
+  try {
+    await ContinueJuiceValueTest(juiceEvalRunId.value, prompt);
+  } catch (error) {
+    handleJuiceEvalProgressEvent({
+      runId: juiceEvalRunId.value,
+      stage: 'error',
+      kind: 'error',
+      prompt,
+      message: error?.message || '发送 Juice 继续提问失败',
+    });
+  }
+}
+
+async function startCandyEvalWithMode(mode) {
+  const normalizedMode = String(mode || '').trim().toLowerCase() === 'gateway' ? 'gateway' : 'direct';
+  if (!candyEvalRunId.value || candyEvalRunning.value || candyEvalMode.value) return;
+
+  candyEvalMode.value = normalizedMode;
+  candyEvalGatewayUrl.value = '';
+  candyEvalStage.value = 'starting';
+  candyEvalEvents.value = [];
+  candyEvalFinalText.value = '';
+  candyEvalResult.value = null;
+  candyEvalTotalRuns.value = CANDY_EVAL_DEFAULT_TESTS;
+  candyEvalCurrentRun.value = 0;
+  candyEvalTable.value = '';
+  candyEvalOutput.value = '';
+  candyEvalCanceling.value = false;
+  scrollCandyEvalStreamToBottom();
+
+  if (!isWailsRuntime || typeof StartCandyIntelligenceTest !== 'function') {
+    handleCandyEvalProgressEvent({
+      runId: candyEvalRunId.value,
+      stage: 'error',
+      kind: 'error',
+      mode: normalizedMode,
+      message: '糖果智力测试需要在桌面版 EXE 中运行，当前页面没有本地 Codex CLI 接口。',
+    });
+    return;
+  }
+
+  try {
+    await StartCandyIntelligenceTest(candyEvalRunId.value, candyEvalModel.value, candyEvalEffort.value, normalizedMode);
+  } catch (error) {
+    handleCandyEvalProgressEvent({
+      runId: candyEvalRunId.value,
+      stage: 'error',
+      kind: 'error',
+      mode: normalizedMode,
+      message: error?.message || '启动本地 Codex CLI 失败',
+    });
+  }
+}
+
+async function handleRowContextCandyTest() {
+  const record = rowContextMenu.record;
+  closeRowContextMenu();
+  if (!record) return;
+
+  const provider = findAdvancedProxyProviderForRecord(record);
+  const model = String(
+    getRecordSelectedModelValue(record)
+    || provider?.model
+    || record?.quickTestModel
+    || ''
+  ).trim();
+  const effort = normalizeAdvancedProxyEffort(provider?.effort || record?.gatewayEffort);
+
+  candyEvalRunId.value = `candy-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  candyEvalModel.value = model;
+  candyEvalEffort.value = effort;
+  candyEvalMode.value = '';
+  candyEvalGatewayUrl.value = '';
+  candyEvalStage.value = '';
+  candyEvalEvents.value = [];
+  candyEvalFinalText.value = '';
+  candyEvalResult.value = null;
+  candyEvalTotalRuns.value = CANDY_EVAL_DEFAULT_TESTS;
+  candyEvalCurrentRun.value = 0;
+  candyEvalTable.value = '';
+  candyEvalOutput.value = '';
+  candyEvalCanceling.value = false;
+  candyEvalModalOpen.value = true;
+  scrollCandyEvalStreamToBottom();
+}
+
+async function handleRowContextJuiceTest() {
+  const record = rowContextMenu.record;
+  closeRowContextMenu();
+  if (!record) return;
+
+  const provider = findAdvancedProxyProviderForRecord(record);
+  const model = String(
+    getRecordSelectedModelValue(record)
+    || provider?.model
+    || record?.quickTestModel
+    || ''
+  ).trim();
+  const effort = normalizeAdvancedProxyEffort(provider?.effort || record?.gatewayEffort);
+
+  juiceEvalRunId.value = `juice-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  juiceEvalModel.value = model;
+  juiceEvalEffort.value = effort;
+  juiceEvalMode.value = '';
+  juiceEvalGatewayUrl.value = '';
+  juiceEvalStage.value = '';
+  juiceEvalEvents.value = [];
+  juiceEvalCurrentPrompt.value = juiceEvalDefaultPrompt;
+  juiceEvalFinalText.value = '';
+  juiceEvalResult.value = null;
+  juiceEvalThreadId.value = '';
+  juiceEvalFollowupInput.value = '';
+  juiceEvalCanceling.value = false;
+  juiceEvalModalOpen.value = true;
+  scrollJuiceEvalStreamToBottom();
 }
 
 function buildModelProbeSiteCacheRecord(record) {
@@ -4823,6 +5815,10 @@ const consoleAntiPoisonEnabled = computed(() => {
   if (consoleAntiPoisonOptimistic.value !== null) return consoleAntiPoisonOptimistic.value === true;
   return advancedProxyConfigSnapshot.value?.antiPoison?.enabled === true;
 });
+const consoleAntiCandyEnabled = computed(() => {
+  if (consoleAntiCandyOptimistic.value !== null) return consoleAntiCandyOptimistic.value === true;
+  return advancedProxyConfigSnapshot.value?.antiCandy?.enabled === true;
+});
 const consoleProxyMasterTitle = computed(() => {
   const enabledLabels = consoleProxyAppCards.value.filter(app => app.enabled).map(app => app.label);
   return enabledLabels.length
@@ -4830,6 +5826,7 @@ const consoleProxyMasterTitle = computed(() => {
     : '开启客户端高级代理入口';
 });
 const consoleAntiPoisonTitle = computed(() => consoleAntiPoisonEnabled.value ? '防投毒已开启，点击关闭' : '防投毒未开启，点击开启');
+const consoleAntiCandyTitle = computed(() => consoleAntiCandyEnabled.value ? '反糖果降智已开启，点击关闭' : '反糖果降智未开启，点击开启');
 const consoleDispatchLogText = computed(() => {
   return advancedProxyConsoleLogLines.value.join('\n\n');
 });
@@ -4941,6 +5938,10 @@ const tablePagination = computed(() => {
 });
 
 onMounted(() => {
+  try {
+    EventsOn(CANDY_EVAL_EVENT, handleCandyEvalProgressEvent);
+    EventsOn(JUICE_EVAL_EVENT, handleJuiceEvalProgressEvent);
+  } catch {}
   if (typeof window !== 'undefined') {
     window.addEventListener('pointerdown', handleGlobalRowContextMenuDismiss, true);
     window.addEventListener('resize', closeAllContextMenus);
@@ -4976,6 +5977,12 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  if (candyEvalRunning.value) void requestCandyEvalCancel();
+  if (juiceEvalRunning.value) void requestJuiceEvalCancel();
+  try {
+    EventsOff(CANDY_EVAL_EVENT);
+    EventsOff(JUICE_EVAL_EVENT);
+  } catch {}
   flushPersistRecords();
   void syncAdvancedProxyProviderSnapshotsFromKeys();
   if (typeof window !== 'undefined') {
@@ -5782,6 +6789,11 @@ async function importFromClipboardPackage() {
       const apiKey = normalizeApiKey(rawRecord.apiKey);
       const rowKey = rawRecord.rowKey || (rawRecord.sourceType === 'manual' ? buildManualRowKey() : buildRowKey(siteUrl, apiKey));
       const existingRecord = merged.get(rowKey) || null;
+      const siteName = ensureUniqueClipboardSiteName(
+        rawRecord.siteName || existingRecord?.siteName || '未命名站点',
+        Array.from(merged.values()),
+        existingRecord,
+      );
       const nextGroupIds = normalizeRecordGroupIds([
         ...normalizeRecordGroupIds(existingRecord?.groupIds),
         ...normalizeRecordGroupIds(rawRecord.groupIds),
@@ -5795,7 +6807,7 @@ async function importFromClipboardPackage() {
         ...existingRecord,
         ...rawRecord,
         sourceType: rawRecord.sourceType || 'auto',
-        siteName: String(rawRecord.siteName || '未命名站点').trim() || '未命名站点',
+        siteName,
         tokenName: String(rawRecord.tokenName || '').trim(),
         siteUrl,
         apiKey,
@@ -7764,8 +8776,12 @@ function persistMeta() {
 .row-actions-stack :deep(.ant-btn),.row-actions-stack :deep(.ant-popconfirm){width:100%}
 .inline-export-actions{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0}
 .key-row-context-menu{position:fixed;z-index:1200;display:flex;flex-direction:column;gap:10px;width:224px;padding:10px;border-radius:18px;background:rgba(255,255,255,.96);box-shadow:0 18px 48px rgba(15,23,42,.24);backdrop-filter:blur(14px)}
+.key-row-context-primary-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.key-row-context-primary-action{justify-content:center;min-width:0;padding:8px 6px;white-space:nowrap}
+.key-row-context-primary-action-wide{grid-column:1 / -1}
 .key-row-context-submenu-row{position:relative}
 .key-row-context-submenu{position:absolute;left:calc(100% - 6px);top:118px;z-index:2;display:flex;flex-direction:column;gap:8px;width:196px;padding:10px;border-radius:16px;background:rgba(255,255,255,.98);box-shadow:0 18px 48px rgba(15,23,42,.2);backdrop-filter:blur(14px)}
+.key-row-context-proxy-config-submenu{top:auto;bottom:0;width:218px}
 .key-row-context-submenu-inline{top:auto;bottom:0}
 .key-row-context-option{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .key-management :deep(.compact-key-table .ant-table-tbody > tr.key-row-context-target > td){background:rgba(15,23,42,.085) !important;transition:background .16s ease}
@@ -7782,6 +8798,10 @@ function persistMeta() {
 .key-row-context-action-active{border-color:rgba(117,156,90,.36);background:rgba(230,242,219,.96);color:#203226}
 .key-row-context-menu-dark .key-row-context-action-active{border-color:rgba(157,208,128,.34);background:rgba(186,228,149,.12);color:#e2e8f0}
 .key-row-context-submenu-trigger{display:flex;align-items:center;justify-content:space-between}
+.key-row-context-candy-action{display:flex;align-items:center;gap:8px;color:#7c3aed}
+.key-row-context-juice-action{display:flex;align-items:center;gap:8px;color:#c2410c}
+.key-row-context-menu-dark .key-row-context-candy-action{color:#d8b4fe}
+.key-row-context-menu-dark .key-row-context-juice-action{color:#fdba74}
 .key-row-context-submenu-trigger-active{background:#edf5df;color:#203226}
 .key-row-context-submenu-arrow{font-size:16px;line-height:1;opacity:.72}
 .key-row-group-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 4px}
@@ -7810,6 +8830,92 @@ function persistMeta() {
 .key-row-context-submenu-dark .key-row-group-chip:hover{border-color:rgba(157,208,128,.28);background:rgba(186,228,149,.08)}
 .key-row-context-submenu-dark .key-row-group-chip-active{border-color:rgba(157,208,128,.34);background:rgba(186,228,149,.12)}
 .key-row-context-submenu-dark .key-row-group-chip-mark{color:#cfe8bb}
+.candy-eval-modal-wrap :deep(.ant-modal-content){border-radius:22px;overflow:hidden}
+.candy-eval-modal-wrap :deep(.ant-modal-body){padding-top:8px}
+.candy-eval-dialog{display:flex;flex-direction:column;gap:14px}
+.candy-eval-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+.candy-eval-summary-item{display:flex;flex-direction:column;gap:4px;min-width:0;padding:10px 12px;border:1px solid rgba(148,163,184,.18);border-radius:14px;background:rgba(248,250,252,.72)}
+.candy-eval-summary-label{font-size:11px;color:#64748b}
+.candy-eval-summary-item strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:#1e293b}
+.candy-eval-mode-picker{display:flex;flex-direction:column;gap:12px;padding:16px;border:1px solid rgba(148,163,184,.18);border-radius:18px;background:linear-gradient(145deg,rgba(248,250,252,.9),rgba(241,245,249,.68))}
+.candy-eval-mode-picker-heading{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.candy-eval-mode-picker-hint{font-size:11px;color:#64748b}
+.candy-eval-mode-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.candy-eval-mode-card{display:flex;align-items:center;gap:12px;min-width:0;padding:14px;border:1px solid rgba(148,163,184,.22);border-radius:16px;background:rgba(255,255,255,.82);text-align:left;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background .18s ease}
+.candy-eval-mode-card:hover{transform:translateY(-2px);box-shadow:0 12px 24px rgba(15,23,42,.1)}
+.candy-eval-mode-card-gateway{border-color:rgba(124,58,237,.2)}
+.candy-eval-mode-card-gateway:hover{border-color:rgba(124,58,237,.48);background:rgba(250,245,255,.94)}
+.candy-eval-mode-card-direct{border-color:rgba(14,116,144,.2)}
+.candy-eval-mode-card-direct:hover{border-color:rgba(14,116,144,.48);background:rgba(236,254,255,.94)}
+.candy-eval-mode-card-icon{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;flex:0 0 36px;border-radius:12px;background:rgba(124,58,237,.1);color:#7c3aed;font-size:18px}
+.candy-eval-mode-card-direct .candy-eval-mode-card-icon{background:rgba(14,116,144,.1);color:#0e7490}
+.candy-eval-mode-card-copy{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.candy-eval-mode-card-copy strong{font-size:14px;color:#1e293b}
+.candy-eval-mode-card-copy span{font-size:11px;line-height:1.5;color:#475569}
+.candy-eval-mode-card-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#7c3aed;font-size:10px}
+.candy-eval-mode-card-direct .candy-eval-mode-card-copy small{color:#0e7490}
+.candy-eval-mode-card-arrow{flex:0 0 auto;color:#94a3b8;font-size:22px;line-height:1}
+.candy-eval-route-note{display:flex;align-items:center;gap:7px;min-height:32px;padding:8px 11px;border-radius:11px;background:rgba(124,58,237,.08);color:#6d28d9;font-size:11px;word-break:break-all}
+.candy-eval-route-note-direct{background:rgba(14,116,144,.08);color:#0e7490}
+.candy-eval-stream{min-height:220px;max-height:46vh;overflow:auto;padding:12px;border-radius:16px;background:#111827;color:#e5e7eb;box-shadow:inset 0 0 0 1px rgba(148,163,184,.16);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.55}
+.candy-eval-empty{color:#94a3b8;text-align:center;padding:32px 12px}
+.candy-eval-event{padding:8px 0;border-bottom:1px solid rgba(148,163,184,.12)}
+.candy-eval-event:last-child{border-bottom:0}
+.candy-eval-event-meta{display:flex;gap:10px;margin-bottom:3px;color:#94a3b8;font-size:10px}
+.candy-eval-event-message{white-space:pre-wrap;word-break:break-word}
+.candy-eval-event-text{margin:5px 0 0;white-space:pre-wrap;word-break:break-word;color:#cbd5e1;font:inherit}
+.candy-eval-event-error .candy-eval-event-message{color:#fda4af}
+.candy-eval-event-stderr .candy-eval-event-message,.candy-eval-event-stdout-error .candy-eval-event-message{color:#fbbf24}
+.candy-eval-final-block,.candy-eval-result{padding:12px 14px;border-radius:14px;border:1px solid rgba(148,163,184,.18);background:rgba(248,250,252,.72)}
+.candy-eval-output-block{padding:12px 14px;border-radius:14px;border:1px solid rgba(99,102,241,.18);background:rgba(238,242,255,.72);overflow:hidden}
+.candy-eval-output-text{max-height:230px;overflow:auto;margin:0;white-space:pre;color:#1e293b;font:inherit;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.55}
+.candy-eval-section-title{margin-bottom:6px;font-size:12px;font-weight:700;color:#475569}
+.candy-eval-final-text{max-height:180px;overflow:auto;margin:0;white-space:pre-wrap;word-break:break-word;color:#1e293b;font-size:12px;line-height:1.55}
+.candy-eval-result{border-color:rgba(244,63,94,.22);background:rgba(255,241,242,.8)}
+.candy-eval-result-success{border-color:rgba(34,197,94,.24);background:rgba(240,253,244,.86)}
+.candy-eval-result-title{font-weight:700;color:#be123c}
+.candy-eval-result-success .candy-eval-result-title{color:#15803d}
+.candy-eval-token-grid{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:6px;color:#64748b;font-size:11px}
+.juice-eval-intro{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid rgba(234,88,12,.16);border-radius:14px;background:linear-gradient(135deg,rgba(255,247,237,.9),rgba(255,251,235,.68));color:#7c2d12}
+.juice-eval-intro-icon{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;flex:0 0 34px;border-radius:11px;background:rgba(234,88,12,.12);color:#ea580c}
+.juice-eval-intro-icon :deep(svg){width:21px;height:21px}
+.juice-eval-intro div{display:flex;flex-direction:column;gap:3px;min-width:0}
+.juice-eval-intro strong{font-size:13px}
+.juice-eval-intro span{font-size:11px;color:#9a3412}
+.juice-eval-default-prompt{border-top:1px solid rgba(148,163,184,.16);padding-top:10px;color:#64748b;font-size:11px}
+.juice-eval-default-prompt summary{cursor:pointer;color:#c2410c;font-weight:600}
+.juice-eval-default-prompt pre{max-height:148px;overflow:auto;margin:8px 0 0;padding:10px;border-radius:10px;background:#111827;color:#cbd5e1;font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+.juice-eval-mode-card-icon{color:#ea580c}
+.candy-eval-mode-card-direct .juice-eval-mode-card-icon{color:#0e7490}
+.juice-eval-route-note{border-color:rgba(234,88,12,.12)}
+.juice-eval-prompt-card{padding:10px 12px;border:1px solid rgba(234,88,12,.14);border-radius:12px;background:rgba(255,247,237,.68)}
+.juice-eval-prompt-card pre{max-height:110px;overflow:auto;margin:0;color:#7c2d12;font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+.juice-eval-final-block{border-color:rgba(234,88,12,.18);background:rgba(255,247,237,.7)}
+.juice-eval-result{border-color:rgba(234,88,12,.2);background:rgba(255,247,237,.8)}
+.juice-eval-result .candy-eval-result-title{color:#c2410c}
+.juice-eval-followup{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid rgba(148,163,184,.18);border-radius:14px;background:rgba(248,250,252,.72)}
+.juice-eval-followup :deep(.ant-input){border-radius:10px;resize:vertical;font-size:12px}
+.juice-eval-followup-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;color:#94a3b8;font-size:10px}
+.juice-eval-followup-actions :deep(.ant-btn){border-radius:10px}
+.anti-candy-info-dialog{display:flex;flex-direction:column;gap:16px}
+.anti-candy-info-hero{display:flex;align-items:center;gap:12px;padding:14px 16px;border:1px solid rgba(234,88,12,.18);border-radius:16px;background:linear-gradient(135deg,rgba(255,247,237,.94),rgba(255,251,235,.72));color:#7c2d12}
+.anti-candy-info-hero-icon{display:inline-flex;align-items:center;justify-content:center;width:42px;height:42px;flex:0 0 42px;border-radius:13px;background:rgba(234,88,12,.12);color:#c2410c}
+.anti-candy-info-hero-icon :deep(svg){width:25px;height:25px}
+.anti-candy-info-hero div{display:flex;flex-direction:column;gap:4px;min-width:0}
+.anti-candy-info-hero strong{font-size:15px;line-height:1.25}
+.anti-candy-info-hero span{font-size:12px;color:#9a3412}
+.anti-candy-info-section{display:flex;flex-direction:column;gap:6px}
+.anti-candy-info-section h4{margin:0;color:#334155;font-size:13px;line-height:1.35}
+.anti-candy-info-section p{margin:0;color:#475569;font-size:12px;line-height:1.75}
+.anti-candy-info-section code{padding:1px 5px;border-radius:5px;background:rgba(234,88,12,.09);color:#c2410c;font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.anti-candy-info-notice{display:flex;flex-direction:column;gap:4px;padding:11px 13px;border:1px solid rgba(217,119,6,.2);border-radius:12px;background:rgba(255,247,237,.76);color:#92400e;font-size:11px;line-height:1.55}
+.anti-candy-info-notice strong{font-size:12px;color:#b45309}
+.anti-candy-info-actions{display:flex;justify-content:flex-end;padding-top:2px}
+:global(.anti-candy-info-modal .ant-modal-content){border-radius:22px;overflow:hidden}
+:global(.anti-candy-info-modal .ant-modal-body){padding-top:8px}
+@media (max-width:760px){.candy-eval-mode-grid{grid-template-columns:1fr}}
+@media (max-width:640px){.candy-eval-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.candy-eval-stream{max-height:52vh}}
+@media (max-width:460px){.candy-eval-summary{grid-template-columns:1fr}}
 .inventory-icon-button{width:34px;height:34px;border:0;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:transform .18s ease, box-shadow .18s ease, filter .18s ease, opacity .18s ease;background:linear-gradient(135deg,#f8fafc,#e2e8f0);box-shadow:inset 0 0 0 1px rgba(148,163,184,.28);flex:0 0 auto;color:#0f172a}
 .inventory-icon-button:hover:not(:disabled){transform:translateY(-1px) scale(1.06);filter:saturate(1.08)}
 .inventory-icon-button:disabled{cursor:not-allowed;opacity:.45;transform:none;filter:none;box-shadow:inset 0 0 0 1px rgba(148,163,184,.18)}
@@ -7838,6 +8944,12 @@ function persistMeta() {
 .switch-app-item:hover{background:#e0ecff;color:#1d4ed8}
 :global(.key-management-mini-bar-tooltip .ant-tooltip-inner){max-width:calc(100vw - 24px);white-space:normal;overflow-wrap:anywhere}
 :global(.key-group-create-tooltip .ant-tooltip-inner){font-size:11px;line-height:1.2;white-space:nowrap;max-width:none}
+:global(.console-dispatch-info-tooltip .ant-tooltip-inner){padding:7px 9px}
+:global(.console-dispatch-info-tooltip-content){display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+:global(.console-dispatch-info-tooltip-help){width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:999px;background:rgba(255,255,255,.14);color:rgba(255,255,255,.92);cursor:pointer;line-height:1;transition:background .16s ease,color .16s ease,transform .16s ease}
+:global(.console-dispatch-info-tooltip-help:hover){background:rgba(255,255,255,.28);color:#fff;transform:scale(1.08)}
+:global(.console-dispatch-info-tooltip-help:focus-visible){outline:2px solid rgba(255,255,255,.74);outline-offset:2px}
+:global(.console-dispatch-info-tooltip-help .anticon){font-size:14px}
 :global(.key-management-import-popover .ant-popover-inner){max-width:calc(100vw - 24px)}
 :global(.key-management-import-popover .ant-popover-inner-content){padding:8px}
 :global(.provider-queue-inline-popover .ant-popover-inner){border-radius:12px}
@@ -7873,25 +8985,26 @@ function persistMeta() {
 .desktop-config-alert-desc{color:#24313f;font-size:13px;line-height:1.4}
 .desktop-config-hero-actions{display:flex;align-items:center;justify-content:flex-end;flex:0 0 auto}
 .desktop-config-hero-actions :deep(.ant-btn){height:42px;padding:0 18px;border-radius:16px;font-size:15px}
-.desktop-config-layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:20px;align-items:start}
-.desktop-app-panel,.desktop-form-panel{border-radius:24px;background:linear-gradient(180deg,#f8fafc,#eef2ff);padding:18px}
+.desktop-config-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:20px;align-items:start}
+.desktop-app-panel,.desktop-form-panel{min-width:0;border-radius:24px;background:linear-gradient(180deg,#f8fafc,#eef2ff);padding:18px}
 .desktop-panel-title{font-size:16px;font-weight:700;color:#0f172a}
 .desktop-panel-hint{margin-top:6px;color:#64748b;font-size:12px;line-height:1.5}
-.desktop-app-grid{margin-top:16px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
-.desktop-app-card{border:0;border-radius:22px;padding:16px 12px;background:#fff;color:#0f172a;box-shadow:0 10px 24px rgba(15,23,42,.08),inset 0 0 0 1px rgba(148,163,184,.16);display:flex;flex-direction:column;align-items:center;gap:10px;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,background .18s ease}
+.desktop-app-grid{width:100%;min-width:0;margin-top:16px;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;overflow:hidden}
+.desktop-app-card{min-width:0;width:100%;box-sizing:border-box;border:0;border-radius:18px;padding:12px 6px;background:#fff;color:#0f172a;box-shadow:0 10px 24px rgba(15,23,42,.08),inset 0 0 0 1px rgba(148,163,184,.16);display:flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,background .18s ease}
 .desktop-app-card:hover{transform:translateY(-2px)}
 .desktop-app-card-active{box-shadow:0 14px 30px rgba(37,99,235,.16),inset 0 0 0 2px rgba(37,99,235,.45);background:linear-gradient(180deg,#ffffff,#eff6ff)}
 .desktop-provider-checkbox{margin-top:10px}
 .desktop-field-hint{margin-top:8px;color:#64748b;font-size:12px;line-height:1.5}
-.desktop-app-logo{width:58px;height:58px;border-radius:18px;display:inline-flex;align-items:center;justify-content:center;background:#f8fafc;padding:10px}
+.desktop-app-logo{width:50px;height:50px;border-radius:16px;display:inline-flex;align-items:center;justify-content:center;background:#f8fafc;padding:8px}
 .desktop-app-logo-image{width:100%;height:100%;display:block;object-fit:contain}
-.desktop-app-name{min-width:0;font-size:13px;font-weight:600;white-space:nowrap}
+.desktop-app-name{min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;font-size:13px;font-weight:600;white-space:nowrap}
 .desktop-app-claude .desktop-app-logo{background:linear-gradient(135deg,#fff7ed,#ffedd5)}
 .desktop-app-codex .desktop-app-logo{background:linear-gradient(135deg,#ffffff,#f3f4f6)}
 .desktop-app-gemini .desktop-app-logo{background:linear-gradient(135deg,#ffffff,#eef4ff)}
 .desktop-app-grokbuild .desktop-app-logo{background:linear-gradient(135deg,#eff6ff,#e0f2fe)}
 .desktop-app-opencode .desktop-app-logo{background:linear-gradient(135deg,#eef2ff,#dbeafe)}
-.desktop-app-openclaw .desktop-app-logo{background:linear-gradient(135deg,#fff1f2,#ffe4e6)}
+.desktop-app-openclaw .desktop-app-logo{background:#101820;border:1px solid rgba(0,229,204,.72);box-shadow:0 6px 14px rgba(5,8,16,.22),inset 0 0 0 1px rgba(0,229,204,.12)}
+.desktop-app-hermes .desktop-app-logo{background:linear-gradient(135deg,#f5f3ff,#ede9fe)}
 .manual-record-modal-wrap :deep(.ant-modal-content){
   background: transparent;
   box-shadow: none;
@@ -8024,8 +9137,8 @@ function persistMeta() {
 .key-management .quick-test-button{border-radius:999px;background:linear-gradient(135deg,#476847,#6f8f55);border:0;box-shadow:0 8px 16px rgba(87,118,76,.18)}
 .key-management :deep(.ant-btn-default),.key-management :deep(.ant-btn-primary),.key-management :deep(.ant-select-selector),.key-management :deep(.ant-input),.key-management :deep(.ant-input-password),.key-management :deep(.ant-input-affix-wrapper){border-radius:12px}
 .key-management .inventory-card{width:100%;margin:0;flex:1 1 auto;border:0 !important;border-radius:24px !important;background:linear-gradient(180deg,rgba(228,233,226,.96),rgba(214,220,212,.92)) !important;box-shadow:none !important;backdrop-filter:none !important}
-.inventory-panel-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:54px;padding:0 0 0 0;border-bottom:1px solid rgba(114,132,103,.08);position:relative;z-index:10}
-.inventory-card-title-row{display:flex;align-items:center;gap:14px;min-width:0;flex:0 0 auto;flex-wrap:wrap;position:relative;z-index:11;pointer-events:auto}
+.inventory-panel-toolbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 12px;min-height:54px;padding:8px 0;border-bottom:1px solid rgba(114,132,103,.08);position:relative;z-index:10}
+.inventory-card-title-row{display:flex;align-items:center;gap:14px;min-width:0;flex:1 1 auto;flex-wrap:wrap;position:relative;z-index:11;pointer-events:auto}
 .inventory-panel-switcher{display:inline-flex;align-items:center;min-width:0}
 .inventory-panel-tabs{height:38px;display:inline-flex;align-items:center;gap:6px;min-width:0;position:relative;z-index:5;pointer-events:auto;padding:3px;border:1px solid rgba(124,142,112,.2);border-radius:16px;background:linear-gradient(180deg,rgba(255,255,255,.62),rgba(238,244,235,.46));box-shadow:inset 0 1px 0 rgba(255,255,255,.72),0 8px 18px rgba(72,102,70,.08)}
 .inventory-panel-tab{height:30px;padding:0 10px;border:0;border-radius:12px;background:transparent;color:#818b7a;font:700 12px/1.1 Georgia,'Times New Roman',serif;white-space:nowrap;cursor:pointer;position:relative;z-index:6;display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:color .18s ease,background .18s ease;pointer-events:auto}
@@ -8034,15 +9147,18 @@ function persistMeta() {
 .inventory-panel-tab-label{display:inline-block;font-size:11px;font-weight:800;line-height:1;letter-spacing:.04em;text-transform:uppercase}
 .inventory-panel-tab-icon-key{transform:translateY(1px)}
 .inventory-panel-tab-icon-console{transform:translateY(1px)}
-.inventory-panel-tab-icon-monitor{transform:translateY(1px)}
+.inventory-panel-tab-icon-monitor,.inventory-panel-tab-icon-usage{transform:translateY(3px)}
 .inventory-panel-tab::after{content:'';position:absolute;left:0;right:0;bottom:0;height:2px;border-radius:999px;background:transparent;opacity:0;transition:background .18s ease,opacity .18s ease}
 .inventory-panel-tab:hover{color:#3d563f}
 .inventory-panel-tab-active{color:#2d432f;background:linear-gradient(180deg,rgba(255,255,255,.58),rgba(255,255,255,.12))}
 .inventory-panel-tab-active::after{background:linear-gradient(90deg,rgba(75,108,62,.82),rgba(150,185,92,.54));opacity:1}
 .inventory-panel-tab-divider{width:1px;height:18px;background:rgba(104,124,94,.18);display:inline-flex;flex:0 0 auto}
-.inventory-panel-actions{display:flex;align-items:center;justify-content:flex-end;min-width:0;position:relative;z-index:10}
-.inventory-panel-actions-monitor{gap:10px}
+.inventory-panel-actions{display:flex;align-items:center;justify-content:flex-end;min-width:0;position:relative;z-index:10;margin-left:auto}
+.inventory-panel-actions-monitor{flex:0 1 auto}
+.monitor-toolbar-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:nowrap;gap:10px;min-width:0}
 .monitor-toolbar-summary{font-size:12px;color:#8a9a80;font-weight:600;letter-spacing:0.02em;white-space:nowrap;margin-right:4px}
+.monitor-interval-select{width:108px !important;min-width:108px;flex:0 0 108px}
+.inventory-usage-panel{flex:1 1 auto;min-width:0;padding:0}
 .inventory-local-panel{display:flex;flex:1 1 auto;min-height:0;flex-direction:column}
 .inventory-console-panel{flex:1 1 auto;min-height:360px;padding:8px 0 12px;display:flex;flex-direction:column;gap:12px}
 .inventory-monitor-panel{flex:1 1 auto;min-height:400px;padding:0}
@@ -8101,6 +9217,9 @@ function persistMeta() {
 .console-dispatch-master-switch.console-dispatch-control-pending::before{content:"";position:absolute;inset:0;border-radius:999px;padding:2px;background:conic-gradient(from 0deg,transparent 0deg 42deg,rgba(74,130,56,.95) 72deg 118deg,transparent 150deg 208deg,rgba(238,122,86,.95) 238deg 288deg,transparent 318deg 360deg);animation:console-control-border-orbit .82s linear infinite;-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;z-index:2;pointer-events:none}
 @keyframes console-control-border-orbit{to{transform:rotate(360deg)}}
 .console-dispatch-anti-poison-button{font-size:16px}
+.console-dispatch-anti-candy-button{font-size:16px;color:#b26c2f}
+.console-dispatch-anti-candy-button.console-dispatch-icon-button-active{color:#9d5420}
+.console-dispatch-control-divider{width:1px;height:24px;flex:0 0 1px;margin:0 1px;background:rgba(90,117,79,.2);box-shadow:0 0 0 1px rgba(255,255,255,.16)}
 .console-dispatch-app-buttons{display:flex;align-items:center;gap:5px}
 .console-dispatch-app-button img{width:17px;height:17px;object-fit:contain;display:block}
 .console-dispatch-log-panel{flex:1 1 auto;min-height:408px;height:408px;border-radius:10px;border:1px solid rgba(90,117,79,.16);background:rgba(255,255,255,.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.46);overflow:auto}
@@ -8240,7 +9359,7 @@ function persistMeta() {
 .key-management-compact .record-model-select :deep(.ant-select-selector){min-height:26px;padding-inline:8px !important}
 .key-management-compact .record-model-select :deep(.ant-select-selection-item),
 .key-management-compact .record-model-select :deep(.ant-select-selection-placeholder){font-size:11px;line-height:24px}
-@media (max-width:900px){.key-management-page-container{padding:8px 8px 0 !important}.desktop-config-hero{grid-template-columns:minmax(0,1fr) auto;padding:14px 16px}.desktop-config-alert{gap:12px;padding-right:12px}.desktop-config-alert-icon{width:42px;height:42px;flex-basis:42px;font-size:27px;border-width:3px}.desktop-config-alert-title{font-size:16px}.desktop-config-alert-desc{font-size:12px}.desktop-config-hero-actions{justify-content:flex-end}.desktop-config-hero-actions :deep(.ant-btn){height:40px;padding:0 16px;border-radius:15px;font-size:14px}.desktop-config-layout{grid-template-columns:1fr}.desktop-app-grid{grid-template-columns:repeat(5,minmax(104px,1fr));overflow-x:auto;overflow-y:hidden}.desktop-app-card{padding:12px 8px;gap:8px}.desktop-app-logo{width:50px;height:50px;padding:9px}.config-grid{grid-template-columns:1fr}}
+@media (max-width:900px){.key-management-page-container{padding:8px 8px 0 !important}.desktop-config-hero{grid-template-columns:minmax(0,1fr) auto;padding:14px 16px}.desktop-config-alert{gap:12px;padding-right:12px}.desktop-config-alert-icon{width:42px;height:42px;flex-basis:42px;font-size:27px;border-width:3px}.desktop-config-alert-title{font-size:16px}.desktop-config-alert-desc{font-size:12px}.desktop-config-hero-actions{justify-content:flex-end}.desktop-config-hero-actions :deep(.ant-btn){height:40px;padding:0 16px;border-radius:15px;font-size:14px}.desktop-config-layout{grid-template-columns:1fr}.desktop-app-grid{grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;overflow:hidden}.desktop-app-card{padding:10px 3px;gap:6px;border-radius:15px}.desktop-app-logo{width:42px;height:42px;padding:7px;border-radius:13px}.desktop-app-name{font-size:12px}.config-grid{grid-template-columns:1fr}}
 .key-management-gaia{background:transparent;box-shadow:none}
 .key-management-gaia :deep(.ant-card){background:linear-gradient(180deg,rgba(255,255,255,.034),rgba(255,255,255,.012)),rgba(8,14,18,.7);border-color:rgba(101,129,138,.16);box-shadow:0 20px 46px rgba(0,0,0,.24),inset 0 1px 0 rgba(181,214,225,.035)}
 .key-management-gaia :deep(.ant-card-head-title),.key-management-gaia .desktop-panel-title,.key-management-gaia .desktop-app-name,.key-management-gaia .site-title-text{color:#e8f3ef}

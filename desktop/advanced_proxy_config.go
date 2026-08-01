@@ -19,6 +19,7 @@ const (
 	advancedProxyGrokBuildPath  = "/advanced-proxy/grokbuild/v1"
 	advancedProxyOpenCodePath   = "/advanced-proxy/opencode/v1"
 	advancedProxyOpenClawPath   = "/advanced-proxy/openclaw/v1"
+	advancedProxyHermesPath     = "/advanced-proxy/hermes/v1"
 	advancedProxyGlobalScope    = "global"
 )
 
@@ -64,6 +65,7 @@ type AdvancedProxyQueuesConfig struct {
 	GrokBuild AdvancedProxyQueueConfig `json:"grokbuild"`
 	OpenCode  AdvancedProxyQueueConfig `json:"opencode"`
 	OpenClaw  AdvancedProxyQueueConfig `json:"openclaw"`
+	Hermes    AdvancedProxyQueueConfig `json:"hermes"`
 }
 
 type AppFailoverConfig struct {
@@ -135,6 +137,14 @@ type AntiPoisonConfig struct {
 	StringProtection AntiPoisonStringProtectionConfig `json:"stringProtection"`
 }
 
+type AntiCandyConfig struct {
+	Enabled     bool     `json:"enabled"`
+	Models      []string `json:"models"`
+	MaxContinue int      `json:"maxContinue"`
+	MaxTierN    int      `json:"maxTierN"`
+	MarkerText  string   `json:"markerText"`
+}
+
 type AdvancedProxyConfig struct {
 	Enabled                bool                         `json:"enabled"`
 	DebugLogging           bool                         `json:"debugLogging"`
@@ -148,11 +158,13 @@ type AdvancedProxyConfig struct {
 	GrokBuild              AdvancedProxyAppConfig       `json:"grokbuild"`
 	OpenCode               AdvancedProxyAppConfig       `json:"opencode"`
 	OpenClaw               AdvancedProxyAppConfig       `json:"openclaw"`
+	Hermes                 AdvancedProxyAppConfig       `json:"hermes"`
 	Failover               AppFailoverConfig            `json:"failover"`
 	HighAvailability       HighAvailabilityConfig       `json:"highAvailability"`
 	Rectifier              RectifierConfig              `json:"rectifier"`
 	Optimizer              OptimizerConfig              `json:"optimizer"`
 	AntiPoison             AntiPoisonConfig             `json:"antiPoison"`
+	AntiCandy              AntiCandyConfig              `json:"antiCandy"`
 	UpdatedAt              string                       `json:"updatedAt"`
 }
 
@@ -214,6 +226,7 @@ func defaultAdvancedProxyQueuesConfig() AdvancedProxyQueuesConfig {
 		GrokBuild: defaultAdvancedProxyQueueConfig(true),
 		OpenCode:  defaultAdvancedProxyQueueConfig(true),
 		OpenClaw:  defaultAdvancedProxyQueueConfig(true),
+		Hermes:    defaultAdvancedProxyQueueConfig(true),
 	}
 }
 
@@ -308,6 +321,16 @@ func defaultContextAutoCompressionConfig() ContextAutoCompressionConfig {
 	}
 }
 
+func defaultAntiCandyConfig() AntiCandyConfig {
+	return AntiCandyConfig{
+		Enabled:     false,
+		Models:      []string{"gpt-5.5"},
+		MaxContinue: 3,
+		MaxTierN:    6,
+		MarkerText:  "Continue thinking...",
+	}
+}
+
 func defaultAdvancedProxyConfig() AdvancedProxyConfig {
 	return AdvancedProxyConfig{
 		Enabled:                false,
@@ -338,6 +361,10 @@ func defaultAdvancedProxyConfig() AdvancedProxyConfig {
 		OpenClaw: AdvancedProxyAppConfig{
 			Enabled:  false,
 			BasePath: advancedProxyOpenClawPath,
+		},
+		Hermes: AdvancedProxyAppConfig{
+			Enabled:  false,
+			BasePath: advancedProxyHermesPath,
 		},
 		Failover: AppFailoverConfig{
 			AppType:                   "claude",
@@ -371,6 +398,7 @@ func defaultAdvancedProxyConfig() AdvancedProxyConfig {
 			CacheTTL:          "1h",
 		},
 		AntiPoison: defaultAntiPoisonConfig(),
+		AntiCandy:  defaultAntiCandyConfig(),
 	}
 }
 
@@ -440,6 +468,7 @@ func sanitizeAdvancedProxyConfig(config AdvancedProxyConfig) AdvancedProxyConfig
 	config.Queues.GrokBuild = sanitizeAdvancedProxyQueueConfig(config.Queues.GrokBuild, defaults.Queues.GrokBuild, nil)
 	config.Queues.OpenCode = sanitizeAdvancedProxyQueueConfig(config.Queues.OpenCode, defaults.Queues.OpenCode, nil)
 	config.Queues.OpenClaw = sanitizeAdvancedProxyQueueConfig(config.Queues.OpenClaw, defaults.Queues.OpenClaw, nil)
+	config.Queues.Hermes = sanitizeAdvancedProxyQueueConfig(config.Queues.Hermes, defaults.Queues.Hermes, nil)
 
 	if strings.TrimSpace(config.Claude.BasePath) == "" {
 		config.Claude.BasePath = defaults.Claude.BasePath
@@ -451,6 +480,7 @@ func sanitizeAdvancedProxyConfig(config AdvancedProxyConfig) AdvancedProxyConfig
 	config.GrokBuild = sanitizeAdvancedProxyAppConfig(config.GrokBuild, defaults.GrokBuild)
 	config.OpenCode = sanitizeAdvancedProxyAppConfig(config.OpenCode, defaults.OpenCode)
 	config.OpenClaw = sanitizeAdvancedProxyAppConfig(config.OpenClaw, defaults.OpenClaw)
+	config.Hermes = sanitizeAdvancedProxyAppConfig(config.Hermes, defaults.Hermes)
 
 	if strings.TrimSpace(config.Failover.AppType) == "" {
 		config.Failover.AppType = defaults.Failover.AppType
@@ -476,7 +506,45 @@ func sanitizeAdvancedProxyConfig(config AdvancedProxyConfig) AdvancedProxyConfig
 		config.Optimizer.CacheTTL = defaults.Optimizer.CacheTTL
 	}
 	config.AntiPoison = sanitizeAntiPoisonConfig(config.AntiPoison)
+	config.AntiCandy = sanitizeAntiCandyConfig(config.AntiCandy)
 	config.Enabled = advancedProxyAnyAppEnabled(config)
+	return config
+}
+
+func sanitizeAntiCandyConfig(config AntiCandyConfig) AntiCandyConfig {
+	defaults := defaultAntiCandyConfig()
+	models := make([]string, 0, len(config.Models))
+	seen := map[string]struct{}{}
+	for _, model := range config.Models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		key := strings.ToLower(model)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		models = append(models, model)
+	}
+	if len(models) == 0 {
+		models = append([]string(nil), defaults.Models...)
+	}
+	config.Models = models
+	if config.MaxContinue <= 0 {
+		config.MaxContinue = defaults.MaxContinue
+	} else {
+		config.MaxContinue = clampInt(config.MaxContinue, 1, 10)
+	}
+	if config.MaxTierN <= 0 {
+		config.MaxTierN = defaults.MaxTierN
+	} else {
+		config.MaxTierN = clampInt(config.MaxTierN, 1, 64)
+	}
+	config.MarkerText = strings.TrimSpace(config.MarkerText)
+	if config.MarkerText == "" {
+		config.MarkerText = defaults.MarkerText
+	}
 	return config
 }
 
@@ -676,7 +744,7 @@ func normalizeAdvancedProxyHighAvailabilityRPMConfig(config HighAvailabilityRPMC
 
 func isAdvancedProxyLegacyRPMScope(scope string) bool {
 	switch strings.ToLower(strings.TrimSpace(scope)) {
-	case "claude", "codex", "opencode", "openclaw":
+	case "claude", "codex", "opencode", "openclaw", "hermes":
 		return true
 	default:
 		return false
@@ -714,12 +782,14 @@ func advancedProxyQueuesLikelyMissing(queues AdvancedProxyQueuesConfig) bool {
 		!queues.GrokBuild.InheritGlobal &&
 		!queues.OpenCode.InheritGlobal &&
 		!queues.OpenClaw.InheritGlobal &&
+		!queues.Hermes.InheritGlobal &&
 		len(queues.Global.Providers) == 0 &&
 		len(queues.Claude.Providers) == 0 &&
 		len(queues.Codex.Providers) == 0 &&
 		len(queues.GrokBuild.Providers) == 0 &&
 		len(queues.OpenCode.Providers) == 0 &&
-		len(queues.OpenClaw.Providers) == 0
+		len(queues.OpenClaw.Providers) == 0 &&
+		len(queues.Hermes.Providers) == 0
 }
 
 func sanitizeAdvancedProxyQueueConfig(config AdvancedProxyQueueConfig, defaults AdvancedProxyQueueConfig, fallbackProviders []AdvancedProxyProvider) AdvancedProxyQueueConfig {
@@ -932,7 +1002,7 @@ func normalizeClaudeAPIKeyField(value string) string {
 
 func normalizeAdvancedProxyQueueScope(scope string) string {
 	switch strings.ToLower(strings.TrimSpace(scope)) {
-	case "claude", "codex", "grokbuild", "opencode", "openclaw":
+	case "claude", "codex", "grokbuild", "opencode", "openclaw", "hermes":
 		return strings.ToLower(strings.TrimSpace(scope))
 	default:
 		return advancedProxyGlobalScope
@@ -941,7 +1011,7 @@ func normalizeAdvancedProxyQueueScope(scope string) string {
 
 func isAdvancedProxySupportedAppType(appType string) bool {
 	switch strings.ToLower(strings.TrimSpace(appType)) {
-	case "claude", "codex", "grokbuild", "opencode", "openclaw":
+	case "claude", "codex", "grokbuild", "opencode", "openclaw", "hermes":
 		return true
 	default:
 		return false
@@ -950,7 +1020,7 @@ func isAdvancedProxySupportedAppType(appType string) bool {
 
 func isAdvancedProxySupportedQueueScope(scope string) bool {
 	switch strings.ToLower(strings.TrimSpace(scope)) {
-	case "global", "claude", "codex", "grokbuild", "opencode", "openclaw":
+	case "global", "claude", "codex", "grokbuild", "opencode", "openclaw", "hermes":
 		return true
 	default:
 		return false
@@ -958,7 +1028,7 @@ func isAdvancedProxySupportedQueueScope(scope string) bool {
 }
 
 func advancedProxyAnyAppEnabled(config AdvancedProxyConfig) bool {
-	return config.Claude.Enabled || config.Codex.Enabled || config.GrokBuild.Enabled || config.OpenCode.Enabled || config.OpenClaw.Enabled
+	return config.Claude.Enabled || config.Codex.Enabled || config.GrokBuild.Enabled || config.OpenCode.Enabled || config.OpenClaw.Enabled || config.Hermes.Enabled
 }
 
 func advancedProxyAppEnabled(config AdvancedProxyConfig, appType string) bool {
@@ -973,6 +1043,8 @@ func advancedProxyAppEnabled(config AdvancedProxyConfig, appType string) bool {
 		return config.OpenCode.Enabled
 	case "openclaw":
 		return config.OpenClaw.Enabled
+	case "hermes":
+		return config.Hermes.Enabled
 	default:
 		return false
 	}
@@ -990,6 +1062,8 @@ func advancedProxyAppBasePath(config AdvancedProxyConfig, appType string) string
 		return config.OpenCode.BasePath
 	case "openclaw":
 		return config.OpenClaw.BasePath
+	case "hermes":
+		return config.Hermes.BasePath
 	default:
 		return "/"
 	}
@@ -1007,6 +1081,8 @@ func advancedProxyQueueConfigForScope(config *AdvancedProxyConfig, scope string)
 		return &config.Queues.OpenCode
 	case "openclaw":
 		return &config.Queues.OpenClaw
+	case "hermes":
+		return &config.Queues.Hermes
 	default:
 		return &config.Queues.Global
 	}

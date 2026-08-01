@@ -1,10 +1,10 @@
 <template>
-  <div class="usage-view" :class="{ 'usage-view-dark': isDarkMode }">
+  <div class="usage-view" :class="{ 'usage-view-dark': isDarkMode, 'usage-view-embedded': props.embedded }">
     <div class="usage-page-shell">
-      <AppHeader current-page="usage" :is-dark-mode="isDarkMode" />
+      <AppHeader v-if="!props.embedded" current-page="usage" :is-dark-mode="isDarkMode" />
 
       <main class="usage-main">
-        <section class="usage-hero">
+        <section v-if="!props.embedded" class="usage-hero">
           <div>
             <p class="usage-kicker">{{ t('USAGE_NAV') }}</p>
             <h1>{{ t('USAGE_TITLE') }}</h1>
@@ -22,17 +22,44 @@
                 {{ tab.label }}
               </button>
             </div>
-            <button type="button" class="usage-refresh" :disabled="loading" @click="refresh">
-              <span :class="{ 'is-spinning': loading }" aria-hidden="true">↻</span>
-              {{ loading ? t('USAGE_REFRESHING') : t('USAGE_REFRESH') }}
+            <button type="button" class="usage-refresh" :disabled="isLoadingUsage" @click="refresh">
+              <span :class="{ 'is-spinning': isLoadingUsage }" aria-hidden="true">↻</span>
+              {{ isLoadingUsage ? t('USAGE_REFRESHING') : t('USAGE_REFRESH') }}
             </button>
           </div>
         </section>
+
+        <div v-else class="usage-embedded-toolbar">
+          <div class="usage-range-tabs" role="tablist" :aria-label="t('USAGE_DATE_RANGE')">
+            <button
+              v-for="tab in rangeTabs"
+              :key="tab.id"
+              type="button"
+              :class="{ 'is-active': range === tab.id }"
+              @click="range = tab.id"
+            >
+              {{ tab.label }}
+            </button>
+          </div>
+          <button type="button" class="usage-refresh" :disabled="isLoadingUsage" @click="refresh">
+            <span :class="{ 'is-spinning': isLoadingUsage }" aria-hidden="true">↻</span>
+            {{ isLoadingUsage ? t('USAGE_REFRESHING') : t('USAGE_REFRESH') }}
+          </button>
+        </div>
 
         <div v-if="error" class="usage-error" role="alert">
           <strong>{{ t('USAGE_LOAD_FAILED') }}</strong>
           <span>{{ error }}</span>
           <button type="button" @click="refresh">{{ t('USAGE_TRY_AGAIN') }}</button>
+        </div>
+
+        <div v-if="isLoadingUsage" class="usage-loading-state" role="status" aria-live="polite">
+          <span class="usage-loading-spinner is-spinning" aria-hidden="true">↻</span>
+          <div class="usage-loading-copy">
+            <strong>{{ t('USAGE_LOADING_DATA') }} {{ usageLoadProgress }}%</strong>
+            <small>{{ usageLoadingStage }}</small>
+          </div>
+          <div class="usage-loading-track" aria-hidden="true"><span :style="{ width: usageLoadProgress + '%' }"></span></div>
         </div>
 
         <section class="usage-panel usage-filters">
@@ -124,7 +151,7 @@
               <div><span>{{ t('USAGE_LATEST_BUCKET') }}</span><strong>{{ trend.latestLabel || '—' }}</strong></div>
               <div><span>{{ t('USAGE_LATEST_TOKENS') }}</span><strong>{{ formatCompact(trend.latestValue) }}</strong></div>
               <div><span>{{ t('USAGE_RANGE') }}</span><strong>{{ activeRangeLabel }}</strong></div>
-              <p>{{ t('USAGE_FALLBACK_NOTE') }}</p>
+              <p>{{ t('USAGE_LOCAL_FALLBACK_NOTE') }}</p>
             </aside>
           </div>
         </section>
@@ -137,7 +164,7 @@
             </div>
             <div class="usage-details-meta">
               <span>{{ t('USAGE_ROWS', { count: filteredRows.length }) }}</span>
-              <span v-if="sourceRows.some(row => row.synthetic)" class="usage-session-badge">{{ t('USAGE_CODEX_SESSION_FALLBACK') }}</span>
+                <span v-if="sourceRows.some(row => row.synthetic)" class="usage-session-badge">{{ t('USAGE_LOCAL_SESSION_SOURCE') }}</span>
             </div>
           </div>
 
@@ -162,7 +189,19 @@
                 <tr v-for="row in filteredRows" :key="row.id">
                   <td><strong>{{ formatDateTime(row.timestamp) }}</strong><small>{{ formatDateOnly(row.timestamp) }}</small></td>
                   <td><strong>{{ row.provider }}</strong><small>{{ row.appLabel }}</small></td>
-                  <td><strong class="usage-model">{{ row.model }}</strong><small v-if="row.route">{{ row.route }}</small></td>
+                  <td>
+                    <span
+                      class="usage-model-tooltip"
+                      :class="{ 'has-model-costs': modelCostTooltipItems(row).length > 1 }"
+                      :title="modelCostTooltipText(row)"
+                      :data-tooltip="modelCostTooltipText(row)"
+                      :tabindex="modelCostTooltipItems(row).length > 1 ? 0 : undefined"
+                      :aria-label="modelCostTooltipText(row) || undefined"
+                    >
+                      <strong class="usage-model">{{ row.model }}</strong>
+                    </span>
+                    <small v-if="row.route">{{ row.route }}</small>
+                  </td>
                   <td><strong>{{ formatNumber(row.inputTokens) }}</strong><small v-if="row.cacheReadTokens">{{ t('USAGE_CACHE_READ', { value: formatCompact(row.cacheReadTokens) }) }}</small></td>
                   <td><strong>{{ formatNumber(row.outputTokens) }}</strong><small v-if="row.reasoningTokens">{{ t('USAGE_REASONING', { value: formatCompact(row.reasoningTokens) }) }}</small></td>
                   <td><span :class="{ 'is-muted': row.cost == null }">{{ formatCost(row.cost) }}</span></td>
@@ -170,7 +209,7 @@
                   <td><span class="usage-status" :class="statusClass(row)">{{ statusLabel(row) }}</span></td>
                   <td><code>{{ row.source }}</code></td>
                 </tr>
-                <tr v-if="!filteredRows.length"><td colspan="9" class="usage-empty">{{ loading ? t('USAGE_LOADING_DATA') : t('USAGE_NO_REQUESTS') }}</td></tr>
+                <tr v-if="!filteredRows.length"><td colspan="9" class="usage-empty">{{ isLoadingUsage ? t('USAGE_LOADING_DATA') : t('USAGE_NO_REQUESTS') }}</td></tr>
               </tbody>
             </table>
           </div>
@@ -193,7 +232,19 @@
               <thead><tr><th>{{ t('USAGE_MODEL') }}</th><th>{{ t('USAGE_REQUESTS_HEADER') }}</th><th>{{ t('USAGE_TOTAL_TOKENS') }}</th><th>{{ t('USAGE_INPUT') }}</th><th>{{ t('USAGE_OUTPUT') }}</th><th>{{ t('USAGE_SUCCESS_RATE') }}</th><th>{{ t('USAGE_AVERAGE_LATENCY') }}</th></tr></thead>
               <tbody>
                 <tr v-for="item in modelStats" :key="item.key">
-                  <td><strong class="usage-model">{{ item.label }}</strong><small>{{ item.providerLabels.join(' · ') }}</small></td>
+                  <td>
+                    <span
+                      class="usage-model-tooltip"
+                      :class="{ 'has-model-costs': modelCostTooltipItems(item).length > 1 }"
+                      :title="modelCostTooltipText(item)"
+                      :data-tooltip="modelCostTooltipText(item)"
+                      :tabindex="modelCostTooltipItems(item).length > 1 ? 0 : undefined"
+                      :aria-label="modelCostTooltipText(item) || undefined"
+                    >
+                      <strong class="usage-model">{{ item.label }}</strong>
+                    </span>
+                    <small>{{ item.providerLabels.join(' · ') }}</small>
+                  </td>
                   <td>{{ formatNumber(item.requests) }}</td><td>{{ formatNumber(item.totalTokens) }}</td><td>{{ formatNumber(item.inputTokens) }}</td><td>{{ formatNumber(item.outputTokens) }}</td><td>{{ formatPercent(item.successRate) }}</td><td>{{ formatLatency(item.averageLatency) }}</td>
                 </tr>
                 <tr v-if="!modelStats.length"><td colspan="7" class="usage-empty">{{ t('USAGE_NO_MODEL_DATA') }}</td></tr>
@@ -209,12 +260,23 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import AppHeader from '../components/AppHeader.vue';
-import { getLocalTokenUsageAnalytics, listAdvancedProxyRequestRecords } from '../utils/advancedProxyBridge.js';
+import {
+  getUsagePreloadSnapshot,
+  listAdvancedProxyRequestRecords,
+  preloadUsageData,
+  USAGE_PRELOAD_EVENT,
+} from '../utils/advancedProxyBridge.js';
 import { getAppliedThemeMode, isDarkThemeMode, THEME_MODE_CHANGE_EVENT } from '../utils/theme.js';
 
+const props = defineProps({
+  embedded: {
+    type: Boolean,
+    default: false,
+  },
+});
 const { t, locale } = useI18n();
 const rangeTabs = computed(() => [
   { id: 'today', label: t('USAGE_TODAY') },
@@ -228,16 +290,33 @@ const usageTabs = computed(() => [
   { id: 'models', label: t('USAGE_MODEL_STATS') },
 ]);
 const appLabels = { codex: 'Codex', claude: 'Claude', 'claude-desktop': 'Claude Desktop', gemini: 'Gemini', grok: 'Grok', openclaw: 'OpenClaw', opencode: 'OpenCode' };
-const records = ref([]);
-const analytics = ref(null);
-const loading = ref(false);
+const initialUsageSnapshot = getUsagePreloadSnapshot();
+const records = ref(Array.isArray(initialUsageSnapshot.records) ? initialUsageSnapshot.records : []);
+const analytics = ref(initialUsageSnapshot.analytics && typeof initialUsageSnapshot.analytics === 'object' ? initialUsageSnapshot.analytics : null);
+const preloadState = ref(initialUsageSnapshot);
+const loading = ref(initialUsageSnapshot.loading === true);
 const error = ref('');
-const range = ref('7d');
+const range = ref('today');
 const activeTab = ref('requests');
 const appFilter = ref('all');
 const providerFilter = ref('all');
 const modelFilter = ref('all');
 const isDarkMode = ref(isDarkThemeMode(getAppliedThemeMode()));
+const backgroundLoading = ref(false);
+const historyLoaded = ref(false);
+const loadProgress = ref(initialUsageSnapshot.loading ? initialUsageSnapshot.progress : 0);
+let refreshGeneration = 0;
+let historyGeneration = 0;
+
+const isLoadingUsage = computed(() => loading.value || backgroundLoading.value || preloadState.value.loading === true);
+const usageLoadProgress = computed(() => Math.max(1, Math.min(100, Math.round(loadProgress.value || preloadState.value.progress || 0))));
+const usageLoadingStage = computed(() => {
+  if (backgroundLoading.value) return t('USAGE_LOADING_HISTORY');
+  if (preloadState.value.loading) {
+    return preloadState.value.stage === 'records' ? t('USAGE_LOADING_RECORDS') : t('USAGE_LOADING_ANALYTICS');
+  }
+  return t('USAGE_LOADING_DATA');
+});
 
 function text(value) { return String(value ?? '').trim(); }
 function number(value) {
@@ -276,21 +355,55 @@ function usageObject(record) {
   return {};
 }
 
+function normalizeModelCosts(value) {
+  let source = [];
+  if (Array.isArray(value)) {
+    source = value;
+  } else if (value && typeof value === 'object') {
+    source = Object.entries(value).map(([model, cost]) => ({ model, cost }));
+  }
+  const map = new Map();
+  source.forEach(item => {
+    const model = text(item && (item.model || item.modelName || item.name || item.key));
+    const cost = nullableNumber(item && (item.cost ?? item.totalCost ?? item.costUsd ?? item.amount));
+    const tokens = nullableNumber(item && (item.tokens ?? item.tokenCount ?? item.totalTokens));
+    const costKnown = item && typeof item.costKnown === 'boolean' ? item.costKnown : cost !== null;
+    if (!model || (cost === null && tokens === null)) return;
+    const key = model.toLowerCase();
+    const current = map.get(key) || {
+      model: model,
+      modelName: text(item && (item.modelName || item.name)) || model,
+      cost: 0,
+      tokens: 0,
+      costKnown: false,
+    };
+    if (cost !== null) current.cost += cost;
+    if (tokens !== null) current.tokens += tokens;
+    current.costKnown = current.costKnown || costKnown;
+    map.set(key, current);
+  });
+  return Array.from(map.values()).sort((left, right) => {
+    if (left.costKnown && right.costKnown && left.cost !== right.cost) return right.cost - left.cost;
+    if (left.tokens !== right.tokens) return right.tokens - left.tokens;
+    return left.model.localeCompare(right.model);
+  });
+}
+
 function normalizeRecord(record, index) {
   const usage = usageObject(record);
   const appType = text(record && record.appType).toLowerCase() || 'proxy';
   const appLabel = appName(appType);
   const provider = text(record && record.providerName) || appLabel;
-  const model = text(record && record.model) || '—';
+  const model = text(record && (record.model || record.modelName || record.requestModel)) || text(usage.model || usage.modelName) || '—';
   const recordedAt = timestamp(record && (record.recordedAt || record.createdAt || record.updatedAt || record.timestamp || record.time));
   const code = nullableNumber(record && record.statusCode);
-  const inputTokens = firstNumber(record && record.inputTokens, record && record.promptTokens, usage.inputTokens, usage.promptTokens, usage.prompt_tokens);
-  const outputTokens = firstNumber(record && record.outputTokens, record && record.completionTokens, usage.outputTokens, usage.completionTokens, usage.completion_tokens);
-  const reasoningTokens = firstNumber(record && record.reasoningTokens, usage.reasoningTokens, usage.reasoning_tokens);
+  const inputTokens = firstNumber(record && record.inputTokens, record && record.promptTokens, usage.inputTokens, usage.input_tokens, usage.promptTokens, usage.prompt_tokens);
+  const outputTokens = firstNumber(record && record.outputTokens, record && record.completionTokens, usage.outputTokens, usage.output_tokens, usage.completionTokens, usage.completion_tokens);
+  const reasoningTokens = firstNumber(record && record.reasoningTokens, usage.reasoningTokens, usage.reasoning_tokens, usage.reasoning_output_tokens);
   const totalTokens = firstNumber(record && record.totalTokens, usage.totalTokens, usage.total_tokens, inputTokens + outputTokens + reasoningTokens);
-  const cost = nullableNumber(record && record.cost, record && record.totalCost, record && record.costUsd, usage.cost, usage.totalCost, usage.costUsd, record && record.pricing && record.pricing.cost);
+  const cost = nullableNumber(record && record.cost, record && record.totalCost, record && record.costUsd, usage.cost, usage.totalCost, usage.total_cost, usage.costUsd, record && record.pricing && (record.pricing.cost ?? record.pricing.totalCost ?? record.pricing.total_cost));
   const latencyMs = nullableNumber(record && record.latencyMs, record && record.durationMs, record && record.duration);
-  const cacheReadTokens = firstNumber(record && record.cacheReadTokens, record && record.cache_read_input_tokens, usage.cacheReadTokens, usage.cache_read_input_tokens, usage.cache_read_tokens);
+  const cacheReadTokens = firstNumber(record && record.cacheReadTokens, record && record.cache_read_input_tokens, usage.cacheReadTokens, usage.cachedInputTokens, usage.cached_input_tokens, usage.cache_read_input_tokens, usage.cache_read_tokens);
   const statusText = text(record && record.status).toLowerCase();
   const success = code !== null ? code >= 200 && code < 400 : ['ok', 'success', 'completed', 'complete'].includes(statusText);
   const route = text(record && (record.outboundRoute || record.clientRoute));
@@ -313,74 +426,111 @@ function normalizeRecord(record, index) {
     success: success,
     source: text(record && record.source) || route || appType,
     route: route,
+    modelCosts: normalizeModelCosts(record && (record.modelCosts || record.model_costs)),
     requestCount: 1,
     synthetic: false,
   };
 }
 
-function sessionRows(localAnalytics) {
-  const series = Array.isArray(localAnalytics && localAnalytics.series) ? localAnalytics.series : [];
-  const rows = series.map((point, index) => {
-    const inputTokens = firstNumber(point && point.inputTokens);
-    const outputTokens = firstNumber(point && point.outputTokens);
-    const reasoningTokens = firstNumber(point && point.reasoningTokens);
-    const totalTokens = firstNumber(point && point.totalTokens, inputTokens + outputTokens + reasoningTokens);
-    const date = text(point && point.date);
-    const hour = text(point && point.hour).padStart(2, '0');
-    const recordedAt = timestamp(date ? date + 'T' + hour + ':00:00' : '') || Date.now();
-    return {
-      id: ['codex-session', date || 'unknown', hour || '00', index].join('-'),
-      timestamp: recordedAt,
-      provider: 'Codex (Session)',
-      providerKey: 'Codex (Session)',
-      appType: 'codex',
-      appLabel: 'Codex',
-      model: '—',
-      inputTokens: inputTokens,
-      outputTokens: outputTokens,
-      reasoningTokens: reasoningTokens,
-      totalTokens: totalTokens,
-      cacheReadTokens: 0,
-      cost: null,
-      latencyMs: null,
-      statusCode: 200,
-      success: true,
-      source: 'codex_session',
-      route: '',
-      requestCount: Math.max(1, Math.round(firstNumber(point && point.sessionCount))),
-      synthetic: true,
-    };
-  });
-  if (rows.length || !(localAnalytics && localAnalytics.totalTokens)) return rows;
-  return [{
-    id: 'codex-session-total',
-    timestamp: Date.now(),
-    provider: 'Codex (Session)',
-    providerKey: 'Codex (Session)',
-    appType: 'codex',
-    appLabel: 'Codex',
-    model: '—',
-    inputTokens: firstNumber(localAnalytics.inputTokens),
-    outputTokens: firstNumber(localAnalytics.outputTokens),
-    reasoningTokens: firstNumber(localAnalytics.reasoningTokens),
-    totalTokens: firstNumber(localAnalytics.totalTokens),
-    cacheReadTokens: 0,
-    cost: null,
+function buildLocalSessionRow(session, index) {
+  const source = text(session && session.source);
+  const appType = text(session && session.appType).toLowerCase()
+    || (source.toLowerCase().startsWith('claude') ? 'claude' : 'codex');
+  const appLabel = appName(appType);
+  const sourceLabel = text(session && session.sourceLabel) || appLabel;
+  const provider = text(session && session.provider) || sourceLabel + ' (Session)';
+  const inputTokens = firstNumber(session && session.inputTokens);
+  const outputTokens = firstNumber(session && session.outputTokens);
+  const reasoningTokens = firstNumber(session && session.reasoningTokens);
+  const cacheReadTokens = firstNumber(session && (session.cacheReadTokens ?? session.cache_read_tokens));
+  const totalTokens = firstNumber(session && session.totalTokens, inputTokens + outputTokens + reasoningTokens);
+  const recordedAt = timestamp(session && (session.timestamp || session.updatedAt || session.createdAt)) || Date.now();
+  return {
+    id: text(session && session.id) || [appType + '-session', recordedAt, index].join('-'),
+    timestamp: recordedAt,
+    provider: provider,
+    providerKey: provider,
+    appType: appType,
+    appLabel: appLabel,
+    model: text(session && (session.modelName || session.model)) || '—',
+    inputTokens: inputTokens,
+    outputTokens: outputTokens,
+    reasoningTokens: reasoningTokens,
+    totalTokens: totalTokens,
+    cacheReadTokens: cacheReadTokens,
+    cost: nullableNumber(session && (session.cost ?? session.totalCost ?? session.costUsd)),
     latencyMs: null,
     statusCode: 200,
     success: true,
-    source: 'codex_session',
-    route: '',
-    requestCount: Math.max(1, Math.round(firstNumber(localAnalytics.sessionCount))),
+    source: source || appType + '_session',
+    route: text(session && session.modelName) && text(session && session.model) && text(session.modelName) !== text(session.model) ? text(session.model) : '',
+    modelCosts: normalizeModelCosts(session && (session.modelCosts || session.model_costs)),
+    requestCount: Math.max(1, Math.round(firstNumber(session && session.requestCount))),
     synthetic: true,
-  }];
+  };
+}
+
+function sessionRows(localAnalytics) {
+  const sessions = Array.isArray(localAnalytics && localAnalytics.sessions) ? localAnalytics.sessions : [];
+  if (sessions.length) return sessions.map(buildLocalSessionRow);
+
+  const series = Array.isArray(localAnalytics && localAnalytics.series) ? localAnalytics.series : [];
+  const rows = series.map((point, index) => {
+    const date = text(point && point.date);
+    const hour = text(point && point.hour).padStart(2, '0');
+    const source = text(point && point.source);
+    const appType = text(point && point.appType).toLowerCase()
+      || (source.toLowerCase().startsWith('claude') ? 'claude' : 'codex');
+    return buildLocalSessionRow({
+      id: [appType + '-session', date || 'unknown', hour || '00', index].join('-'),
+      timestamp: date ? date + 'T' + hour + ':00:00' : '',
+      appType: appType,
+      source: source || appType + '_session',
+      sourceLabel: text(point && point.sourceLabel),
+      model: point && point.model,
+      inputTokens: point && point.inputTokens,
+      outputTokens: point && point.outputTokens,
+      reasoningTokens: point && point.reasoningTokens,
+      cacheReadTokens: point && point.cacheReadTokens,
+      totalTokens: point && point.totalTokens,
+      cost: point && point.cost,
+      modelCosts: point && (point.modelCosts || point.model_costs),
+      requestCount: point && point.sessionCount,
+    }, index);
+  });
+  if (rows.length || !(localAnalytics && localAnalytics.totalTokens)) return rows;
+  return [buildLocalSessionRow({
+    id: 'local-session-total',
+    timestamp: Date.now(),
+    appType: text(localAnalytics && localAnalytics.source) === 'claude' ? 'claude' : 'codex',
+    source: text(localAnalytics && localAnalytics.source) || 'local_sessions',
+    sourceLabel: text(localAnalytics && localAnalytics.sourceLabel),
+    model: localAnalytics.model,
+    inputTokens: localAnalytics.inputTokens,
+    outputTokens: localAnalytics.outputTokens,
+    reasoningTokens: localAnalytics.reasoningTokens,
+    cacheReadTokens: localAnalytics.cacheReadTokens,
+    totalTokens: localAnalytics.totalTokens,
+    cost: localAnalytics.cost,
+    requestCount: localAnalytics.sessionCount,
+  }, 0)];
 }
 
 const requestRows = computed(() => (Array.isArray(records.value) ? records.value : []).map(normalizeRecord));
 const localRows = computed(() => sessionRows(analytics.value));
-const sourceRows = computed(() => requestRows.value.length ? requestRows.value : localRows.value);
+const sourceRows = computed(() => {
+  const requests = requestRows.value;
+  const sessions = localRows.value;
+  if (!sessions.length) return requests;
+  if (!requests.length) return sessions;
+
+  // Local session logs are authoritative for the app types they cover.
+  // Keep proxy rows for other app types as a live-data supplement.
+  const localAppTypes = new Set(sessions.map(row => row.appType).filter(Boolean));
+  return [...requests.filter(row => !localAppTypes.has(row.appType)), ...sessions];
+});
 const activeRangeLabel = computed(() => (rangeTabs.value.find(item => item.id === range.value) || rangeTabs.value[1]).label);
-const sourceLabel = computed(() => requestRows.value.length ? t('USAGE_PROXY_REQUEST_RECORDS') : t('USAGE_CODEX_LOCAL_SESSIONS'));
+const sourceLabel = computed(() => localRows.value.length ? t('USAGE_LOCAL_SESSIONS') : t('USAGE_PROXY_REQUEST_RECORDS'));
 
 const rangeStart = computed(() => {
   if (range.value === 'all') return 0;
@@ -456,16 +606,70 @@ const metricCards = computed(() => [
   { id: 'cost', label: t('USAGE_COST'), value: formatCost(summary.value.cost), title: '', detail: summary.value.costKnown ? t('USAGE_BASED_ON_RECORD_PRICING') : t('USAGE_NOT_PRICED') },
 ]);
 
+function mergeModelCosts(existing, additions) {
+  if (!Array.isArray(additions) || !additions.length) return Array.isArray(existing) ? existing : [];
+  const map = new Map();
+  [...(Array.isArray(existing) ? existing : []), ...additions].forEach(item => {
+    const model = text(item && (item.model || item.modelName || item.name));
+    const cost = nullableNumber(item && (item.cost ?? item.totalCost ?? item.costUsd ?? item.amount));
+    const tokens = nullableNumber(item && (item.tokens ?? item.tokenCount ?? item.totalTokens));
+    const costKnown = item && typeof item.costKnown === 'boolean' ? item.costKnown : cost !== null;
+    if (!model || (cost === null && tokens === null)) return;
+    const key = model.toLowerCase();
+    const current = map.get(key) || { model, modelName: text(item && (item.modelName || item.name)) || model, cost: 0, tokens: 0, costKnown: false };
+    if (cost !== null) current.cost += cost;
+    if (tokens !== null) current.tokens += tokens;
+    current.costKnown = current.costKnown || costKnown;
+    map.set(key, current);
+  });
+  return Array.from(map.values()).sort((left, right) => {
+    if (left.costKnown && right.costKnown && left.cost !== right.cost) return right.cost - left.cost;
+    if (left.tokens !== right.tokens) return right.tokens - left.tokens;
+    return left.model.localeCompare(right.model);
+  });
+}
+
+function modelCostTooltipItems(source) {
+  const entries = normalizeModelCosts(source && source.modelCosts);
+  if (entries.length < 2) return [];
+  const totalCost = entries.reduce((sum, item) => sum + (item.costKnown ? item.cost : 0), 0);
+  const useCost = totalCost > 0;
+  const totalTokens = entries.reduce((sum, item) => sum + item.tokens, 0);
+  if (!useCost && !(totalTokens > 0)) return [];
+  return entries.map(item => ({
+    ...item,
+    label: item.modelName || item.model,
+    metric: useCost ? formatCost(item.cost) : `${formatNumber(item.tokens)} ${t('USAGE_TOKENS')}`,
+    percent: (useCost ? (item.costKnown ? item.cost : 0) : item.tokens) / (useCost ? totalCost : totalTokens) * 100,
+  }));
+}
+
+function modelCostTooltipText(source) {
+  return modelCostTooltipItems(source)
+    .map(item => `${item.label}: ${item.metric} (${formatModelCostPercent(item.percent)})`)
+    .join('\n');
+}
+
+function formatModelCostPercent(value) {
+  const parsed = number(value);
+  return parsed === null ? '—' : parsed.toFixed(1) + '%';
+}
+
 function groupedStats(rows, keyName, labelName) {
   const map = new Map();
   rows.forEach(row => {
     const key = text(row[keyName]) || 'Unknown';
-    const item = map.get(key) || { key: key, label: text(row[labelName]) || key, requests: 0, totalTokens: 0, inputTokens: 0, outputTokens: 0, success: 0, latency: 0, latencyRows: 0, appLabels: new Set(), providerLabels: new Set() };
+    const item = map.get(key) || { key: key, label: text(row[labelName]) || key, requests: 0, totalTokens: 0, inputTokens: 0, outputTokens: 0, cost: 0, costKnown: false, modelCosts: [], success: 0, latency: 0, latencyRows: 0, appLabels: new Set(), providerLabels: new Set() };
     const count = row.requestCount || 1;
     item.requests += count;
     item.totalTokens += row.totalTokens;
     item.inputTokens += row.inputTokens;
     item.outputTokens += row.outputTokens;
+    if (row.cost !== null) {
+      item.cost += row.cost;
+      item.costKnown = true;
+    }
+    item.modelCosts = mergeModelCosts(item.modelCosts, row.modelCosts);
     item.success += row.success ? count : 0;
     if (row.latencyMs !== null) {
       item.latency += row.latencyMs;
@@ -482,6 +686,8 @@ function groupedStats(rows, keyName, labelName) {
     totalTokens: item.totalTokens,
     inputTokens: item.inputTokens,
     outputTokens: item.outputTokens,
+    cost: item.costKnown ? item.cost : null,
+    modelCosts: item.modelCosts,
     successRate: item.requests ? item.success / item.requests * 100 : null,
     averageLatency: item.latencyRows ? item.latency / item.latencyRows : null,
     appLabels: Array.from(item.appLabels),
@@ -553,7 +759,9 @@ function formatPercent(value) {
 }
 function formatCost(value) {
   const parsed = number(value);
-  return parsed === null ? '—' : '$' + parsed.toFixed(4);
+  if (parsed === null) return '—';
+  const digits = parsed !== 0 && Math.abs(parsed) < 0.01 ? 6 : 4;
+  return '$' + parsed.toFixed(digits);
 }
 function formatLatency(value) {
   const parsed = number(value);
@@ -579,27 +787,94 @@ function clearFilters() {
   providerFilter.value = 'all';
   modelFilter.value = 'all';
 }
-async function refresh() {
-  loading.value = true;
-  error.value = '';
+async function loadHistoryData() {
+  if (historyLoaded.value || backgroundLoading.value) return;
+  const generation = ++historyGeneration;
+  backgroundLoading.value = true;
+  loadProgress.value = 48;
   try {
-    const result = await Promise.all([listAdvancedProxyRequestRecords(400), getLocalTokenUsageAnalytics()]);
-    records.value = Array.isArray(result[0]) ? result[0] : [];
-    analytics.value = result[1] && typeof result[1] === 'object' ? result[1] : null;
+    const result = await listAdvancedProxyRequestRecords(400);
+    if (generation !== historyGeneration) return;
+    records.value = Array.isArray(result) ? result : records.value;
+    historyLoaded.value = true;
+    loadProgress.value = 100;
+    error.value = '';
   } catch (loadError) {
-    error.value = loadError && loadError.message ? loadError.message : t('USAGE_LOCAL_BRIDGE_ERROR');
+    if (generation === historyGeneration) {
+      error.value = loadError && loadError.message ? loadError.message : t('USAGE_LOCAL_BRIDGE_ERROR');
+    }
   } finally {
-    loading.value = false;
+    if (generation === historyGeneration) backgroundLoading.value = false;
+  }
+}
+
+async function refresh(options = {}) {
+  const force = options && typeof options === 'object' && options.force === false ? false : true;
+  const generation = ++refreshGeneration;
+  const cached = getUsagePreloadSnapshot();
+  syncPreload({ detail: cached });
+  const hasCachedData = records.value.length > 0 || localRows.value.length > 0;
+  loading.value = !hasCachedData || cached.loading || force;
+  loadProgress.value = cached.loading ? cached.progress : hasCachedData && !force ? 100 : 8;
+  error.value = '';
+
+  try {
+    const snapshot = await preloadUsageData({ force });
+    if (generation !== refreshGeneration) return;
+    syncPreload({ detail: snapshot });
+    if (snapshot.error && !records.value.length && !localRows.value.length) error.value = snapshot.error;
+  } catch (loadError) {
+    if (generation === refreshGeneration) {
+      error.value = loadError && loadError.message ? loadError.message : t('USAGE_LOCAL_BRIDGE_ERROR');
+    }
+  } finally {
+    if (generation === refreshGeneration) {
+      loading.value = false;
+      loadProgress.value = 100;
+    }
+  }
+
+  if (generation !== refreshGeneration) return;
+  await nextTick();
+  if (range.value !== 'today') {
+    historyLoaded.value = false;
+    void loadHistoryData();
   }
 }
 function syncTheme(event) {
   isDarkMode.value = isDarkThemeMode(event && event.detail && event.detail.mode || getAppliedThemeMode());
 }
+function syncPreload(event) {
+  const snapshot = event?.detail && typeof event.detail === 'object' ? event.detail : getUsagePreloadSnapshot();
+  preloadState.value = snapshot;
+  // A non-today range may already have fetched the larger history window. Do
+  // not let the background 120-row preload replace that view when its final
+  // event arrives later.
+  if (Array.isArray(snapshot.records) && (range.value === 'today' || !historyLoaded.value)) {
+    records.value = snapshot.records;
+  }
+  if (snapshot.analytics && typeof snapshot.analytics === 'object') analytics.value = snapshot.analytics;
+  if (snapshot.loading && !backgroundLoading.value) {
+    loading.value = true;
+    loadProgress.value = snapshot.progress;
+  } else if (snapshot.stage === 'ready' && !backgroundLoading.value) {
+    loading.value = false;
+    loadProgress.value = 100;
+  }
+}
+watch(range, value => {
+  if (value !== 'today') void loadHistoryData();
+});
 onMounted(() => {
   window.addEventListener(THEME_MODE_CHANGE_EVENT, syncTheme);
-  void refresh();
+  window.addEventListener(USAGE_PRELOAD_EVENT, syncPreload);
+  syncPreload();
+  void refresh({ force: false });
 });
-onBeforeUnmount(() => window.removeEventListener(THEME_MODE_CHANGE_EVENT, syncTheme));
+onBeforeUnmount(() => {
+  window.removeEventListener(THEME_MODE_CHANGE_EVENT, syncTheme);
+  window.removeEventListener(USAGE_PRELOAD_EVENT, syncPreload);
+});
 </script>
 
 <style scoped>
@@ -629,6 +904,11 @@ onBeforeUnmount(() => window.removeEventListener(THEME_MODE_CHANGE_EVENT, syncTh
   --accent-soft: rgba(91, 132, 101, 0.24);
   background: radial-gradient(circle at 10% 0%, rgba(64, 104, 108, 0.22), transparent 30%), linear-gradient(180deg, #0a1317, var(--bg));
 }
+.usage-view-embedded { min-height: 0; background: transparent; }
+.usage-view-embedded .usage-page-shell { width: 100%; padding: 8px 0 16px; }
+.usage-view-embedded .usage-main { gap: 10px; }
+.usage-view-embedded .usage-panel { border-radius: 16px; }
+.usage-embedded-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
 .usage-page-shell { width: min(1480px, calc(100% - 32px)); margin: 0 auto; padding: 16px 0 42px; }
 .usage-main { display: grid; gap: 14px; }
 .usage-hero, .usage-panel, .usage-metric { border: 1px solid var(--border); background: var(--surface); box-shadow: 0 16px 34px rgba(52, 74, 56, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.5); backdrop-filter: blur(16px); }
@@ -650,6 +930,13 @@ onBeforeUnmount(() => window.removeEventListener(THEME_MODE_CHANGE_EVENT, syncTh
 .usage-error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 15px; border: 1px solid rgba(190, 92, 71, .25); border-radius: 16px; color: #9a4a38; background: rgba(255, 235, 225, .82); font-size: 12px; }
 .usage-error span { opacity: .82; }
 .usage-error button { margin-left: auto; padding: 5px 9px; border-radius: 8px; color: inherit; background: rgba(255, 255, 255, .46); font-size: 11px; font-weight: 750; }
+.usage-loading-state { display: grid; grid-template-columns: auto minmax(0, auto) minmax(120px, 1fr); align-items: center; gap: 10px; min-height: 48px; padding: 9px 13px; border: 1px solid var(--border); border-radius: 14px; color: var(--muted); background: rgba(123, 157, 117, .07); }
+.usage-loading-spinner { display: inline-block; color: var(--accent); font-size: 22px; line-height: 1; }
+.usage-loading-copy { display: grid; gap: 2px; min-width: 0; }
+.usage-loading-copy strong { color: var(--text); font-size: 12px; }
+.usage-loading-copy small { overflow: hidden; color: var(--faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.usage-loading-track { height: 6px; overflow: hidden; border-radius: 999px; background: rgba(109, 155, 115, .15); }
+.usage-loading-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), #c28b58); transition: width .22s ease; }
 .usage-panel { display: grid; gap: 15px; padding: 19px; border-radius: 21px; }
 .usage-panel-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; }
 .usage-panel h2 { font-size: 18px; }
@@ -699,6 +986,10 @@ onBeforeUnmount(() => window.removeEventListener(THEME_MODE_CHANGE_EVENT, syncTh
 .usage-table td { padding: 12px; border-bottom: 1px solid rgba(111, 143, 115, .1); color: var(--muted); vertical-align: middle; white-space: nowrap; }
 .usage-table tbody tr:last-child td { border-bottom: 0; }
 .usage-table tbody tr:hover td { background: rgba(109, 155, 115, .055); }
+.usage-model-tooltip { position: relative; display: block; max-width: 220px; }
+.usage-model-tooltip.has-model-costs { cursor: help; }
+.usage-model-tooltip.has-model-costs::after { position: absolute; z-index: 20; left: 0; bottom: calc(100% + 8px); width: max-content; max-width: min(320px, 70vw); padding: 9px 11px; border: 1px solid rgba(132, 165, 170, .25); border-radius: 10px; color: var(--text); background: var(--strong); box-shadow: 0 12px 28px rgba(0, 0, 0, .2); content: attr(data-tooltip); font-size: 11px; font-weight: 600; line-height: 1.55; opacity: 0; pointer-events: none; transform: translateY(4px); transition: opacity .14s ease, transform .14s ease; white-space: pre-line; }
+.usage-model-tooltip.has-model-costs:hover::after, .usage-model-tooltip.has-model-costs:focus-visible::after { opacity: 1; transform: translateY(0); }
 .usage-table td strong { display: block; max-width: 220px; overflow: hidden; color: var(--text); font-size: 12px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
 .usage-table td small { display: block; max-width: 220px; margin-top: 4px; overflow: hidden; color: var(--faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .usage-table td span.is-muted { color: var(--faint); }
@@ -713,4 +1004,5 @@ onBeforeUnmount(() => window.removeEventListener(THEME_MODE_CHANGE_EVENT, syncTh
 @media (max-width: 1180px) { .usage-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .usage-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 820px) { .usage-page-shell { width: min(100% - 20px, 720px); padding-top: 10px; } .usage-hero { align-items: flex-start; flex-direction: column; padding: 20px; } .usage-actions { width: 100%; justify-content: flex-start; } .usage-trend-layout { grid-template-columns: minmax(0, 1fr); } .usage-trend-aside { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 0 12px; } .usage-trend-aside > div { display: grid; gap: 4px; padding: 12px 0; border-bottom: 0; } .usage-trend-aside strong { text-align: left; } .usage-trend-aside p { grid-column: 1 / -1; margin-top: 0; } }
 @media (max-width: 560px) { .usage-filter-grid, .usage-metrics { grid-template-columns: minmax(0, 1fr); } .usage-panel { padding: 15px; } .usage-panel-heading { align-items: flex-start; flex-direction: column; } .usage-details-meta { justify-content: flex-start; } .usage-trend-aside { grid-template-columns: minmax(0, 1fr); } .usage-trend-aside p { grid-column: auto; } }
+@media (max-width: 560px) { .usage-loading-state { grid-template-columns: auto minmax(0, 1fr); } .usage-loading-track { grid-column: 1 / -1; } }
 </style>

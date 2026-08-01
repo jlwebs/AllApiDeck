@@ -6,6 +6,10 @@ export function AppendClientLog(arg1:string,arg2:string):Promise<void>;
 
 export function ApplyManagedAppConfigFiles(arg1:main.ManagedAppConfigApplyRequest):Promise<main.ManagedAppConfigApplyResult>;
 
+export function CancelCandyIntelligenceTest(arg1:string):Promise<void>;
+
+export function CancelJuiceValueTest(arg1:string):Promise<void>;
+
 export function ClearAdvancedProxyRequestRecords():Promise<boolean>;
 
 export function CloseBridgeImportSession():Promise<main.BridgeImportSnapshot>;
@@ -13,6 +17,8 @@ export function CloseBridgeImportSession():Promise<main.BridgeImportSnapshot>;
 export function CloseDesktopProfileAssist(arg1:Array<string>):Promise<Record<string, any>>;
 
 export function CollapsePanel():Promise<void>;
+
+export function ContinueJuiceValueTest(arg1:string,arg2:string):Promise<void>;
 
 export function EnterSidebarMode():Promise<void>;
 
@@ -139,6 +145,10 @@ export function SetPanelSuperMiniActive(arg1:boolean):Promise<void>;
 export function ShowMainWindow():Promise<void>;
 
 export function StartBridgeImportSession():Promise<main.BridgeImportSnapshot>;
+
+export function StartCandyIntelligenceTest(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
+
+export function StartJuiceValueTest(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
 
 export function StartLatestAppReleaseDownload():Promise<main.AppUpdateDownloadSnapshot>;
 

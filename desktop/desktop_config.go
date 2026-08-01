@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -25,6 +27,7 @@ type ManagedAppConfigWrite struct {
 	AppID   string `json:"appId"`
 	FileID  string `json:"fileId"`
 	Content string `json:"content"`
+	Exists  *bool  `json:"exists,omitempty"`
 }
 
 type ManagedAppConfigApplyRequest struct {
@@ -89,9 +92,15 @@ func (a *App) ApplyManagedAppConfigFiles(request ManagedAppConfigApplyRequest) (
 			return nil, err
 		}
 
-		backupPath, err := writeManagedConfigFile(target.path, file.Content)
-		if err != nil {
-			return nil, fmt.Errorf("failed to write %s (%s): %w", target.label, target.path, err)
+		var backupPath string
+		var operationErr error
+		if file.Exists != nil && !*file.Exists {
+			backupPath, operationErr = removeManagedConfigFile(target.path)
+		} else {
+			backupPath, operationErr = writeManagedConfigFile(target.path, file.Content)
+		}
+		if operationErr != nil {
+			return nil, fmt.Errorf("failed to write %s (%s): %w", target.label, target.path, operationErr)
 		}
 
 		applied = append(applied, ManagedAppConfigAppliedFile{
@@ -105,6 +114,21 @@ func (a *App) ApplyManagedAppConfigFiles(request ManagedAppConfigApplyRequest) (
 	return &ManagedAppConfigApplyResult{Applied: applied}, nil
 }
 
+func removeManagedConfigFile(path string) (string, error) {
+	if !fileExists(path) {
+		return "", nil
+	}
+
+	backupPath := fmt.Sprintf("%s.bak.%s", path, time.Now().Format("20060102-150405"))
+	if err := copySingleFile(path, backupPath); err != nil {
+		return "", err
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return backupPath, err
+	}
+	return backupPath, nil
+}
+
 func resolveManagedConfigTargets(appIDs []string) ([]managedConfigTarget, error) {
 	requested := map[string]bool{}
 	if len(appIDs) == 0 {
@@ -113,14 +137,15 @@ func resolveManagedConfigTargets(appIDs []string) ([]managedConfigTarget, error)
 		requested["grokbuild"] = true
 		requested["opencode"] = true
 		requested["openclaw"] = true
+		requested["hermes"] = true
 	} else {
 		for _, appID := range appIDs {
 			requested[appID] = true
 		}
 	}
 
-	targets := make([]managedConfigTarget, 0, 6)
-	for _, appID := range []string{"claude", "codex", "grokbuild", "opencode", "openclaw"} {
+	targets := make([]managedConfigTarget, 0, 7)
+	for _, appID := range []string{"claude", "codex", "grokbuild", "opencode", "openclaw", "hermes"} {
 		if !requested[appID] {
 			continue
 		}
@@ -156,6 +181,12 @@ func resolveManagedConfigTargets(appIDs []string) ([]managedConfigTarget, error)
 			targets = append(targets, target)
 		case "openclaw":
 			target, err := resolveManagedConfigTarget("openclaw", "config")
+			if err != nil {
+				return nil, err
+			}
+			targets = append(targets, target)
+		case "hermes":
+			target, err := resolveManagedConfigTarget("hermes", "config")
 			if err != nil {
 				return nil, err
 			}
@@ -249,9 +280,36 @@ func resolveManagedConfigTarget(appID string, fileID string) (managedConfigTarge
 			label:   "openclaw.json",
 			path:    filepath.Join(homeDir, ".openclaw", "openclaw.json"),
 		}, nil
+	case "hermes":
+		if fileID != "config" {
+			return managedConfigTarget{}, fmt.Errorf("unsupported Hermes file: %s", fileID)
+		}
+		return managedConfigTarget{
+			appID:   "hermes",
+			appName: "Hermes",
+			fileID:  "config",
+			label:   "config.yaml",
+			path:    hermesConfigPath(homeDir),
+		}, nil
 	default:
 		return managedConfigTarget{}, fmt.Errorf("unsupported app: %s", appID)
 	}
+}
+
+func hermesConfigPath(homeDir string) string {
+	if configuredHome := strings.TrimSpace(os.Getenv("HERMES_HOME")); configuredHome != "" {
+		return filepath.Join(configuredHome, "config.yaml")
+	}
+
+	if runtime.GOOS == "windows" {
+		localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
+		if localAppData == "" {
+			localAppData = filepath.Join(homeDir, "AppData", "Local")
+		}
+		return filepath.Join(localAppData, "hermes", "config.yaml")
+	}
+
+	return filepath.Join(homeDir, ".hermes", "config.yaml")
 }
 
 func readOptionalTextFile(path string) (string, bool, error) {

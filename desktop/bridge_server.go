@@ -708,6 +708,9 @@ func (a *App) ensureBridgeServer() error {
 	registerAdvancedProxyBridgeRoute(mux, "/advanced-proxy/openclaw/v1/chat/completions", "openclaw.chat", a.handleAdvancedProxyOpenClaw)
 	registerAdvancedProxyBridgeRoute(mux, "/advanced-proxy/openclaw/v1/responses", "openclaw.responses", a.handleAdvancedProxyOpenClaw)
 	registerAdvancedProxyBridgeRoute(mux, "/advanced-proxy/openclaw/v1/responses/compact", "openclaw.responses_compact", a.handleAdvancedProxyOpenClaw)
+	registerAdvancedProxyBridgeRoute(mux, "/advanced-proxy/hermes/v1/chat/completions", "hermes.chat", a.handleAdvancedProxyHermes)
+	registerAdvancedProxyBridgeRoute(mux, "/advanced-proxy/hermes/v1/responses", "hermes.responses", a.handleAdvancedProxyHermes)
+	registerAdvancedProxyBridgeRoute(mux, "/advanced-proxy/hermes/v1/responses/compact", "hermes.responses_compact", a.handleAdvancedProxyHermes)
 
 	server := &http.Server{
 		Addr:              address,

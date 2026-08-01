@@ -10,6 +10,14 @@ export function ApplyManagedAppConfigFiles(arg1) {
   return window['go']['main']['App']['ApplyManagedAppConfigFiles'](arg1);
 }
 
+export function CancelCandyIntelligenceTest(arg1) {
+  return window['go']['main']['App']['CancelCandyIntelligenceTest'](arg1);
+}
+
+export function CancelJuiceValueTest(arg1) {
+  return window['go']['main']['App']['CancelJuiceValueTest'](arg1);
+}
+
 export function ClearAdvancedProxyRequestRecords() {
   return window['go']['main']['App']['ClearAdvancedProxyRequestRecords']();
 }
@@ -24,6 +32,10 @@ export function CloseDesktopProfileAssist(arg1) {
 
 export function CollapsePanel() {
   return window['go']['main']['App']['CollapsePanel']();
+}
+
+export function ContinueJuiceValueTest(arg1, arg2) {
+  return window['go']['main']['App']['ContinueJuiceValueTest'](arg1, arg2);
 }
 
 export function EnterSidebarMode() {
@@ -276,6 +288,14 @@ export function ShowMainWindow() {
 
 export function StartBridgeImportSession() {
   return window['go']['main']['App']['StartBridgeImportSession']();
+}
+
+export function StartCandyIntelligenceTest(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['StartCandyIntelligenceTest'](arg1, arg2, arg3, arg4);
+}
+
+export function StartJuiceValueTest(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['StartJuiceValueTest'](arg1, arg2, arg3, arg4);
 }
 
 export function StartLatestAppReleaseDownload() {

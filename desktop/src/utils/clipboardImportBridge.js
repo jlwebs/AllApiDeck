@@ -8,7 +8,7 @@ import {
   normalizeSiteUrl,
   persistPanelRecords,
 } from './keyPanelStore.js';
-import { resolveClipboardImportRecords } from './clipboardSmartImport.js';
+import { ensureUniqueClipboardSiteName, resolveClipboardImportRecords } from './clipboardSmartImport.js';
 
 export const CLIPBOARD_IMPORT_REQUEST_EVENT = 'batch-api-check:clipboard-import-request';
 export const CLIPBOARD_IMPORT_RESULT_EVENT = 'batch-api-check:clipboard-import-result';
@@ -82,6 +82,11 @@ export function mergeClipboardImportState({
     if (!siteUrl || !apiKey) return;
     const canonicalRowKey = buildRowKey(siteUrl, apiKey);
     const existing = merged.get(canonicalRowKey) || null;
+    const siteName = ensureUniqueClipboardSiteName(
+      rawRecord?.siteName || existing?.siteName || '未命名站点',
+      Array.from(merged.values()),
+      existing,
+    );
     const modelsList = normalizeModels(rawRecord?.modelsList || rawRecord?.modelsText || existing?.modelsList || existing?.modelsText);
     const groupIds = normalizeStringList([
       ...normalizeStringList(existing?.groupIds),
@@ -93,7 +98,7 @@ export function mergeClipboardImportState({
       ...rawRecord,
       rowKey: existing?.rowKey || rawRecord?.rowKey || canonicalRowKey,
       sourceType: existing?.sourceType || rawRecord?.sourceType || 'auto',
-      siteName: String(rawRecord?.siteName || existing?.siteName || '未命名站点').trim() || '未命名站点',
+      siteName,
       tokenName: String(rawRecord?.tokenName || existing?.tokenName || '').trim(),
       siteUrl,
       apiKey,
